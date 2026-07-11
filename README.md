@@ -2,7 +2,7 @@
 
 Historical valuation indicator for a Russian stock portfolio — ERP proxy and per-stock z-score.
 
-**[Interactive charts →](https://ilyazykov.github.io/erp_portfolio)**
+**[Interactive charts →](https://ilyazykov.github.io/erp)**
 
 ## Usage
 
