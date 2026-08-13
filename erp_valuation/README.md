@@ -42,10 +42,10 @@ Earnings Yield = TTM Net Income / Market Cap для всех тикеров.
 
 | Файл | Источник |
 |------|----------|
-| `data/prices_*.csv` | MOEX ISS |
-| `data/quarterly_ni.csv` | Smart-Lab (`/q/{TICKER}/MSFO/net_income/`) |
-| `data/annual_extra.csv` | Smart-Lab (FCF, Revenue — годовые) |
-| `data/ofz10y_monthly.csv` | ЦБ РФ ZCYC (10Y точка кривой) |
+| `../data/prices_*.csv` | MOEX ISS |
+| `../data/quarterly_ni.csv` | Smart-Lab (`/q/{TICKER}/MSFO/net_income/`) |
+| `../data/annual_extra.csv` | Smart-Lab (FCF, Revenue — годовые) |
+| `../data/ofz10y_monthly.csv` | ЦБ РФ ZCYC (10Y точка кривой) |
 
 ## Корпоративные события
 
@@ -65,7 +65,7 @@ Earnings Yield = TTM Net Income / Market Cap для всех тикеров.
 python3 composite_valuation.py
 ```
 
-Выходные файлы сохраняются в `~/Downloads/`.
+Данные читаются из `../data/`, графики сохраняются в `charts/`, итоговый CSV — в `../data/composite_valuation.csv`.
 
 ## Требования
 
