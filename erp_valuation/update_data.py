@@ -1,11 +1,11 @@
 """
-update_data.py — downloads only missing data:
-  - Stock prices from MOEX ISS (new trading days)
-  - OFZ 10Y from CBR ZCYC (new months)
-  - Quarterly net income from Smart-Lab (last 5 quarters)
-  - Annual FCF/Revenue from Smart-Lab
+update_data.py — дозагружает только недостающие данные:
+  - Цены акций с MOEX ISS (новые торговые дни)
+  - OFZ 10Y с ЦБ РФ (новые месяцы)
+  - Квартальную прибыль с Smart-Lab (последние 5 кварталов)
+  - Годовые FCF/Revenue с Smart-Lab
 
-Usage: python3 update_data.py
+Запуск: python3 update_data.py
 """
 import csv, json, re, time, urllib.request, urllib.parse
 from datetime import date, timedelta

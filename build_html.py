@@ -4,10 +4,12 @@ build_html.py — generates index.html with interactive Plotly charts for GitHub
 Usage: python3 build_html.py
 Output: index.html (open in browser or publish via GitHub Pages)
 """
-import csv, json
+import csv, json, math
 from datetime import datetime
+from pathlib import Path
 
-DATA_DIR = "./data"
+REPO_ROOT = Path(__file__).resolve().parent
+DATA_DIR = REPO_ROOT / "data"
 
 def read_csv(path):
     with open(path) as f:
@@ -120,8 +122,66 @@ layer2_alloc_traces = [
     js_series(dates, port_z, 'Portfolio Z', '#4da8c8'),
     js_series(dates, ofz_z,  'OFZ Z',       '#f0b429'),
     js_series(dates, comp_z, 'Composite ERP Z (Port − OFZ)', '#3dd68c', width=2.5),
-    erp_fill(dates, comp_z, above=True),
-    erp_fill(dates, comp_z, above=False),
+]
+
+# USD/RUB → CNY weight sigmoid
+def w_cny(x, m):
+    return 0.20 + 0.60 / (1 + math.exp(15 * (x - m) / m))
+
+usd_rub_rows = read_csv(f"{DATA_DIR}/usd_rub_history.csv")
+usd_rub_rates = [val(r['rate']) for r in usd_rub_rows]
+
+with open(f"{DATA_DIR}/usd_rub_stats.json") as f:
+    usd_rub_stats = json.load(f)
+
+sigmoid_x = usd_rub_stats['x']
+sigmoid_m = usd_rub_stats['m']
+sigmoid_w_cny = w_cny(sigmoid_x, sigmoid_m)
+sigmoid_m_w_cny = w_cny(sigmoid_m, sigmoid_m)
+sigmoid_w_rub = 1 - sigmoid_w_cny
+sigmoid_date = usd_rub_stats['date']
+
+AXIS_MIN = min([55] + usd_rub_rates + [sigmoid_x, sigmoid_m])
+AXIS_MAX = max([120] + usd_rub_rates + [sigmoid_x, sigmoid_m])
+N_POINTS = 300
+sigmoid_curve_x = [AXIS_MIN + i * (AXIS_MAX - AXIS_MIN) / (N_POINTS - 1) for i in range(N_POINTS)]
+sigmoid_curve_y = [w_cny(px, sigmoid_m) * 100 for px in sigmoid_curve_x]
+
+sigmoid_traces = [
+    {
+        'x': sigmoid_curve_x, 'y': sigmoid_curve_y, 'name': 'w_CNY(x)',
+        'type': 'scatter', 'mode': 'lines',
+        'line': {'color': '#4da8c8', 'width': 2.5},
+        'hovertemplate': 'USD/RUB: %{x:.2f}<br>w_CNY: <b>%{y:.0f}%</b><extra></extra>',
+    },
+    {
+        'x': [sigmoid_x], 'y': [sigmoid_w_cny * 100], 'name': f'current x = {sigmoid_x:.2f}',
+        'type': 'scatter', 'mode': 'markers',
+        'marker': {'color': '#e05252', 'size': 11},
+        'hovertemplate': f'x = {sigmoid_x:.2f}<br>w_CNY = {sigmoid_w_cny:.0%}<extra></extra>',
+    },
+]
+
+sigmoid_shapes = [
+    # vertical + horizontal at m (blue)
+    {'type': 'line', 'x0': sigmoid_m, 'x1': sigmoid_m, 'y0': 0, 'y1': 100,
+     'line': {'color': '#4da8c8', 'dash': 'dash', 'width': 1}},
+    {'type': 'line', 'xref': 'paper', 'x0': 0, 'x1': 1, 'y0': sigmoid_m_w_cny * 100, 'y1': sigmoid_m_w_cny * 100,
+     'line': {'color': '#4da8c8', 'dash': 'dash', 'width': 1}},
+    # vertical + horizontal at x (red)
+    {'type': 'line', 'x0': sigmoid_x, 'x1': sigmoid_x, 'y0': 0, 'y1': 100,
+     'line': {'color': '#e05252', 'dash': 'dash', 'width': 1}},
+    {'type': 'line', 'xref': 'paper', 'x0': 0, 'x1': 1, 'y0': sigmoid_w_cny * 100, 'y1': sigmoid_w_cny * 100,
+     'line': {'color': '#e05252', 'dash': 'dash', 'width': 1}},
+]
+
+sigmoid_annotations = [
+    {'x': sigmoid_x, 'y': sigmoid_w_cny * 100, 'text': f'w_CNY = {sigmoid_w_cny:.0%}',
+     'showarrow': False, 'xanchor': 'left', 'xshift': 12, 'yshift': 10,
+     'font': {'color': '#e05252', 'size': 13}},
+    {'x': sigmoid_m, 'y': sigmoid_m_w_cny * 100, 'text': f'm = {sigmoid_m:.2f}',
+     'showarrow': False, 'xanchor': 'left', 'xshift': 12, 'yshift': -14,
+     'font': {'color': '#4da8c8', 'size': 12}},
 ]
 
 data_json = json.dumps({
@@ -129,6 +189,14 @@ data_json = json.dumps({
     'layer1_individual': layer1_individual_traces,
     'layer2_rebal': layer2_rebal_traces,
     'layer2_alloc': layer2_alloc_traces,
+    'sigmoid': sigmoid_traces,
+    'sigmoid_shapes': sigmoid_shapes,
+    'sigmoid_annotations': sigmoid_annotations,
+    'sigmoid_stats': {
+        'x': sigmoid_x, 'm': sigmoid_m,
+        'w_cny': sigmoid_w_cny, 'w_rub': 1 - sigmoid_w_cny,
+        'date': usd_rub_stats['date'],
+    },
 }, default=lambda x: None)
 
 # ── HTML ──────────────────────────────────────────────────────────────────────
@@ -166,6 +234,7 @@ html = f"""<!DOCTYPE html>
   <div class="tab" onclick="showTab('layer1i')">Yield per stock</div>
   <div class="tab" onclick="showTab('layer2r')">Layer 2: Rebalancing</div>
   <div class="tab" onclick="showTab('layer2a')">Layer 2: Allocation</div>
+  <div class="tab" onclick="showTab('sigmoid')">USD/RUB → CNY Weight</div>
 </div>
 
 <div id="layer1" class="chart-wrap active"><div id="plot_layer1" style="height:480px"></div>
@@ -193,6 +262,16 @@ html = f"""<!DOCTYPE html>
   <b>Green (Composite ERP Z)</b> = Portfolio Z − OFZ Z.<br>
   Above +1.5 → stocks cheap vs rates → increase equity allocation.<br>
   Below −1.5 → rates high vs stocks → increase bond allocation.
+</p></div>
+
+<div id="sigmoid" class="chart-wrap"><div id="plot_sigmoid" style="height:480px"></div>
+<p class="note">
+  w_CNY(x) = 0.20 + 0.60 / (1 + exp(15·(x−m)/m)), where <b>x</b> is the latest USD/RUB rate and
+  <b>m</b> is its 365-day average.<br>
+  <b>Blue</b> — sigmoid curve and 365-day average (m = {sigmoid_m:.2f}).
+  <b>Red</b> — current rate (x = {sigmoid_x:.2f}) and resulting w_CNY = {sigmoid_w_cny:.0%},
+  w_RUB = {sigmoid_w_rub:.0%}.<br>
+  Data as of {sigmoid_date}.
 </p></div>
 
 <script>
@@ -224,6 +303,15 @@ const HLINE = (y, color, dash) => ({{
   y0: y, y1: y, line: {{ color, dash: dash||'dash', width: 1 }},
 }});
 
+function sigmoidLayout() {{
+  return Object.assign({{}}, LAYOUT_BASE, {{
+    xaxis: {{ gridcolor: '#1e2830', linecolor: '#1e2830', title: 'USD/RUB rate' }},
+    yaxis: Object.assign({{}}, LAYOUT_BASE.yaxis, {{ title: 'w_CNY(x), %', range: [0, 100], dtick: 10 }}),
+    shapes: DATA.sigmoid_shapes,
+    annotations: DATA.sigmoid_annotations,
+  }});
+}}
+
 const CONFIG = {{ responsive: true, displayModeBar: true,
   modeBarButtonsToRemove: ['select2d','lasso2d','autoScale2d'],
   toImageButtonOptions: {{ format: 'png', scale: 2 }} }};
@@ -232,7 +320,7 @@ let rendered = {{}};
 
 function showTab(id) {{
   document.querySelectorAll('.tab').forEach((t,i) => {{
-    const ids = ['layer1','layer1i','layer2r','layer2a'];
+    const ids = ['layer1','layer1i','layer2r','layer2a','sigmoid'];
     t.classList.toggle('active', ids[i] === id);
   }});
   document.querySelectorAll('.chart-wrap').forEach(el => {{
@@ -265,6 +353,8 @@ function renderChart(id) {{
         HLINE(1.5, '#3dd68c', 'dot'),
         HLINE(-1.5,'#e05252', 'dot'),
       ]), CONFIG);
+  }} else if (id === 'sigmoid') {{
+    Plotly.newPlot('plot_sigmoid', DATA.sigmoid, sigmoidLayout(), CONFIG);
   }}
 }}
 
@@ -274,7 +364,7 @@ renderChart('layer1');
 </body>
 </html>"""
 
-out = "./index.html"
+out = REPO_ROOT / "index.html"
 with open(out, 'w') as f:
     f.write(html)
 print(f"Generated: {out}")

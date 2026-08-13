@@ -13,12 +13,13 @@ Layer 2: Z-score per ticker vs own 36-month history
 import csv, re, math
 from datetime import date, timedelta
 from calendar import monthrange
+from pathlib import Path
 
-SCRATCHPAD = "/private/tmp/claude-501/-Users-ilyazykov-code-personal-buildit/ffcba325-4fdb-4f82-b4b4-957caab60f07/scratchpad"
+SCRATCHPAD = str(Path(__file__).resolve().parent.parent / "data")
 
 WEIGHTS = {
-    'SBER': 1/6, 'YDEX': 1/6, 'T': 1/6,
-    'OZON': 1/6, 'ROSN': 1/6, 'VTBR': 1/6,
+    'SBER': 0.4172, 'YDEX': 0.3152, 'T': 0.1744,
+    'OZON': 0.0759, 'ROSN': 0.0099, 'VTBR': 0.0074,
 }
 
 SHARES = {
@@ -324,7 +325,7 @@ rows = main()
 def fmt(v, w=7):
     return f"{v:{w}.2f}" if v is not None else " " * (w-4) + "None"
 
-print(f"\nLayer 1 — Earnings Yield (all tickers vs OFZ):")
+print(f"\nLayer 1 — Earnings Yield (все тикеры, сравнение с OFZ):")
 print(f"{'Date':<8} {'SBER_EY':>8} {'YDEX_EY':>8} {'T_EY':>8} {'OZON_EY':>8} "
       f"{'ROSN_EY':>8} {'Port_EY':>8} {'OFZ':>7} {'ERP':>8}")
 print("-" * 85)
@@ -358,7 +359,7 @@ print(f"\nTotal: {len(rows)} months, "
 
 # ── Save CSV ───────────────────────────────────────────────────────────────────
 import csv as csv_mod
-out_csv = "/Users/ilyazykov/Downloads/composite_valuation.csv"
+out_csv = str(Path(SCRATCHPAD) / "composite_valuation.csv")
 fields = ['date',
           'SBER_yield','YDEX_yield','T_yield','OZON_yield','ROSN_yield','VTBR_yield',
           'portfolio_yield','ofz10y','erp',
@@ -408,13 +409,13 @@ ax.plot(d1, erp1, color='#3dd68c', linewidth=2.5, label='Composite ERP (Yield �
 ax.axhline(0, color='#6a7381', linewidth=1, linestyle='--', alpha=0.7)
 
 ax.fill_between(d1, erp1, 0,
-    where=[e >= 0 for e in erp1], alpha=0.12, color='#3dd68c', label='ERP > 0 (undervalued)')
+    where=[e >= 0 for e in erp1], alpha=0.12, color='#3dd68c', label='ERP > 0 (недооценка)')
 ax.fill_between(d1, erp1, 0,
-    where=[e < 0  for e in erp1], alpha=0.12, color='#e05252', label='ERP < 0 (overvalued)')
+    where=[e < 0  for e in erp1], alpha=0.12, color='#e05252', label='ERP < 0 (переоценка)')
 
-ax.set_title('Layer 1: Portfolio Composite Yield vs OFZ (stocks/bonds allocation)',
+ax.set_title('Layer 1: Portfolio Composite Yield vs OFZ (аллокация акции/облигации)',
              color='#e6edf3', fontsize=12, pad=12)
-ax.set_ylabel('%, annualised', color='#c9d1d9', fontsize=10)
+ax.set_ylabel('%, годовых', color='#c9d1d9', fontsize=10)
 ax.tick_params(colors='#6a7381', labelsize=8)
 for spine in ax.spines.values(): spine.set_edgecolor('#1e2830')
 ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
@@ -423,10 +424,13 @@ plt.xticks(rotation=45, ha='right')
 ax.legend(facecolor='#13191f', edgecolor='#1e2830', labelcolor='#c9d1d9', fontsize=9)
 ax.grid(axis='y', color='#1e2830', linewidth=0.5, alpha=0.7)
 ax.grid(axis='x', color='#1e2830', linewidth=0.3, alpha=0.5)
+CHARTS_DIR = Path(__file__).resolve().parent / "charts"
+CHARTS_DIR.mkdir(parents=True, exist_ok=True)
+
 plt.tight_layout()
-plt.savefig("/Users/ilyazykov/Downloads/composite_layer1.png", dpi=150,
+plt.savefig(CHARTS_DIR / "composite_layer1.png", dpi=150,
             bbox_inches='tight', facecolor='#0d1117')
-print("Chart 1 (Layer 1): /Users/ilyazykov/Downloads/composite_layer1.png")
+print(f"Chart 1 (Layer 1): {CHARTS_DIR / 'composite_layer1.png'}")
 
 # ── Chart 2: Layer 2 — Z-scores per ticker ────────────────────────────────────
 ticker_colors = {
@@ -471,17 +475,17 @@ for ticker in ['SBER', 'YDEX', 'T', 'OZON', 'ROSN', 'VTBR']:
                  label=ticker_labels[ticker] if first_seg else '_nolegend_')
 
 ax2.set_ylabel('Z-score', color='#c9d1d9', fontsize=10)
-ax2.set_title('Rebalancing: each stock cheaper (+) or more expensive (−) vs its 3-year norm',
+ax2.set_title('Ребалансировка: каждая бумага дешевле (+) или дороже (−) своей нормы за последние 3 года',
               color='#e6edf3', fontsize=11, pad=8)
 ax2.legend(facecolor='#13191f', edgecolor='#1e2830', labelcolor='#c9d1d9', fontsize=9)
 ax2.autoscale(axis='y')
 ax2.margins(y=0.08)
 
 # Right-side labels for zones
-ax2.text(0.01, 1.55, 'line above → stock cheaper than its norm → buy more',
+ax2.text(0.01, 1.55, 'линия выше → эта бумага дешевле своей нормы → докупать',
          transform=ax2.get_yaxis_transform(),
          color='#3dd68c', fontsize=7.5, va='bottom', alpha=0.85)
-ax2.text(0.01, -1.55, 'line below → stock more expensive than its norm → trim',
+ax2.text(0.01, -1.55, 'линия ниже → эта бумага дороже своей нормы → сокращать',
          transform=ax2.get_yaxis_transform(),
          color='#e05252', fontsize=7.5, va='top', alpha=0.85)
 
@@ -521,7 +525,7 @@ if cz_clean_x:
     ax3.fill_between(cz_clean_x, cz_clean_y, 0,
         where=[v < 0  for v in cz_clean_y], alpha=0.12, color='#e05252')
 
-ax3.set_title('Allocation: portfolio cheaper (+) or more expensive (−) vs its norm, adjusted for rates',
+ax3.set_title('Аллокация: портфель дешевле (+) или дороже (−) своей нормы с поправкой на ставки',
               color='#e6edf3', fontsize=11, pad=8)
 ax3.set_ylabel('Z-score', color='#c9d1d9', fontsize=10)
 ax3.set_xlabel('')
@@ -532,15 +536,15 @@ ax3.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
 ax3.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
 plt.xticks(rotation=45, ha='right')
 
-ax3.text(0.01, 1.55, 'green above → stocks cheap vs rates → increase equity allocation',
+ax3.text(0.01, 1.55, 'зелёная выше → акции дёшевы vs ставки → больше акций',
          transform=ax3.get_yaxis_transform(),
          color='#3dd68c', fontsize=7.5, va='bottom', alpha=0.85)
-ax3.text(0.01, -1.55, 'green below → rates high vs stocks → increase bond allocation',
+ax3.text(0.01, -1.55, 'зелёная ниже → ставки высоки vs акции → больше ОФЗ',
          transform=ax3.get_yaxis_transform(),
          color='#e05252', fontsize=7.5, va='top', alpha=0.85)
 
 plt.tight_layout()
-plt.savefig("/Users/ilyazykov/Downloads/composite_layer2.png", dpi=150,
+plt.savefig(CHARTS_DIR / "composite_layer2.png", dpi=150,
             bbox_inches='tight', facecolor='#0d1117')
-print("Chart 2 (Layer 2): /Users/ilyazykov/Downloads/composite_layer2.png")
+print(f"Chart 2 (Layer 2): {CHARTS_DIR / 'composite_layer2.png'}")
 plt.close('all')

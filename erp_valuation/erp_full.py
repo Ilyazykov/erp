@@ -5,8 +5,12 @@ from calendar import monthrange
 SCRATCHPAD = "/private/tmp/claude-501/-Users-ilyazykov-code-personal-buildit/ffcba325-4fdb-4f82-b4b4-957caab60f07/scratchpad"
 
 WEIGHTS = {
-    'SBER': 1/6, 'YDEX': 1/6, 'T': 1/6,
-    'OZON': 1/6, 'ROSN': 1/6, 'VTBR': 1/6,
+    'SBER': 0.4172,
+    'YDEX': 0.3152,
+    'T':    0.1744,
+    'OZON': 0.0759,
+    'ROSN': 0.0099,
+    'VTBR': 0.0074,
 }
 
 SHARES = {
@@ -43,16 +47,16 @@ QUARTER_END = {1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31)}
 
 def quarter_str_to_report_date(qstr):
     """
-    Reports are published approximately:
-    Q1 → end of April, Q2 → end of July, Q3 → end of October, Q4 → end of February next year
-    Conservative estimate: 45 days after quarter end.
-    Exception for 2022 (SBER/VTBR did not publish) — handled via None values.
+    'SBER' публикует примерно:
+    Q1 → конец апреля, Q2 → конец июля, Q3 → конец октября, Q4 → конец февраля следующего года
+    Используем консервативную оценку: 45 дней после конца квартала.
+    Исключения для 2022 (Сбер/ВТБ не публиковали) — обрабатываем через None значения.
     """
     year = int(qstr[:4])
     q = int(qstr[5])
     end_month, end_day = QUARTER_END[q]
     if q == 4:
-        # Q4: annual data available from Jan 1 next year
+        # Q4: годовые данные известны с 1 января следующего года
         report_date = date(year + 1, 1, 1)
     else:
         qend = date(year, end_month, end_day)
@@ -172,7 +176,7 @@ def main():
                 shares = TCSG_SHARES
             elif ticker == 'T' and as_of < T_SPLIT_DATE:
                 shares = T_PRE_SPLIT_SHARES
-            mcap = price * shares / 1e9  # bln RUB
+            mcap = price * shares / 1e9  # млрд руб
             ey_values[ticker] = ttm_ni / mcap * 100  # %
 
         available = [t for t in WEIGHTS if ey_values.get(t) is not None]
@@ -243,7 +247,7 @@ try:
     ws = wb.active
     ws.title = "ERP Portfolio"
 
-    headers = ['Date','SBER EY%','YDEX EY%','T EY%','OZON EY%',
+    headers = ['Дата','SBER EY%','YDEX EY%','T EY%','OZON EY%',
                'ROSN EY%','VTBR EY%','Portfolio EY%','OFZ 10Y%','ERP Proxy%']
     hdr_fill = PatternFill("solid", fgColor="1e2a3a")
     hdr_font = Font(bold=True, color="e6edf3")
@@ -293,13 +297,13 @@ ax.plot(dates_p, erp_p, color='#3dd68c', linewidth=2.5, label='ERP Proxy (EY −
 ax.axhline(0, color='#6a7381', linewidth=1, linestyle='--', alpha=0.7)
 
 ax.fill_between(dates_p, erp_p, 0,
-    where=[e >= 0 for e in erp_p], alpha=0.12, color='#3dd68c', label='ERP > 0 (undervalued)')
+    where=[e >= 0 for e in erp_p], alpha=0.12, color='#3dd68c', label='ERP > 0 (недооценка)')
 ax.fill_between(dates_p, erp_p, 0,
-    where=[e < 0 for e in erp_p],  alpha=0.12, color='#e05252', label='ERP < 0 (overvalued)')
+    where=[e < 0 for e in erp_p],  alpha=0.12, color='#e05252', label='ERP < 0 (переоценка)')
 
-ax.set_title('ERP Proxy — Russian Stock Portfolio (SBER/YDEX/T/OZON/ROSN/VTBR)',
+ax.set_title('ERP Proxy российского портфеля (SBER/YDEX/T/OZON/ROSN/VTBR)',
              color='#e6edf3', fontsize=13, pad=12)
-ax.set_ylabel('%, annualised', color='#c9d1d9', fontsize=10)
+ax.set_ylabel('%, годовых', color='#c9d1d9', fontsize=10)
 ax.tick_params(colors='#6a7381', labelsize=8)
 for spine in ax.spines.values():
     spine.set_edgecolor('#1e2830')
