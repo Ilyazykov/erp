@@ -1,0 +1,35 @@
+name: Update CNY/RUB weights plot and report
+
+on:
+  schedule:
+    - cron: "0 12 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  plot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r usd_rub_tracker/requirements.txt
+
+      - name: Calculate weights and build plot
+        run: python usd_rub_tracker/scripts/calc_weights_and_plot.py
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add usd_rub_tracker/charts/sigmoid.png usd_rub_tracker/REPORT.md
+          git commit -m "chore: update weights plot and report" || echo "No changes to commit"
+          git push || echo "No changes to push"
