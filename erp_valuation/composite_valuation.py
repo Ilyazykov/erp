@@ -222,16 +222,20 @@ def main():
     all_prices = {t: load_prices(t) for t in WEIGHTS}
     ofz_data = load_ofz()
 
+    today = date.today()
+    end_y, end_m = today.year, today.month
+
     months = []
     y, m = 2019, 1
-    while (y, m) <= (2026, 7):
+    while (y, m) <= (end_y, end_m):
         months.append((y, m))
         m += 1
         if m > 12: m, y = 1, y + 1
 
     results = []
     for (y, m) in months:
-        as_of = date(y, m, monthrange(y, m)[1])
+        is_current_month = (y, m) == (end_y, end_m)
+        as_of = today if is_current_month else date(y, m, monthrange(y, m)[1])
         month_str = f"{y}-{m:02d}"
 
         # OFZ

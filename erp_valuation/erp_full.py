@@ -1,8 +1,9 @@
 import csv, re, time
 from datetime import date, timedelta
 from calendar import monthrange
+from pathlib import Path
 
-SCRATCHPAD = "/private/tmp/claude-501/-Users-ilyazykov-code-personal-buildit/ffcba325-4fdb-4f82-b4b4-957caab60f07/scratchpad"
+SCRATCHPAD = str(Path(__file__).resolve().parent.parent / "data")
 
 WEIGHTS = {
     'SBER': 0.4172,
@@ -136,17 +137,20 @@ def main():
     all_prices = {t: load_prices(t) for t in WEIGHTS}
     ofz_data = load_ofz()
 
-    # Monthly range: 2019-01 to 2026-07
+    today = date.today()
+    end_y, end_m = today.year, today.month
+
     months = []
     y, m = 2019, 1
-    while (y, m) <= (2026, 7):
+    while (y, m) <= (end_y, end_m):
         months.append((y, m))
         m += 1
         if m > 12: m, y = 1, y + 1
 
     results = []
     for (y, m) in months:
-        as_of = date(y, m, monthrange(y, m)[1])
+        is_current_month = (y, m) == (end_y, end_m)
+        as_of = today if is_current_month else date(y, m, monthrange(y, m)[1])
         month_str = f"{y}-{m:02d}"
 
         # OFZ
@@ -226,7 +230,7 @@ for r in rows:
 print(f"\nTotal months: {len(rows)}, with data: {sum(1 for r in rows if r['portfolio_ey'] is not None)}")
 
 # ── Save CSV ──────────────────────────────────────────────────────────────────
-out_csv = "/Users/ilyazykov/Downloads/erp_portfolio.csv"
+out_csv = str(Path(SCRATCHPAD) / "erp_portfolio.csv")
 fields = ['date','SBER_ey','YDEX_ey','T_ey','OZON_ey','ROSN_ey','VTBR_ey',
           'portfolio_ey','ofz10y','erp']
 with open(out_csv, 'w', newline='') as f:
@@ -269,8 +273,9 @@ try:
                 if ci == 10 and v is not None:  # ERP column
                     c.fill = PatternFill("solid", fgColor="c6efce" if v > 0 else "ffc7ce")
 
-    wb.save("/Users/ilyazykov/Downloads/erp_portfolio.xlsx")
-    print("Excel: /Users/ilyazykov/Downloads/erp_portfolio.xlsx")
+    out_xlsx = Path(__file__).resolve().parent / "erp_portfolio.xlsx"
+    wb.save(out_xlsx)
+    print(f"Excel: {out_xlsx}")
 except ImportError:
     print("openpyxl not available")
 
@@ -314,7 +319,9 @@ ax.legend(facecolor='#13191f', edgecolor='#1e2830', labelcolor='#c9d1d9', fontsi
 ax.grid(axis='y', color='#1e2830', linewidth=0.5, alpha=0.7)
 ax.grid(axis='x', color='#1e2830', linewidth=0.3, alpha=0.5)
 
+out_png = Path(__file__).resolve().parent / "charts" / "erp_portfolio.png"
+out_png.parent.mkdir(parents=True, exist_ok=True)
+
 plt.tight_layout()
-plt.savefig("/Users/ilyazykov/Downloads/erp_portfolio.png", dpi=150,
-            bbox_inches='tight', facecolor='#0d1117')
-print("Chart: /Users/ilyazykov/Downloads/erp_portfolio.png")
+plt.savefig(out_png, dpi=150, bbox_inches='tight', facecolor='#0d1117')
+print(f"Chart: {out_png}")
