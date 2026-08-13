@@ -27,6 +27,7 @@
 <body>
 <h1>ERP Portfolio Valuation</h1>
 <p class="subtitle">SBER · YDEX · T · OZON · ROSN · VTBR &nbsp;|&nbsp; Jan 2019 — present</p>
+<p class="subtitle" id="last_updated">Last updated: loading…</p>
 
 <div class="tabs">
   <div class="tab active" data-tab="layer1">Layer 1: ERP</div>
@@ -200,7 +201,7 @@ function renderChart(id) {
       ]), CONFIG);
   } else if (id === 'sigmoid') {
     const layout = Object.assign({}, LAYOUT_BASE, {
-      xaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', title: 'USD/RUB rate' },
+      xaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', title: 'USD/RUB rate', range: DATA.sigmoidAxisRange },
       yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { title: 'w_CNY(x), %', range: [0, 100], dtick: 10 }),
       shapes: DATA.sigmoidShapes,
       annotations: DATA.sigmoidAnnotations,
@@ -319,7 +320,8 @@ async function loadData() {
   `;
 
   return { layer1, layer1_individual: layer1Individual, layer2_rebal: layer2Rebal,
-           layer2_alloc: layer2Alloc, sigmoid, sigmoidShapes, sigmoidAnnotations };
+           layer2_alloc: layer2Alloc, sigmoid, sigmoidShapes, sigmoidAnnotations,
+           sigmoidAxisRange: [axisMin, axisMax] };
 }
 
 loadData().then(data => {

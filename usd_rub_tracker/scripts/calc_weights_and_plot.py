@@ -25,7 +25,7 @@ from __future__ import annotations
 import csv
 import json
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import matplotlib
@@ -33,6 +33,10 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+
+
+def utc_timestamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -98,6 +102,8 @@ def build_plot(rates: list[float], x: float, m: float, current_w_cny: float, out
     ax.yaxis.set_major_formatter(lambda v, _pos: f"{v:.0f}%")
     ax.grid(True, alpha=0.3)
     ax.legend(loc="best")
+    fig.text(0.99, 0.01, f"Updated: {utc_timestamp()}", color="#6b7280", fontsize=7,
+              ha="right", va="bottom")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
@@ -110,6 +116,7 @@ def build_report(today: date, x: float, m: float, cny: float, rub: float, report
     content = f"""# USD/RUB Weight Report
 
 **Date:** {today.isoformat()}
+**Updated:** {utc_timestamp()}
 
 - Current USD/RUB rate (x): **{x:.4f}**
 - 365-day average USD/RUB rate (m): **{m:.4f}**

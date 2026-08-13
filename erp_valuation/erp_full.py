@@ -1,9 +1,12 @@
 import csv, re, time
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime, timezone
 from calendar import monthrange
 from pathlib import Path
 
 SCRATCHPAD = str(Path(__file__).resolve().parent.parent / "data")
+
+def utc_timestamp():
+    return datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
 
 WEIGHTS = {
     'SBER': 0.4172,
@@ -318,6 +321,8 @@ plt.xticks(rotation=45, ha='right')
 ax.legend(facecolor='#13191f', edgecolor='#1e2830', labelcolor='#c9d1d9', fontsize=9)
 ax.grid(axis='y', color='#1e2830', linewidth=0.5, alpha=0.7)
 ax.grid(axis='x', color='#1e2830', linewidth=0.3, alpha=0.5)
+fig.text(0.99, 0.01, f'Updated: {utc_timestamp()}', color='#6a7381', fontsize=7,
+          ha='right', va='bottom')
 
 out_png = Path(__file__).resolve().parent / "charts" / "erp_portfolio.png"
 out_png.parent.mkdir(parents=True, exist_ok=True)

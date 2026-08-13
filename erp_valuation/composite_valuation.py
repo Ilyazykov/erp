@@ -11,11 +11,14 @@ Layer 2: Z-score per ticker vs own 36-month history
   → Z-score removes scale differences — all comparable
 """
 import csv, re, math
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime, timezone
 from calendar import monthrange
 from pathlib import Path
 
 SCRATCHPAD = str(Path(__file__).resolve().parent.parent / "data")
+
+def utc_timestamp():
+    return datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
 
 WEIGHTS = {
     'SBER': 0.4172, 'YDEX': 0.3152, 'T': 0.1744,
@@ -428,6 +431,8 @@ plt.xticks(rotation=45, ha='right')
 ax.legend(facecolor='#13191f', edgecolor='#1e2830', labelcolor='#c9d1d9', fontsize=9)
 ax.grid(axis='y', color='#1e2830', linewidth=0.5, alpha=0.7)
 ax.grid(axis='x', color='#1e2830', linewidth=0.3, alpha=0.5)
+fig.text(0.99, 0.01, f'Updated: {utc_timestamp()}', color='#6a7381', fontsize=7,
+          ha='right', va='bottom')
 CHARTS_DIR = Path(__file__).resolve().parent / "charts"
 CHARTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -546,6 +551,9 @@ ax3.text(0.01, 1.55, 'зелёная выше → акции дёшевы vs с�
 ax3.text(0.01, -1.55, 'зелёная ниже → ставки высоки vs акции → больше ОФЗ',
          transform=ax3.get_yaxis_transform(),
          color='#e05252', fontsize=7.5, va='top', alpha=0.85)
+
+fig.text(0.99, 0.01, f'Updated: {utc_timestamp()}', color='#6a7381', fontsize=7,
+          ha='right', va='bottom')
 
 plt.tight_layout()
 plt.savefig(CHARTS_DIR / "composite_layer2.png", dpi=150,
