@@ -150,24 +150,34 @@ def build_wcny_5y_plot(history_5y: list[tuple[str, float]], out_path: Path) -> N
     plot_dates = [d for d, v in zip(dates, valid) if v]
     plot_x = rates[valid]
     plot_m = rolling_m[valid]
-    plot_w_cny = w_cny(plot_x, plot_m) * 100
+    plot_w_rub = w_rub(plot_x, plot_m) * 100
 
     fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(plot_dates, plot_w_cny, color="#2563eb", linewidth=1.5, label="w_CNY(t)")
+    ax.plot(plot_dates, plot_w_rub, color="#2563eb", linewidth=1.5, label="w_RUB(t)")
     for level in (20, 50, 80):
         ax.axhline(level, color="#6b7280", linestyle="--", linewidth=0.6)
 
     ax.set_xlabel("Date")
-    ax.set_ylabel("w_CNY(t), %")
-    ax.set_title("CNY weight over time (trailing 365-day average)")
+    ax.set_ylabel("w_RUB(t), %", color="#2563eb")
+    ax.set_title("RUB weight over time (trailing 365-day average) vs USD/RUB rate")
     ax.set_ylim(0, 100)
     ax.yaxis.set_major_locator(plt.MultipleLocator(10))
     ax.yaxis.set_major_formatter(lambda v, _pos: f"{v:.0f}%")
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
-    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+    ax.tick_params(axis="y", labelcolor="#2563eb")
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+    ax.xaxis.set_major_locator(mdates.YearLocator())
     plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
     ax.grid(True, alpha=0.3)
-    ax.legend(loc="best")
+
+    ax2 = ax.twinx()
+    ax2.plot(plot_dates, plot_x, color="#9ca3af", linewidth=1, alpha=0.7, label="USD/RUB rate")
+    ax2.set_ylabel("USD/RUB rate", color="#9ca3af")
+    ax2.tick_params(axis="y", labelcolor="#9ca3af")
+
+    lines1, labels1 = ax.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax.legend(lines1 + lines2, labels1 + labels2, loc="upper left")
+
     fig.text(0.99, 0.01, f"Updated: {utc_timestamp()}", color="#6b7280", fontsize=7,
               ha="right", va="bottom")
 
@@ -192,7 +202,7 @@ def build_report(today: date, x: float, m: float, cny: float, rub: float, report
 
 ![Sigmoid weight curve]({plot_rel_path})
 
-![CNY weight over 5 years]({wcny_5y_rel_path})
+![RUB weight over 5 years]({wcny_5y_rel_path})
 """
     report_path.write_text(content, encoding="utf-8")
 

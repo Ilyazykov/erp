@@ -1,13 +1,13 @@
 """
 One-off backfill script.
 
-Fetches daily USD/RUB exchange rates from 2020-01-01 onward from the Bank
+Fetches daily USD/RUB exchange rates from 2009-01-01 onward from the Bank
 of Russia (CBR) public XML API and saves them to
 data/usd_rub_history_5y.csv. Unlike data/usd_rub_history.csv (a 365-day
 rolling window, trimmed daily), this file is append-only and keeps
 growing forever — it is the source for the "w_CNY over 5 years" chart.
 
-The chart itself starts around 2021-01 (a full year after 2020-01-01),
+The chart itself starts around 2010-01 (a full year after 2009-01-01),
 since the first 365 days of history are only used to warm up each day's
 trailing 365-day average (m) and produce no visible w_CNY(t) point.
 
@@ -37,7 +37,7 @@ DATA_DIR = REPO_ROOT / "data"
 CSV_PATH = DATA_DIR / "usd_rub_history_5y.csv"
 
 REQUEST_TIMEOUT = 60
-HISTORY_START = date(2020, 1, 1)
+HISTORY_START = date(2009, 1, 1)
 
 
 def fetch_usd_rub_history(start: date, end: date) -> list[tuple[str, float]]:
