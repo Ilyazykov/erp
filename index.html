@@ -77,7 +77,7 @@ const DATA_DIR = './data';
 async function fetchCsv(path) {
   const res = await fetch(path, { cache: 'no-store' });
   const text = await res.text();
-  const lines = text.trim().split('\n');
+  const lines = text.trim().split(/\r\n|\r|\n/);
   const header = lines[0].split(',');
   return lines.slice(1).map(line => {
     const cells = line.split(',');
