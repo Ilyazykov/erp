@@ -35,7 +35,7 @@
   <div class="tab" data-tab="layer2r">Layer 2: Rebalancing</div>
   <div class="tab" data-tab="layer2a">Layer 2: Allocation</div>
   <div class="tab" data-tab="sigmoid">USD/RUB → CNY Weight</div>
-  <div class="tab" data-tab="wcny5y">w_RUB over 5 years</div>
+  <div class="tab" data-tab="wcny5y">w_CNY over 5 years</div>
 </div>
 
 <div id="layer1" class="chart-wrap active"><div id="plot_layer1" style="height:480px"></div>
@@ -74,8 +74,8 @@
 
 <div id="wcny5y" class="chart-wrap"><div id="plot_wcny5y" style="height:480px"></div>
 <p class="note">
-  w_RUB(t) computed daily over the last 5 years: x(t) is that day's USD/RUB rate, m(t) is the
-  trailing 365-day average USD/RUB rate as of that day.
+  w_CNY(t) computed daily over the last 5 years: x(t) is that day's USD/RUB rate, m(t) is the
+  trailing 365-day average USD/RUB rate as of that day. USD/RUB rate overlaid on the right axis.
 </p></div>
 
 <script>
@@ -218,7 +218,13 @@ function renderChart(id) {
     Plotly.newPlot('plot_wcny5y', DATA.wCny5y,
       Object.assign({}, LAYOUT_BASE, {
         xaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', tickformat: '%Y', dtick: 'M12', tickangle: -45 },
-        yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { title: 'w_RUB(t), %', range: [0, 100], dtick: 10 }),
+        yaxis: Object.assign({}, LAYOUT_BASE.yaxis, {
+          title: 'w_CNY(t), %', range: [0, 100], dtick: 10, color: '#4da8c8',
+        }),
+        yaxis2: {
+          title: 'USD/RUB rate', overlaying: 'y', side: 'right',
+          gridcolor: '#1e2830', linecolor: '#1e2830', color: '#9ca3af',
+        },
         shapes: [HLINE(20, '#6a7381', 'dot'), HLINE(50, '#6a7381', 'dot'), HLINE(80, '#6a7381', 'dot')],
       }), CONFIG);
   }
@@ -362,12 +368,13 @@ async function loadData() {
     Data as of ${usdRubStats.date}.
   `;
 
-  // w_RUB(t) over the 5-year history: m(t) is the trailing 365-day average
+  // w_CNY(t) over the 5-year history: m(t) is the trailing 365-day average
   // as of each day (needs at least 365 preceding rows to be defined).
   const rates5y = usdRub5yRows.map(r => val(r.rate));
   const dates5y = usdRub5yRows.map(r => r.date);
   const wCny5yDates = [];
   const wCny5yValues = [];
+  const wCny5yRates = [];
   let windowSum = 0;
   for (let i = 0; i < rates5y.length; i++) {
     windowSum += rates5y[i];
@@ -376,15 +383,27 @@ async function loadData() {
       const mT = windowSum / 365;
       const xT = rates5y[i];
       wCny5yDates.push(dates5y[i]);
-      wCny5yValues.push((1 - wCny(xT, mT)) * 100);
+      wCny5yValues.push(wCny(xT, mT) * 100);
+      wCny5yRates.push(xT);
     }
   }
-  const wCny5y = [{
-    x: wCny5yDates, y: wCny5yValues, name: 'w_RUB(t)',
-    type: 'scatter', mode: 'lines',
-    line: { color: '#4da8c8', width: 2 },
-    hovertemplate: '%{x}<br>w_RUB: <b>%{y:.0f}%</b><extra></extra>',
-  }];
+  const wCny5y = [
+    {
+      x: wCny5yDates, y: wCny5yValues, name: 'w_CNY(t)',
+      type: 'scatter', mode: 'lines',
+      line: { color: '#4da8c8', width: 2 },
+      yaxis: 'y',
+      hovertemplate: '%{x}<br>w_CNY: <b>%{y:.0f}%</b><extra></extra>',
+    },
+    {
+      x: wCny5yDates, y: wCny5yRates, name: 'USD/RUB rate',
+      type: 'scatter', mode: 'lines',
+      line: { color: '#9ca3af', width: 1 },
+      opacity: 0.7,
+      yaxis: 'y2',
+      hovertemplate: '%{x}<br>USD/RUB: <b>%{y:.2f}</b><extra></extra>',
+    },
+  ];
 
   return { layer1, layer1_individual: layer1Individual, layer2_rebal: layer2Rebal,
            layer2_alloc: layer2Alloc, sigmoid, sigmoidShapes, sigmoidAnnotations, wCny5y,
