@@ -35,6 +35,7 @@
   <div class="tab" data-tab="layer2r">Layer 2: Rebalancing</div>
   <div class="tab" data-tab="layer2a">Layer 2: Allocation</div>
   <div class="tab" data-tab="sigmoid">USD/RUB → CNY Weight</div>
+  <div class="tab" data-tab="wcny5y">w_CNY over 5 years</div>
 </div>
 
 <div id="layer1" class="chart-wrap active"><div id="plot_layer1" style="height:480px"></div>
@@ -69,6 +70,12 @@
   w_CNY(x) = 0.20 + 0.60 / (1 + exp(15·(x−m)/m)), where <b>x</b> is the latest USD/RUB rate and
   <b>m</b> is its 365-day average.<br>
   <span class="loading">Loading current values…</span>
+</p></div>
+
+<div id="wcny5y" class="chart-wrap"><div id="plot_wcny5y" style="height:480px"></div>
+<p class="note">
+  w_CNY(t) computed daily over the last 5 years: x(t) is that day's USD/RUB rate, m(t) is the
+  trailing 365-day average USD/RUB rate as of that day.
 </p></div>
 
 <script>
@@ -207,6 +214,13 @@ function renderChart(id) {
       annotations: DATA.sigmoidAnnotations,
     });
     Plotly.newPlot('plot_sigmoid', DATA.sigmoid, layout, CONFIG);
+  } else if (id === 'wcny5y') {
+    Plotly.newPlot('plot_wcny5y', DATA.wCny5y,
+      Object.assign({}, LAYOUT_BASE, {
+        xaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', tickformat: '%Y-%m', tickangle: -45 },
+        yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { title: 'w_CNY(t), %', range: [0, 100], dtick: 10 }),
+        shapes: [HLINE(20, '#6a7381', 'dot'), HLINE(50, '#6a7381', 'dot'), HLINE(80, '#6a7381', 'dot')],
+      }), CONFIG);
   }
 }
 
@@ -239,11 +253,12 @@ async function loadLastUpdated() {
 }
 
 async function loadData() {
-  const [rows, eyRows, usdRubRows, usdRubStats] = await Promise.all([
+  const [rows, eyRows, usdRubRows, usdRubStats, usdRub5yRows] = await Promise.all([
     fetchCsv(`${DATA_DIR}/composite_valuation.csv`),
     fetchCsv(`${DATA_DIR}/erp_portfolio.csv`),
     fetchCsv(`${DATA_DIR}/usd_rub_history.csv`),
     fetchJson(`${DATA_DIR}/usd_rub_stats.json`),
+    fetchCsv(`${DATA_DIR}/usd_rub_history_5y.csv`),
   ]);
 
   const dates = rows.map(r => r.date + '-01');
@@ -347,8 +362,32 @@ async function loadData() {
     Data as of ${usdRubStats.date}.
   `;
 
+  // w_CNY(t) over the 5-year history: m(t) is the trailing 365-day average
+  // as of each day (needs at least 365 preceding rows to be defined).
+  const rates5y = usdRub5yRows.map(r => val(r.rate));
+  const dates5y = usdRub5yRows.map(r => r.date);
+  const wCny5yDates = [];
+  const wCny5yValues = [];
+  let windowSum = 0;
+  for (let i = 0; i < rates5y.length; i++) {
+    windowSum += rates5y[i];
+    if (i >= 365) windowSum -= rates5y[i - 365];
+    if (i >= 364) {
+      const mT = windowSum / 365;
+      const xT = rates5y[i];
+      wCny5yDates.push(dates5y[i]);
+      wCny5yValues.push(wCny(xT, mT) * 100);
+    }
+  }
+  const wCny5y = [{
+    x: wCny5yDates, y: wCny5yValues, name: 'w_CNY(t)',
+    type: 'scatter', mode: 'lines',
+    line: { color: '#4da8c8', width: 2 },
+    hovertemplate: '%{x}<br>w_CNY: <b>%{y:.0f}%</b><extra></extra>',
+  }];
+
   return { layer1, layer1_individual: layer1Individual, layer2_rebal: layer2Rebal,
-           layer2_alloc: layer2Alloc, sigmoid, sigmoidShapes, sigmoidAnnotations,
+           layer2_alloc: layer2Alloc, sigmoid, sigmoidShapes, sigmoidAnnotations, wCny5y,
            sigmoidAxisRange: [axisMin, axisMax] };
 }
 

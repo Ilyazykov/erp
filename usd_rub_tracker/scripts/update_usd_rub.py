@@ -41,6 +41,7 @@ USD_CODE = "R01235"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 CSV_PATH = REPO_ROOT / "data" / "usd_rub_history.csv"
+HISTORY_5Y_PATH = REPO_ROOT / "data" / "usd_rub_history_5y.csv"
 STATS_PATH = REPO_ROOT / "data" / "usd_rub_stats.json"
 
 REQUEST_TIMEOUT = 30
@@ -150,6 +151,7 @@ def write_stats(
 
 def main() -> int:
     existing = read_history()
+    existing_5y = read_history(HISTORY_5Y_PATH)
 
     recent = fetch_recent_usd_rub_rates()
     if not recent:
@@ -171,6 +173,12 @@ def main() -> int:
         write_history(updated)
         history_changed = True
         print(f"Appended through {started_date} = {started_rate:.4f}. Total rows: {len(updated)}")
+
+    if latest_started is not None and existing_5y and latest_started[0] > existing_5y[-1][0]:
+        started_date, started_rate = latest_started
+        updated_5y = forward_fill_gap(existing_5y, started_date, started_rate)
+        write_history(updated_5y, HISTORY_5Y_PATH)
+        print(f"Appended through {started_date} to 5y history. Total rows: {len(updated_5y)}")
 
     write_stats(updated, latest_published[0], latest_published[1])
     print(f"Latest published rate: {latest_published[0]} = {latest_published[1]:.4f}")
