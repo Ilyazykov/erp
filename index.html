@@ -89,7 +89,9 @@
 <div id="plot_alloc_target" style="height:420px; margin-top:8px"></div>
 <p class="note" id="alloc_target_note">
   <span class="loading">Loading current allocation…</span>
-</p></div>
+</p>
+<div id="alloc_target_table_wrap"></div>
+</div>
 
 <div id="sigmoid" class="chart-wrap"><div id="plot_sigmoid" style="height:480px"></div>
 <p class="note" id="sigmoid_note">
@@ -654,6 +656,35 @@ async function loadData() {
     target = <span class="stat">${targetAllocationData.target_stocks.toFixed(1)}%</span> stocks /
     <span class="stat">${targetAllocationData.target_bonds.toFixed(1)}%</span> bonds.<br>
     Data as of ${targetAllocationData.date} (updated ${targetAllocationData.updated}).
+  `;
+
+  const allocTableRows = allocNames.slice().sort((a, b) => allocTarget[b] - allocTarget[a]);
+  document.getElementById('alloc_target_table_wrap').innerHTML = `
+    <table class="data-table">
+      <thead><tr>
+        <th>Category</th><th>Base</th><th>Z-score</th><th>Adjustment</th><th>Target</th><th>&Delta; vs Base</th>
+      </tr></thead>
+      <tbody>
+        ${allocTableRows.map(n => {
+          const z = targetAllocationData.z;
+          const zStr = z !== null ? (z >= 0 ? '+' : '') + z.toFixed(2) : '—';
+          const adj = z !== null ? (n === 'Stocks' ? allocTarget[n] - allocBase[n] : -(allocTarget.Stocks - allocBase.Stocks)) : null;
+          const adjStr = adj !== null ? (adj >= 0 ? '+' : '') + adj.toFixed(1) + ' pp' : '—';
+          const delta = allocTarget[n] - allocBase[n];
+          const deltaStr = (delta >= 0 ? '+' : '') + delta.toFixed(1) + ' pp';
+          const deltaCls = delta > 0.05 ? 'pos' : (delta < -0.05 ? 'neg' : 'muted');
+          const adjCls = adj === null ? 'muted' : (adj > 0 ? 'pos' : (adj < 0 ? 'neg' : 'muted'));
+          return `<tr>
+            <td class="ticker" style="color:${ALLOC_COLORS[n]}">${n}</td>
+            <td>${allocBase[n].toFixed(1)}%</td>
+            <td>${zStr}</td>
+            <td class="${adjCls}">${adjStr}</td>
+            <td>${allocTarget[n].toFixed(1)}%</td>
+            <td class="${deltaCls}">${deltaStr}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
   `;
 
   return { layer1, layer1_individual: layer1Individual, layer2_rebal: layer2Rebal,
