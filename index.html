@@ -36,6 +36,7 @@
   <div class="tab" data-tab="layer2a">Layer 2: Allocation</div>
   <div class="tab" data-tab="sigmoid">USD/RUB → CNY Weight</div>
   <div class="tab" data-tab="wcny5y">w_CNY over 5 years</div>
+  <div class="tab" data-tab="targetweights">Target Weights</div>
 </div>
 
 <div id="layer1" class="chart-wrap active"><div id="plot_layer1" style="height:480px"></div>
@@ -76,6 +77,16 @@
 <p class="note">
   w_CNY(t) computed daily over the last 5 years: x(t) is that day's USD/RUB rate, m(t) is the
   trailing 365-day average USD/RUB rate as of that day. USD/RUB rate overlaid on the right axis.
+</p></div>
+
+<div id="targetweights" class="chart-wrap"><div id="plot_targetweights" style="height:560px"></div>
+<p class="note" id="targetweights_note">
+  Each wedge is one ticker, sized by its <b>base</b> (strategic) weight — the outlined boundary marks
+  that base share. The solid fill shows the <b>target</b> weight after the Z-score correction
+  (<code>base + (e^(|Z|&minus;1.5) &minus; 1)&middot;sign(Z)</code>, applied only when |Z| &gt; 1.5,
+  then renormalized across all 10 positions to sum to 100%).<br>
+  Fill inside the boundary → underweight vs base. Fill outside the boundary → overweight vs base.
+  <span class="loading">Loading current values…</span>
 </p></div>
 
 <script>
@@ -214,6 +225,8 @@ function renderChart(id) {
       annotations: DATA.sigmoidAnnotations,
     });
     Plotly.newPlot('plot_sigmoid', DATA.sigmoid, layout, CONFIG);
+  } else if (id === 'targetweights') {
+    Plotly.newPlot('plot_targetweights', DATA.targetWeights, DATA.targetWeightsLayout, CONFIG);
   } else if (id === 'wcny5y') {
     Plotly.newPlot('plot_wcny5y', DATA.wCny5y,
       Object.assign({}, LAYOUT_BASE, {
@@ -246,6 +259,7 @@ async function loadLastUpdated() {
     `${DATA_DIR}/erp_portfolio.csv`,
     `${DATA_DIR}/usd_rub_history.csv`,
     `${DATA_DIR}/usd_rub_stats.json`,
+    `${DATA_DIR}/target_weights.json`,
   ];
   const dates = (await Promise.all(paths.map(fetchLastModified))).filter(Boolean);
   const el = document.getElementById('last_updated');
@@ -259,12 +273,13 @@ async function loadLastUpdated() {
 }
 
 async function loadData() {
-  const [rows, eyRows, usdRubRows, usdRubStats, usdRub5yRows] = await Promise.all([
+  const [rows, eyRows, usdRubRows, usdRubStats, usdRub5yRows, targetWeightsData] = await Promise.all([
     fetchCsv(`${DATA_DIR}/composite_valuation.csv`),
     fetchCsv(`${DATA_DIR}/erp_portfolio.csv`),
     fetchCsv(`${DATA_DIR}/usd_rub_history.csv`),
     fetchJson(`${DATA_DIR}/usd_rub_stats.json`),
     fetchCsv(`${DATA_DIR}/usd_rub_history_5y.csv`),
+    fetchJson(`${DATA_DIR}/target_weights.json`),
   ]);
 
   const dates = rows.map(r => r.date + '-01');
@@ -407,8 +422,94 @@ async function loadData() {
     },
   ];
 
+  // Target weights donut/polar chart: each ticker gets an angular wedge sized
+  // by its base weight (so wedges tile the full circle like a pie). Within
+  // each wedge, an outlined bar marks the base-weight boundary and a solid
+  // bar shows the actual target (post Z-correction) radius — fill short of
+  // the boundary = underweight, fill past the boundary = overweight.
+  const TICKER_COLORS = {
+    SBER: '#4da8c8', YDEX: '#f0b429', T: '#3dd68c', DOMRF: '#22d3ee',
+    TRND: '#c084fc', OZON: '#e05252', AKME: '#60a5fa', AKFN: '#facc15',
+    ROSN: '#a78bfa', VTBR: '#fb923c',
+  };
+  const twRows = targetWeightsData.weights;
+  const twTotalBase = twRows.reduce((s, r) => s + r.base, 0);
+  let cursor = 0;
+  const twTheta = [];
+  const twWidth = [];
+  twRows.forEach(r => {
+    const width = r.base / twTotalBase * 360;
+    twTheta.push(cursor + width / 2);
+    twWidth.push(width);
+    cursor += width;
+  });
+
+  const twMaxR = Math.max(...twRows.map(r => Math.max(r.base, r.target))) * 1.15;
+
+  const targetWeights = [
+    {
+      type: 'barpolar',
+      r: twRows.map(r => r.base),
+      theta: twTheta,
+      width: twWidth,
+      name: 'Base (boundary)',
+      marker: { color: 'rgba(0,0,0,0)', line: { color: twRows.map(r => TICKER_COLORS[r.ticker] || '#8b949e'), width: 2 } },
+      hovertemplate: twRows.map(r => `${r.ticker}<br>Base: <b>${r.base.toFixed(2)}%</b><extra></extra>`),
+    },
+    {
+      type: 'barpolar',
+      r: twRows.map(r => r.target),
+      theta: twTheta,
+      width: twWidth.map(w => w * 0.86),
+      name: 'Target (adjusted)',
+      marker: { color: twRows.map(r => TICKER_COLORS[r.ticker] || '#8b949e'), opacity: 0.85 },
+      hovertemplate: twRows.map(r => {
+        const diff = r.target - r.base;
+        const diffStr = (diff >= 0 ? '+' : '') + diff.toFixed(2);
+        const zStr = r.z !== null ? r.z.toFixed(2) : 'n/a';
+        return `${r.ticker}<br>Target: <b>${r.target.toFixed(2)}%</b><br>` +
+               `Base: ${r.base.toFixed(2)}% (${diffStr} п.п.)<br>Z: ${zStr} (${r.signal})<extra></extra>`;
+      }),
+    },
+    {
+      type: 'scatterpolar',
+      mode: 'text',
+      r: twRows.map((r, i) => twWidth[i] < 15 ? twMaxR * (1.06 + 0.1 * (i % 3)) : twMaxR * 1.06),
+      theta: twTheta,
+      text: twRows.map(r => r.ticker),
+      textfont: { color: twRows.map(r => TICKER_COLORS[r.ticker] || '#8b949e'), size: 11 },
+      showlegend: false,
+      hoverinfo: 'skip',
+    },
+  ];
+
+  const targetWeightsLayout = {
+    paper_bgcolor: '#0d1117',
+    plot_bgcolor: '#0d1117',
+    font: { color: '#c9d1d9', size: 11 },
+    polar: {
+      domain: { x: [0.06, 0.94], y: [0.04, 0.96] },
+      bgcolor: '#0d1117',
+      radialaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', range: [0, twMaxR * 1.4], ticksuffix: '%' },
+      angularaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', showticklabels: false, rotation: 90, direction: 'clockwise' },
+    },
+    showlegend: true,
+    legend: { bgcolor: '#13191f', bordercolor: '#1e2830', borderwidth: 1, x: 1, y: 1 },
+    margin: { t: 30, r: 30, b: 30, l: 30 },
+  };
+
+  document.getElementById('targetweights_note').innerHTML = `
+    Each wedge is one ticker, sized by its <b>base</b> (strategic) weight — the outlined boundary marks
+    that base share. The solid fill shows the <b>target</b> weight after the Z-score correction
+    (<code>base + (e^(|Z|&minus;1.5) &minus; 1)&middot;sign(Z)</code>, applied only when |Z| &gt; 1.5,
+    then renormalized across all 10 positions to sum to 100%).<br>
+    Fill inside the boundary → underweight vs base. Fill outside the boundary → overweight vs base.<br>
+    Data as of ${targetWeightsData.date} (updated ${targetWeightsData.updated}).
+  `;
+
   return { layer1, layer1_individual: layer1Individual, layer2_rebal: layer2Rebal,
            layer2_alloc: layer2Alloc, sigmoid, sigmoidShapes, sigmoidAnnotations, wCny5y,
+           targetWeights, targetWeightsLayout,
            sigmoidAxisRange: [axisMin, axisMax] };
 }
 

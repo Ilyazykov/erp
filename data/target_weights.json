@@ -1,0 +1,77 @@
+{
+  "date": "2026-08-15",
+  "updated": "2026-08-15 18:41:16 UTC",
+  "z_threshold": 1.5,
+  "weights": [
+    {
+      "ticker": "SBER",
+      "base": 40,
+      "z": 3.0296,
+      "signal": "buy",
+      "target": 38.4921
+    },
+    {
+      "ticker": "YDEX",
+      "base": 24,
+      "z": 2.6976,
+      "signal": "buy",
+      "target": 23.2209
+    },
+    {
+      "ticker": "T",
+      "base": 14,
+      "z": 2.5551,
+      "signal": "buy",
+      "target": 14.0075
+    },
+    {
+      "ticker": "DOMRF",
+      "base": 7,
+      "z": null,
+      "signal": "n/a",
+      "target": 6.1776
+    },
+    {
+      "ticker": "TRND",
+      "base": 5,
+      "z": null,
+      "signal": "n/a",
+      "target": 4.4126
+    },
+    {
+      "ticker": "OZON",
+      "base": 5,
+      "z": 3.3413,
+      "signal": "buy",
+      "target": 9.0941
+    },
+    {
+      "ticker": "AKME",
+      "base": 2,
+      "z": null,
+      "signal": "n/a",
+      "target": 1.765
+    },
+    {
+      "ticker": "AKFN",
+      "base": 1,
+      "z": null,
+      "signal": "n/a",
+      "target": 0.8825
+    },
+    {
+      "ticker": "ROSN",
+      "base": 1,
+      "z": -0.4983,
+      "signal": "neutral",
+      "target": 0.8825
+    },
+    {
+      "ticker": "VTBR",
+      "base": 1,
+      "z": 1.688,
+      "signal": "buy",
+      "target": 1.0651
+    }
+  ]
+}
