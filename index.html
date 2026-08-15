@@ -570,41 +570,60 @@ async function loadData() {
   // Layer 2: Allocation target — stocks vs bonds split. Base share comes from
   // an inverse-logistic function of the CBR key rate; the same Z-gated
   // exponential correction used for tickers is applied here via composite_erp_z.
+  // Same donut geometry as Target Weights: angular width = Base%, both
+  // sectors share one common reference circle, radial extent = R_BASE *
+  // (target/base) so over/underweight reads as protrude/retract vs that circle.
   const ALLOC_COLORS = { Stocks: '#4da8c8', Bonds: '#f0b429' };
   const allocBase = { Stocks: targetAllocationData.base_stocks, Bonds: 100 - targetAllocationData.base_stocks };
   const allocTarget = { Stocks: targetAllocationData.target_stocks, Bonds: targetAllocationData.target_bonds };
   const allocNames = ['Stocks', 'Bonds'];
-  const allocTheta = [90, 270];
-  const allocWidth = [180, 180];
-  const allocMaxR = Math.max(...allocNames.map(n => Math.max(allocBase[n], allocTarget[n]))) * 1.15;
+  let allocCursor = 0;
+  const allocTheta = [];
+  const allocWidth = [];
+  allocNames.forEach(n => {
+    const width = allocBase[n] / 100 * 360;
+    allocTheta.push(allocCursor + width / 2);
+    allocWidth.push(width);
+    allocCursor += width;
+  });
+
+  const ALLOC_R_BASE = 100;
+  const allocRadial = allocNames.map(n => ALLOC_R_BASE * (allocTarget[n] / allocBase[n]));
+  const allocMaxR = Math.max(ALLOC_R_BASE, ...allocRadial);
 
   const allocTargetTrace = [
     {
       type: 'barpolar',
-      r: allocNames.map(n => allocBase[n]),
+      r: allocRadial,
       theta: allocTheta,
       width: allocWidth,
-      name: 'Base (boundary)',
-      marker: { color: 'rgba(0,0,0,0)', line: { color: allocNames.map(n => ALLOC_COLORS[n]), width: 2 } },
-      hovertemplate: allocNames.map(n => `${n}<br>Base: <b>${allocBase[n].toFixed(2)}%</b><extra></extra>`),
-    },
-    {
-      type: 'barpolar',
-      r: allocNames.map(n => allocTarget[n]),
-      theta: allocTheta,
-      width: allocWidth.map(w => w * 0.86),
-      name: 'Target (adjusted)',
-      marker: { color: allocNames.map(n => ALLOC_COLORS[n]), opacity: 0.85 },
+      name: 'Target (relative to Base)',
+      marker: {
+        color: allocNames.map(n => ALLOC_COLORS[n]),
+        opacity: 0.85,
+        line: { color: '#0d1117', width: 1 },
+      },
       hovertemplate: allocNames.map(n => {
         const diff = allocTarget[n] - allocBase[n];
         const diffStr = (diff >= 0 ? '+' : '') + diff.toFixed(2);
-        return `${n}<br>Target: <b>${allocTarget[n].toFixed(2)}%</b><br>Base: ${allocBase[n].toFixed(2)}% (${diffStr} п.п.)<extra></extra>`;
+        return `${n}<br>Base: <b>${allocBase[n].toFixed(2)}%</b> (sector angle)<br>` +
+               `Target: <b>${allocTarget[n].toFixed(2)}%</b> (${diffStr} п.п.)<extra></extra>`;
       }),
+    },
+    {
+      // Common Base reference circle, shared by both sectors.
+      type: 'scatterpolar',
+      mode: 'lines',
+      r: Array.from({ length: 73 }, () => ALLOC_R_BASE),
+      theta: Array.from({ length: 73 }, (_, i) => i * 5),
+      line: { color: '#e6edf3', width: 1.5, dash: 'dot' },
+      name: 'Base (common reference circle)',
+      hoverinfo: 'skip',
     },
     {
       type: 'scatterpolar',
       mode: 'text',
-      r: allocNames.map(() => allocMaxR * 1.1),
+      r: allocNames.map(() => allocMaxR * 1.14),
       theta: allocTheta,
       text: allocNames,
       textfont: { color: allocNames.map(n => ALLOC_COLORS[n]), size: 13 },
@@ -620,7 +639,7 @@ async function loadData() {
     polar: {
       domain: { x: [0.15, 0.85], y: [0.05, 0.95] },
       bgcolor: '#0d1117',
-      radialaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', range: [0, allocMaxR * 1.25], ticksuffix: '%' },
+      radialaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', range: [0, allocMaxR * 1.25], showticklabels: false, ticksuffix: '' },
       angularaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', showticklabels: false, rotation: 90, direction: 'clockwise' },
     },
     showlegend: true,
