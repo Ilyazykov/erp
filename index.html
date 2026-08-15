@@ -35,32 +35,52 @@
 </head>
 <body>
 <h1>ERP Portfolio Valuation</h1>
-<p class="subtitle">SBER · YDEX · T · DOMRF · OZON · ROSN · VTBR &nbsp;|&nbsp; Jan 2019 — present</p>
+<p class="subtitle">Jan 2019 — present</p>
 <p class="subtitle" id="last_updated">Last updated: loading…</p>
 
 <div class="tabs">
-  <div class="tab active" data-tab="layer1">Layer 1: ERP</div>
-  <div class="tab" data-tab="layer1i">Yield per stock</div>
-  <div class="tab" data-tab="layer2r">Layer 2: Rebalancing</div>
-  <div class="tab" data-tab="layer2a">Layer 2: Allocation</div>
-  <div class="tab" data-tab="sigmoid">USD/RUB → CNY Weight</div>
-  <div class="tab" data-tab="wcny5y">w_CNY over 5 years</div>
+  <div class="tab active" data-tab="sigmoid">USD/RUB → CNY Weight (current + 5Y)</div>
+  <div class="tab" data-tab="layer2a">ERP &amp; Stocks/Bonds Allocation</div>
+  <div class="tab" data-tab="layer2r">Yield per Stock &amp; Rebalancing</div>
 </div>
 
-<div id="layer1" class="chart-wrap active"><div id="plot_layer1" style="height:480px"></div>
+<div id="sigmoid" class="chart-wrap active"><div id="plot_sigmoid" style="height:480px"></div>
+<p class="note" id="sigmoid_note">
+  w_CNY(x) = 0.20 + 0.60 / (1 + exp(15·(x−m)/m)), where <b>x</b> is the latest USD/RUB rate and
+  <b>m</b> is its 365-day average.<br>
+  <span class="loading">Loading current values…</span>
+</p>
+<div id="plot_wcny5y" style="height:480px; margin-top:8px"></div>
+<p class="note">
+  w_CNY(t) computed daily over the last 5 years: x(t) is that day's USD/RUB rate, m(t) is the
+  trailing 365-day average USD/RUB rate as of that day. USD/RUB rate overlaid on the right axis.
+</p></div>
+
+<div id="layer2a" class="chart-wrap"><div id="plot_layer1" style="height:480px"></div>
 <p class="note">
   <b>Blue</b> — Portfolio Earnings Yield (TTM Net Income / Market Cap for all 7 stocks, portfolio-weighted).<br>
   <b>Orange</b> — OFZ 10Y (risk-free rate).<br>
   <b>Green</b> — ERP = EY − OFZ. Green zone: stocks yield more than bonds. Red zone: bonds yield more.
-</p></div>
+</p>
+<div id="plot_layer2a" style="height:480px; margin-top:8px"></div>
+<p class="note">
+  <b>Green (Composite ERP Z)</b> = Portfolio Z − OFZ Z.<br>
+  Above +1.5 → stocks cheap vs rates → increase equity allocation.<br>
+  Below −1.5 → rates high vs stocks → increase bond allocation.
+</p>
+<div id="plot_alloc_target" style="height:420px; margin-top:8px"></div>
+<p class="note" id="alloc_target_note">
+  <span class="loading">Loading current allocation…</span>
+</p>
+<div id="alloc_target_table_wrap"></div>
+</div>
 
-<div id="layer1i" class="chart-wrap"><div id="plot_layer1i" style="height:480px"></div>
+<div id="layer2r" class="chart-wrap"><div id="plot_layer1i" style="height:480px"></div>
 <p class="note">
   Earnings Yield per stock. YDEX and OZON have low EY due to high market cap (growth premium).<br>
   OZON until 2025 — negative EY (loss-making).
-</p></div>
-
-<div id="layer2r" class="chart-wrap"><div id="plot_layer2r" style="height:480px"></div>
+</p>
+<div id="plot_layer2r" style="height:480px; margin-top:8px"></div>
 <p class="note">
   Z-score of each stock vs its own 3-year history (36-month rolling window).<br>
   Metrics: SBER/T/VTBR/DOMRF — Earnings Yield; ROSN — FCF Yield; YDEX/OZON — Revenue Yield.<br>
@@ -79,32 +99,6 @@
 </p>
 <div id="targetweights_table_wrap"></div>
 </div>
-
-<div id="layer2a" class="chart-wrap"><div id="plot_layer2a" style="height:480px"></div>
-<p class="note">
-  <b>Green (Composite ERP Z)</b> = Portfolio Z − OFZ Z.<br>
-  Above +1.5 → stocks cheap vs rates → increase equity allocation.<br>
-  Below −1.5 → rates high vs stocks → increase bond allocation.
-</p>
-<div id="plot_alloc_target" style="height:420px; margin-top:8px"></div>
-<p class="note" id="alloc_target_note">
-  <span class="loading">Loading current allocation…</span>
-</p>
-<div id="alloc_target_table_wrap"></div>
-</div>
-
-<div id="sigmoid" class="chart-wrap"><div id="plot_sigmoid" style="height:480px"></div>
-<p class="note" id="sigmoid_note">
-  w_CNY(x) = 0.20 + 0.60 / (1 + exp(15·(x−m)/m)), where <b>x</b> is the latest USD/RUB rate and
-  <b>m</b> is its 365-day average.<br>
-  <span class="loading">Loading current values…</span>
-</p></div>
-
-<div id="wcny5y" class="chart-wrap"><div id="plot_wcny5y" style="height:480px"></div>
-<p class="note">
-  w_CNY(t) computed daily over the last 5 years: x(t) is that day's USD/RUB rate, m(t) is the
-  trailing 365-day average USD/RUB rate as of that day. USD/RUB rate overlaid on the right axis.
-</p></div>
 
 <script>
 const DATA_DIR = './data';
@@ -214,21 +208,9 @@ document.querySelectorAll('.tab').forEach(t => {
 });
 
 function renderChart(id) {
-  if (id === 'layer1') {
+  if (id === 'layer2a') {
     Plotly.newPlot('plot_layer1', DATA.layer1,
       layoutWith('%, annualised', [HLINE(0, '#6a7381', 'dot')]), CONFIG);
-  } else if (id === 'layer1i') {
-    Plotly.newPlot('plot_layer1i', DATA.layer1_individual,
-      layoutWith('%, annualised', [HLINE(0, '#6a7381', 'dot')]), CONFIG);
-  } else if (id === 'layer2r') {
-    Plotly.newPlot('plot_layer2r', DATA.layer2_rebal,
-      layoutWith('Z-score', [
-        HLINE(0, '#6a7381', 'dot'),
-        HLINE(1.5, '#3dd68c', 'dot'),
-        HLINE(-1.5, '#e05252', 'dot'),
-      ]), CONFIG);
-    Plotly.newPlot('plot_targetweights', DATA.targetWeights, DATA.targetWeightsLayout, CONFIG);
-  } else if (id === 'layer2a') {
     Plotly.newPlot('plot_layer2a', DATA.layer2_alloc,
       layoutWith('Z-score', [
         HLINE(0, '#6a7381', 'dot'),
@@ -236,6 +218,16 @@ function renderChart(id) {
         HLINE(-1.5, '#e05252', 'dot'),
       ]), CONFIG);
     Plotly.newPlot('plot_alloc_target', DATA.allocTarget, DATA.allocTargetLayout, CONFIG);
+  } else if (id === 'layer2r') {
+    Plotly.newPlot('plot_layer1i', DATA.layer1_individual,
+      layoutWith('%, annualised', [HLINE(0, '#6a7381', 'dot')]), CONFIG);
+    Plotly.newPlot('plot_layer2r', DATA.layer2_rebal,
+      layoutWith('Z-score', [
+        HLINE(0, '#6a7381', 'dot'),
+        HLINE(1.5, '#3dd68c', 'dot'),
+        HLINE(-1.5, '#e05252', 'dot'),
+      ]), CONFIG);
+    Plotly.newPlot('plot_targetweights', DATA.targetWeights, DATA.targetWeightsLayout, CONFIG);
   } else if (id === 'sigmoid') {
     const layout = Object.assign({}, LAYOUT_BASE, {
       xaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', title: 'USD/RUB rate', range: DATA.sigmoidAxisRange },
@@ -244,7 +236,6 @@ function renderChart(id) {
       annotations: DATA.sigmoidAnnotations,
     });
     Plotly.newPlot('plot_sigmoid', DATA.sigmoid, layout, CONFIG);
-  } else if (id === 'wcny5y') {
     Plotly.newPlot('plot_wcny5y', DATA.wCny5y,
       Object.assign({}, LAYOUT_BASE, {
         xaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', tickformat: '%Y', dtick: 'M12', tickangle: -45 },
@@ -705,8 +696,8 @@ loadLastUpdated();
 
 loadData().then(data => {
   DATA = data;
-  renderChart('layer1');
-  rendered.layer1 = true;
+  renderChart('sigmoid');
+  rendered.sigmoid = true;
 }).catch(err => {
   document.body.insertAdjacentHTML('afterbegin',
     `<p style="color:#e05252">Failed to load data: ${err.message}</p>`);
