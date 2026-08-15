@@ -2,7 +2,7 @@ name: Update ERP valuation charts
 
 on:
   schedule:
-    - cron: "20 12 * * 1"
+    - cron: "20 12 * * *"
   workflow_dispatch: {}
 
 permissions:
