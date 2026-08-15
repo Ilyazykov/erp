@@ -1,6 +1,6 @@
 {
   "date": "2026-08-15",
-  "updated": "2026-08-15 18:56:23 UTC",
+  "updated": "2026-08-15 18:59:05 UTC",
   "z_threshold": 1.5,
   "weights": [
     {
@@ -8,6 +8,7 @@
       "base": 40,
       "z": 3.0296,
       "signal": "buy",
+      "adjustment": 3.6163,
       "target": 38.4921
     },
     {
@@ -15,6 +16,7 @@
       "base": 24,
       "z": 2.6976,
       "signal": "buy",
+      "adjustment": 2.3122,
       "target": 23.2209
     },
     {
@@ -22,6 +24,7 @@
       "base": 14,
       "z": 2.5551,
       "signal": "buy",
+      "adjustment": 1.8723,
       "target": 14.0075
     },
     {
@@ -29,6 +32,7 @@
       "base": 7,
       "z": null,
       "signal": "n/a",
+      "adjustment": null,
       "target": 6.1776
     },
     {
@@ -36,6 +40,7 @@
       "base": 5,
       "z": null,
       "signal": "n/a",
+      "adjustment": null,
       "target": 4.4126
     },
     {
@@ -43,6 +48,7 @@
       "base": 5,
       "z": 3.3413,
       "signal": "buy",
+      "adjustment": 5.3047,
       "target": 9.0941
     },
     {
@@ -50,6 +56,7 @@
       "base": 2,
       "z": null,
       "signal": "n/a",
+      "adjustment": null,
       "target": 1.765
     },
     {
@@ -57,6 +64,7 @@
       "base": 1,
       "z": null,
       "signal": "n/a",
+      "adjustment": null,
       "target": 0.8825
     },
     {
@@ -64,6 +72,7 @@
       "base": 1,
       "z": -0.4983,
       "signal": "neutral",
+      "adjustment": 0.0,
       "target": 0.8825
     },
     {
@@ -71,6 +80,7 @@
       "base": 1,
       "z": 1.688,
       "signal": "buy",
+      "adjustment": 0.2068,
       "target": 1.0651
     }
   ]

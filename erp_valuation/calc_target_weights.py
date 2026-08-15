@@ -182,6 +182,7 @@ def write_json(rows: list[dict], as_of: str, out_path: Path = OUT_JSON_PATH) -> 
                 "base": round(r["base"], 4),
                 "z": round(r["z"], 4) if r["z"] is not None else None,
                 "signal": r["signal"],
+                "adjustment": round(r["adjusted"] - r["base"], 4) if r["z"] is not None else None,
                 "target": round(r["target"], 4),
             }
             for r in rows

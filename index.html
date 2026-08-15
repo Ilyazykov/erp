@@ -22,6 +22,15 @@
   .note b { color: #8b949e; }
   .note .stat { color: #c9d1d9; }
   .loading { color: #6a7381; font-size: 0.85rem; padding: 16px; }
+  .data-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 12px; }
+  .data-table th, .data-table td { padding: 6px 10px; text-align: right; border-bottom: 1px solid #1e2830; }
+  .data-table th:first-child, .data-table td:first-child { text-align: left; }
+  .data-table th { color: #8b949e; font-weight: 600; font-size: 0.78rem; }
+  .data-table td.ticker { font-weight: 600; }
+  .data-table td.pos { color: #3dd68c; }
+  .data-table td.neg { color: #e05252; }
+  .data-table td.muted { color: #6a7381; }
+  .data-table tbody tr:hover { background: #13191f; }
 </style>
 </head>
 <body>
@@ -85,13 +94,15 @@
 
 <div id="targetweights" class="chart-wrap"><div id="plot_targetweights" style="height:560px"></div>
 <p class="note" id="targetweights_note">
-  Each wedge is one ticker, sized by its <b>base</b> (strategic) weight — the outlined boundary marks
-  that base share. The solid fill shows the <b>target</b> weight after the Z-score correction
+  Each wedge is one ticker, sized by its <b>target</b> weight after the Z-score correction
   (<code>base + (e^(|Z|&minus;1.5) &minus; 1)&middot;sign(Z)</code>, applied only when |Z| &gt; 1.5,
-  then renormalized across all 10 positions to sum to 100%).<br>
-  Fill inside the boundary → underweight vs base. Fill outside the boundary → overweight vs base.
+  then renormalized across all 10 positions to sum to 100%). The thin outline on each wedge marks
+  the <b>base</b> (strategic) weight.<br>
+  Fill extends past the outline → overweight vs base. Fill falls short of the outline → underweight vs base.
   <span class="loading">Loading current values…</span>
-</p></div>
+</p>
+<div id="targetweights_table_wrap"></div>
+</div>
 
 <script>
 const DATA_DIR = './data';
@@ -429,40 +440,42 @@ async function loadData() {
     },
   ];
 
-  // Target weights donut/polar chart: each ticker gets an angular wedge sized
-  // by its base weight (so wedges tile the full circle like a pie). Within
-  // each wedge, an outlined bar marks the base-weight boundary and a solid
-  // bar shows the actual target (post Z-correction) radius — fill short of
-  // the boundary = underweight, fill past the boundary = overweight.
+  // Target weights polar chart: ONE filled wedge per ticker, sized (angularly
+  // and radially) by its target weight. The base weight is overlaid on the
+  // same wedge as a thin radial boundary line only — never a second filled
+  // bar — so over/underweight vs base is read directly off that one wedge:
+  // fill extends past the line = overweight, fill falls short = underweight.
   const TICKER_COLORS = {
     SBER: '#4da8c8', YDEX: '#f0b429', T: '#3dd68c', DOMRF: '#22d3ee',
     TRND: '#c084fc', OZON: '#e05252', AKME: '#60a5fa', AKFN: '#facc15',
     ROSN: '#a78bfa', VTBR: '#fb923c',
   };
   const twRows = targetWeightsData.weights;
-  const twTotalBase = twRows.reduce((s, r) => s + r.base, 0);
-  let cursor = 0;
+  const twTotalTarget = twRows.reduce((s, r) => s + r.target, 0);
+  let twCursor = 0;
   const twTheta = [];
   const twWidth = [];
   twRows.forEach(r => {
-    const width = r.base / twTotalBase * 360;
-    twTheta.push(cursor + width / 2);
+    const width = r.target / twTotalTarget * 360;
+    twTheta.push(twCursor + width / 2);
     twWidth.push(width);
-    cursor += width;
+    twCursor += width;
   });
 
   const twMaxR = Math.max(...twRows.map(r => Math.max(r.base, r.target))) * 1.15;
 
+  // Base boundary drawn as a short radial tick (line) at r=base spanning each
+  // wedge's angular width, built as a scatterpolar trace with line breaks
+  // (null theta) between segments so each ticker gets its own independent arc.
+  const twBoundaryTheta = [];
+  const twBoundaryR = [];
+  twRows.forEach((r, i) => {
+    const halfWidth = twWidth[i] / 2 * 0.86;
+    twBoundaryTheta.push(twTheta[i] - halfWidth, twTheta[i] + halfWidth, null);
+    twBoundaryR.push(r.base, r.base, null);
+  });
+
   const targetWeights = [
-    {
-      type: 'barpolar',
-      r: twRows.map(r => r.base),
-      theta: twTheta,
-      width: twWidth,
-      name: 'Base (boundary)',
-      marker: { color: 'rgba(0,0,0,0)', line: { color: twRows.map(r => TICKER_COLORS[r.ticker] || '#8b949e'), width: 2 } },
-      hovertemplate: twRows.map(r => `${r.ticker}<br>Base: <b>${r.base.toFixed(2)}%</b><extra></extra>`),
-    },
     {
       type: 'barpolar',
       r: twRows.map(r => r.target),
@@ -477,6 +490,16 @@ async function loadData() {
         return `${r.ticker}<br>Target: <b>${r.target.toFixed(2)}%</b><br>` +
                `Base: ${r.base.toFixed(2)}% (${diffStr} п.п.)<br>Z: ${zStr} (${r.signal})<extra></extra>`;
       }),
+    },
+    {
+      type: 'scatterpolar',
+      mode: 'lines',
+      r: twBoundaryR,
+      theta: twBoundaryTheta,
+      line: { color: '#e6edf3', width: 2.5 },
+      name: 'Base (boundary)',
+      hoverinfo: 'skip',
+      connectgaps: false,
     },
     {
       type: 'scatterpolar',
@@ -506,12 +529,40 @@ async function loadData() {
   };
 
   document.getElementById('targetweights_note').innerHTML = `
-    Each wedge is one ticker, sized by its <b>base</b> (strategic) weight — the outlined boundary marks
-    that base share. The solid fill shows the <b>target</b> weight after the Z-score correction
+    Each wedge is one ticker, sized by its <b>target</b> weight after the Z-score correction
     (<code>base + (e^(|Z|&minus;1.5) &minus; 1)&middot;sign(Z)</code>, applied only when |Z| &gt; 1.5,
-    then renormalized across all 10 positions to sum to 100%).<br>
-    Fill inside the boundary → underweight vs base. Fill outside the boundary → overweight vs base.<br>
+    then renormalized across all 10 positions to sum to 100%). The thin outline on each wedge marks
+    the <b>base</b> (strategic) weight.<br>
+    Fill extends past the outline → overweight vs base. Fill falls short of the outline → underweight vs base.<br>
     Data as of ${targetWeightsData.date} (updated ${targetWeightsData.updated}).
+  `;
+
+  const twTableRows = twRows.slice().sort((a, b) => b.target - a.target);
+  document.getElementById('targetweights_table_wrap').innerHTML = `
+    <table class="data-table">
+      <thead><tr>
+        <th>Ticker</th><th>Base</th><th>Z-score</th><th>Adjustment</th><th>Target</th><th>&Delta; vs Base</th>
+      </tr></thead>
+      <tbody>
+        ${twTableRows.map(r => {
+          const zStr = r.z !== null ? (r.z >= 0 ? '+' : '') + r.z.toFixed(2) : '—';
+          const adj = r.adjustment;
+          const adjStr = adj !== null ? (adj >= 0 ? '+' : '') + adj.toFixed(1) + ' pp' : '—';
+          const delta = r.target - r.base;
+          const deltaStr = (delta >= 0 ? '+' : '') + delta.toFixed(1) + ' pp';
+          const deltaCls = delta > 0.05 ? 'pos' : (delta < -0.05 ? 'neg' : 'muted');
+          const adjCls = adj === null ? 'muted' : (adj > 0 ? 'pos' : (adj < 0 ? 'neg' : 'muted'));
+          return `<tr>
+            <td class="ticker" style="color:${TICKER_COLORS[r.ticker] || '#8b949e'}">${r.ticker}</td>
+            <td>${r.base.toFixed(1)}%</td>
+            <td>${zStr}</td>
+            <td class="${adjCls}">${adjStr}</td>
+            <td>${r.target.toFixed(1)}%</td>
+            <td class="${deltaCls}">${deltaStr}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
   `;
 
   // Layer 2: Allocation target — stocks vs bonds split. Base share comes from
@@ -597,8 +648,8 @@ loadLastUpdated();
 
 loadData().then(data => {
   DATA = data;
-  renderChart('layer1');
-  rendered.layer1 = true;
+  const qsTab = new URLSearchParams(location.search).get('tab');
+  if (qsTab) { showTab(qsTab); } else { renderChart('layer1'); rendered.layer1 = true; }
 }).catch(err => {
   document.body.insertAdjacentHTML('afterbegin',
     `<p style="color:#e05252">Failed to load data: ${err.message}</p>`);
