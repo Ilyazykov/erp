@@ -650,8 +650,6 @@ loadLastUpdated();
 
 loadData().then(data => {
   DATA = data;
-  const qsTab = new URLSearchParams(location.search).get('tab');
-  if (qsTab) { showTab(qsTab); return; }
   renderChart('layer1');
   rendered.layer1 = true;
 }).catch(err => {
