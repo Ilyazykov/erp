@@ -38,12 +38,19 @@ T_START          = date(2024, 11, 28)
 T_SPLIT_DATE     = date(2026, 4, 17)
 T_PRE_SPLIT_SHARES = 268274786
 VTBR_SPLIT_DATE  = date(2024, 7, 15)
-VTBR_SPLIT_RATIO = 4664
+VTBR_SPLIT_RATIO = 5000
+# VTBR ordinary share count history (pre-split basis until 2024-07-15):
+#  - .. 2023-01-30:            12,960,541,337,338 (flat since 2014, no ordinary issuance)
+#  - 2023-01-30 .. 2024-07-15: ~26,850,000,000,000 (two 2023 placements, ~13.89tn added,
+#    for RNKB acquisition + recapitalization — unrelated to the later reverse split)
 # Two share-count changes after the reverse split:
 #  - 2024-07-15 .. 2025-09-30: 5,370mn shares (post-split, pre-SPO)
 #  - 2025-09-30 .. 2026-04-30: 6,620mn shares (SPO settled 2025-09-30, raised ~84bn RUB)
 #  - 2026-04-30 .. present:    12,927,766,416 (SHARES['VTBR']) — preferred→ordinary
 #    conversion completed 2026-04-30, no cash raised
+VTBR_2023_ISSUANCE_DATE = date(2023, 1, 30)
+VTBR_PRE_2023_SHARES    = 12960541337338
+VTBR_POST_2023_SHARES   = 26850000000000
 VTBR_SPO_DATE       = date(2025, 9, 30)
 VTBR_POST_SPLIT_SHARES = 5370000000
 VTBR_CONVERSION_DATE   = date(2026, 4, 30)
@@ -155,8 +162,10 @@ def load_ofz():
 def get_shares(ticker, as_of):
     shares = SHARES[ticker]
     if ticker == 'VTBR':
-        if as_of < VTBR_SPLIT_DATE:
-            shares = VTBR_POST_SPLIT_SHARES * VTBR_SPLIT_RATIO
+        if as_of < VTBR_2023_ISSUANCE_DATE:
+            shares = VTBR_PRE_2023_SHARES
+        elif as_of < VTBR_SPLIT_DATE:
+            shares = VTBR_POST_2023_SHARES
         elif as_of < VTBR_SPO_DATE:
             shares = VTBR_POST_SPLIT_SHARES
         elif as_of < VTBR_CONVERSION_DATE:
