@@ -92,7 +92,7 @@
   trailing 365-day average USD/RUB rate as of that day. USD/RUB rate overlaid on the right axis.
 </p></div>
 
-<div id="targetweights" class="chart-wrap"><div id="plot_targetweights" style="height:420px; max-width:520px; margin:0 auto"></div>
+<div id="targetweights" class="chart-wrap"><div id="plot_targetweights" style="height:760px; max-width:820px; margin:0 auto"></div>
 <p class="note" id="targetweights_note">
   Each sector's <b>angular width</b> is its <b>base</b> (strategic) weight — so sectors tile the
   full circle like a normal portfolio donut, and even 1% positions show as thin slices. Every
@@ -475,9 +475,13 @@ async function loadData() {
       type: 'barpolar',
       r: twRadial,
       theta: twTheta,
-      width: twWidth.map(w => w * 0.92),
+      width: twWidth,
       name: 'Target (relative to Base)',
-      marker: { color: twRows.map(r => TICKER_COLORS[r.ticker] || '#8b949e'), opacity: 0.85 },
+      marker: {
+        color: twRows.map(r => TICKER_COLORS[r.ticker] || '#8b949e'),
+        opacity: 0.85,
+        line: { color: '#0d1117', width: 1 },
+      },
       hovertemplate: twRows.map((r, i) => {
         const diff = r.target - r.base;
         const diffStr = (diff >= 0 ? '+' : '') + diff.toFixed(2);
@@ -646,6 +650,8 @@ loadLastUpdated();
 
 loadData().then(data => {
   DATA = data;
+  const qsTab = new URLSearchParams(location.search).get('tab');
+  if (qsTab) { showTab(qsTab); return; }
   renderChart('layer1');
   rendered.layer1 = true;
 }).catch(err => {
