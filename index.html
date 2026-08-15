@@ -94,11 +94,13 @@
 
 <div id="targetweights" class="chart-wrap"><div id="plot_targetweights" style="height:420px; max-width:520px; margin:0 auto"></div>
 <p class="note" id="targetweights_note">
-  Each wedge is one ticker, sized by its <b>target</b> weight after the Z-score correction
+  Each sector's <b>angular width</b> is its <b>base</b> (strategic) weight — so sectors tile the
+  full circle like a normal portfolio donut, and even 1% positions show as thin slices. Every
+  sector shares one common dotted <b>base reference circle</b>. The sector's <b>radial extent</b>
+  shows its <b>target</b> weight after the Z-score correction
   (<code>base + (e^(|Z|&minus;1.5) &minus; 1)&middot;sign(Z)</code>, applied only when |Z| &gt; 1.5,
-  then renormalized across all 10 positions to sum to 100%). The thin outline on each wedge marks
-  the <b>base</b> (strategic) weight.<br>
-  Fill extends past the outline → overweight vs base. Fill falls short of the outline → underweight vs base.
+  then renormalized across all 10 positions to sum to 100%), relative to base.<br>
+  Sector extends past the dotted circle → overweight vs base. Sector ends short of it → underweight vs base.
   <span class="loading">Loading current values…</span>
 </p>
 <div id="targetweights_table_wrap"></div>
@@ -440,103 +442,66 @@ async function loadData() {
     },
   ];
 
-  // Target weights polar chart: ONE filled wedge per ticker, sized (angularly
-  // and radially) by its target weight. The base weight is overlaid on the
-  // same wedge as a thin radial boundary line only — never a second filled
-  // bar — so over/underweight vs base is read directly off that one wedge:
-  // fill extends past the line = overweight, fill falls short = underweight.
+  // Target weights donut: angular width of each ticker's sector = its BASE
+  // weight (so sectors tile the full circle exactly like a normal portfolio
+  // donut, and even 1%-base tickers show up as thin slices). All sectors
+  // share ONE common outer radius (R_BASE) representing "at base weight".
+  // The radial extent actually drawn = R_BASE * (target/base), so a sector
+  // whose target equals its base ends exactly on the common circle; a
+  // sector with target > base protrudes past it; target < base falls short.
   const TICKER_COLORS = {
     SBER: '#4da8c8', YDEX: '#f0b429', T: '#3dd68c', DOMRF: '#22d3ee',
     TRND: '#c084fc', OZON: '#e05252', AKME: '#60a5fa', AKFN: '#facc15',
     ROSN: '#a78bfa', VTBR: '#fb923c',
   };
   const twRows = targetWeightsData.weights;
-  const twTotalTarget = twRows.reduce((s, r) => s + r.target, 0);
+  const twTotalBase = twRows.reduce((s, r) => s + r.base, 0);
   let twCursor = 0;
-  const twTheta = [];
-  const twWidth = [];
+  const twTheta = [];   // angular center of each ticker's sector
+  const twWidth = [];   // angular width = base share of the full circle
   twRows.forEach(r => {
-    const width = r.target / twTotalTarget * 360;
+    const width = r.base / twTotalBase * 360;
     twTheta.push(twCursor + width / 2);
     twWidth.push(width);
     twCursor += width;
   });
 
-  const twMaxR = Math.max(...twRows.map(r => Math.max(r.base, r.target)));
-
-  // Base boundary drawn as a curved arc at r=base spanning each wedge's
-  // angular width (interpolated in 1-degree steps so it follows the wedge's
-  // round edge rather than cutting a straight chord across it), built as a
-  // scatterpolar trace with null breaks between segments so each ticker gets
-  // its own independent arc.
-  const twBoundaryTheta = [];
-  const twBoundaryR = [];
-  twRows.forEach((r, i) => {
-    const halfWidth = twWidth[i] / 2 * 0.86;
-    const thetaStart = twTheta[i] - halfWidth;
-    const thetaEnd = twTheta[i] + halfWidth;
-    const steps = Math.max(2, Math.ceil(halfWidth * 2));
-    for (let s = 0; s <= steps; s++) {
-      twBoundaryTheta.push(thetaStart + (thetaEnd - thetaStart) * s / steps);
-      twBoundaryR.push(r.base);
-    }
-    twBoundaryTheta.push(null);
-    twBoundaryR.push(null);
-  });
+  const R_BASE = 100; // common reference radius shared by every sector
+  const twRadial = twRows.map(r => R_BASE * (r.target / r.base));
+  const twMaxR = Math.max(R_BASE, ...twRadial);
 
   const targetWeights = [
     {
       type: 'barpolar',
-      r: twRows.map(r => r.target),
+      r: twRadial,
       theta: twTheta,
-      width: twWidth.map(w => w * 0.86),
-      name: 'Target (adjusted)',
+      width: twWidth.map(w => w * 0.92),
+      name: 'Target (relative to Base)',
       marker: { color: twRows.map(r => TICKER_COLORS[r.ticker] || '#8b949e'), opacity: 0.85 },
-      hovertemplate: twRows.map(r => {
+      hovertemplate: twRows.map((r, i) => {
         const diff = r.target - r.base;
         const diffStr = (diff >= 0 ? '+' : '') + diff.toFixed(2);
         const zStr = r.z !== null ? r.z.toFixed(2) : 'n/a';
-        return `${r.ticker}<br>Target: <b>${r.target.toFixed(2)}%</b><br>` +
-               `Base: ${r.base.toFixed(2)}% (${diffStr} п.п.)<br>Z: ${zStr} (${r.signal})<extra></extra>`;
+        return `${r.ticker}<br>Base: <b>${r.base.toFixed(2)}%</b> (sector angle)<br>` +
+               `Target: <b>${r.target.toFixed(2)}%</b> (${diffStr} п.п.)<br>Z: ${zStr} (${r.signal})<extra></extra>`;
       }),
     },
     {
+      // The common Base reference circle — one continuous ring at R_BASE,
+      // shared by every ticker (never computed per-ticker).
       type: 'scatterpolar',
       mode: 'lines',
-      r: twBoundaryR,
-      theta: twBoundaryTheta,
-      line: { color: '#e6edf3', width: 2.5 },
-      name: 'Base (boundary)',
+      r: Array.from({ length: 73 }, () => R_BASE),
+      theta: Array.from({ length: 73 }, (_, i) => i * 5),
+      line: { color: '#e6edf3', width: 1.5, dash: 'dot' },
+      name: 'Base (common reference circle)',
       hoverinfo: 'skip',
-      connectgaps: false,
     },
     {
       type: 'scatterpolar',
       mode: 'text',
-      r: (() => {
-        // Small wedges cluster tightly in angle, so their labels collide if
-        // placed at a single radius; alternate near/far radius in addition to
-        // the angular fan-out below, instead of pushing the whole chart's
-        // radial range out just to fit a handful of labels.
-        let smallIdx = 0;
-        return twWidth.map(w => {
-          if (w >= 15) return twMaxR * 1.1;
-          const r = twMaxR * (1.14 + 0.1 * (smallIdx % 2));
-          smallIdx++;
-          return r;
-        });
-      })(),
-      theta: (() => {
-        let smallIdx = 0;
-        const smallCount = twWidth.filter(w => w < 15).length;
-        return twWidth.map((w, i) => {
-          if (w >= 15) return twTheta[i];
-          const spread = 10;
-          const offset = (smallIdx - (smallCount - 1) / 2) * spread;
-          smallIdx++;
-          return twTheta[i] + offset;
-        });
-      })(),
+      r: twRows.map(() => twMaxR * 1.14),
+      theta: twTheta,
       text: twRows.map(r => r.ticker),
       textfont: { color: twRows.map(r => TICKER_COLORS[r.ticker] || '#8b949e'), size: 10 },
       showlegend: false,
@@ -551,7 +516,7 @@ async function loadData() {
     polar: {
       domain: { x: [0.1, 0.9], y: [0.06, 0.94] },
       bgcolor: '#0d1117',
-      radialaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', range: [0, twMaxR * 1.4], ticksuffix: '%', tickfont: { size: 9 } },
+      radialaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', range: [0, twMaxR * 1.25], showticklabels: false, ticksuffix: '' },
       angularaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', showticklabels: false, rotation: 90, direction: 'clockwise' },
     },
     showlegend: true,
@@ -560,11 +525,13 @@ async function loadData() {
   };
 
   document.getElementById('targetweights_note').innerHTML = `
-    Each wedge is one ticker, sized by its <b>target</b> weight after the Z-score correction
+    Each sector's <b>angular width</b> is its <b>base</b> (strategic) weight — so sectors tile the
+    full circle like a normal portfolio donut, and even 1% positions show as thin slices. Every
+    sector shares one common dotted <b>base reference circle</b>. The sector's <b>radial extent</b>
+    shows its <b>target</b> weight after the Z-score correction
     (<code>base + (e^(|Z|&minus;1.5) &minus; 1)&middot;sign(Z)</code>, applied only when |Z| &gt; 1.5,
-    then renormalized across all 10 positions to sum to 100%). The thin outline on each wedge marks
-    the <b>base</b> (strategic) weight.<br>
-    Fill extends past the outline → overweight vs base. Fill falls short of the outline → underweight vs base.<br>
+    then renormalized across all 10 positions to sum to 100%), relative to base.<br>
+    Sector extends past the dotted circle → overweight vs base. Sector ends short of it → underweight vs base.<br>
     Data as of ${targetWeightsData.date} (updated ${targetWeightsData.updated}).
   `;
 
