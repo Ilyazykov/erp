@@ -27,7 +27,7 @@ independent of the per-ticker weights above:
   1. Base stock share from the CBR key rate r (inverse logistic —
      low rate -> high stock share, high rate -> low stock share):
 
-         w(r) = 100 / (1 + exp((r - 10.3) / 2.7))
+         w(r) = 100 / (1 + exp((r - 10.322) / 2.531))
 
   2. The same Z-gated exponential correction applied to tickers is
      applied here too, driven by composite_erp_z (Portfolio Z - OFZ Z):
@@ -73,8 +73,8 @@ Z_COLUMN_SUFFIX = "_z"
 COMPOSITE_Z_COLUMN = "composite_erp_z"
 
 # Inverse-logistic base stock share as a function of the CBR key rate (%).
-KEY_RATE_MIDPOINT = 10.3
-KEY_RATE_SLOPE = 2.7
+KEY_RATE_MIDPOINT = 10.322
+KEY_RATE_SLOPE = 2.531
 
 
 def utc_timestamp() -> str:
@@ -159,15 +159,40 @@ def compute_target_weights(base_weights: dict[str, float], zscores: dict[str, fl
 
 def compute_allocation(key_rate: float, composite_z: float | None) -> dict:
     base_stocks = stock_share_from_rate(key_rate)
-    adjusted_stocks = base_stocks + z_correction(composite_z)
-    adjusted_stocks = max(0.0, min(100.0, adjusted_stocks))
+    base_bonds = 100 - base_stocks
+
+    # Composite ERP Z > +1.5 -> stocks cheap vs rates -> buy stocks: the
+    # correction goes to Stocks, Bonds gets 0. Z < -1.5 -> rates rich vs
+    # stocks -> buy bonds: the correction goes to Bonds instead, Stocks gets
+    # 0. Neither side ever receives the other's mirrored/negated value -- at
+    # any moment only ONE side actually has an active signal, exactly like a
+    # ticker with no Z-score sitting at 0. Both legs are then renormalized to
+    # sum to 100%, same as the per-ticker target weights.
+    correction = z_correction(composite_z)
+    if correction > 0:
+        stocks_adjustment, bonds_adjustment = correction, 0.0
+    elif correction < 0:
+        stocks_adjustment, bonds_adjustment = 0.0, -correction
+    else:
+        stocks_adjustment, bonds_adjustment = 0.0, 0.0
+
+    adjusted_stocks = base_stocks + stocks_adjustment
+    adjusted_bonds = base_bonds + bonds_adjustment
+
+    total_adjusted = adjusted_stocks + adjusted_bonds
+    target_stocks = adjusted_stocks / total_adjusted * 100
+    target_bonds = adjusted_bonds / total_adjusted * 100
+
     return {
         "key_rate": key_rate,
         "base_stocks": base_stocks,
+        "base_bonds": base_bonds,
         "z": composite_z,
         "signal": signal(composite_z),
-        "target_stocks": adjusted_stocks,
-        "target_bonds": 100 - adjusted_stocks,
+        "stocks_adjustment": stocks_adjustment if composite_z is not None else None,
+        "bonds_adjustment": bonds_adjustment if composite_z is not None else None,
+        "target_stocks": target_stocks,
+        "target_bonds": target_bonds,
     }
 
 
@@ -231,8 +256,11 @@ def write_allocation_json(alloc: dict, as_of: str, key_rate_date: str,
         "key_rate_date": key_rate_date,
         "composite_z_date": composite_z_date,
         "base_stocks": round(alloc["base_stocks"], 4),
+        "base_bonds": round(alloc["base_bonds"], 4),
         "z": round(alloc["z"], 4) if alloc["z"] is not None else None,
         "signal": alloc["signal"],
+        "stocks_adjustment": round(alloc["stocks_adjustment"], 4) if alloc["stocks_adjustment"] is not None else None,
+        "bonds_adjustment": alloc["bonds_adjustment"],
         "target_stocks": round(alloc["target_stocks"], 4),
         "target_bonds": round(alloc["target_bonds"], 4),
     }

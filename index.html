@@ -573,8 +573,14 @@ async function loadData() {
   // sectors share one common reference circle, radial extent = R_BASE *
   // (target/base) so over/underweight reads as protrude/retract vs that circle.
   const ALLOC_COLORS = { Stocks: '#4da8c8', Bonds: '#f0b429' };
-  const allocBase = { Stocks: targetAllocationData.base_stocks, Bonds: 100 - targetAllocationData.base_stocks };
+  const allocBase = { Stocks: targetAllocationData.base_stocks, Bonds: targetAllocationData.base_bonds };
   const allocTarget = { Stocks: targetAllocationData.target_stocks, Bonds: targetAllocationData.target_bonds };
+  // Composite ERP Z is a single portfolio-wide reading — both rows show the
+  // same value. Which side actually receives the correction depends on its
+  // sign (positive -> Stocks, negative -> Bonds); the Adjustment column
+  // (not Z) is what shows that asymmetry.
+  const allocZ = { Stocks: targetAllocationData.z, Bonds: targetAllocationData.z };
+  const allocAdjustment = { Stocks: targetAllocationData.stocks_adjustment, Bonds: targetAllocationData.bonds_adjustment };
   const allocNames = ['Stocks', 'Bonds'];
   let allocCursor = 0;
   const allocTheta = [];
@@ -649,7 +655,8 @@ async function loadData() {
   const allocZStr = targetAllocationData.z !== null ? targetAllocationData.z.toFixed(2) : 'n/a';
   document.getElementById('alloc_target_note').innerHTML = `
     <b>Target allocation</b> — base stock share from the CBR key rate
-    (<code>w(r) = 100 / (1 + e^((r&minus;10.3)/2.7))</code>, r = <span class="stat">${targetAllocationData.key_rate.toFixed(2)}%</span>
+    (<code>w(r) = 100 / (1 + e^((r&minus;${targetAllocationData.key_rate_midpoint})/${targetAllocationData.key_rate_slope}))</code>,
+    r = <span class="stat">${targetAllocationData.key_rate.toFixed(2)}%</span>
     as of ${targetAllocationData.key_rate_date} → base = <span class="stat">${targetAllocationData.base_stocks.toFixed(1)}%</span> stocks),
     then the same Z-gated correction as the ticker weights applied via Composite ERP Z
     (<span class="stat">${allocZStr}</span>, ${targetAllocationData.signal}) →
@@ -662,13 +669,13 @@ async function loadData() {
   document.getElementById('alloc_target_table_wrap').innerHTML = `
     <table class="data-table">
       <thead><tr>
-        <th>Category</th><th>Base</th><th>Z-score</th><th>Adjustment</th><th>Target</th><th>&Delta; vs Base</th>
+        <th>Category</th><th>Key Rate</th><th>Base</th><th>Z-score</th><th>Adjustment</th><th>Target</th><th>&Delta; vs Base</th>
       </tr></thead>
       <tbody>
         ${allocTableRows.map(n => {
-          const z = targetAllocationData.z;
+          const z = allocZ[n];
           const zStr = z !== null ? (z >= 0 ? '+' : '') + z.toFixed(2) : '—';
-          const adj = z !== null ? (n === 'Stocks' ? allocTarget[n] - allocBase[n] : -(allocTarget.Stocks - allocBase.Stocks)) : null;
+          const adj = allocAdjustment[n];
           const adjStr = adj !== null ? (adj >= 0 ? '+' : '') + adj.toFixed(1) + ' pp' : '—';
           const delta = allocTarget[n] - allocBase[n];
           const deltaStr = (delta >= 0 ? '+' : '') + delta.toFixed(1) + ' pp';
@@ -676,6 +683,7 @@ async function loadData() {
           const adjCls = adj === null ? 'muted' : (adj > 0 ? 'pos' : (adj < 0 ? 'neg' : 'muted'));
           return `<tr>
             <td class="ticker" style="color:${ALLOC_COLORS[n]}">${n}</td>
+            <td>${targetAllocationData.key_rate.toFixed(2)}%</td>
             <td>${allocBase[n].toFixed(1)}%</td>
             <td>${zStr}</td>
             <td class="${adjCls}">${adjStr}</td>
