@@ -21,9 +21,31 @@ Base weights come from data/target_weights_base.json. Z-scores come
 from the last row of data/composite_valuation.csv (produced by
 composite_valuation.py).
 
+Also computes the Layer 2: Allocation split (stocks vs bonds), which is
+independent of the per-ticker weights above:
+
+  1. Base stock share from the CBR key rate r (inverse logistic —
+     low rate -> high stock share, high rate -> low stock share):
+
+         w(r) = 100 / (1 + exp((r - 10.3) / 2.7))
+
+  2. The same Z-gated exponential correction applied to tickers is
+     applied here too, driven by composite_erp_z (Portfolio Z - OFZ Z):
+
+         excess = |Z| - 1.5
+         adjusted = w(r) + (exp(excess) - 1) * sign(Z)   if |Z| > 1.5
+         adjusted = w(r)                                  otherwise
+
+     then clipped to [0, 100]. Bonds share = 100 - stocks share.
+
+Key rate comes from the latest row of data/key_rate.csv (produced by
+fetch_key_rate.py).
+
 Outputs:
-    data/target_weights.json  (for the site's donut chart)
-    data/target_weights.csv   (daily history, appended)
+    data/target_weights.json   (per-ticker, for the site's donut chart)
+    data/target_weights.csv    (per-ticker daily history, appended)
+    data/target_allocation.json (stocks/bonds split, for the site)
+    data/target_allocation.csv  (stocks/bonds daily history, appended)
 
 Run:
     python erp_valuation/calc_target_weights.py
@@ -40,11 +62,19 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = REPO_ROOT / "data"
 BASE_WEIGHTS_PATH = DATA_DIR / "target_weights_base.json"
 COMPOSITE_CSV_PATH = DATA_DIR / "composite_valuation.csv"
+KEY_RATE_CSV_PATH = DATA_DIR / "key_rate.csv"
 OUT_JSON_PATH = DATA_DIR / "target_weights.json"
 OUT_CSV_PATH = DATA_DIR / "target_weights.csv"
+ALLOC_OUT_JSON_PATH = DATA_DIR / "target_allocation.json"
+ALLOC_OUT_CSV_PATH = DATA_DIR / "target_allocation.csv"
 
 Z_THRESHOLD = 1.5
 Z_COLUMN_SUFFIX = "_z"
+COMPOSITE_Z_COLUMN = "composite_erp_z"
+
+# Inverse-logistic base stock share as a function of the CBR key rate (%).
+KEY_RATE_MIDPOINT = 10.3
+KEY_RATE_SLOPE = 2.7
 
 
 def utc_timestamp() -> str:
@@ -69,6 +99,29 @@ def read_latest_zscores(path: Path = COMPOSITE_CSV_PATH) -> dict[str, float]:
     return zscores
 
 
+def read_latest_composite_z(path: Path = COMPOSITE_CSV_PATH) -> tuple[str, float | None]:
+    with path.open("r", newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    if not rows:
+        raise ValueError(f"{path} is empty")
+    last = rows[-1]
+    value = last.get(COMPOSITE_Z_COLUMN)
+    return last["date"], (float(value) if value not in (None, "") else None)
+
+
+def read_latest_key_rate(path: Path = KEY_RATE_CSV_PATH) -> tuple[str, float]:
+    with path.open("r", newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    if not rows:
+        raise ValueError(f"{path} is empty")
+    last = rows[-1]
+    return last["date"], float(last["rate_pct"])
+
+
+def stock_share_from_rate(r: float) -> float:
+    return 100 / (1 + math.exp((r - KEY_RATE_MIDPOINT) / KEY_RATE_SLOPE))
+
+
 def signal(z: float | None) -> str:
     if z is None:
         return "n/a"
@@ -79,12 +132,15 @@ def signal(z: float | None) -> str:
     return "neutral"
 
 
-def adjusted_weight(base: float, z: float | None) -> float:
+def z_correction(z: float | None) -> float:
     if z is None or abs(z) <= Z_THRESHOLD:
-        return base
+        return 0.0
     excess = abs(z) - Z_THRESHOLD
-    delta = (math.exp(excess) - 1) * (1 if z > 0 else -1)
-    return base + delta
+    return (math.exp(excess) - 1) * (1 if z > 0 else -1)
+
+
+def adjusted_weight(base: float, z: float | None) -> float:
+    return base + z_correction(z)
 
 
 def compute_target_weights(base_weights: dict[str, float], zscores: dict[str, float]) -> list[dict]:
@@ -99,6 +155,20 @@ def compute_target_weights(base_weights: dict[str, float], zscores: dict[str, fl
         r["target"] = r["adjusted"] / total_adjusted * 100
 
     return rows
+
+
+def compute_allocation(key_rate: float, composite_z: float | None) -> dict:
+    base_stocks = stock_share_from_rate(key_rate)
+    adjusted_stocks = base_stocks + z_correction(composite_z)
+    adjusted_stocks = max(0.0, min(100.0, adjusted_stocks))
+    return {
+        "key_rate": key_rate,
+        "base_stocks": base_stocks,
+        "z": composite_z,
+        "signal": signal(composite_z),
+        "target_stocks": adjusted_stocks,
+        "target_bonds": 100 - adjusted_stocks,
+    }
 
 
 def write_json(rows: list[dict], as_of: str, out_path: Path = OUT_JSON_PATH) -> None:
@@ -148,6 +218,57 @@ def append_csv(rows: list[dict], as_of: str, out_path: Path = OUT_CSV_PATH) -> N
         writer.writerows(existing_rows)
 
 
+def write_allocation_json(alloc: dict, as_of: str, key_rate_date: str,
+                           composite_z_date: str, out_path: Path = ALLOC_OUT_JSON_PATH) -> None:
+    payload = {
+        "date": as_of,
+        "updated": utc_timestamp(),
+        "z_threshold": Z_THRESHOLD,
+        "key_rate_midpoint": KEY_RATE_MIDPOINT,
+        "key_rate_slope": KEY_RATE_SLOPE,
+        "key_rate": alloc["key_rate"],
+        "key_rate_date": key_rate_date,
+        "composite_z_date": composite_z_date,
+        "base_stocks": round(alloc["base_stocks"], 4),
+        "z": round(alloc["z"], 4) if alloc["z"] is not None else None,
+        "signal": alloc["signal"],
+        "target_stocks": round(alloc["target_stocks"], 4),
+        "target_bonds": round(alloc["target_bonds"], 4),
+    }
+    out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def append_allocation_csv(alloc: dict, as_of: str, out_path: Path = ALLOC_OUT_CSV_PATH) -> None:
+    header = ["date", "key_rate", "base_stocks", "z", "target_stocks", "target_bonds"]
+    new_row = [
+        as_of,
+        f"{alloc['key_rate']:.2f}",
+        f"{alloc['base_stocks']:.4f}",
+        f"{alloc['z']:.4f}" if alloc["z"] is not None else "",
+        f"{alloc['target_stocks']:.4f}",
+        f"{alloc['target_bonds']:.4f}",
+    ]
+
+    existing_rows = []
+    if out_path.exists():
+        with out_path.open("r", newline="", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            existing_header = next(reader, None)
+            existing_rows = list(reader)
+        if existing_header != header:
+            existing_rows = []
+
+    if existing_rows and existing_rows[-1][0] == as_of:
+        existing_rows[-1] = new_row
+    else:
+        existing_rows.append(new_row)
+
+    with out_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+        writer.writerows(existing_rows)
+
+
 def main() -> int:
     base_weights = read_base_weights()
     zscores = read_latest_zscores()
@@ -164,6 +285,20 @@ def main() -> int:
     print(f"Total: {sum(r['target'] for r in rows):.2f}%")
     print(f"Saved {OUT_JSON_PATH}")
     print(f"Saved {OUT_CSV_PATH}")
+
+    key_rate_date, key_rate = read_latest_key_rate()
+    composite_z_date, composite_z = read_latest_composite_z()
+    alloc = compute_allocation(key_rate, composite_z)
+    write_allocation_json(alloc, as_of, key_rate_date, composite_z_date)
+    append_allocation_csv(alloc, as_of)
+
+    z_str = f"{composite_z:.2f}" if composite_z is not None else "-"
+    print()
+    print(f"Key rate ({key_rate_date}): {key_rate:.2f}%  Composite Z ({composite_z_date}): {z_str}")
+    print(f"Base stocks: {alloc['base_stocks']:.2f}%  Target stocks: {alloc['target_stocks']:.2f}%  "
+          f"Target bonds: {alloc['target_bonds']:.2f}%  Signal: {alloc['signal']}")
+    print(f"Saved {ALLOC_OUT_JSON_PATH}")
+    print(f"Saved {ALLOC_OUT_CSV_PATH}")
     return 0
 
 

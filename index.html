@@ -64,6 +64,10 @@
   <b>Green (Composite ERP Z)</b> = Portfolio Z − OFZ Z.<br>
   Above +1.5 → stocks cheap vs rates → increase equity allocation.<br>
   Below −1.5 → rates high vs stocks → increase bond allocation.
+</p>
+<div id="plot_alloc_target" style="height:420px; margin-top:8px"></div>
+<p class="note" id="alloc_target_note">
+  <span class="loading">Loading current allocation…</span>
 </p></div>
 
 <div id="sigmoid" class="chart-wrap"><div id="plot_sigmoid" style="height:480px"></div>
@@ -217,6 +221,7 @@ function renderChart(id) {
         HLINE(1.5, '#3dd68c', 'dot'),
         HLINE(-1.5, '#e05252', 'dot'),
       ]), CONFIG);
+    Plotly.newPlot('plot_alloc_target', DATA.allocTarget, DATA.allocTargetLayout, CONFIG);
   } else if (id === 'sigmoid') {
     const layout = Object.assign({}, LAYOUT_BASE, {
       xaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', title: 'USD/RUB rate', range: DATA.sigmoidAxisRange },
@@ -260,6 +265,7 @@ async function loadLastUpdated() {
     `${DATA_DIR}/usd_rub_history.csv`,
     `${DATA_DIR}/usd_rub_stats.json`,
     `${DATA_DIR}/target_weights.json`,
+    `${DATA_DIR}/target_allocation.json`,
   ];
   const dates = (await Promise.all(paths.map(fetchLastModified))).filter(Boolean);
   const el = document.getElementById('last_updated');
@@ -273,13 +279,14 @@ async function loadLastUpdated() {
 }
 
 async function loadData() {
-  const [rows, eyRows, usdRubRows, usdRubStats, usdRub5yRows, targetWeightsData] = await Promise.all([
+  const [rows, eyRows, usdRubRows, usdRubStats, usdRub5yRows, targetWeightsData, targetAllocationData] = await Promise.all([
     fetchCsv(`${DATA_DIR}/composite_valuation.csv`),
     fetchCsv(`${DATA_DIR}/erp_portfolio.csv`),
     fetchCsv(`${DATA_DIR}/usd_rub_history.csv`),
     fetchJson(`${DATA_DIR}/usd_rub_stats.json`),
     fetchCsv(`${DATA_DIR}/usd_rub_history_5y.csv`),
     fetchJson(`${DATA_DIR}/target_weights.json`),
+    fetchJson(`${DATA_DIR}/target_allocation.json`),
   ]);
 
   const dates = rows.map(r => r.date + '-01');
@@ -507,9 +514,82 @@ async function loadData() {
     Data as of ${targetWeightsData.date} (updated ${targetWeightsData.updated}).
   `;
 
+  // Layer 2: Allocation target — stocks vs bonds split. Base share comes from
+  // an inverse-logistic function of the CBR key rate; the same Z-gated
+  // exponential correction used for tickers is applied here via composite_erp_z.
+  const ALLOC_COLORS = { Stocks: '#4da8c8', Bonds: '#f0b429' };
+  const allocBase = { Stocks: targetAllocationData.base_stocks, Bonds: 100 - targetAllocationData.base_stocks };
+  const allocTarget = { Stocks: targetAllocationData.target_stocks, Bonds: targetAllocationData.target_bonds };
+  const allocNames = ['Stocks', 'Bonds'];
+  const allocTheta = [90, 270];
+  const allocWidth = [180, 180];
+  const allocMaxR = Math.max(...allocNames.map(n => Math.max(allocBase[n], allocTarget[n]))) * 1.15;
+
+  const allocTargetTrace = [
+    {
+      type: 'barpolar',
+      r: allocNames.map(n => allocBase[n]),
+      theta: allocTheta,
+      width: allocWidth,
+      name: 'Base (boundary)',
+      marker: { color: 'rgba(0,0,0,0)', line: { color: allocNames.map(n => ALLOC_COLORS[n]), width: 2 } },
+      hovertemplate: allocNames.map(n => `${n}<br>Base: <b>${allocBase[n].toFixed(2)}%</b><extra></extra>`),
+    },
+    {
+      type: 'barpolar',
+      r: allocNames.map(n => allocTarget[n]),
+      theta: allocTheta,
+      width: allocWidth.map(w => w * 0.86),
+      name: 'Target (adjusted)',
+      marker: { color: allocNames.map(n => ALLOC_COLORS[n]), opacity: 0.85 },
+      hovertemplate: allocNames.map(n => {
+        const diff = allocTarget[n] - allocBase[n];
+        const diffStr = (diff >= 0 ? '+' : '') + diff.toFixed(2);
+        return `${n}<br>Target: <b>${allocTarget[n].toFixed(2)}%</b><br>Base: ${allocBase[n].toFixed(2)}% (${diffStr} п.п.)<extra></extra>`;
+      }),
+    },
+    {
+      type: 'scatterpolar',
+      mode: 'text',
+      r: allocNames.map(() => allocMaxR * 1.1),
+      theta: allocTheta,
+      text: allocNames,
+      textfont: { color: allocNames.map(n => ALLOC_COLORS[n]), size: 13 },
+      showlegend: false,
+      hoverinfo: 'skip',
+    },
+  ];
+
+  const allocTargetLayout = {
+    paper_bgcolor: '#0d1117',
+    plot_bgcolor: '#0d1117',
+    font: { color: '#c9d1d9', size: 11 },
+    polar: {
+      domain: { x: [0.15, 0.85], y: [0.05, 0.95] },
+      bgcolor: '#0d1117',
+      radialaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', range: [0, allocMaxR * 1.25], ticksuffix: '%' },
+      angularaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', showticklabels: false, rotation: 90, direction: 'clockwise' },
+    },
+    showlegend: true,
+    legend: { bgcolor: '#13191f', bordercolor: '#1e2830', borderwidth: 1, x: 1, y: 1 },
+    margin: { t: 20, r: 20, b: 20, l: 20 },
+  };
+
+  const allocZStr = targetAllocationData.z !== null ? targetAllocationData.z.toFixed(2) : 'n/a';
+  document.getElementById('alloc_target_note').innerHTML = `
+    <b>Target allocation</b> — base stock share from the CBR key rate
+    (<code>w(r) = 100 / (1 + e^((r&minus;10.3)/2.7))</code>, r = <span class="stat">${targetAllocationData.key_rate.toFixed(2)}%</span>
+    as of ${targetAllocationData.key_rate_date} → base = <span class="stat">${targetAllocationData.base_stocks.toFixed(1)}%</span> stocks),
+    then the same Z-gated correction as the ticker weights applied via Composite ERP Z
+    (<span class="stat">${allocZStr}</span>, ${targetAllocationData.signal}) →
+    target = <span class="stat">${targetAllocationData.target_stocks.toFixed(1)}%</span> stocks /
+    <span class="stat">${targetAllocationData.target_bonds.toFixed(1)}%</span> bonds.<br>
+    Data as of ${targetAllocationData.date} (updated ${targetAllocationData.updated}).
+  `;
+
   return { layer1, layer1_individual: layer1Individual, layer2_rebal: layer2Rebal,
            layer2_alloc: layer2Alloc, sigmoid, sigmoidShapes, sigmoidAnnotations, wCny5y,
-           targetWeights, targetWeightsLayout,
+           targetWeights, targetWeightsLayout, allocTarget: allocTargetTrace, allocTargetLayout,
            sigmoidAxisRange: [axisMin, axisMax] };
 }
 
