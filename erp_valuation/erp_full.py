@@ -41,12 +41,19 @@ T_START      = date(2024, 11, 28)
 T_SPLIT_DATE = date(2026, 4, 17)
 T_PRE_SPLIT_SHARES = 268274786   # = 2682747860 / 9.58 (implied from price ratio)
 
-# VTBR did a 1:4664 reverse split on 2024-07-15.
-# Before that date: shares were ~60.3 trillion (= 12.9B × 4664)
-# After: 12.9B shares at ~93 rub each.
+# VTBR did a 1:5000 reverse split on 2024-07-15.
+# Before that date: shares were ~26.85 trillion (post-2023 issuances basis)
+# After: 5.37bn shares, then diluted further by later placements.
 # We handle this by using adjusted shares count per period.
 VTBR_SPLIT_DATE = date(2024, 7, 15)
-VTBR_SPLIT_RATIO = 4664  # old shares per 1 new share
+VTBR_SPLIT_RATIO = 5000  # old shares per 1 new share
+# VTBR ordinary share count history (pre-split basis until 2024-07-15):
+#  - .. 2023-01-30:            12,960,541,337,338 (flat since 2014, no ordinary issuance)
+#  - 2023-01-30 .. 2024-07-15: ~26,850,000,000,000 (two 2023 placements, ~13.89tn added,
+#    for RNKB acquisition + recapitalization — unrelated to the later reverse split)
+VTBR_2023_ISSUANCE_DATE = date(2023, 1, 30)
+VTBR_PRE_2023_SHARES    = 12960541337338
+VTBR_POST_2023_SHARES   = 26850000000000
 # Two further share-count changes after the reverse split:
 #  - 2024-07-15 .. 2025-09-30: 5,370mn shares (post-split, pre-SPO)
 #  - 2025-09-30 .. 2026-04-30: 6,620mn shares (SPO settled 2025-09-30, raised ~84bn RUB)
