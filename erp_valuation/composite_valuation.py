@@ -156,7 +156,7 @@ def get_shares(ticker, as_of):
     shares = SHARES[ticker]
     if ticker == 'VTBR':
         if as_of < VTBR_SPLIT_DATE:
-            shares = shares * VTBR_SPLIT_RATIO
+            shares = VTBR_POST_SPLIT_SHARES * VTBR_SPLIT_RATIO
         elif as_of < VTBR_SPO_DATE:
             shares = VTBR_POST_SPLIT_SHARES
         elif as_of < VTBR_CONVERSION_DATE:
