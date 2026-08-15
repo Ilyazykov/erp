@@ -464,15 +464,24 @@ async function loadData() {
 
   const twMaxR = Math.max(...twRows.map(r => Math.max(r.base, r.target))) * 1.15;
 
-  // Base boundary drawn as a short radial tick (line) at r=base spanning each
-  // wedge's angular width, built as a scatterpolar trace with line breaks
-  // (null theta) between segments so each ticker gets its own independent arc.
+  // Base boundary drawn as a curved arc at r=base spanning each wedge's
+  // angular width (interpolated in 1-degree steps so it follows the wedge's
+  // round edge rather than cutting a straight chord across it), built as a
+  // scatterpolar trace with null breaks between segments so each ticker gets
+  // its own independent arc.
   const twBoundaryTheta = [];
   const twBoundaryR = [];
   twRows.forEach((r, i) => {
     const halfWidth = twWidth[i] / 2 * 0.86;
-    twBoundaryTheta.push(twTheta[i] - halfWidth, twTheta[i] + halfWidth, null);
-    twBoundaryR.push(r.base, r.base, null);
+    const thetaStart = twTheta[i] - halfWidth;
+    const thetaEnd = twTheta[i] + halfWidth;
+    const steps = Math.max(2, Math.ceil(halfWidth * 2));
+    for (let s = 0; s <= steps; s++) {
+      twBoundaryTheta.push(thetaStart + (thetaEnd - thetaStart) * s / steps);
+      twBoundaryR.push(r.base);
+    }
+    twBoundaryTheta.push(null);
+    twBoundaryR.push(null);
   });
 
   const targetWeights = [
@@ -648,8 +657,8 @@ loadLastUpdated();
 
 loadData().then(data => {
   DATA = data;
-  const qsTab = new URLSearchParams(location.search).get('tab');
-  if (qsTab) { showTab(qsTab); } else { renderChart('layer1'); rendered.layer1 = true; }
+  renderChart('layer1');
+  rendered.layer1 = true;
 }).catch(err => {
   document.body.insertAdjacentHTML('afterbegin',
     `<p style="color:#e05252">Failed to load data: ${err.message}</p>`);
