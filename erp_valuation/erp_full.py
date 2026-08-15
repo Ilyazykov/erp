@@ -198,8 +198,10 @@ def main():
                 continue
             shares = SHARES[ticker]
             if ticker == 'VTBR':
-                if as_of < VTBR_SPLIT_DATE:
-                    shares = VTBR_POST_SPLIT_SHARES * VTBR_SPLIT_RATIO
+                if as_of < VTBR_2023_ISSUANCE_DATE:
+                    shares = VTBR_PRE_2023_SHARES
+                elif as_of < VTBR_SPLIT_DATE:
+                    shares = VTBR_POST_2023_SHARES
                 elif as_of < VTBR_SPO_DATE:
                     shares = VTBR_POST_SPLIT_SHARES
                 elif as_of < VTBR_CONVERSION_DATE:
