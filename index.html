@@ -45,7 +45,6 @@
   <div class="tab" data-tab="layer2a">Layer 2: Allocation</div>
   <div class="tab" data-tab="sigmoid">USD/RUB → CNY Weight</div>
   <div class="tab" data-tab="wcny5y">w_CNY over 5 years</div>
-  <div class="tab" data-tab="targetweights">Target Weights</div>
 </div>
 
 <div id="layer1" class="chart-wrap active"><div id="plot_layer1" style="height:480px"></div>
@@ -66,7 +65,20 @@
   Z-score of each stock vs its own 3-year history (36-month rolling window).<br>
   Metrics: SBER/T/VTBR/DOMRF — Earnings Yield; ROSN — FCF Yield; YDEX/OZON — Revenue Yield.<br>
   <b>Above +1.5</b> → stock cheaper than its norm → buy. <b>Below −1.5</b> → more expensive → trim.
-</p></div>
+</p>
+<div id="plot_targetweights" style="height:760px; max-width:820px; margin:8px auto 0"></div>
+<p class="note" id="targetweights_note">
+  Each sector's <b>angular width</b> is its <b>base</b> (strategic) weight — so sectors tile the
+  full circle like a normal portfolio donut, and even 1% positions show as thin slices. Every
+  sector shares one common dotted <b>base reference circle</b>. The sector's <b>radial extent</b>
+  shows its <b>target</b> weight after the Z-score correction
+  (<code>base + (e^(|Z|&minus;1.5) &minus; 1)&middot;sign(Z)</code>, applied only when |Z| &gt; 1.5,
+  then renormalized across all 10 positions to sum to 100%), relative to base.<br>
+  Sector extends past the dotted circle → overweight vs base. Sector ends short of it → underweight vs base.
+  <span class="loading">Loading current values…</span>
+</p>
+<div id="targetweights_table_wrap"></div>
+</div>
 
 <div id="layer2a" class="chart-wrap"><div id="plot_layer2a" style="height:480px"></div>
 <p class="note">
@@ -91,20 +103,6 @@
   w_CNY(t) computed daily over the last 5 years: x(t) is that day's USD/RUB rate, m(t) is the
   trailing 365-day average USD/RUB rate as of that day. USD/RUB rate overlaid on the right axis.
 </p></div>
-
-<div id="targetweights" class="chart-wrap"><div id="plot_targetweights" style="height:760px; max-width:820px; margin:0 auto"></div>
-<p class="note" id="targetweights_note">
-  Each sector's <b>angular width</b> is its <b>base</b> (strategic) weight — so sectors tile the
-  full circle like a normal portfolio donut, and even 1% positions show as thin slices. Every
-  sector shares one common dotted <b>base reference circle</b>. The sector's <b>radial extent</b>
-  shows its <b>target</b> weight after the Z-score correction
-  (<code>base + (e^(|Z|&minus;1.5) &minus; 1)&middot;sign(Z)</code>, applied only when |Z| &gt; 1.5,
-  then renormalized across all 10 positions to sum to 100%), relative to base.<br>
-  Sector extends past the dotted circle → overweight vs base. Sector ends short of it → underweight vs base.
-  <span class="loading">Loading current values…</span>
-</p>
-<div id="targetweights_table_wrap"></div>
-</div>
 
 <script>
 const DATA_DIR = './data';
@@ -227,6 +225,7 @@ function renderChart(id) {
         HLINE(1.5, '#3dd68c', 'dot'),
         HLINE(-1.5, '#e05252', 'dot'),
       ]), CONFIG);
+    Plotly.newPlot('plot_targetweights', DATA.targetWeights, DATA.targetWeightsLayout, CONFIG);
   } else if (id === 'layer2a') {
     Plotly.newPlot('plot_layer2a', DATA.layer2_alloc,
       layoutWith('Z-score', [
@@ -243,8 +242,6 @@ function renderChart(id) {
       annotations: DATA.sigmoidAnnotations,
     });
     Plotly.newPlot('plot_sigmoid', DATA.sigmoid, layout, CONFIG);
-  } else if (id === 'targetweights') {
-    Plotly.newPlot('plot_targetweights', DATA.targetWeights, DATA.targetWeightsLayout, CONFIG);
   } else if (id === 'wcny5y') {
     Plotly.newPlot('plot_wcny5y', DATA.wCny5y,
       Object.assign({}, LAYOUT_BASE, {
