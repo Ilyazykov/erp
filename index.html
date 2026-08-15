@@ -92,7 +92,7 @@
   trailing 365-day average USD/RUB rate as of that day. USD/RUB rate overlaid on the right axis.
 </p></div>
 
-<div id="targetweights" class="chart-wrap"><div id="plot_targetweights" style="height:560px"></div>
+<div id="targetweights" class="chart-wrap"><div id="plot_targetweights" style="height:420px; max-width:520px; margin:0 auto"></div>
 <p class="note" id="targetweights_note">
   Each wedge is one ticker, sized by its <b>target</b> weight after the Z-score correction
   (<code>base + (e^(|Z|&minus;1.5) &minus; 1)&middot;sign(Z)</code>, applied only when |Z| &gt; 1.5,
@@ -462,7 +462,7 @@ async function loadData() {
     twCursor += width;
   });
 
-  const twMaxR = Math.max(...twRows.map(r => Math.max(r.base, r.target))) * 1.15;
+  const twMaxR = Math.max(...twRows.map(r => Math.max(r.base, r.target)));
 
   // Base boundary drawn as a curved arc at r=base spanning each wedge's
   // angular width (interpolated in 1-degree steps so it follows the wedge's
@@ -513,10 +513,32 @@ async function loadData() {
     {
       type: 'scatterpolar',
       mode: 'text',
-      r: twRows.map((r, i) => twWidth[i] < 15 ? twMaxR * (1.06 + 0.1 * (i % 3)) : twMaxR * 1.06),
-      theta: twTheta,
+      r: (() => {
+        // Small wedges cluster tightly in angle, so their labels collide if
+        // placed at a single radius; alternate near/far radius in addition to
+        // the angular fan-out below, instead of pushing the whole chart's
+        // radial range out just to fit a handful of labels.
+        let smallIdx = 0;
+        return twWidth.map(w => {
+          if (w >= 15) return twMaxR * 1.1;
+          const r = twMaxR * (1.14 + 0.1 * (smallIdx % 2));
+          smallIdx++;
+          return r;
+        });
+      })(),
+      theta: (() => {
+        let smallIdx = 0;
+        const smallCount = twWidth.filter(w => w < 15).length;
+        return twWidth.map((w, i) => {
+          if (w >= 15) return twTheta[i];
+          const spread = 10;
+          const offset = (smallIdx - (smallCount - 1) / 2) * spread;
+          smallIdx++;
+          return twTheta[i] + offset;
+        });
+      })(),
       text: twRows.map(r => r.ticker),
-      textfont: { color: twRows.map(r => TICKER_COLORS[r.ticker] || '#8b949e'), size: 11 },
+      textfont: { color: twRows.map(r => TICKER_COLORS[r.ticker] || '#8b949e'), size: 10 },
       showlegend: false,
       hoverinfo: 'skip',
     },
@@ -525,16 +547,16 @@ async function loadData() {
   const targetWeightsLayout = {
     paper_bgcolor: '#0d1117',
     plot_bgcolor: '#0d1117',
-    font: { color: '#c9d1d9', size: 11 },
+    font: { color: '#c9d1d9', size: 10 },
     polar: {
-      domain: { x: [0.06, 0.94], y: [0.04, 0.96] },
+      domain: { x: [0.1, 0.9], y: [0.06, 0.94] },
       bgcolor: '#0d1117',
-      radialaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', range: [0, twMaxR * 1.4], ticksuffix: '%' },
+      radialaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', range: [0, twMaxR * 1.4], ticksuffix: '%', tickfont: { size: 9 } },
       angularaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', showticklabels: false, rotation: 90, direction: 'clockwise' },
     },
     showlegend: true,
-    legend: { bgcolor: '#13191f', bordercolor: '#1e2830', borderwidth: 1, x: 1, y: 1 },
-    margin: { t: 30, r: 30, b: 30, l: 30 },
+    legend: { bgcolor: '#13191f', bordercolor: '#1e2830', borderwidth: 1, x: 0.5, y: -0.06, xanchor: 'center', yanchor: 'top', orientation: 'h', font: { size: 9 } },
+    margin: { t: 10, r: 10, b: 10, l: 10 },
   };
 
   document.getElementById('targetweights_note').innerHTML = `
