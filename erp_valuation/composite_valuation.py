@@ -297,10 +297,11 @@ def main():
 
     # Layer 2: rolling z-score per ticker (36-month window, using best metric)
     for ticker in WEIGHTS:
-        series = [r['l2_yields'].get(ticker) for r in results]
-        zscores = rolling_zscore(series, window=36)
+        l1_series = [r['l1_yields'].get(ticker) for r in results]
+        l2_series = [r['l2_yields'].get(ticker) for r in results]
+        zscores = rolling_zscore(l2_series, window=36)
         for i, r in enumerate(results):
-            r[f'{ticker}_yield'] = series[i]
+            r[f'{ticker}_yield'] = l1_series[i]
             r[f'{ticker}_z'] = zscores[i]
 
     # Portfolio z-score (weighted average of individual z-scores)
