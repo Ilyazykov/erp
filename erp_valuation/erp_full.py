@@ -47,6 +47,15 @@ T_PRE_SPLIT_SHARES = 268274786   # = 2682747860 / 9.58 (implied from price ratio
 # We handle this by using adjusted shares count per period.
 VTBR_SPLIT_DATE = date(2024, 7, 15)
 VTBR_SPLIT_RATIO = 4664  # old shares per 1 new share
+# Two further share-count changes after the reverse split:
+#  - 2024-07-15 .. 2025-09-30: 5,370mn shares (post-split, pre-SPO)
+#  - 2025-09-30 .. 2026-04-30: 6,620mn shares (SPO settled 2025-09-30, raised ~84bn RUB)
+#  - 2026-04-30 .. present:    12,927,766,416 (SHARES['VTBR']) — preferred→ordinary
+#    conversion completed 2026-04-30, no cash raised
+VTBR_SPO_DATE = date(2025, 9, 30)
+VTBR_POST_SPLIT_SHARES = 5370000000
+VTBR_CONVERSION_DATE = date(2026, 4, 30)
+VTBR_POST_SPO_SHARES = 6620000000
 
 # DOMRF (ДОМ.РФ) IPO on 2025-11-20: 179.9M shares post-IPO, 161.8M before.
 DOMRF_START = date(2025, 11, 20)
@@ -181,8 +190,13 @@ def main():
                 ey_values[ticker] = None
                 continue
             shares = SHARES[ticker]
-            if ticker == 'VTBR' and as_of < VTBR_SPLIT_DATE:
-                shares = shares * VTBR_SPLIT_RATIO
+            if ticker == 'VTBR':
+                if as_of < VTBR_SPLIT_DATE:
+                    shares = shares * VTBR_SPLIT_RATIO
+                elif as_of < VTBR_SPO_DATE:
+                    shares = VTBR_POST_SPLIT_SHARES
+                elif as_of < VTBR_CONVERSION_DATE:
+                    shares = VTBR_POST_SPO_SHARES
             if ticker == 'YDEX' and as_of < YDEX_START:
                 shares = YNDX_SHARES
             if ticker == 'T' and as_of < T_START:

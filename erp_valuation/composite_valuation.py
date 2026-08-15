@@ -39,6 +39,15 @@ T_SPLIT_DATE     = date(2026, 4, 17)
 T_PRE_SPLIT_SHARES = 268274786
 VTBR_SPLIT_DATE  = date(2024, 7, 15)
 VTBR_SPLIT_RATIO = 4664
+# Two share-count changes after the reverse split:
+#  - 2024-07-15 .. 2025-09-30: 5,370mn shares (post-split, pre-SPO)
+#  - 2025-09-30 .. 2026-04-30: 6,620mn shares (SPO settled 2025-09-30, raised ~84bn RUB)
+#  - 2026-04-30 .. present:    12,927,766,416 (SHARES['VTBR']) — preferred→ordinary
+#    conversion completed 2026-04-30, no cash raised
+VTBR_SPO_DATE       = date(2025, 9, 30)
+VTBR_POST_SPLIT_SHARES = 5370000000
+VTBR_CONVERSION_DATE   = date(2026, 4, 30)
+VTBR_POST_SPO_SHARES   = 6620000000
 DOMRF_START      = date(2025, 11, 20)
 DOMRF_PRE_IPO_SHARES = 161800000
 
@@ -145,8 +154,13 @@ def load_ofz():
 
 def get_shares(ticker, as_of):
     shares = SHARES[ticker]
-    if ticker == 'VTBR' and as_of < VTBR_SPLIT_DATE:
-        shares = shares * VTBR_SPLIT_RATIO
+    if ticker == 'VTBR':
+        if as_of < VTBR_SPLIT_DATE:
+            shares = shares * VTBR_SPLIT_RATIO
+        elif as_of < VTBR_SPO_DATE:
+            shares = VTBR_POST_SPLIT_SHARES
+        elif as_of < VTBR_CONVERSION_DATE:
+            shares = VTBR_POST_SPO_SHARES
     if ticker == 'YDEX' and as_of < YDEX_START:
         shares = YNDX_SHARES
     if ticker == 'T':
