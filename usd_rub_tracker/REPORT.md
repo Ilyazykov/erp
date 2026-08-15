@@ -10,4 +10,4 @@
 
 ![Sigmoid weight curve](charts/sigmoid.png)
 
-![RUB weight over 5 years](charts/wcny_5y.png)
+![CNY weight over 5 years](charts/wcny_5y.png)

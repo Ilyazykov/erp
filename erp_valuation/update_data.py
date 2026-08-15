@@ -13,7 +13,7 @@ from calendar import monthrange
 
 DATA_DIR = "./data"
 
-TICKERS = ['SBER', 'ROSN', 'VTBR', 'YDEX', 'T', 'OZON']
+TICKERS = ['SBER', 'ROSN', 'VTBR', 'YDEX', 'T', 'OZON', 'DOMRF']
 # Pre-redomicile tickers also need price updates (historical only, won't have new data)
 EXTRA_TICKERS = ['YNDX', 'TCSG']
 

@@ -9,21 +9,23 @@ def utc_timestamp():
     return datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
 
 WEIGHTS = {
-    'SBER': 0.4172,
-    'YDEX': 0.3152,
-    'T':    0.1744,
-    'OZON': 0.0759,
-    'ROSN': 0.0099,
-    'VTBR': 0.0074,
+    'SBER':  0.4348,
+    'YDEX':  0.2609,
+    'T':     0.1522,
+    'DOMRF': 0.0761,
+    'OZON':  0.0543,
+    'ROSN':  0.0109,
+    'VTBR':  0.0109,
 }
 
 SHARES = {
-    'SBER': 21586948000,
-    'ROSN': 10598177817,
-    'VTBR': 12927766416,
-    'YDEX': 396012957,
-    'T':    2682747860,
-    'OZON': 208992107,
+    'SBER':  21586948000,
+    'ROSN':  10598177817,
+    'VTBR':  12927766416,
+    'YDEX':  396012957,
+    'T':     2682747860,
+    'OZON':  208992107,
+    'DOMRF': 179900000,
 }
 
 # YNDX (old ticker) had 326M shares; YDEX (post-redomicile) has 396M
@@ -45,6 +47,10 @@ T_PRE_SPLIT_SHARES = 268274786   # = 2682747860 / 9.58 (implied from price ratio
 # We handle this by using adjusted shares count per period.
 VTBR_SPLIT_DATE = date(2024, 7, 15)
 VTBR_SPLIT_RATIO = 4664  # old shares per 1 new share
+
+# DOMRF (ДОМ.РФ) IPO on 2025-11-20: 179.9M shares post-IPO, 161.8M before.
+DOMRF_START = date(2025, 11, 20)
+DOMRF_PRE_IPO_SHARES = 161800000
 
 # Quarter end dates
 QUARTER_END = {1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31)}
@@ -183,6 +189,8 @@ def main():
                 shares = TCSG_SHARES
             elif ticker == 'T' and as_of < T_SPLIT_DATE:
                 shares = T_PRE_SPLIT_SHARES
+            if ticker == 'DOMRF' and as_of < DOMRF_START:
+                shares = DOMRF_PRE_IPO_SHARES
             mcap = price * shares / 1e9  # млрд руб
             ey_values[ticker] = ttm_ni / mcap * 100  # %
 
@@ -200,6 +208,7 @@ def main():
             'SBER_ey': ey_values.get('SBER'),
             'YDEX_ey': ey_values.get('YDEX'),
             'T_ey':    ey_values.get('T'),
+            'DOMRF_ey': ey_values.get('DOMRF'),
             'OZON_ey': ey_values.get('OZON'),
             'ROSN_ey': ey_values.get('ROSN'),
             'VTBR_ey': ey_values.get('VTBR'),
@@ -216,14 +225,14 @@ rows = main()
 def fmt(v):
     return f"{v:7.2f}" if v is not None else "   None"
 
-print(f"{'Date':<8} {'SBER':>7} {'YDEX':>7} {'T':>7} {'OZON':>7} "
+print(f"{'Date':<8} {'SBER':>7} {'YDEX':>7} {'T':>7} {'DOMRF':>7} {'OZON':>7} "
       f"{'ROSN':>7} {'VTBR':>7} {'PortEY':>7} {'OFZ10Y':>7} {'ERP':>7}")
-print("-" * 80)
+print("-" * 88)
 shown = 0
 for r in rows:
     if r['portfolio_ey'] is not None:
         print(f"{r['date']:<8} {fmt(r['SBER_ey'])} {fmt(r['YDEX_ey'])} "
-              f"{fmt(r['T_ey'])} {fmt(r['OZON_ey'])} {fmt(r['ROSN_ey'])} "
+              f"{fmt(r['T_ey'])} {fmt(r['DOMRF_ey'])} {fmt(r['OZON_ey'])} {fmt(r['ROSN_ey'])} "
               f"{fmt(r['VTBR_ey'])} {fmt(r['portfolio_ey'])} "
               f"{fmt(r['ofz10y'])} {fmt(r['erp'])}")
         shown += 1
@@ -234,7 +243,7 @@ print(f"\nTotal months: {len(rows)}, with data: {sum(1 for r in rows if r['portf
 
 # ── Save CSV ──────────────────────────────────────────────────────────────────
 out_csv = str(Path(SCRATCHPAD) / "erp_portfolio.csv")
-fields = ['date','SBER_ey','YDEX_ey','T_ey','OZON_ey','ROSN_ey','VTBR_ey',
+fields = ['date','SBER_ey','YDEX_ey','T_ey','DOMRF_ey','OZON_ey','ROSN_ey','VTBR_ey',
           'portfolio_ey','ofz10y','erp']
 with open(out_csv, 'w', newline='') as f:
     w = csv.DictWriter(f, fieldnames=fields)
@@ -254,7 +263,7 @@ try:
     ws = wb.active
     ws.title = "ERP Portfolio"
 
-    headers = ['Дата','SBER EY%','YDEX EY%','T EY%','OZON EY%',
+    headers = ['Дата','SBER EY%','YDEX EY%','T EY%','DOMRF EY%','OZON EY%',
                'ROSN EY%','VTBR EY%','Portfolio EY%','OFZ 10Y%','ERP Proxy%']
     hdr_fill = PatternFill("solid", fgColor="1e2a3a")
     hdr_font = Font(bold=True, color="e6edf3")
@@ -267,13 +276,13 @@ try:
         ws.column_dimensions[get_column_letter(col)].width = 13
 
     for ri, r in enumerate(rows, 2):
-        vals = [r['date'], r['SBER_ey'], r['YDEX_ey'], r['T_ey'], r['OZON_ey'],
+        vals = [r['date'], r['SBER_ey'], r['YDEX_ey'], r['T_ey'], r['DOMRF_ey'], r['OZON_ey'],
                 r['ROSN_ey'], r['VTBR_ey'], r['portfolio_ey'], r['ofz10y'], r['erp']]
         for ci, v in enumerate(vals, 1):
             c = ws.cell(row=ri, column=ci, value=v)
             if v is not None and ci > 1:
                 c.number_format = '0.00'
-                if ci == 10 and v is not None:  # ERP column
+                if ci == len(headers) and v is not None:  # ERP column
                     c.fill = PatternFill("solid", fgColor="c6efce" if v > 0 else "ffc7ce")
 
     out_xlsx = Path(__file__).resolve().parent / "erp_portfolio.xlsx"
@@ -309,7 +318,7 @@ ax.fill_between(dates_p, erp_p, 0,
 ax.fill_between(dates_p, erp_p, 0,
     where=[e < 0 for e in erp_p],  alpha=0.12, color='#e05252', label='ERP < 0 (переоценка)')
 
-ax.set_title('ERP Proxy российского портфеля (SBER/YDEX/T/OZON/ROSN/VTBR)',
+ax.set_title('ERP Proxy российского портфеля (SBER/YDEX/T/DOMRF/OZON/ROSN/VTBR)',
              color='#e6edf3', fontsize=13, pad=12)
 ax.set_ylabel('%, годовых', color='#c9d1d9', fontsize=10)
 ax.tick_params(colors='#6a7381', labelsize=8)

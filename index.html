@@ -26,7 +26,7 @@
 </head>
 <body>
 <h1>ERP Portfolio Valuation</h1>
-<p class="subtitle">SBER · YDEX · T · OZON · ROSN · VTBR &nbsp;|&nbsp; Jan 2019 — present</p>
+<p class="subtitle">SBER · YDEX · T · DOMRF · OZON · ROSN · VTBR &nbsp;|&nbsp; Jan 2019 — present</p>
 <p class="subtitle" id="last_updated">Last updated: loading…</p>
 
 <div class="tabs">
@@ -40,7 +40,7 @@
 
 <div id="layer1" class="chart-wrap active"><div id="plot_layer1" style="height:480px"></div>
 <p class="note">
-  <b>Blue</b> — Portfolio Earnings Yield (TTM Net Income / Market Cap for all 6 stocks, portfolio-weighted).<br>
+  <b>Blue</b> — Portfolio Earnings Yield (TTM Net Income / Market Cap for all 7 stocks, portfolio-weighted).<br>
   <b>Orange</b> — OFZ 10Y (risk-free rate).<br>
   <b>Green</b> — ERP = EY − OFZ. Green zone: stocks yield more than bonds. Red zone: bonds yield more.
 </p></div>
@@ -54,7 +54,7 @@
 <div id="layer2r" class="chart-wrap"><div id="plot_layer2r" style="height:480px"></div>
 <p class="note">
   Z-score of each stock vs its own 3-year history (36-month rolling window).<br>
-  Metrics: SBER/T/VTBR — Earnings Yield; ROSN — FCF Yield; YDEX/OZON — Revenue Yield.<br>
+  Metrics: SBER/T/VTBR/DOMRF — Earnings Yield; ROSN — FCF Yield; YDEX/OZON — Revenue Yield.<br>
   <b>Above +1.5</b> → stock cheaper than its norm → buy. <b>Below −1.5</b> → more expensive → trim.
 </p></div>
 
@@ -289,6 +289,7 @@ async function loadData() {
     jsSeries(eyDates, eySeries('SBER_ey'), 'SBER EY%', '#4da8c8'),
     jsSeries(eyDates, eySeries('YDEX_ey'), 'YDEX EY%', '#f0b429'),
     jsSeries(eyDates, eySeries('T_ey'), 'T EY%', '#3dd68c'),
+    jsSeries(eyDates, eySeries('DOMRF_ey'), 'DOMRF EY%', '#22d3ee'),
     jsSeries(eyDates, eySeries('OZON_ey'), 'OZON EY%', '#e05252'),
     jsSeries(eyDates, eySeries('ROSN_ey'), 'ROSN EY%', '#a78bfa', { visible: false }),
     jsSeries(eyDates, eySeries('VTBR_ey'), 'VTBR EY%', '#fb923c', { visible: false }),
@@ -299,6 +300,7 @@ async function loadData() {
     jsSeries(dates, series('SBER_z'), 'SBER (EY)', '#4da8c8'),
     jsSeries(dates, series('YDEX_z'), 'YDEX (Rev Yield)', '#f0b429'),
     jsSeries(dates, series('T_z'), 'T (EY)', '#3dd68c'),
+    jsSeries(dates, series('DOMRF_z'), 'DOMRF (EY)', '#22d3ee'),
     jsSeries(dates, series('OZON_z'), 'OZON (Rev Yield)', '#e05252'),
     jsSeries(dates, series('ROSN_z'), 'ROSN (FCF Yield)', '#a78bfa', { visible: false }),
     jsSeries(dates, series('VTBR_z'), 'VTBR (EY)', '#fb923c', { visible: false }),

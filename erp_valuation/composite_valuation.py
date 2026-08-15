@@ -7,7 +7,7 @@ Layer 1: Earnings Yield (TTM NI / mcap) for ALL tickers vs OFZ
 
 Layer 2: Z-score per ticker vs own 36-month history
   → Each ticker uses best metric for its type
-  → SBER/T/VTBR: Earnings Yield; ROSN: FCF Yield; YDEX/OZON: Revenue Yield
+  → SBER/T/VTBR/DOMRF: Earnings Yield; ROSN: FCF Yield; YDEX/OZON: Revenue Yield
   → Z-score removes scale differences — all comparable
 """
 import csv, re, math
@@ -21,13 +21,14 @@ def utc_timestamp():
     return datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
 
 WEIGHTS = {
-    'SBER': 0.4172, 'YDEX': 0.3152, 'T': 0.1744,
-    'OZON': 0.0759, 'ROSN': 0.0099, 'VTBR': 0.0074,
+    'SBER': 0.4348, 'YDEX': 0.2609, 'T': 0.1522, 'DOMRF': 0.0761,
+    'OZON': 0.0543, 'ROSN': 0.0109, 'VTBR': 0.0109,
 }
 
 SHARES = {
     'SBER': 21586948000, 'ROSN': 10598177817, 'VTBR': 12927766416,
     'YDEX': 396012957,   'T':    2682747860,   'OZON': 208992107,
+    'DOMRF': 179900000,
 }
 
 YNDX_SHARES      = 326342270
@@ -38,6 +39,8 @@ T_SPLIT_DATE     = date(2026, 4, 17)
 T_PRE_SPLIT_SHARES = 268274786
 VTBR_SPLIT_DATE  = date(2024, 7, 15)
 VTBR_SPLIT_RATIO = 4664
+DOMRF_START      = date(2025, 11, 20)
+DOMRF_PRE_IPO_SHARES = 161800000
 
 QUARTER_END = {1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31)}
 
@@ -151,6 +154,8 @@ def get_shares(ticker, as_of):
             shares = TCSG_SHARES
         elif as_of < T_SPLIT_DATE:
             shares = T_PRE_SPLIT_SHARES
+    if ticker == 'DOMRF' and as_of < DOMRF_START:
+        shares = DOMRF_PRE_IPO_SHARES
     return shares
 
 # Metric assignment per ticker
@@ -165,6 +170,7 @@ LAYER2_METRIC = {
     'SBER': 'ey',
     'T':    'ey',
     'VTBR': 'ey',
+    'DOMRF': 'ey',   # bank/development institution, same as SBER/T/VTBR
     'ROSN': 'fcf',   # FCF better for capex-heavy oil
     'YDEX': 'rev',   # Revenue Yield: FCF negative historically
     'OZON': 'rev',   # Revenue Yield: loss-making until 2025
@@ -333,28 +339,28 @@ def fmt(v, w=7):
     return f"{v:{w}.2f}" if v is not None else " " * (w-4) + "None"
 
 print(f"\nLayer 1 — Earnings Yield (все тикеры, сравнение с OFZ):")
-print(f"{'Date':<8} {'SBER_EY':>8} {'YDEX_EY':>8} {'T_EY':>8} {'OZON_EY':>8} "
+print(f"{'Date':<8} {'SBER_EY':>8} {'YDEX_EY':>8} {'T_EY':>8} {'DOMRF_EY':>9} {'OZON_EY':>8} "
       f"{'ROSN_EY':>8} {'Port_EY':>8} {'OFZ':>7} {'ERP':>8}")
-print("-" * 85)
+print("-" * 95)
 shown = 0
 for r in rows:
     if r['port_yield'] is not None:
         ly = r['l1_yields']
         print(f"{r['date']:<8} {fmt(ly.get('SBER'),8)} {fmt(ly.get('YDEX'),8)} "
-              f"{fmt(ly.get('T'),8)} {fmt(ly.get('OZON'),8)} {fmt(ly.get('ROSN'),8)} "
+              f"{fmt(ly.get('T'),8)} {fmt(ly.get('DOMRF'),9)} {fmt(ly.get('OZON'),8)} {fmt(ly.get('ROSN'),8)} "
               f"{fmt(r['port_yield'],8)} {fmt(r['ofz10y'],7)} {fmt(r['erp'],8)}")
         shown += 1
         if shown >= 30:
             break
 
-print(f"\n{'Date':<8} {'SBER_Z':>7} {'YDEX_Z':>7} {'T_Z':>7} {'OZON_Z':>7} "
+print(f"\n{'Date':<8} {'SBER_Z':>7} {'YDEX_Z':>7} {'T_Z':>7} {'DOMRF_Z':>8} {'OZON_Z':>7} "
       f"{'ROSN_Z':>7} {'Port_Z':>7} {'OFZ_Z':>7} {'Comp_Z':>7}")
-print("-" * 72)
+print("-" * 81)
 shown2 = 0
 for r in rows:
     if r.get('port_z') is not None:
         print(f"{r['date']:<8} {fmt(r['SBER_z'])} {fmt(r['YDEX_z'])} "
-              f"{fmt(r['T_z'])} {fmt(r['OZON_z'])} {fmt(r['ROSN_z'])} "
+              f"{fmt(r['T_z'])} {fmt(r['DOMRF_z'],8)} {fmt(r['OZON_z'])} {fmt(r['ROSN_z'])} "
               f"{fmt(r['port_z'])} {fmt(r['ofz_z'])} {fmt(r['composite_erp_z'])}")
         shown2 += 1
         if shown2 >= 30:
@@ -368,16 +374,16 @@ print(f"\nTotal: {len(rows)} months, "
 import csv as csv_mod
 out_csv = str(Path(SCRATCHPAD) / "composite_valuation.csv")
 fields = ['date',
-          'SBER_yield','YDEX_yield','T_yield','OZON_yield','ROSN_yield','VTBR_yield',
+          'SBER_yield','YDEX_yield','T_yield','DOMRF_yield','OZON_yield','ROSN_yield','VTBR_yield',
           'portfolio_yield','ofz10y','erp',
-          'SBER_z','YDEX_z','T_z','OZON_z','ROSN_z','VTBR_z',
+          'SBER_z','YDEX_z','T_z','DOMRF_z','OZON_z','ROSN_z','VTBR_z',
           'portfolio_z','ofz_z','composite_erp_z']
 with open(out_csv, 'w', newline='') as f:
     w = csv_mod.DictWriter(f, fieldnames=fields)
     w.writeheader()
     for r in rows:
         row_out = {'date': r['date']}
-        for t in ['SBER','YDEX','T','OZON','ROSN','VTBR']:
+        for t in ['SBER','YDEX','T','DOMRF','OZON','ROSN','VTBR']:
             row_out[f'{t}_yield'] = round(r[f'{t}_yield'], 4) if r.get(f'{t}_yield') is not None else ''
             row_out[f'{t}_z']     = round(r[f'{t}_z'], 4)     if r.get(f'{t}_z')     is not None else ''
         row_out['portfolio_yield']   = round(r['port_yield'], 4)         if r['port_yield']         is not None else ''
@@ -443,12 +449,13 @@ print(f"Chart 1 (Layer 1): {CHARTS_DIR / 'composite_layer1.png'}")
 
 # ── Chart 2: Layer 2 — Z-scores per ticker ────────────────────────────────────
 ticker_colors = {
-    'SBER': '#4da8c8', 'YDEX': '#f0b429', 'T': '#3dd68c',
+    'SBER': '#4da8c8', 'YDEX': '#f0b429', 'T': '#3dd68c', 'DOMRF': '#22d3ee',
     'OZON': '#e05252', 'ROSN': '#a78bfa', 'VTBR': '#fb923c',
 }
 ticker_labels = {
-    'SBER': 'SBER (EY)',  'YDEX': 'YDEX (FCF Yield)',
-    'T':    'T (EY)',     'OZON': 'OZON (Rev Yield)',
+    'SBER': 'SBER (EY)',  'YDEX': 'YDEX (Rev Yield)',
+    'T':    'T (EY)',     'DOMRF': 'DOMRF (EY)',
+    'OZON': 'OZON (Rev Yield)',
     'ROSN': 'ROSN (FCF)', 'VTBR': 'VTBR (EY)',
 }
 
@@ -467,7 +474,7 @@ for ax_ in [ax2, ax3]:
 
 # Top: individual tickers
 all_dates_z = [datetime.strptime(r['date'], '%Y-%m') for r in rows]
-for ticker in ['SBER', 'YDEX', 'T', 'OZON', 'ROSN', 'VTBR']:
+for ticker in ['SBER', 'YDEX', 'T', 'DOMRF', 'OZON', 'ROSN', 'VTBR']:
     zvals = [r.get(f'{ticker}_z') for r in rows]
     cx, cy = [], []
     first_seg = True
