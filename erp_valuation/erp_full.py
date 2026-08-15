@@ -48,11 +48,15 @@ T_PRE_SPLIT_SHARES = 268274786   # = 2682747860 / 9.58 (implied from price ratio
 VTBR_SPLIT_DATE = date(2024, 7, 15)
 VTBR_SPLIT_RATIO = 5000  # old shares per 1 new share
 # VTBR ordinary share count history (pre-split basis until 2024-07-15):
-#  - .. 2023-01-30:            12,960,541,337,338 (flat since 2014, no ordinary issuance)
-#  - 2023-01-30 .. 2024-07-15: ~26,850,000,000,000 (two 2023 placements, ~13.89tn added,
-#    for RNKB acquisition + recapitalization — unrelated to the later reverse split)
-VTBR_2023_ISSUANCE_DATE = date(2023, 1, 30)
-VTBR_PRE_2023_SHARES    = 12960541337338
+#  - .. 2023-03-30:            12,960,541,337,338 (flat since 2014, no ordinary issuance)
+#  - 2023-03-30 .. 2023-06-13: ~21,703,791,818,409 (1st 2023 placement settled, RNKB deal,
+#    CBR report registered 2023-03-30, ~8.74tn shares added)
+#  - 2023-06-13 .. 2024-07-15: ~26,850,000,000,000 (2nd 2023 placement settled 2023-06-11,
+#    CBR notified 2023-06-13, ~5.15tn shares added, open subscription)
+VTBR_2023_ISSUANCE1_DATE = date(2023, 3, 30)
+VTBR_2023_ISSUANCE2_DATE = date(2023, 6, 13)
+VTBR_PRE_2023_SHARES     = 12960541337338
+VTBR_POST_ISSUANCE1_SHARES = 21703791818409
 VTBR_POST_2023_SHARES   = 26850000000000
 # Two further share-count changes after the reverse split:
 #  - 2024-07-15 .. 2025-09-30: 5,370mn shares (post-split, pre-SPO)
@@ -198,8 +202,10 @@ def main():
                 continue
             shares = SHARES[ticker]
             if ticker == 'VTBR':
-                if as_of < VTBR_2023_ISSUANCE_DATE:
+                if as_of < VTBR_2023_ISSUANCE1_DATE:
                     shares = VTBR_PRE_2023_SHARES
+                elif as_of < VTBR_2023_ISSUANCE2_DATE:
+                    shares = VTBR_POST_ISSUANCE1_SHARES
                 elif as_of < VTBR_SPLIT_DATE:
                     shares = VTBR_POST_2023_SHARES
                 elif as_of < VTBR_SPO_DATE:
