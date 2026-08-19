@@ -46,6 +46,7 @@ STATS_PATH = REPO_ROOT / "data" / "usd_rub_stats.json"
 
 REQUEST_TIMEOUT = 30
 HISTORY_DAYS = 365
+SIGMA_WINDOW_DAYS = 90
 
 
 def fetch_recent_usd_rub_rates() -> list[tuple[str, float]]:
@@ -134,6 +135,18 @@ def forward_fill_gap(
     return filled
 
 
+def compute_sigma(history: list[tuple[str, float]], window: int = SIGMA_WINDOW_DAYS) -> float | None:
+    """Population std dev of rate over the trailing `window` days of history
+    (None if there isn't enough history yet). Used only by the additional,
+    volatility-amplified sensitivity variant -- does not affect m or x."""
+    if len(history) < window:
+        return None
+    recent_rates = [rate for _, rate in history[-window:]]
+    mean = sum(recent_rates) / window
+    var = sum((r - mean) ** 2 for r in recent_rates) / window
+    return var ** 0.5
+
+
 def write_stats(
     history: list[tuple[str, float]], latest_date: str, latest_rate: float, path: Path = STATS_PATH
 ) -> None:
@@ -141,10 +154,16 @@ def write_stats(
     m is the 365-day average computed strictly from history (days that
     have already started). x is the single most recently published CBR
     rate, which may be dated later than history's last row.
+
+    sigma_90d is an additional field (90-day rolling std dev of the rate,
+    from the same history) used only to explore a volatility-amplified
+    variant of the w_CNY sensitivity -- it does not change x, m, or the
+    existing w_CNY(x) formula.
     """
     rates = [rate for _, rate in history]
     m = sum(rates) / len(rates)
-    stats = {"date": latest_date, "x": latest_rate, "m": m}
+    sigma_90d = compute_sigma(history)
+    stats = {"date": latest_date, "x": latest_rate, "m": m, "sigma_90d": sigma_90d}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(stats, indent=2) + "\n", encoding="utf-8")
 
