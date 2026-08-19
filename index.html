@@ -54,6 +54,20 @@
 <p class="note">
   w_CNY(t) computed daily over the last 5 years: x(t) is that day's USD/RUB rate, m(t) is the
   trailing 365-day average USD/RUB rate as of that day. USD/RUB rate overlaid on the right axis.
+</p>
+<div id="plot_sigmoid_amp" style="height:480px; margin-top:24px"></div>
+<p class="note" id="sigmoid_amp_note">
+  <b>EXPERIMENTAL</b> — sensitivity amplified by volatility:
+  w_CNY(x) = 0.20 + 0.60 / (1 + exp(k_eff·(x−m)/m)), k_eff = 15 · (σ₉₀/m) / 0.0209
+  (σ₉₀ = 90-day rolling std dev of the rate). At typical volatility k_eff ≈ 15 (matches
+  the original curve above); in high-volatility regimes the signal is sharper, in calm
+  regimes it's smoother.<br>
+  <span class="loading">Loading current values…</span>
+</p>
+<div id="plot_wcny5y_amp" style="height:480px; margin-top:8px"></div>
+<p class="note">
+  Same as the w_CNY(t) chart above, but using the volatility-amplified formula
+  (k_eff scaled by the trailing 90-day rolling σ of the rate instead of a fixed k=15).
 </p></div>
 
 <div id="layer2a" class="chart-wrap"><div id="plot_layer1" style="height:480px"></div>
@@ -157,6 +171,17 @@ function wCny(x, m) {
   return 0.20 + 0.60 / (1 + Math.exp(15 * (x - m) / m));
 }
 
+// EXPERIMENTAL: sensitivity amplified by volatility. sigma is the 90-day
+// rolling std dev of the rate (usd_rub_stats.json's sigma_90d field). At
+// typical historical volatility (SIGMA_REF) this reduces to the same k=15
+// as wCny() above; higher volatility steepens the curve, lower flattens it.
+const SIGMA_REF = 0.0209;
+function wCnyAmplified(x, m, sigma) {
+  if (sigma === null || sigma === undefined) return wCny(x, m);
+  const kEff = 15 * (sigma / m) / SIGMA_REF;
+  return 0.20 + 0.60 / (1 + Math.exp(kEff * (x - m) / m));
+}
+
 const LAYOUT_BASE = {
   paper_bgcolor: '#0d1117',
   plot_bgcolor:  '#0d1117',
@@ -241,6 +266,26 @@ function renderChart(id) {
         xaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', tickformat: '%Y', dtick: 'M12', tickangle: -45 },
         yaxis: Object.assign({}, LAYOUT_BASE.yaxis, {
           title: 'w_CNY(t), %', range: [0, 100], dtick: 10, color: '#4da8c8',
+        }),
+        yaxis2: {
+          title: 'USD/RUB rate', overlaying: 'y', side: 'right',
+          gridcolor: '#1e2830', linecolor: '#1e2830', color: '#9ca3af',
+        },
+        shapes: [HLINE(20, '#6a7381', 'dot'), HLINE(50, '#6a7381', 'dot'), HLINE(80, '#6a7381', 'dot')],
+      }), CONFIG);
+
+    const layoutAmp = Object.assign({}, LAYOUT_BASE, {
+      xaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', title: 'USD/RUB rate', range: DATA.sigmoidAxisRange },
+      yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { title: 'w_CNY(x), %', range: [0, 100], dtick: 10 }),
+      shapes: DATA.sigmoidAmpShapes,
+      annotations: DATA.sigmoidAmpAnnotations,
+    });
+    Plotly.newPlot('plot_sigmoid_amp', DATA.sigmoidAmp, layoutAmp, CONFIG);
+    Plotly.newPlot('plot_wcny5y_amp', DATA.wCny5yAmp,
+      Object.assign({}, LAYOUT_BASE, {
+        xaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', tickformat: '%Y', dtick: 'M12', tickangle: -45 },
+        yaxis: Object.assign({}, LAYOUT_BASE.yaxis, {
+          title: 'w_CNY(t), %', range: [0, 100], dtick: 10, color: '#a78bfa',
         }),
         yaxis2: {
           title: 'USD/RUB rate', overlaying: 'y', side: 'right',
@@ -395,6 +440,69 @@ async function loadData() {
     Data as of ${usdRubStats.date}.
   `;
 
+  // EXPERIMENTAL: sensitivity-amplified variant, using sigma_90d from
+  // usd_rub_stats.json (may be absent on older stats.json snapshots).
+  const sigmoidSigma = usdRubStats.sigma_90d !== undefined ? usdRubStats.sigma_90d : null;
+  const sigmoidWCnyAmp = wCnyAmplified(sigmoidX, sigmoidM, sigmoidSigma);
+  const sigmoidMWCnyAmp = wCnyAmplified(sigmoidM, sigmoidM, sigmoidSigma);
+  const sigmoidWRubAmp = 1 - sigmoidWCnyAmp;
+  const curveYAmp = curveX.map(px => wCnyAmplified(px, sigmoidM, sigmoidSigma) * 100);
+
+  const sigmoidAmp = [
+    {
+      x: curveX, y: curveY, name: 'w_CNY(x) original (fixed k=15)',
+      type: 'scatter', mode: 'lines',
+      line: { color: '#9ca3af', width: 1.5, dash: 'dash' },
+      hovertemplate: 'USD/RUB: %{x:.2f}<br>w_CNY (original): <b>%{y:.0f}%</b><extra></extra>',
+    },
+    {
+      x: curveX, y: curveYAmp, name: 'w_CNY(x) amplified',
+      type: 'scatter', mode: 'lines',
+      line: { color: '#a78bfa', width: 2.5 },
+      hovertemplate: 'USD/RUB: %{x:.2f}<br>w_CNY (amplified): <b>%{y:.0f}%</b><extra></extra>',
+    },
+    {
+      x: [sigmoidX], y: [sigmoidWCnyAmp * 100], name: `current x = ${sigmoidX.toFixed(2)}`,
+      type: 'scatter', mode: 'markers',
+      marker: { color: '#e05252', size: 11 },
+      hovertemplate: `x = ${sigmoidX.toFixed(2)}<br>w_CNY (amplified) = ${(sigmoidWCnyAmp * 100).toFixed(0)}%<extra></extra>`,
+    },
+  ];
+
+  const sigmoidAmpShapes = [
+    { type: 'line', x0: sigmoidM, x1: sigmoidM, y0: 0, y1: 100,
+      line: { color: '#a78bfa', dash: 'dash', width: 1 } },
+    { type: 'line', xref: 'paper', x0: 0, x1: 1, y0: sigmoidMWCnyAmp * 100, y1: sigmoidMWCnyAmp * 100,
+      line: { color: '#a78bfa', dash: 'dash', width: 1 } },
+    { type: 'line', x0: sigmoidX, x1: sigmoidX, y0: 0, y1: 100,
+      line: { color: '#e05252', dash: 'dash', width: 1 } },
+    { type: 'line', xref: 'paper', x0: 0, x1: 1, y0: sigmoidWCnyAmp * 100, y1: sigmoidWCnyAmp * 100,
+      line: { color: '#e05252', dash: 'dash', width: 1 } },
+  ];
+
+  const sigmoidAmpAnnotations = [
+    { x: sigmoidX, y: sigmoidWCnyAmp * 100, text: `w_CNY = ${(sigmoidWCnyAmp * 100).toFixed(0)}%`,
+      showarrow: false, xanchor: 'left', xshift: 12, yshift: 10,
+      font: { color: '#e05252', size: 13 } },
+    { x: sigmoidM, y: sigmoidMWCnyAmp * 100, text: `m = ${sigmoidM.toFixed(2)}`,
+      showarrow: false, xanchor: 'left', xshift: 12, yshift: -14,
+      font: { color: '#a78bfa', size: 12 } },
+  ];
+
+  const sigmaStr = sigmoidSigma !== null ? sigmoidSigma.toFixed(2) : 'n/a';
+  document.getElementById('sigmoid_amp_note').innerHTML = `
+    <b>EXPERIMENTAL</b> — sensitivity amplified by volatility:
+    w_CNY(x) = 0.20 + 0.60 / (1 + exp(k_eff·(x−m)/m)), k_eff = 15 · (σ₉₀/m) / 0.0209
+    (σ₉₀ = 90-day rolling std dev of the rate, currently <span class="stat">${sigmaStr}</span>).
+    At typical volatility k_eff ≈ 15 (matches the original curve above); in high-volatility
+    regimes the signal is sharper, in calm regimes it's smoother.<br>
+    <b>Gray dashed</b> — original curve. <b>Purple</b> — amplified curve.
+    <b>Red</b> — current rate (x = <span class="stat">${sigmoidX.toFixed(2)}</span>) and resulting
+    w_CNY = <span class="stat">${(sigmoidWCnyAmp * 100).toFixed(0)}%</span>,
+    w_RUB = <span class="stat">${(sigmoidWRubAmp * 100).toFixed(0)}%</span>.<br>
+    Data as of ${usdRubStats.date}.
+  `;
+
   // w_CNY(t) over the 5-year history: m(t) is the trailing 365-day average
   // as of each day (needs at least 365 preceding rows to be defined).
   const rates5y = usdRub5yRows.map(r => val(r.rate));
@@ -424,6 +532,53 @@ async function loadData() {
     },
     {
       x: wCny5yDates, y: wCny5yRates, name: 'USD/RUB rate',
+      type: 'scatter', mode: 'lines',
+      line: { color: '#9ca3af', width: 1 },
+      opacity: 0.7,
+      yaxis: 'y2',
+      hovertemplate: '%{x}<br>USD/RUB: <b>%{y:.2f}</b><extra></extra>',
+    },
+  ];
+
+  // EXPERIMENTAL: same 5-year series, but with sensitivity amplified by a
+  // trailing 90-day rolling sigma computed from the same rates5y history.
+  const SIGMA_WINDOW = 90;
+  const wCny5yAmpDates = [];
+  const wCny5yAmpValues = [];
+  const wCny5yAmpRates = [];
+  let sigWindowSum = 0;
+  let sigWindowSum2 = 0;
+  windowSum = 0;
+  for (let i = 0; i < rates5y.length; i++) {
+    windowSum += rates5y[i];
+    if (i >= 365) windowSum -= rates5y[i - 365];
+    sigWindowSum += rates5y[i];
+    sigWindowSum2 += rates5y[i] * rates5y[i];
+    if (i >= SIGMA_WINDOW) {
+      sigWindowSum -= rates5y[i - SIGMA_WINDOW];
+      sigWindowSum2 -= rates5y[i - SIGMA_WINDOW] * rates5y[i - SIGMA_WINDOW];
+    }
+    if (i >= 364 && i >= SIGMA_WINDOW - 1) {
+      const mT = windowSum / 365;
+      const xT = rates5y[i];
+      const sigMean = sigWindowSum / SIGMA_WINDOW;
+      const sigVar = Math.max(sigWindowSum2 / SIGMA_WINDOW - sigMean * sigMean, 0);
+      const sigmaT = Math.sqrt(sigVar);
+      wCny5yAmpDates.push(dates5y[i]);
+      wCny5yAmpValues.push(wCnyAmplified(xT, mT, sigmaT) * 100);
+      wCny5yAmpRates.push(xT);
+    }
+  }
+  const wCny5yAmp = [
+    {
+      x: wCny5yAmpDates, y: wCny5yAmpValues, name: 'w_CNY(t) amplified',
+      type: 'scatter', mode: 'lines',
+      line: { color: '#a78bfa', width: 2 },
+      yaxis: 'y',
+      hovertemplate: '%{x}<br>w_CNY (amplified): <b>%{y:.0f}%</b><extra></extra>',
+    },
+    {
+      x: wCny5yAmpDates, y: wCny5yAmpRates, name: 'USD/RUB rate',
       type: 'scatter', mode: 'lines',
       line: { color: '#9ca3af', width: 1 },
       opacity: 0.7,
@@ -688,6 +843,7 @@ async function loadData() {
 
   return { layer1, layer1_individual: layer1Individual, layer2_rebal: layer2Rebal,
            layer2_alloc: layer2Alloc, sigmoid, sigmoidShapes, sigmoidAnnotations, wCny5y,
+           sigmoidAmp, sigmoidAmpShapes, sigmoidAmpAnnotations, wCny5yAmp,
            targetWeights, targetWeightsLayout, allocTarget: allocTargetTrace, allocTargetLayout,
            sigmoidAxisRange: [axisMin, axisMax] };
 }
