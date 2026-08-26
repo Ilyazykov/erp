@@ -1,31 +1,31 @@
 {
-  "date": "2026-08-25",
-  "updated": "2026-08-25 13:26:21 UTC",
+  "date": "2026-08-26",
+  "updated": "2026-08-26 13:31:49 UTC",
   "z_threshold": 1.5,
   "weights": [
     {
       "ticker": "SBER",
       "base": 40,
-      "z": 3.2448,
+      "z": 3.1231,
       "signal": "buy",
-      "adjustment": 4.7248,
-      "target": 31.0912
+      "adjustment": 4.0688,
+      "target": 32.5968
     },
     {
       "ticker": "YDEX",
       "base": 24,
-      "z": 3.1382,
+      "z": 2.9405,
       "signal": "buy",
-      "adjustment": 4.1459,
-      "target": 19.5661
+      "adjustment": 3.2228,
+      "target": 20.1362
     },
     {
       "ticker": "T",
       "base": 14,
-      "z": 2.7249,
+      "z": 2.5799,
       "signal": "buy",
-      "adjustment": 2.4038,
-      "target": 11.4034
+      "adjustment": 1.9444,
+      "target": 11.7937
     },
     {
       "ticker": "DOMRF",
@@ -33,7 +33,7 @@
       "z": null,
       "signal": "n/a",
       "adjustment": null,
-      "target": 4.8662
+      "target": 5.1778
     },
     {
       "ticker": "TRND",
@@ -41,15 +41,15 @@
       "z": null,
       "signal": "n/a",
       "adjustment": null,
-      "target": 3.4758
+      "target": 3.6984
     },
     {
       "ticker": "OZON",
       "base": 5,
-      "z": 4.9928,
+      "z": 4.7701,
       "signal": "buy",
-      "adjustment": 31.8779,
-      "target": 25.6363
+      "adjustment": 25.314,
+      "target": 22.4226
     },
     {
       "ticker": "AKME",
@@ -57,7 +57,7 @@
       "z": null,
       "signal": "n/a",
       "adjustment": null,
-      "target": 1.3903
+      "target": 1.4794
     },
     {
       "ticker": "AKFN",
@@ -65,23 +65,23 @@
       "z": null,
       "signal": "n/a",
       "adjustment": null,
-      "target": 0.6952
+      "target": 0.7397
     },
     {
       "ticker": "ROSN",
       "base": 1,
-      "z": -0.4008,
+      "z": -0.4214,
       "signal": "neutral",
       "adjustment": 0.0,
-      "target": 0.6952
+      "target": 0.7397
     },
     {
       "ticker": "VTBR",
       "base": 1,
-      "z": 2.0295,
+      "z": 1.9969,
       "signal": "buy",
-      "adjustment": 0.6981,
-      "target": 1.1805
+      "adjustment": 0.6436,
+      "target": 1.2158
     }
   ]
 }
