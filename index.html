@@ -95,7 +95,7 @@
   full circle like a normal portfolio donut, and even 1% positions show as thin slices. Every
   sector shares one common dotted <b>base reference circle</b>. The sector's <b>radial extent</b>
   shows its <b>target</b> weight after the Z-score correction
-  (<code>base + (e^(|Z|&minus;1.5) &minus; 1)&middot;sign(Z)</code>, applied only when |Z| &gt; 1.5,
+  (<code>base + 3&middot;sqrt(|Z|&minus;1.5)&middot;sign(Z)</code>, applied only when |Z| &gt; 1.5,
   then renormalized across all 10 positions to sum to 100%), relative to base.<br>
   Sector extends past the dotted circle → overweight vs base. Sector ends short of it → underweight vs base.
   <span class="loading">Loading current values…</span>
@@ -593,7 +593,7 @@ async function loadData() {
     full circle like a normal portfolio donut, and even 1% positions show as thin slices. Every
     sector shares one common dotted <b>base reference circle</b>. The sector's <b>radial extent</b>
     shows its <b>target</b> weight after the Z-score correction
-    (<code>base + (e^(|Z|&minus;1.5) &minus; 1)&middot;sign(Z)</code>, applied only when |Z| &gt; 1.5,
+    (<code>base + 3&middot;sqrt(|Z|&minus;1.5)&middot;sign(Z)</code>, applied only when |Z| &gt; 1.5,
     then renormalized across all 10 positions to sum to 100%), relative to base.<br>
     Sector extends past the dotted circle → overweight vs base. Sector ends short of it → underweight vs base.<br>
     Data as of ${targetWeightsData.date} (updated ${targetWeightsData.updated}).
