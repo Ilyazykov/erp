@@ -1,6 +1,6 @@
 {
-  "date": "2026-08-26",
-  "updated": "2026-08-26 13:31:49 UTC",
+  "date": "2026-08-27",
+  "updated": "2026-08-27 09:26:14 UTC",
   "z_threshold": 1.5,
   "key_rate_midpoint": 10.322,
   "key_rate_slope": 2.531,
@@ -9,10 +9,10 @@
   "composite_z_date": "2026-08",
   "base_stocks": 18.9513,
   "base_bonds": 81.0487,
-  "z": 2.5954,
+  "z": 2.7513,
   "signal": "buy",
-  "stocks_adjustment": 1.9904,
+  "stocks_adjustment": 2.4949,
   "bonds_adjustment": 0.0,
-  "target_stocks": 20.533,
-  "target_bonds": 79.467
+  "target_stocks": 20.9241,
+  "target_bonds": 79.0759
 }

@@ -22,13 +22,15 @@ def utc_timestamp():
 
 WEIGHTS = {
     'SBER': 0.4348, 'YDEX': 0.2609, 'T': 0.1522, 'DOMRF': 0.0761,
-    'OZON': 0.0543, 'ROSN': 0.0109, 'VTBR': 0.0109,
+    'OZON': 0.0217, 'ROSN': 0.0109, 'VTBR': 0.0109,
+    'GMKN': 0.0109, 'PLZL': 0.0109, 'IRAO': 0.0109,
 }
 
 SHARES = {
     'SBER': 21586948000, 'ROSN': 10598177817, 'VTBR': 12927766416,
     'YDEX': 396012957,   'T':    2682747860,   'OZON': 208992107,
     'DOMRF': 179900000,
+    'GMKN': 15286339700, 'PLZL': 1360694001, 'IRAO': 104400000000,
 }
 
 YNDX_SHARES      = 326342270
@@ -41,6 +43,10 @@ VTBR_SPLIT_DATE  = date(2024, 7, 15)
 VTBR_SPLIT_RATIO = 4664
 DOMRF_START      = date(2025, 11, 20)
 DOMRF_PRE_IPO_SHARES = 161800000
+GMKN_SPLIT_DATE  = date(2024, 4, 4)
+GMKN_SPLIT_RATIO = 100
+PLZL_SPLIT_DATE  = date(2025, 3, 25)
+PLZL_SPLIT_RATIO = 10
 
 QUARTER_END = {1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31)}
 
@@ -156,6 +162,10 @@ def get_shares(ticker, as_of):
             shares = T_PRE_SPLIT_SHARES
     if ticker == 'DOMRF' and as_of < DOMRF_START:
         shares = DOMRF_PRE_IPO_SHARES
+    if ticker == 'GMKN' and as_of < GMKN_SPLIT_DATE:
+        shares = shares // GMKN_SPLIT_RATIO
+    if ticker == 'PLZL' and as_of < PLZL_SPLIT_DATE:
+        shares = shares // PLZL_SPLIT_RATIO
     return shares
 
 # Metric assignment per ticker
@@ -174,6 +184,9 @@ LAYER2_METRIC = {
     'ROSN': 'fcf',   # FCF better for capex-heavy oil
     'YDEX': 'rev',   # Revenue Yield: FCF negative historically
     'OZON': 'rev',   # Revenue Yield: loss-making until 2025
+    'GMKN': 'fcf',   # capex-heavy miner, same rationale as ROSN
+    'PLZL': 'fcf',   # capex-heavy gold miner, same rationale as ROSN
+    'IRAO': 'ey',    # stable profitable utility, same as SBER/T/VTBR
 }
 
 def interpolate_nones(series):
@@ -376,15 +389,17 @@ import csv as csv_mod
 out_csv = str(Path(SCRATCHPAD) / "composite_valuation.csv")
 fields = ['date',
           'SBER_yield','YDEX_yield','T_yield','DOMRF_yield','OZON_yield','ROSN_yield','VTBR_yield',
+          'GMKN_yield','PLZL_yield','IRAO_yield',
           'portfolio_yield','ofz10y','erp',
           'SBER_z','YDEX_z','T_z','DOMRF_z','OZON_z','ROSN_z','VTBR_z',
+          'GMKN_z','PLZL_z','IRAO_z',
           'portfolio_z','ofz_z','composite_erp_z']
 with open(out_csv, 'w', newline='') as f:
     w = csv_mod.DictWriter(f, fieldnames=fields)
     w.writeheader()
     for r in rows:
         row_out = {'date': r['date']}
-        for t in ['SBER','YDEX','T','DOMRF','OZON','ROSN','VTBR']:
+        for t in ['SBER','YDEX','T','DOMRF','OZON','ROSN','VTBR','GMKN','PLZL','IRAO']:
             row_out[f'{t}_yield'] = round(r[f'{t}_yield'], 4) if r.get(f'{t}_yield') is not None else ''
             row_out[f'{t}_z']     = round(r[f'{t}_z'], 4)     if r.get(f'{t}_z')     is not None else ''
         row_out['portfolio_yield']   = round(r['port_yield'], 4)         if r['port_yield']         is not None else ''
@@ -452,12 +467,14 @@ print(f"Chart 1 (Layer 1): {CHARTS_DIR / 'composite_layer1.png'}")
 ticker_colors = {
     'SBER': '#4da8c8', 'YDEX': '#f0b429', 'T': '#3dd68c', 'DOMRF': '#22d3ee',
     'OZON': '#e05252', 'ROSN': '#a78bfa', 'VTBR': '#fb923c',
+    'GMKN': '#34d399', 'PLZL': '#fbbf24', 'IRAO': '#f472b6',
 }
 ticker_labels = {
     'SBER': 'SBER (EY)',  'YDEX': 'YDEX (Rev Yield)',
     'T':    'T (EY)',     'DOMRF': 'DOMRF (EY)',
     'OZON': 'OZON (Rev Yield)',
     'ROSN': 'ROSN (FCF)', 'VTBR': 'VTBR (EY)',
+    'GMKN': 'GMKN (FCF)', 'PLZL': 'PLZL (FCF)', 'IRAO': 'IRAO (EY)',
 }
 
 fig, (ax2, ax3) = plt.subplots(2, 1, figsize=(16, 12), sharex=True)
@@ -475,7 +492,7 @@ for ax_ in [ax2, ax3]:
 
 # Top: individual tickers
 all_dates_z = [datetime.strptime(r['date'], '%Y-%m') for r in rows]
-for ticker in ['SBER', 'YDEX', 'T', 'DOMRF', 'OZON', 'ROSN', 'VTBR']:
+for ticker in ['SBER', 'YDEX', 'T', 'DOMRF', 'OZON', 'ROSN', 'VTBR', 'GMKN', 'PLZL', 'IRAO']:
     zvals = [r.get(f'{ticker}_z') for r in rows]
     cx, cy = [], []
     first_seg = True

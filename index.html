@@ -332,6 +332,9 @@ async function loadData() {
     jsSeries(eyDates, eySeries('OZON_ey'), 'OZON EY%', '#e05252'),
     jsSeries(eyDates, eySeries('ROSN_ey'), 'ROSN EY%', '#a78bfa', { visible: false }),
     jsSeries(eyDates, eySeries('VTBR_ey'), 'VTBR EY%', '#fb923c', { visible: false }),
+    jsSeries(eyDates, eySeries('GMKN_ey'), 'GMKN EY%', '#34d399', { visible: false }),
+    jsSeries(eyDates, eySeries('PLZL_ey'), 'PLZL EY%', '#fbbf24', { visible: false }),
+    jsSeries(eyDates, eySeries('IRAO_ey'), 'IRAO EY%', '#f472b6', { visible: false }),
     jsSeries(eyDates, eySeries('ofz10y'), 'OFZ 10Y', '#f0b429', { dash: 'dash', width: 1.5 }),
   ];
 
@@ -343,6 +346,9 @@ async function loadData() {
     jsSeries(dates, series('OZON_z'), 'OZON (Rev Yield)', '#e05252'),
     jsSeries(dates, series('ROSN_z'), 'ROSN (FCF Yield)', '#a78bfa', { visible: false }),
     jsSeries(dates, series('VTBR_z'), 'VTBR (EY)', '#fb923c', { visible: false }),
+    jsSeries(dates, series('GMKN_z'), 'GMKN (FCF Yield)', '#34d399', { visible: false }),
+    jsSeries(dates, series('PLZL_z'), 'PLZL (FCF Yield)', '#fbbf24', { visible: false }),
+    jsSeries(dates, series('IRAO_z'), 'IRAO (EY)', '#f472b6', { visible: false }),
   ];
 
   const layer2Alloc = [
@@ -506,7 +512,7 @@ async function loadData() {
   const TICKER_COLORS = {
     SBER: '#4da8c8', YDEX: '#f0b429', T: '#3dd68c', DOMRF: '#22d3ee',
     TRND: '#c084fc', OZON: '#e05252', AKME: '#60a5fa', AKFN: '#facc15',
-    ROSN: '#a78bfa', VTBR: '#fb923c',
+    ROSN: '#a78bfa', VTBR: '#fb923c', GMKN: '#34d399', PLZL: '#fbbf24', IRAO: '#f472b6',
   };
   const twRows = targetWeightsData.weights;
   const twTotalBase = twRows.reduce((s, r) => s + r.base, 0);
