@@ -7,8 +7,14 @@ Formula (per ticker with a Z-score, gated by the same +-1.5 threshold
 used elsewhere on the site to mean "buy"/"trim"):
 
     excess = |Z| - 1.5
-    adjusted = base + (exp(excess) - 1) * sign(Z)      if |Z| > 1.5
-    adjusted = base                                     otherwise
+    adjusted = base + Z_CORRECTION_K * sqrt(excess) * sign(Z)   if |Z| > 1.5
+    adjusted = base                                              otherwise
+
+sqrt (not exp) is used deliberately: it grows without any upper bound (no
+plateau/cap), but far more slowly than an exponential, so an unusually
+extreme Z-score (e.g. |Z| > 5) still produces a proportionate, sane
+correction instead of the exponential blowing up (exp(3.7) - 1 = ~39pp on
+a 2%-base ticker, dwarfing every other position).
 
 Tickers without a Z-score (funds: TRND, AKME, AKFN; and DOMRF when its
 history is too short) are held at their base weight in this step, but
@@ -29,12 +35,12 @@ independent of the per-ticker weights above:
 
          w(r) = 100 / (1 + exp((r - 10.322) / 2.531))
 
-  2. The same Z-gated exponential correction applied to tickers is
-     applied here too, driven by composite_erp_z (Portfolio Z - OFZ Z):
+  2. The same Z-gated sqrt correction applied to tickers is applied here
+     too, driven by composite_erp_z (Portfolio Z - OFZ Z):
 
          excess = |Z| - 1.5
-         adjusted = w(r) + (exp(excess) - 1) * sign(Z)   if |Z| > 1.5
-         adjusted = w(r)                                  otherwise
+         adjusted = w(r) + Z_CORRECTION_K * sqrt(excess) * sign(Z)   if |Z| > 1.5
+         adjusted = w(r)                                              otherwise
 
      then clipped to [0, 100]. Bonds share = 100 - stocks share.
 
@@ -69,6 +75,7 @@ ALLOC_OUT_JSON_PATH = DATA_DIR / "target_allocation.json"
 ALLOC_OUT_CSV_PATH = DATA_DIR / "target_allocation.csv"
 
 Z_THRESHOLD = 1.5
+Z_CORRECTION_K = 3.0  # scales sqrt(excess) -> pp correction; see module docstring
 Z_COLUMN_SUFFIX = "_z"
 COMPOSITE_Z_COLUMN = "composite_erp_z"
 
@@ -136,7 +143,7 @@ def z_correction(z: float | None) -> float:
     if z is None or abs(z) <= Z_THRESHOLD:
         return 0.0
     excess = abs(z) - Z_THRESHOLD
-    return (math.exp(excess) - 1) * (1 if z > 0 else -1)
+    return Z_CORRECTION_K * math.sqrt(excess) * (1 if z > 0 else -1)
 
 
 def adjusted_weight(base: float, z: float | None) -> float:
