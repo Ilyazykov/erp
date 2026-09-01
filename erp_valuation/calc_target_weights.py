@@ -92,12 +92,29 @@ def read_base_weights(path: Path = BASE_WEIGHTS_PATH) -> dict[str, float]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _last_row_with_any_zscore(rows: list[dict]) -> dict:
+    """The current month's row can be partially empty (e.g. the month has
+    just started -- OFZ data may already exist for it while no trading-day
+    price exists yet for any ticker via last_price_of_month()). Skip such
+    trailing rows and return the most recent one that actually has at least
+    one populated per-ticker *_z column (excluding portfolio_z/ofz_z/
+    composite_erp_z, which are aggregates, not ticker Z-scores)."""
+    aggregate_columns = {"portfolio_z", "ofz_z", "composite_erp_z"}
+    for row in reversed(rows):
+        if any(
+            k.endswith(Z_COLUMN_SUFFIX) and k not in aggregate_columns and v not in (None, "")
+            for k, v in row.items()
+        ):
+            return row
+    return rows[-1]
+
+
 def read_latest_zscores(path: Path = COMPOSITE_CSV_PATH) -> dict[str, float]:
     with path.open("r", newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     if not rows:
         raise ValueError(f"{path} is empty")
-    last = rows[-1]
+    last = _last_row_with_any_zscore(rows)
     zscores: dict[str, float] = {}
     for key, value in last.items():
         if key.endswith(Z_COLUMN_SUFFIX) and value not in (None, ""):
@@ -111,7 +128,7 @@ def read_latest_composite_z(path: Path = COMPOSITE_CSV_PATH) -> tuple[str, float
         rows = list(csv.DictReader(f))
     if not rows:
         raise ValueError(f"{path} is empty")
-    last = rows[-1]
+    last = _last_row_with_any_zscore(rows)
     value = last.get(COMPOSITE_Z_COLUMN)
     return last["date"], (float(value) if value not in (None, "") else None)
 
