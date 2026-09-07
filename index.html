@@ -296,7 +296,7 @@ async function loadLastUpdated() {
 }
 
 async function loadData() {
-  const [rows, eyRows, usdRubRows, usdRubStats, usdRub5yRows, targetWeightsData, targetAllocationData] = await Promise.all([
+  const [rows, eyRows, usdRubRows, usdRubStats, usdRub5yRows, targetWeightsData, targetAllocationData, vkcoRows] = await Promise.all([
     fetchCsv(`${DATA_DIR}/composite_valuation.csv`),
     fetchCsv(`${DATA_DIR}/erp_portfolio.csv`),
     fetchCsv(`${DATA_DIR}/usd_rub_history.csv`),
@@ -304,6 +304,7 @@ async function loadData() {
     fetchCsv(`${DATA_DIR}/usd_rub_history_5y.csv`),
     fetchJson(`${DATA_DIR}/target_weights.json`),
     fetchJson(`${DATA_DIR}/target_allocation.json`),
+    fetchCsv(`${DATA_DIR}/vkco_zscore.csv`),
   ]);
 
   const dates = rows.map(r => r.date + '-01');
@@ -349,6 +350,13 @@ async function loadData() {
     jsSeries(dates, series('GMKN_z'), 'GMKN (FCF Yield)', '#34d399', { visible: false }),
     jsSeries(dates, series('PLZL_z'), 'PLZL (FCF Yield)', '#fbbf24', { visible: false }),
     jsSeries(dates, series('IRAO_z'), 'IRAO (EY)', '#f472b6', { visible: false }),
+    jsSeries(
+      vkcoRows.map(r => r.date + '-01'),
+      vkcoRows.map(r => val(r.z_score)),
+      'VKCO (Rev Yield, experimental — not in portfolio)',
+      '#94a3b8',
+      { visible: false },
+    ),
   ];
 
   const layer2Alloc = [
