@@ -1,26 +1,32 @@
 """
-Standalone experiment: computes a Revenue Yield Z-score for VKCO (VK Company,
-formerly Mail.ru Group) — a loss-making, declining stock — purely to see how
-the Z-score metric behaves on a falling/unprofitable company.
+Standalone experiment: computes both Earnings Yield and Revenue Yield (plus
+a Revenue-Yield-based Z-score) for VKCO (VK Company, formerly Mail.ru
+Group) — a loss-making, declining stock — purely to see how these metrics
+behave on a falling/unprofitable company.
 
 This does NOT touch the portfolio pipeline (composite_valuation.py,
 erp_full.py, WEIGHTS, target_weights_base.json). VKCO is not, and should
 not be, part of the actual portfolio. Output is a standalone CSV consumed
-only by the "VKCO (Rev Yield, experimental)" line on the site's Layer 2:
-Rebalancing chart, hidden behind the legend by default.
+by the site's "VKCO" lines on the EY chart and the Revenue Yield chart,
+both hidden behind the legend by default.
 
-Revenue Yield (not Earnings Yield) is used deliberately: VKCO's net income
-is negative most of the time, which would make EY-based Z-scores mostly
-noise around a negative baseline rather than a meaningful valuation signal
--- the same reasoning already applied to YDEX/OZON in the main pipeline.
+The Z-score is deliberately computed from Revenue Yield, not Earnings
+Yield: VKCO's net income is negative most of the time, which would make an
+EY-based Z-score mostly noise around a negative baseline rather than a
+meaningful valuation signal -- the same reasoning already applied to
+YDEX/OZON in the main pipeline. EY itself is still computed and reported
+(just not Z-scored) so it can be plotted on the EY chart alongside the
+other tickers.
 
 Data sources (same as the rest of the project, no auth required):
     - Prices: MOEX ISS history API
-    - Annual revenue: Smart-Lab MSFO chart data
+    - Quarterly net income: Smart-Lab MSFO quarterly data (EY)
+    - Annual revenue: Smart-Lab MSFO chart data (Revenue Yield)
 
 Outputs:
     data/vkco_prices.csv        (date, close)
-    data/vkco_zscore.csv        (date, revenue_yield, z_score)
+    data/vkco_quarterly_ni.csv  (quarter, net_income_bln)
+    data/vkco_zscore.csv        (date, earnings_yield, revenue_yield, z_score)
 
 Run:
     python erp_valuation/vkco_zscore_experiment.py
@@ -43,7 +49,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = REPO_ROOT / "data"
 PRICES_PATH = DATA_DIR / "vkco_prices.csv"
 REVENUE_PATH = DATA_DIR / "vkco_annual_revenue.csv"
+QUARTERLY_NI_PATH = DATA_DIR / "vkco_quarterly_ni.csv"
 OUT_PATH = DATA_DIR / "vkco_zscore.csv"
+
+QUARTER_END = {1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31)}
 
 # Share count history. VK Company's 2023 redomiciliation from Cyprus-based
 # Mail.ru Group Limited to a Russian MKPAO structure was a 1:1 legal-form
@@ -210,6 +219,69 @@ def annual_report_date(year: int) -> date:
     return date(year + 1, 3, 1)
 
 
+def quarter_str_to_report_date(qstr: str) -> date:
+    year, q = int(qstr[:4]), int(qstr[5])
+    if q == 4:
+        return date(year + 1, 1, 1)
+    qend = date(year, QUARTER_END[q][0], QUARTER_END[q][1])
+    return qend + timedelta(days=45)
+
+
+def fetch_quarterly_ni() -> list[tuple[str, float | None]]:
+    """Returns list of (qstr, value) from Smart-Lab quarterly page (last 5 quarters)."""
+    url = f"https://smart-lab.ru/q/{TICKER}/f/q/MSFO/"
+    html = fetch_url(url)
+
+    m = re.search(r'<tr class="header_row">(.*?)</tr>', html, re.DOTALL)
+    if not m:
+        return []
+    header_cells = re.findall(r'<(?:th|td)[^>]*><strong>(\d{4}Q\d)</strong>', m.group(1))
+
+    ni_m = re.search(r'<tr[^>]*field="net_income"[^>]*>(.*?)</tr>', html, re.DOTALL)
+    if not ni_m:
+        return []
+    cells = re.findall(r"<td[^>]*>(.*?)</td>", ni_m.group(1), re.DOTALL)
+    vals = [re.sub(r"<[^>]+>", "", c).strip().replace("\xa0", "").replace(" ", "") for c in cells]
+    vals = [v for v in vals if v and v != "&nbsp;"]
+
+    result = []
+    for i, qstr in enumerate(header_cells):
+        if i < len(vals):
+            try:
+                result.append((qstr, float(vals[i])))
+            except ValueError:
+                result.append((qstr, None))
+    return result
+
+
+def update_quarterly_ni() -> None:
+    existing = read_csv(QUARTERLY_NI_PATH)
+    existing_keys = {r["quarter"] for r in existing}
+
+    quarters = fetch_quarterly_ni()
+    new_rows = []
+    for qstr, val in quarters:
+        if qstr not in existing_keys:
+            new_rows.append({"quarter": qstr, "net_income_bln": val if val is not None else ""})
+            existing_keys.add(qstr)
+
+    if new_rows:
+        all_rows = existing + new_rows
+        all_rows.sort(key=lambda r: r["quarter"])
+        write_csv(QUARTERLY_NI_PATH, ["quarter", "net_income_bln"], all_rows)
+        print(f"  {TICKER} quarterly NI: +{len(new_rows)} quarters")
+    else:
+        print(f"  {TICKER} quarterly NI: up to date")
+
+
+def get_ttm_ni(quarterly: list[tuple[str, float | None, date]], as_of: date) -> float | None:
+    available = [(q, ni, rd) for q, ni, rd in quarterly if rd <= as_of and ni is not None]
+    if len(available) < 4:
+        return None
+    available.sort(key=lambda x: x[0])
+    return sum(x[1] for x in available[-4:])
+
+
 def get_shares(as_of: date) -> int:
     shares = SHARES_CURRENT
     for effective_from, count in SHARES_HISTORY:
@@ -260,12 +332,20 @@ def main() -> int:
     update_prices()
     print(f"Updating {TICKER} annual revenue...")
     update_revenue()
+    print(f"Updating {TICKER} quarterly net income...")
+    update_quarterly_ni()
 
     prices_rows = read_csv(PRICES_PATH)
     prices = {r["date"]: float(r["close"]) for r in prices_rows}
     revenue_rows = read_csv(REVENUE_PATH)
     revenue_data = [
         (int(r["year"]), float(r["revenue_bln"]) if r["revenue_bln"] else None) for r in revenue_rows
+    ]
+    ni_rows = read_csv(QUARTERLY_NI_PATH)
+    quarterly_ni = [
+        (r["quarter"], float(r["net_income_bln"]) if r["net_income_bln"] else None,
+         quarter_str_to_report_date(r["quarter"]))
+        for r in ni_rows
     ]
 
     if not prices:
@@ -281,38 +361,46 @@ def main() -> int:
         if m > 12:
             m, y = 1, y + 1
 
-    dates, yields = [], []
+    dates, rev_yields, ey_yields = [], [], []
     for y, m in months:
         as_of = today if (y, m) == (today.year, today.month) else date(y, m, monthrange(y, m)[1])
         price = last_price_of_month(prices, y, m)
-        revenue = get_latest_annual_revenue(revenue_data, as_of)
-        if price is None or revenue is None:
-            dates.append(f"{y}-{m:02d}")
-            yields.append(None)
+        dates.append(f"{y}-{m:02d}")
+        if price is None:
+            rev_yields.append(None)
+            ey_yields.append(None)
             continue
         shares = get_shares(as_of)
         mcap = price * shares / 1e9
-        dates.append(f"{y}-{m:02d}")
-        yields.append(revenue / mcap * 100 if mcap > 0 else None)
 
-    zscores = rolling_zscore(yields)
+        revenue = get_latest_annual_revenue(revenue_data, as_of)
+        rev_yields.append(revenue / mcap * 100 if (revenue is not None and mcap > 0) else None)
+
+        ttm_ni = get_ttm_ni(quarterly_ni, as_of)
+        ey_yields.append(ttm_ni / mcap * 100 if (ttm_ni is not None and mcap > 0) else None)
+
+    zscores = rolling_zscore(rev_yields)
 
     out_rows = [
         {
             "date": d,
-            "revenue_yield": round(y, 4) if y is not None else "",
+            "earnings_yield": round(ey, 4) if ey is not None else "",
+            "revenue_yield": round(rv, 4) if rv is not None else "",
             "z_score": round(z, 4) if z is not None else "",
         }
-        for d, y, z in zip(dates, yields, zscores)
+        for d, ey, rv, z in zip(dates, ey_yields, rev_yields, zscores)
     ]
-    write_csv(OUT_PATH, ["date", "revenue_yield", "z_score"], out_rows)
+    write_csv(OUT_PATH, ["date", "earnings_yield", "revenue_yield", "z_score"], out_rows)
     print(f"Saved {OUT_PATH}")
 
     populated = sum(1 for r in out_rows if r["z_score"] != "")
     print(f"Total months: {len(out_rows)}, with z-score: {populated}")
     if out_rows:
         last = out_rows[-1]
-        print(f"Latest ({last['date']}): revenue_yield={last['revenue_yield']} z_score={last['z_score']}")
+        print(
+            f"Latest ({last['date']}): earnings_yield={last['earnings_yield']} "
+            f"revenue_yield={last['revenue_yield']} z_score={last['z_score']}"
+        )
     return 0
 
 

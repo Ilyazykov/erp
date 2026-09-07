@@ -315,6 +315,7 @@ def main():
         zscores = rolling_zscore(l2_series, window=36)
         for i, r in enumerate(results):
             r[f'{ticker}_yield'] = l1_series[i]
+            r[f'{ticker}_l2yield'] = l2_series[i]
             r[f'{ticker}_z'] = zscores[i]
 
     # Portfolio z-score (weighted average of individual z-scores)
@@ -390,6 +391,8 @@ out_csv = str(Path(SCRATCHPAD) / "composite_valuation.csv")
 fields = ['date',
           'SBER_yield','YDEX_yield','T_yield','DOMRF_yield','OZON_yield','ROSN_yield','VTBR_yield',
           'GMKN_yield','PLZL_yield','IRAO_yield',
+          'SBER_l2yield','YDEX_l2yield','T_l2yield','DOMRF_l2yield','OZON_l2yield','ROSN_l2yield','VTBR_l2yield',
+          'GMKN_l2yield','PLZL_l2yield','IRAO_l2yield',
           'portfolio_yield','ofz10y','erp',
           'SBER_z','YDEX_z','T_z','DOMRF_z','OZON_z','ROSN_z','VTBR_z',
           'GMKN_z','PLZL_z','IRAO_z',
@@ -401,6 +404,7 @@ with open(out_csv, 'w', newline='') as f:
         row_out = {'date': r['date']}
         for t in ['SBER','YDEX','T','DOMRF','OZON','ROSN','VTBR','GMKN','PLZL','IRAO']:
             row_out[f'{t}_yield'] = round(r[f'{t}_yield'], 4) if r.get(f'{t}_yield') is not None else ''
+            row_out[f'{t}_l2yield'] = round(r[f'{t}_l2yield'], 4) if r.get(f'{t}_l2yield') is not None else ''
             row_out[f'{t}_z']     = round(r[f'{t}_z'], 4)     if r.get(f'{t}_z')     is not None else ''
         row_out['portfolio_yield']   = round(r['port_yield'], 4)         if r['port_yield']         is not None else ''
         row_out['ofz10y']            = round(r['ofz10y'], 4)             if r['ofz10y']             is not None else ''

@@ -81,7 +81,16 @@
 <div id="layer2r" class="chart-wrap"><div id="plot_layer1i" style="height:480px"></div>
 <p class="note">
   Earnings Yield per stock. YDEX and OZON have low EY due to high market cap (growth premium).<br>
-  OZON until 2025 — negative EY (loss-making).
+  OZON until 2025 — negative EY (loss-making). VKCO (hidden by default) — consistently negative, loss-making.
+</p>
+<div id="plot_rev_yield" style="height:420px; margin-top:8px"></div>
+<p class="note">
+  Revenue Yield — the actual Layer 2 Z-score metric for YDEX/OZON (and the experimental VKCO line),
+  not Earnings Yield. Shown separately since it's on a different scale.
+</p>
+<div id="plot_fcf_yield" style="height:420px; margin-top:8px"></div>
+<p class="note">
+  FCF Yield — the actual Layer 2 Z-score metric for ROSN/GMKN/PLZL, not Earnings Yield.
 </p>
 <div id="plot_layer2r" style="height:480px; margin-top:8px"></div>
 <p class="note">
@@ -235,6 +244,10 @@ function renderChart(id) {
   } else if (id === 'layer2r') {
     Plotly.newPlot('plot_layer1i', DATA.layer1_individual,
       layoutWith('%, annualised', [HLINE(0, '#6a7381', 'dot')]), CONFIG);
+    Plotly.newPlot('plot_rev_yield', DATA.revYield,
+      layoutWith('Revenue Yield, %', [HLINE(0, '#6a7381', 'dot')]), CONFIG);
+    Plotly.newPlot('plot_fcf_yield', DATA.fcfYield,
+      layoutWith('FCF Yield, %', [HLINE(0, '#6a7381', 'dot')]), CONFIG);
     Plotly.newPlot('plot_layer2r', DATA.layer2_rebal,
       layoutWith('Z-score', [
         HLINE(0, '#6a7381', 'dot'),
@@ -336,7 +349,32 @@ async function loadData() {
     jsSeries(eyDates, eySeries('GMKN_ey'), 'GMKN EY%', '#34d399', { visible: false }),
     jsSeries(eyDates, eySeries('PLZL_ey'), 'PLZL EY%', '#fbbf24', { visible: false }),
     jsSeries(eyDates, eySeries('IRAO_ey'), 'IRAO EY%', '#f472b6', { visible: false }),
+    jsSeries(
+      vkcoRows.map(r => r.date + '-01'),
+      vkcoRows.map(r => val(r.earnings_yield)),
+      'VKCO EY% (experimental — not in portfolio)',
+      '#94a3b8',
+      { visible: false },
+    ),
     jsSeries(eyDates, eySeries('ofz10y'), 'OFZ 10Y', '#f0b429', { dash: 'dash', width: 1.5 }),
+  ];
+
+  const revYield = [
+    jsSeries(dates, series('YDEX_l2yield'), 'YDEX Rev Yield%', '#f0b429'),
+    jsSeries(dates, series('OZON_l2yield'), 'OZON Rev Yield%', '#e05252'),
+    jsSeries(
+      vkcoRows.map(r => r.date + '-01'),
+      vkcoRows.map(r => val(r.revenue_yield)),
+      'VKCO Rev Yield% (experimental — not in portfolio)',
+      '#94a3b8',
+      { visible: false },
+    ),
+  ];
+
+  const fcfYield = [
+    jsSeries(dates, series('ROSN_l2yield'), 'ROSN FCF Yield%', '#a78bfa'),
+    jsSeries(dates, series('GMKN_l2yield'), 'GMKN FCF Yield%', '#34d399'),
+    jsSeries(dates, series('PLZL_l2yield'), 'PLZL FCF Yield%', '#fbbf24'),
   ];
 
   const layer2Rebal = [
@@ -765,7 +803,7 @@ async function loadData() {
   `;
 
   return { layer1, layer1_individual: layer1Individual, layer2_rebal: layer2Rebal,
-           layer2_alloc: layer2Alloc,
+           layer2_alloc: layer2Alloc, revYield, fcfYield,
            sigmoidAmp, sigmoidAmpShapes, sigmoidAmpAnnotations, wCny5yCombined,
            targetWeights, targetWeightsLayout, allocTarget: allocTargetTrace, allocTargetLayout,
            sigmoidAxisRange: [axisMin, axisMax] };
