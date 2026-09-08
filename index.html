@@ -92,6 +92,19 @@
 <p class="note">
   FCF Yield — the actual Layer 2 Z-score metric for ROSN/GMKN/PLZL, not Earnings Yield.
 </p>
+<div id="plot_vkco_revenue_v2" style="height:480px; margin-top:8px"></div>
+<p class="note">
+  <b>EXPERIMENTAL</b> — VKCO Revenue Yield numerator, old vs new. VKCO is not in the
+  portfolio; this is a standalone comparison of two ways to compute the Revenue Yield
+  numerator between annual report dates.<br>
+  <b>Dotted</b> — current production method: last reported annual revenue held flat until
+  the next report (a step function).<br>
+  <b>Solid</b> — proposed replacement: a natural cubic spline through every real reported
+  point (<b>white dots</b>) plus one predicted point for the next not-yet-reported year
+  (<b>pink star</b> — recency-weighted linear regression, weight = 0.75<sup>years ago</sup>).
+  Once the real report publishes, the predicted point is replaced by the actual value and
+  the whole spline is refit.
+</p>
 <div id="plot_layer2r" style="height:480px; margin-top:8px"></div>
 <p class="note">
   Z-score of each stock vs its own 3-year history (36-month rolling window).<br>
@@ -248,6 +261,15 @@ function renderChart(id) {
       layoutWith('Revenue Yield, %', [HLINE(0, '#6a7381', 'dot')]), CONFIG);
     Plotly.newPlot('plot_fcf_yield', DATA.fcfYield,
       layoutWith('FCF Yield, %', [HLINE(0, '#6a7381', 'dot')]), CONFIG);
+    Plotly.newPlot('plot_vkco_revenue_v2', DATA.vkcoRevenueV2,
+      Object.assign({}, LAYOUT_BASE, {
+        yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { title: 'Revenue Yield, %' }),
+        yaxis2: {
+          title: 'Revenue, bln RUB', overlaying: 'y', side: 'right',
+          gridcolor: '#1e2830', linecolor: '#1e2830', color: '#3dd68c',
+        },
+        shapes: [HLINE(0, '#6a7381', 'dot')],
+      }), CONFIG);
     Plotly.newPlot('plot_layer2r', DATA.layer2_rebal,
       layoutWith('Z-score', [
         HLINE(0, '#6a7381', 'dot'),
@@ -309,7 +331,7 @@ async function loadLastUpdated() {
 }
 
 async function loadData() {
-  const [rows, eyRows, usdRubRows, usdRubStats, usdRub5yRows, targetWeightsData, targetAllocationData, vkcoRows] = await Promise.all([
+  const [rows, eyRows, usdRubRows, usdRubStats, usdRub5yRows, targetWeightsData, targetAllocationData, vkcoRows, vkcoRevenueRows, vkcoPredicted] = await Promise.all([
     fetchCsv(`${DATA_DIR}/composite_valuation.csv`),
     fetchCsv(`${DATA_DIR}/erp_portfolio.csv`),
     fetchCsv(`${DATA_DIR}/usd_rub_history.csv`),
@@ -318,6 +340,8 @@ async function loadData() {
     fetchJson(`${DATA_DIR}/target_weights.json`),
     fetchJson(`${DATA_DIR}/target_allocation.json`),
     fetchCsv(`${DATA_DIR}/vkco_zscore.csv`),
+    fetchCsv(`${DATA_DIR}/vkco_annual_revenue.csv`),
+    fetchJson(`${DATA_DIR}/vkco_revenue_predicted.json`),
   ]);
 
   const dates = rows.map(r => r.date + '-01');
@@ -376,6 +400,37 @@ async function loadData() {
     jsSeries(dates, series('GMKN_l2yield'), 'GMKN FCF Yield%', '#34d399'),
     jsSeries(dates, series('PLZL_l2yield'), 'PLZL FCF Yield%', '#fbbf24'),
   ];
+
+  // EXPERIMENTAL: VKCO Revenue Yield numerator, old (step function, still in
+  // production) vs new (spline through real reports + one predicted point).
+  const vkcoDates = vkcoRows.map(r => r.date + '-01');
+  const vkcoReportPoints = vkcoRevenueRows
+    .filter(r => r.revenue_bln !== '' && r.revenue_bln !== undefined)
+    .map(r => ({ date: `${parseInt(r.year, 10) + 1}-03-01`, value: val(r.revenue_bln) }));
+  const vkcoPredictedDate = vkcoPredicted ? `${vkcoPredicted.year + 1}-03-01` : null;
+
+  const vkcoRevenueV2 = [
+    jsSeries(vkcoDates, vkcoRows.map(r => val(r.revenue_yield)), 'Revenue Yield % (OLD: step function)',
+      '#facc15', { dash: 'dot', width: 1.2 }),
+    jsSeries(vkcoDates, vkcoRows.map(r => val(r.revenue_yield_v2)), 'Revenue Yield % (NEW: spline+predicted)',
+      '#facc15', { width: 2.2 }),
+    Object.assign(
+      jsSeries(vkcoDates, vkcoRows.map(r => val(r.revenue_v2_bln)), 'Revenue numerator, bln RUB (NEW)', '#3dd68c', { width: 2.2 }),
+      { yaxis: 'y2' },
+    ),
+    {
+      x: vkcoReportPoints.map(p => p.date), y: vkcoReportPoints.map(p => p.value),
+      name: 'Real reported annual revenue', type: 'scatter', mode: 'markers',
+      marker: { color: '#ffffff', size: 8 }, yaxis: 'y2',
+      hovertemplate: '%{x|%Y-%m}<br>Revenue: <b>%{y:.1f}</b> bln RUB<extra></extra>',
+    },
+    vkcoPredicted ? {
+      x: [vkcoPredictedDate], y: [vkcoPredicted.revenue_bln],
+      name: `Predicted ${vkcoPredicted.year} revenue (Method 8)`, type: 'scatter', mode: 'markers',
+      marker: { color: '#f472b6', size: 14, symbol: 'star' }, yaxis: 'y2',
+      hovertemplate: `Predicted ${vkcoPredicted.year}: <b>%{y:.1f}</b> bln RUB<extra></extra>`,
+    } : null,
+  ].filter(Boolean);
 
   const layer2Rebal = [
     jsSeries(dates, series('SBER_z'), 'SBER (EY)', '#4da8c8'),
@@ -803,7 +858,7 @@ async function loadData() {
   `;
 
   return { layer1, layer1_individual: layer1Individual, layer2_rebal: layer2Rebal,
-           layer2_alloc: layer2Alloc, revYield, fcfYield,
+           layer2_alloc: layer2Alloc, revYield, fcfYield, vkcoRevenueV2,
            sigmoidAmp, sigmoidAmpShapes, sigmoidAmpAnnotations, wCny5yCombined,
            targetWeights, targetWeightsLayout, allocTarget: allocTargetTrace, allocTargetLayout,
            sigmoidAxisRange: [axisMin, axisMax] };

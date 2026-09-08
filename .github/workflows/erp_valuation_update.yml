@@ -32,6 +32,9 @@ jobs:
       - name: Recalculate per-stock yield (erp_portfolio.csv)
         run: python erp_valuation/erp_full.py
 
+      - name: Update VKCO experimental Z-score (not part of the portfolio)
+        run: python erp_valuation/vkco_zscore_experiment.py
+
       - name: Commit and push changes
         run: |
           git config user.name "github-actions[bot]"
