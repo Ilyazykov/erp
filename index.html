@@ -42,6 +42,7 @@
   <div class="tab active" data-tab="sigmoid">USD/RUB → CNY Weight (current + 5Y)</div>
   <div class="tab" data-tab="layer2a">ERP &amp; Stocks/Bonds Allocation</div>
   <div class="tab" data-tab="layer2r">Yield per Stock &amp; Rebalancing</div>
+  <div class="tab" data-tab="usstocks">US Stocks Z-score</div>
 </div>
 
 <div id="sigmoid" class="chart-wrap active"><div id="plot_sigmoid_amp" style="height:480px"></div>
@@ -123,6 +124,23 @@
   <span class="loading">Loading current values…</span>
 </p>
 <div id="targetweights_table_wrap"></div>
+</div>
+
+<div id="usstocks" class="chart-wrap"><div id="plot_us_zscore" style="height:640px"></div>
+<p class="note">
+  <b>EXPERIMENTAL</b> — Z-score (vs each stock's own 36-month rolling history) for a basket of
+  37 major US stocks. This is NOT part of the Russian-stock ERP portfolio — purely an
+  informational overlay, no rebalancing logic applied. Data: Yahoo Finance (free, no auth),
+  annual financials only (~4 fiscal years of history per ticker), so Z-scores use whatever
+  window is available rather than a strict 36-month cutoff.<br>
+  Numerator per ticker: <b>EY</b> (net income) for stable profitable businesses,
+  <b>Revenue Yield</b> for unprofitable/volatile-earnings businesses,
+  <b>FCF Yield</b> for capital-intensive/cyclical businesses (energy, mining, REITs,
+  utilities) — same reasoning as ROSN/GMKN/PLZL (FCF) and YDEX/OZON (Revenue) in the main
+  portfolio. All lines hidden by default except the top few by weight — click the legend to
+  toggle. <b>Above +1.5</b> → cheaper than its own norm. <b>Below −1.5</b> → more expensive.
+  SPCX (SpaceX, IPO June 2026) has no Z-score yet — too little history.
+</p>
 </div>
 
 <script>
@@ -277,6 +295,13 @@ function renderChart(id) {
         HLINE(-1.5, '#e05252', 'dot'),
       ]), CONFIG);
     Plotly.newPlot('plot_targetweights', DATA.targetWeights, DATA.targetWeightsLayout, CONFIG);
+  } else if (id === 'usstocks') {
+    Plotly.newPlot('plot_us_zscore', DATA.usZscore,
+      layoutWith('Z-score', [
+        HLINE(0, '#6a7381', 'dot'),
+        HLINE(1.5, '#3dd68c', 'dot'),
+        HLINE(-1.5, '#e05252', 'dot'),
+      ]), CONFIG);
   } else if (id === 'sigmoid') {
     const layoutAmp = Object.assign({}, LAYOUT_BASE, {
       xaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', title: 'USD/RUB rate', range: DATA.sigmoidAxisRange },
@@ -331,7 +356,7 @@ async function loadLastUpdated() {
 }
 
 async function loadData() {
-  const [rows, eyRows, usdRubRows, usdRubStats, usdRub5yRows, targetWeightsData, targetAllocationData, vkcoRows, vkcoRevenueRows, vkcoPredicted] = await Promise.all([
+  const [rows, eyRows, usdRubRows, usdRubStats, usdRub5yRows, targetWeightsData, targetAllocationData, vkcoRows, vkcoRevenueRows, vkcoPredicted, usZscoreRows] = await Promise.all([
     fetchCsv(`${DATA_DIR}/composite_valuation.csv`),
     fetchCsv(`${DATA_DIR}/erp_portfolio.csv`),
     fetchCsv(`${DATA_DIR}/usd_rub_history.csv`),
@@ -342,6 +367,7 @@ async function loadData() {
     fetchCsv(`${DATA_DIR}/vkco_zscore.csv`),
     fetchCsv(`${DATA_DIR}/vkco_annual_revenue.csv`),
     fetchJson(`${DATA_DIR}/vkco_revenue_predicted.json`),
+    fetchCsv(`${DATA_DIR}/us_zscore.csv`),
   ]);
 
   const dates = rows.map(r => r.date + '-01');
@@ -431,6 +457,45 @@ async function loadData() {
       hovertemplate: `Predicted ${vkcoPredicted.year}: <b>%{y:.1f}</b> bln RUB<extra></extra>`,
     } : null,
   ].filter(Boolean);
+
+  // EXPERIMENTAL: basket of 37 major US stocks, Z-score vs each stock's own
+  // rolling history. NOT part of the Russian ERP portfolio.
+  const US_TICKERS = [
+    ['GOOGL', 6],   ['NVDA', 5],   ['LLY', 5],    ['CAT', 5],    ['LIN', 5],
+    ['GE', 4],      ['AMZN', 4],   ['WMT', 4],    ['XOM', 4],    ['NEE', 4],
+    ['PLD', 4],     ['JPM', 3],    ['BRK-B', 3],  ['JNJ', 3],    ['META', 3],
+    ['V', 2],       ['MA', 2],     ['HOOD', 2],   ['MSFT', 2],   ['AAPL', 2],
+    ['ABBV', 2],    ['TSLA', 2],   ['HD', 2],     ['PG', 2],     ['KO', 2],
+    ['SHEL', 2],    ['CVX', 2],    ['SHW', 2],    ['DUK', 2],    ['AMT', 2],
+    ['SOFI', 1.5],  ['XYZ', 1.5],  ['INTC', 1],   ['SPCX', 1],   ['FCX', 1],
+    ['SO', 1],      ['EQIX', 1],
+  ];
+  const US_COLORS = [
+    '#4da8c8','#f0b429','#3dd68c','#22d3ee','#e05252','#a78bfa','#fb923c',
+    '#34d399','#fbbf24','#f472b6','#60a5fa','#facc15','#c084fc','#fb7185',
+    '#2dd4bf','#f97316','#84cc16','#e879f9','#38bdf8','#fde047','#f87171',
+    '#a3e635','#818cf8','#fbcfe8','#5eead4','#fdba74','#bef264','#c4b5fd',
+    '#fca5a5','#67e8f9','#d9f99d','#f0abfc','#93c5fd','#fed7aa','#99f6e4','#ddd6fe',
+  ];
+  const usZDates = [...new Set(usZscoreRows.map(r => r.date + '-01'))];
+  const usByTicker = {};
+  usZscoreRows.forEach(r => {
+    (usByTicker[r.ticker] = usByTicker[r.ticker] || []).push(r);
+  });
+  const usMetricLabel = { EY: 'EY', Revenue: 'Rev Yield', FCF: 'FCF Yield' };
+  const usZscore = US_TICKERS.map(([ticker, weight], i) => {
+    const trows = usByTicker[ticker] || [];
+    const byDate = {};
+    trows.forEach(r => { byDate[r.date + '-01'] = r; });
+    const metric = trows.length ? trows[0].metric : '';
+    return jsSeries(
+      usZDates,
+      usZDates.map(d => { const r = byDate[d]; return r ? val(r.z_score) : null; }),
+      `${ticker} (${usMetricLabel[metric] || metric}) — ${weight}%`,
+      US_COLORS[i % US_COLORS.length],
+      { visible: i < 5 },
+    );
+  });
 
   const layer2Rebal = [
     jsSeries(dates, series('SBER_z'), 'SBER (EY)', '#4da8c8'),
@@ -858,7 +923,7 @@ async function loadData() {
   `;
 
   return { layer1, layer1_individual: layer1Individual, layer2_rebal: layer2Rebal,
-           layer2_alloc: layer2Alloc, revYield, fcfYield, vkcoRevenueV2,
+           layer2_alloc: layer2Alloc, revYield, fcfYield, vkcoRevenueV2, usZscore,
            sigmoidAmp, sigmoidAmpShapes, sigmoidAmpAnnotations, wCny5yCombined,
            targetWeights, targetWeightsLayout, allocTarget: allocTargetTrace, allocTargetLayout,
            sigmoidAxisRange: [axisMin, axisMax] };
