@@ -35,6 +35,9 @@ jobs:
       - name: Update VKCO experimental Z-score (not part of the portfolio)
         run: python erp_valuation/vkco_zscore_experiment.py
 
+      - name: Update US stocks experimental Z-score (not part of the portfolio)
+        run: python erp_valuation/us_zscore.py
+
       - name: Commit and push changes
         run: |
           git config user.name "github-actions[bot]"
