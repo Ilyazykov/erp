@@ -141,6 +141,11 @@
   toggle. <b>Above +1.5</b> → cheaper than its own norm. <b>Below −1.5</b> → more expensive.
   SPCX (SpaceX, IPO June 2026) has no Z-score yet — too little history.
 </p>
+<div id="plot_us_targetweights" style="height:760px; max-width:820px; margin:8px auto 0"></div>
+<p class="note" id="us_targetweights_note">
+  <span class="loading">Loading current values…</span>
+</p>
+<div id="us_targetweights_table_wrap"></div>
 </div>
 
 <script>
@@ -302,6 +307,7 @@ function renderChart(id) {
         HLINE(1.5, '#3dd68c', 'dot'),
         HLINE(-1.5, '#e05252', 'dot'),
       ]), CONFIG);
+    Plotly.newPlot('plot_us_targetweights', DATA.usTargetWeights, DATA.usTargetWeightsLayout, CONFIG);
   } else if (id === 'sigmoid') {
     const layoutAmp = Object.assign({}, LAYOUT_BASE, {
       xaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', title: 'USD/RUB rate', range: DATA.sigmoidAxisRange },
@@ -356,7 +362,7 @@ async function loadLastUpdated() {
 }
 
 async function loadData() {
-  const [rows, eyRows, usdRubRows, usdRubStats, usdRub5yRows, targetWeightsData, targetAllocationData, vkcoRows, vkcoRevenueRows, vkcoPredicted, usZscoreRows] = await Promise.all([
+  const [rows, eyRows, usdRubRows, usdRubStats, usdRub5yRows, targetWeightsData, targetAllocationData, vkcoRows, vkcoRevenueRows, vkcoPredicted, usZscoreRows, usTargetWeightsData] = await Promise.all([
     fetchCsv(`${DATA_DIR}/composite_valuation.csv`),
     fetchCsv(`${DATA_DIR}/erp_portfolio.csv`),
     fetchCsv(`${DATA_DIR}/usd_rub_history.csv`),
@@ -368,6 +374,7 @@ async function loadData() {
     fetchCsv(`${DATA_DIR}/vkco_annual_revenue.csv`),
     fetchJson(`${DATA_DIR}/vkco_revenue_predicted.json`),
     fetchCsv(`${DATA_DIR}/us_zscore.csv`),
+    fetchJson(`${DATA_DIR}/us_target_weights.json`),
   ]);
 
   const dates = rows.map(r => r.date + '-01');
@@ -496,6 +503,123 @@ async function loadData() {
       { visible: i < 5 },
     );
   });
+
+  // US target weights donut — same geometry/formula as the Russian portfolio's
+  // targetWeights chart above: angular width = base weight, radial extent =
+  // R_BASE * (target/base). Purely illustrative; not a real portfolio.
+  const usTwRows = usTargetWeightsData.weights;
+  const usTwTotalBase = usTwRows.reduce((s, r) => s + r.base, 0);
+  let usTwCursor = 0;
+  const usTwTheta = [];
+  const usTwWidth = [];
+  usTwRows.forEach(r => {
+    const width = r.base / usTwTotalBase * 360;
+    usTwTheta.push(usTwCursor + width / 2);
+    usTwWidth.push(width);
+    usTwCursor += width;
+  });
+
+  const US_TW_R_BASE = 100;
+  const usTwRadial = usTwRows.map(r => US_TW_R_BASE * (r.target / r.base));
+  const usTwMaxR = Math.max(US_TW_R_BASE, ...usTwRadial);
+  const usTickerColor = {};
+  US_TICKERS.forEach(([ticker], i) => { usTickerColor[ticker] = US_COLORS[i % US_COLORS.length]; });
+
+  const usTargetWeights = [
+    {
+      type: 'barpolar',
+      r: usTwRadial,
+      theta: usTwTheta,
+      width: usTwWidth,
+      name: 'Target (relative to Base)',
+      marker: {
+        color: usTwRows.map(r => usTickerColor[r.ticker] || '#8b949e'),
+        opacity: 0.85,
+        line: { color: '#0d1117', width: 1 },
+      },
+      hovertemplate: usTwRows.map(r => {
+        const diff = r.target - r.base;
+        const diffStr = (diff >= 0 ? '+' : '') + diff.toFixed(2);
+        const zStr = r.z !== null ? r.z.toFixed(2) : 'n/a';
+        return `${r.ticker}<br>Base: <b>${r.base.toFixed(2)}%</b> (sector angle)<br>` +
+               `Target: <b>${r.target.toFixed(2)}%</b> (${diffStr} п.п.)<br>Z: ${zStr} (${r.signal})<extra></extra>`;
+      }),
+    },
+    {
+      type: 'scatterpolar',
+      mode: 'lines',
+      r: Array.from({ length: 73 }, () => US_TW_R_BASE),
+      theta: Array.from({ length: 73 }, (_, i) => i * 5),
+      line: { color: '#e6edf3', width: 1.5, dash: 'dot' },
+      name: 'Base (common reference circle)',
+      hoverinfo: 'skip',
+    },
+    {
+      type: 'scatterpolar',
+      mode: 'text',
+      r: usTwRows.map(() => usTwMaxR * 1.14),
+      theta: usTwTheta,
+      text: usTwRows.map(r => r.ticker),
+      textfont: { color: usTwRows.map(r => usTickerColor[r.ticker] || '#8b949e'), size: 9 },
+      showlegend: false,
+      hoverinfo: 'skip',
+    },
+  ];
+
+  const usTargetWeightsLayout = {
+    paper_bgcolor: '#0d1117',
+    plot_bgcolor: '#0d1117',
+    font: { color: '#c9d1d9', size: 10 },
+    polar: {
+      domain: { x: [0.1, 0.9], y: [0.06, 0.94] },
+      bgcolor: '#0d1117',
+      radialaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', range: [0, usTwMaxR * 1.25], showticklabels: false, ticksuffix: '' },
+      angularaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', showticklabels: false, rotation: 90, direction: 'clockwise' },
+    },
+    showlegend: true,
+    legend: { bgcolor: '#13191f', bordercolor: '#1e2830', borderwidth: 1, x: 0.5, y: -0.06, xanchor: 'center', yanchor: 'top', orientation: 'h', font: { size: 9 } },
+    margin: { t: 10, r: 10, b: 10, l: 10 },
+  };
+
+  document.getElementById('us_targetweights_note').innerHTML = `
+    <b>EXPERIMENTAL</b> — same illustrative donut as the Russian portfolio's Target Weights
+    chart, applied to this US-stocks basket. Each sector's <b>angular width</b> is its
+    <b>base</b> weight; the <b>radial extent</b> shows the <b>target</b> weight after the same
+    Z-score correction (<code>base + 3&middot;sqrt(|Z|&minus;1.5)&middot;sign(Z)</code>, applied
+    only when |Z| &gt; 1.5, then renormalized across all 37 positions to sum to 100%; if any
+    position would go negative, every position is shifted up by the same amount first so the
+    minimum lands at exactly 0). No real rebalancing happens from this.<br>
+    Sector extends past the dotted circle → overweight vs base. Sector ends short of it → underweight vs base.<br>
+    Data as of ${usTargetWeightsData.date} (updated ${usTargetWeightsData.updated}).
+  `;
+
+  const usTwTableRows = usTwRows.slice().sort((a, b) => b.target - a.target);
+  document.getElementById('us_targetweights_table_wrap').innerHTML = `
+    <table class="data-table">
+      <thead><tr>
+        <th>Ticker</th><th>Base</th><th>Z-score</th><th>Adjustment</th><th>Target</th><th>&Delta; vs Base</th>
+      </tr></thead>
+      <tbody>
+        ${usTwTableRows.map(r => {
+          const zStr = r.z !== null ? (r.z >= 0 ? '+' : '') + r.z.toFixed(2) : '—';
+          const adj = r.adjustment;
+          const adjStr = adj !== null ? (adj >= 0 ? '+' : '') + adj.toFixed(1) + ' pp' : '—';
+          const delta = r.target - r.base;
+          const deltaStr = (delta >= 0 ? '+' : '') + delta.toFixed(1) + ' pp';
+          const deltaCls = delta > 0.05 ? 'pos' : (delta < -0.05 ? 'neg' : 'muted');
+          const adjCls = adj === null ? 'muted' : (adj > 0 ? 'pos' : (adj < 0 ? 'neg' : 'muted'));
+          return `<tr>
+            <td class="ticker" style="color:${usTickerColor[r.ticker] || '#8b949e'}">${r.ticker}</td>
+            <td>${r.base.toFixed(1)}%</td>
+            <td>${zStr}</td>
+            <td class="${adjCls}">${adjStr}</td>
+            <td>${r.target.toFixed(1)}%</td>
+            <td class="${deltaCls}">${deltaStr}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
 
   const layer2Rebal = [
     jsSeries(dates, series('SBER_z'), 'SBER (EY)', '#4da8c8'),
@@ -924,6 +1048,7 @@ async function loadData() {
 
   return { layer1, layer1_individual: layer1Individual, layer2_rebal: layer2Rebal,
            layer2_alloc: layer2Alloc, revYield, fcfYield, vkcoRevenueV2, usZscore,
+           usTargetWeights, usTargetWeightsLayout,
            sigmoidAmp, sigmoidAmpShapes, sigmoidAmpAnnotations, wCny5yCombined,
            targetWeights, targetWeightsLayout, allocTarget: allocTargetTrace, allocTargetLayout,
            sigmoidAxisRange: [axisMin, axisMax] };

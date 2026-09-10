@@ -38,6 +38,9 @@ jobs:
       - name: Update US stocks experimental Z-score (not part of the portfolio)
         run: python erp_valuation/us_zscore.py
 
+      - name: Update US stocks experimental target weights (not part of the portfolio)
+        run: python erp_valuation/calc_us_target_weights.py
+
       - name: Commit and push changes
         run: |
           git config user.name "github-actions[bot]"

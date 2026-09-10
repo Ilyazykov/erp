@@ -3,25 +3,15 @@ Computes daily target portfolio weights by applying a Z-score-driven
 correction on top of the base (strategic) weights, then renormalizing
 across all positions to sum to 100%.
 
-Formula (per ticker with a Z-score, gated by the same +-1.5 threshold
-used elsewhere on the site to mean "buy"/"trim"):
-
-    excess = |Z| - 1.5
-    adjusted = base + Z_CORRECTION_K * sqrt(excess) * sign(Z)   if |Z| > 1.5
-    adjusted = base                                              otherwise
-
-sqrt (not exp) is used deliberately: it grows without any upper bound (no
-plateau/cap), but far more slowly than an exponential, so an unusually
-extreme Z-score (e.g. |Z| > 5) still produces a proportionate, sane
-correction instead of the exponential blowing up (exp(3.7) - 1 = ~39pp on
-a 2%-base ticker, dwarfing every other position).
-
-Tickers without a Z-score (funds: TRND, AKME, AKFN; and DOMRF when its
-history is too short) are held at their base weight in this step, but
-are included in the final renormalization across all 10 positions, so
-they still shift slightly to accommodate corrections elsewhere.
-
-    final = adjusted / sum(adjusted) * 100
+The per-ticker correction/renormalization formula (including the
+negative-weight safeguard) lives in zscore_weights.py, shared with the
+purely-illustrative US-stocks basket (calc_us_target_weights.py) -- see that
+module's docstring for the full formula and the reasoning behind the
+negative-weight shift. Summary: tickers without a Z-score (funds: TRND,
+AKME, AKFN; and DOMRF when its history is too short) are held at their base
+weight in the correction step, but are still included in the final
+renormalization across all 10 positions, so they shift slightly to
+accommodate corrections elsewhere.
 
 Base weights come from data/target_weights_base.json. Z-scores come
 from the last row of data/composite_valuation.csv (produced by
@@ -64,6 +54,8 @@ import math
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+from zscore_weights import Z_THRESHOLD, signal, z_correction, compute_target_weights
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = REPO_ROOT / "data"
 BASE_WEIGHTS_PATH = DATA_DIR / "target_weights_base.json"
@@ -74,8 +66,6 @@ OUT_CSV_PATH = DATA_DIR / "target_weights.csv"
 ALLOC_OUT_JSON_PATH = DATA_DIR / "target_allocation.json"
 ALLOC_OUT_CSV_PATH = DATA_DIR / "target_allocation.csv"
 
-Z_THRESHOLD = 1.5
-Z_CORRECTION_K = 3.0  # scales sqrt(excess) -> pp correction; see module docstring
 Z_COLUMN_SUFFIX = "_z"
 COMPOSITE_Z_COLUMN = "composite_erp_z"
 
@@ -144,41 +134,6 @@ def read_latest_key_rate(path: Path = KEY_RATE_CSV_PATH) -> tuple[str, float]:
 
 def stock_share_from_rate(r: float) -> float:
     return 100 / (1 + math.exp((r - KEY_RATE_MIDPOINT) / KEY_RATE_SLOPE))
-
-
-def signal(z: float | None) -> str:
-    if z is None:
-        return "n/a"
-    if z > Z_THRESHOLD:
-        return "buy"
-    if z < -Z_THRESHOLD:
-        return "trim"
-    return "neutral"
-
-
-def z_correction(z: float | None) -> float:
-    if z is None or abs(z) <= Z_THRESHOLD:
-        return 0.0
-    excess = abs(z) - Z_THRESHOLD
-    return Z_CORRECTION_K * math.sqrt(excess) * (1 if z > 0 else -1)
-
-
-def adjusted_weight(base: float, z: float | None) -> float:
-    return base + z_correction(z)
-
-
-def compute_target_weights(base_weights: dict[str, float], zscores: dict[str, float]) -> list[dict]:
-    rows = []
-    for ticker, base in base_weights.items():
-        z = zscores.get(ticker)
-        adj = adjusted_weight(base, z)
-        rows.append({"ticker": ticker, "base": base, "z": z, "signal": signal(z), "adjusted": adj})
-
-    total_adjusted = sum(r["adjusted"] for r in rows)
-    for r in rows:
-        r["target"] = r["adjusted"] / total_adjusted * 100
-
-    return rows
 
 
 def compute_allocation(key_rate: float, composite_z: float | None) -> dict:
