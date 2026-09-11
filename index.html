@@ -610,10 +610,10 @@ async function loadData() {
           const adjCls = adj === null ? 'muted' : (adj > 0 ? 'pos' : (adj < 0 ? 'neg' : 'muted'));
           return `<tr>
             <td class="ticker" style="color:${usTickerColor[r.ticker] || '#8b949e'}">${r.ticker}</td>
-            <td>${r.base.toFixed(1)}%</td>
+            <td>${r.base.toFixed(2)}%</td>
             <td>${zStr}</td>
             <td class="${adjCls}">${adjStr}</td>
-            <td>${r.target.toFixed(1)}%</td>
+            <td>${r.target.toFixed(2)}%</td>
             <td class="${deltaCls}">${deltaStr}</td>
           </tr>`;
         }).join('')}
@@ -906,10 +906,10 @@ async function loadData() {
           const adjCls = adj === null ? 'muted' : (adj > 0 ? 'pos' : (adj < 0 ? 'neg' : 'muted'));
           return `<tr>
             <td class="ticker" style="color:${TICKER_COLORS[r.ticker] || '#8b949e'}">${r.ticker}</td>
-            <td>${r.base.toFixed(1)}%</td>
+            <td>${r.base.toFixed(2)}%</td>
             <td>${zStr}</td>
             <td class="${adjCls}">${adjStr}</td>
-            <td>${r.target.toFixed(1)}%</td>
+            <td>${r.target.toFixed(2)}%</td>
             <td class="${deltaCls}">${deltaStr}</td>
           </tr>`;
         }).join('')}
