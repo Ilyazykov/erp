@@ -27,7 +27,7 @@ import math
 Z_THRESHOLD = 1.5
 Z_CORRECTION_K = 3.0  # scales sqrt(excess) -> pp correction
 MIN_BASE_FRACTION = 0.20
-SIGMOID_K = 8.0
+SIGMOID_K = 20.0
 
 
 def signal(z: float | None) -> str:
