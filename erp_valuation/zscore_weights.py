@@ -106,19 +106,9 @@ def compute_target_weights(
                 r["target"] = r["adjusted"] + bonus
             else:
                 r["target"] = r["adjusted"]
-    
+
     else:
-        donors = [
-            r for r in rows
-            if r["signal"] in ("neutral", "trim")
-        ]
-
-        penalty = (total_adjusted - 100.0) / len(donors)
-
         for r in rows:
-            if r["signal"] in ("neutral", "trim"):
-                r["target"] = r["adjusted"] - penalty
-            else:
-                r["target"] = r["adjusted"]
+            r["target"] = r["adjusted"] / total_adjusted * 100
 
     return rows
