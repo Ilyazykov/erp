@@ -602,16 +602,17 @@ async function loadData() {
       <tbody>
         ${usTwTableRows.map(r => {
           const zStr = r.z !== null ? (r.z >= 0 ? '+' : '') + r.z.toFixed(2) : '—';
+          const zCls = r.z === null ? 'muted' : (r.z > 1.5 ? 'pos' : (r.z < -1.5 ? 'neg' : 'muted'));
           const adj = r.adjustment;
-          const adjStr = adj !== null ? (adj >= 0 ? '+' : '') + adj.toFixed(1) + ' pp' : '—';
+          const adjStr = adj !== null ? (adj >= 0 ? '+' : '') + adj.toFixed(2) + ' pp' : '—';
           const delta = r.target - r.base;
-          const deltaStr = (delta >= 0 ? '+' : '') + delta.toFixed(1) + ' pp';
+          const deltaStr = (delta >= 0 ? '+' : '') + delta.toFixed(2) + ' pp';
           const deltaCls = delta > 0.05 ? 'pos' : (delta < -0.05 ? 'neg' : 'muted');
           const adjCls = adj === null ? 'muted' : (adj > 0 ? 'pos' : (adj < 0 ? 'neg' : 'muted'));
           return `<tr>
             <td class="ticker" style="color:${usTickerColor[r.ticker] || '#8b949e'}">${r.ticker}</td>
             <td>${r.base.toFixed(2)}%</td>
-            <td>${zStr}</td>
+            <td class="${zCls}">${zStr}</td>
             <td class="${adjCls}">${adjStr}</td>
             <td>${r.target.toFixed(2)}%</td>
             <td class="${deltaCls}">${deltaStr}</td>
@@ -898,16 +899,17 @@ async function loadData() {
       <tbody>
         ${twTableRows.map(r => {
           const zStr = r.z !== null ? (r.z >= 0 ? '+' : '') + r.z.toFixed(2) : '—';
+          const zCls = r.z === null ? 'muted' : (r.z > 1.5 ? 'pos' : (r.z < -1.5 ? 'neg' : 'muted'));
           const adj = r.adjustment;
-          const adjStr = adj !== null ? (adj >= 0 ? '+' : '') + adj.toFixed(1) + ' pp' : '—';
+          const adjStr = adj !== null ? (adj >= 0 ? '+' : '') + adj.toFixed(2) + ' pp' : '—';
           const delta = r.target - r.base;
-          const deltaStr = (delta >= 0 ? '+' : '') + delta.toFixed(1) + ' pp';
+          const deltaStr = (delta >= 0 ? '+' : '') + delta.toFixed(2) + ' pp';
           const deltaCls = delta > 0.05 ? 'pos' : (delta < -0.05 ? 'neg' : 'muted');
           const adjCls = adj === null ? 'muted' : (adj > 0 ? 'pos' : (adj < 0 ? 'neg' : 'muted'));
           return `<tr>
             <td class="ticker" style="color:${TICKER_COLORS[r.ticker] || '#8b949e'}">${r.ticker}</td>
             <td>${r.base.toFixed(2)}%</td>
-            <td>${zStr}</td>
+            <td class="${zCls}">${zStr}</td>
             <td class="${adjCls}">${adjStr}</td>
             <td>${r.target.toFixed(2)}%</td>
             <td class="${deltaCls}">${deltaStr}</td>
@@ -1027,9 +1029,9 @@ async function loadData() {
           const z = allocZ[n];
           const zStr = z !== null ? (z >= 0 ? '+' : '') + z.toFixed(2) : '—';
           const adj = allocAdjustment[n];
-          const adjStr = adj !== null ? (adj >= 0 ? '+' : '') + adj.toFixed(1) + ' pp' : '—';
+          const adjStr = adj !== null ? (adj >= 0 ? '+' : '') + adj.toFixed(2) + ' pp' : '—';
           const delta = allocTarget[n] - allocBase[n];
-          const deltaStr = (delta >= 0 ? '+' : '') + delta.toFixed(1) + ' pp';
+          const deltaStr = (delta >= 0 ? '+' : '') + delta.toFixed(2) + ' pp';
           const deltaCls = delta > 0.05 ? 'pos' : (delta < -0.05 ? 'neg' : 'muted');
           const adjCls = adj === null ? 'muted' : (adj > 0 ? 'pos' : (adj < 0 ? 'neg' : 'muted'));
           return `<tr>
