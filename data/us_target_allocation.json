@@ -1,6 +1,6 @@
 {
   "date": "2026-09-14",
-  "updated": "2026-09-14 02:03:09 UTC",
+  "updated": "2026-09-14 03:19:52 UTC",
   "z_threshold": 1.5,
   "key_rate_midpoint": 10.322,
   "key_rate_slope": 2.531,
@@ -15,8 +15,8 @@
   "base_bonds": 15.8179,
   "z": -2.3686,
   "signal": "trim",
-  "stocks_adjustment": 0.0,
-  "bonds_adjustment": 2.795961373123742,
-  "target_stocks": 81.8924,
-  "target_bonds": 18.1076
+  "stocks_adjustment": -3.7563,
+  "bonds_adjustment": 3.7562571609682465,
+  "target_stocks": 80.4258,
+  "target_bonds": 19.5742
 }

@@ -25,16 +25,18 @@ illustrative, no real allocation happens from this.
 
      base_stocks = (w(r) + stock_share_from_age(age)) / 2
 
-  2. The same Z-gated sqrt correction used everywhere else on the site is
-     applied here too, driven by the US ERP Z-score (Shiller's Excess CAPE
-     Yield Z-score, from data/us_erp.csv) instead of composite_erp_z:
-
-         excess = |Z| - 1.5
-         adjusted = w(r) + Z_CORRECTION_K * sqrt(excess) * sign(Z)   if |Z| > 1.5
-         adjusted = w(r)                                              otherwise
-
-     then renormalized so Stocks + Bonds sum to 100 (same pattern as
-     zscore_weights.compute_target_weights, not clipped to [0, 100]).
+  2. A symmetric, Z-gated shift is then applied via
+     zscore_weights.allocation_split, driven by the US ERP Z-score
+     (Shiller's Excess CAPE Yield Z-score, from data/us_erp.csv) instead of
+     composite_erp_z: one side gains, the other loses, by the SAME pp
+     amount, so total always stays exactly base_stocks + base_bonds (no
+     renormalization needed). The pp shift itself smoothly and
+     asymptotically approaches ALLOC_MAX_SHIFT_PP (~4.1pp) as |Z| -> +inf,
+     using the same "bell curve" sigmoid shape as the per-ticker formula's
+     negative branch -- continuous and differentiable at z = +-1.5, and
+     additionally clamped so it never exceeds the shrinking side's own base
+     share. See zscore_weights.py's module docstring and allocation_split's
+     own docstring for the exact formula.
 
 Fed Funds Rate comes from the latest row of data/fed_funds_rate.csv
 (produced by fetch_fed_funds_rate.py). US ERP Z-score comes from the
@@ -57,9 +59,9 @@ from pathlib import Path
 from zscore_weights import (
     BIRTH_YEAR,
     Z_THRESHOLD,
+    allocation_split,
     signal,
     stock_share_from_age,
-    z_correction,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -112,20 +114,13 @@ def compute_allocation(fed_rate: float, erp_z: float | None, age: float) -> dict
     base_stocks = (rate_stocks + age_stocks) / 2
     base_bonds = 100 - base_stocks
 
-    correction = z_correction(erp_z)
-    if correction > 0:
-        stocks_adjustment, bonds_adjustment = correction, 0.0
-    elif correction < 0:
-        stocks_adjustment, bonds_adjustment = 0.0, -correction
-    else:
-        stocks_adjustment, bonds_adjustment = 0.0, 0.0
-
-    adjusted_stocks = base_stocks + stocks_adjustment
-    adjusted_bonds = base_bonds + bonds_adjustment
-
-    total_adjusted = adjusted_stocks + adjusted_bonds
-    target_stocks = adjusted_stocks / total_adjusted * 100
-    target_bonds = adjusted_bonds / total_adjusted * 100
+    # See zscore_weights.allocation_split's docstring for the full formula:
+    # a symmetric pp shift (one side gains what the other loses), smoothly
+    # capped as |Z| grows, so total always stays exactly base_stocks +
+    # base_bonds -- no renormalization needed.
+    target_stocks, target_bonds = allocation_split(base_stocks, erp_z)
+    stocks_adjustment = target_stocks - base_stocks
+    bonds_adjustment = target_bonds - base_bonds
 
     return {
         "fed_rate": fed_rate,

@@ -25,14 +25,18 @@ independent of the per-ticker weights above:
 
          w(r) = 100 / (1 + exp((r - 10.322) / 2.531))
 
-  2. The same Z-gated sqrt correction applied to tickers is applied here
-     too, driven by composite_erp_z (Portfolio Z - OFZ Z):
-
-         excess = |Z| - 1.5
-         adjusted = w(r) + Z_CORRECTION_K * sqrt(excess) * sign(Z)   if |Z| > 1.5
-         adjusted = w(r)                                              otherwise
-
-     then renormalized so Stocks + Bonds sum to 100.
+  2. A symmetric, Z-gated shift is then applied via
+     zscore_weights.allocation_split (driven by composite_erp_z, the
+     Portfolio Z - OFZ Z): one side gains, the other loses, by the SAME pp
+     amount, so total always stays exactly base_stocks + base_bonds (no
+     renormalization needed). The pp shift itself smoothly and
+     asymptotically approaches ALLOC_MAX_SHIFT_PP (~4.1pp) as |Z| -> +inf,
+     using the same "bell curve" sigmoid shape as the per-ticker formula's
+     negative branch -- continuous and differentiable at z = +-1.5, and
+     additionally clamped so it never exceeds the shrinking side's own base
+     share (guards the edge case of a base share smaller than that). See
+     zscore_weights.py's module docstring and allocation_split's own
+     docstring for the exact formula.
 
 Key rate comes from the latest row of data/key_rate.csv (produced by
 fetch_key_rate.py).
@@ -58,7 +62,7 @@ import math
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from zscore_weights import Z_THRESHOLD, compute_target_weights, signal, z_correction
+from zscore_weights import Z_THRESHOLD, allocation_split, compute_target_weights, signal
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = REPO_ROOT / "data"
@@ -144,27 +148,13 @@ def compute_allocation(key_rate: float, composite_z: float | None) -> dict:
     base_stocks = stock_share_from_rate(key_rate)
     base_bonds = 100 - base_stocks
 
-    # Composite ERP Z > +1.5 -> stocks cheap vs rates -> buy stocks: the
-    # correction goes to Stocks, Bonds gets 0. Z < -1.5 -> rates rich vs
-    # stocks -> buy bonds: the correction goes to Bonds instead, Stocks gets
-    # 0. Neither side ever receives the other's mirrored/negated value -- at
-    # any moment only ONE side actually has an active signal, exactly like a
-    # ticker with no Z-score sitting at 0. Both legs are then renormalized to
-    # sum to 100%, same as the per-ticker target weights.
-    correction = z_correction(composite_z)
-    if correction > 0:
-        stocks_adjustment, bonds_adjustment = correction, 0.0
-    elif correction < 0:
-        stocks_adjustment, bonds_adjustment = 0.0, -correction
-    else:
-        stocks_adjustment, bonds_adjustment = 0.0, 0.0
-
-    adjusted_stocks = base_stocks + stocks_adjustment
-    adjusted_bonds = base_bonds + bonds_adjustment
-
-    total_adjusted = adjusted_stocks + adjusted_bonds
-    target_stocks = adjusted_stocks / total_adjusted * 100
-    target_bonds = adjusted_bonds / total_adjusted * 100
+    # See zscore_weights.allocation_split's docstring for the full formula:
+    # a symmetric pp shift (one side gains what the other loses), smoothly
+    # capped as |Z| grows, so total always stays exactly base_stocks +
+    # base_bonds -- no renormalization needed.
+    target_stocks, target_bonds = allocation_split(base_stocks, composite_z)
+    stocks_adjustment = target_stocks - base_stocks
+    bonds_adjustment = target_bonds - base_bonds
 
     return {
         "key_rate": key_rate,
