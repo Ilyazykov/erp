@@ -20,30 +20,26 @@ composite_valuation.py).
 Also computes the Layer 2: Allocation split (stocks vs bonds), which is
 independent of the per-ticker weights above:
 
-  1. Base stock share is a 50/50 blend of two independent inputs:
+  1. Base stock share from the CBR key rate r (inverse logistic —
+     low rate -> high stock share, high rate -> low stock share):
 
-       a. Rate-based share, from the CBR key rate r (inverse logistic —
-          low rate -> high stock share, high rate -> low stock share):
-
-              w(r) = 100 / (1 + exp((r - 10.322) / 2.531))
-
-       b. Age-based share, from a glide-path rule of thumb (bonds% = age -
-          10, clamped to [0, 100]; see zscore_weights.stock_share_from_age),
-          using BIRTH_YEAR from zscore_weights.py.
-
-     base_stocks = (w(r) + stock_share_from_age(age)) / 2
+         w(r) = 100 / (1 + exp((r - 10.322) / 2.531))
 
   2. The same Z-gated sqrt correction applied to tickers is applied here
      too, driven by composite_erp_z (Portfolio Z - OFZ Z):
 
          excess = |Z| - 1.5
-         adjusted = base_stocks + Z_CORRECTION_K * sqrt(excess) * sign(Z)   if |Z| > 1.5
-         adjusted = base_stocks                                              otherwise
+         adjusted = w(r) + Z_CORRECTION_K * sqrt(excess) * sign(Z)   if |Z| > 1.5
+         adjusted = w(r)                                              otherwise
 
      then renormalized so Stocks + Bonds sum to 100.
 
 Key rate comes from the latest row of data/key_rate.csv (produced by
-fetch_key_rate.py). Age is derived from BIRTH_YEAR and the current date.
+fetch_key_rate.py).
+
+Note: the age-based glide path (bonds% = age - 10) is used ONLY for the
+US-stocks illustrative allocation (calc_us_allocation.py), not here -- the
+Russian portfolio's allocation is rate-based only, per explicit instruction.
 
 Outputs:
     data/target_weights.json   (per-ticker, for the site's donut chart)
@@ -62,14 +58,7 @@ import math
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from zscore_weights import (
-    BIRTH_YEAR,
-    Z_THRESHOLD,
-    compute_target_weights,
-    signal,
-    stock_share_from_age,
-    z_correction,
-)
+from zscore_weights import Z_THRESHOLD, compute_target_weights, signal, z_correction
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = REPO_ROOT / "data"
@@ -151,14 +140,8 @@ def stock_share_from_rate(r: float) -> float:
     return 100 / (1 + math.exp((r - KEY_RATE_MIDPOINT) / KEY_RATE_SLOPE))
 
 
-def current_age(as_of: date) -> int:
-    return as_of.year - BIRTH_YEAR
-
-
-def compute_allocation(key_rate: float, composite_z: float | None, age: float) -> dict:
-    rate_stocks = stock_share_from_rate(key_rate)
-    age_stocks = stock_share_from_age(age)
-    base_stocks = (rate_stocks + age_stocks) / 2
+def compute_allocation(key_rate: float, composite_z: float | None) -> dict:
+    base_stocks = stock_share_from_rate(key_rate)
     base_bonds = 100 - base_stocks
 
     # Composite ERP Z > +1.5 -> stocks cheap vs rates -> buy stocks: the
@@ -185,9 +168,6 @@ def compute_allocation(key_rate: float, composite_z: float | None, age: float) -
 
     return {
         "key_rate": key_rate,
-        "age": age,
-        "rate_stocks": rate_stocks,
-        "age_stocks": age_stocks,
         "base_stocks": base_stocks,
         "base_bonds": base_bonds,
         "z": composite_z,
@@ -258,10 +238,6 @@ def write_allocation_json(alloc: dict, as_of: str, key_rate_date: str,
         "key_rate": alloc["key_rate"],
         "key_rate_date": key_rate_date,
         "composite_z_date": composite_z_date,
-        "birth_year": BIRTH_YEAR,
-        "age": alloc["age"],
-        "rate_stocks": round(alloc["rate_stocks"], 4),
-        "age_stocks": round(alloc["age_stocks"], 4),
         "base_stocks": round(alloc["base_stocks"], 4),
         "base_bonds": round(alloc["base_bonds"], 4),
         "z": round(alloc["z"], 4) if alloc["z"] is not None else None,
@@ -275,13 +251,10 @@ def write_allocation_json(alloc: dict, as_of: str, key_rate_date: str,
 
 
 def append_allocation_csv(alloc: dict, as_of: str, out_path: Path = ALLOC_OUT_CSV_PATH) -> None:
-    header = ["date", "key_rate", "age", "rate_stocks", "age_stocks", "base_stocks", "z", "target_stocks", "target_bonds"]
+    header = ["date", "key_rate", "base_stocks", "z", "target_stocks", "target_bonds"]
     new_row = [
         as_of,
         f"{alloc['key_rate']:.2f}",
-        str(alloc["age"]),
-        f"{alloc['rate_stocks']:.4f}",
-        f"{alloc['age_stocks']:.4f}",
         f"{alloc['base_stocks']:.4f}",
         f"{alloc['z']:.4f}" if alloc["z"] is not None else "",
         f"{alloc['target_stocks']:.4f}",
@@ -327,17 +300,14 @@ def main() -> int:
 
     key_rate_date, key_rate = read_latest_key_rate()
     composite_z_date, composite_z = read_latest_composite_z()
-    age = current_age(date.today())
-    alloc = compute_allocation(key_rate, composite_z, age)
+    alloc = compute_allocation(key_rate, composite_z)
     write_allocation_json(alloc, as_of, key_rate_date, composite_z_date)
     append_allocation_csv(alloc, as_of)
 
     z_str = f"{composite_z:.2f}" if composite_z is not None else "-"
     print()
-    print(f"Key rate ({key_rate_date}): {key_rate:.2f}%  Composite Z ({composite_z_date}): {z_str}  Age: {age}")
-    print(f"Rate-based stocks: {alloc['rate_stocks']:.2f}%  Age-based stocks: {alloc['age_stocks']:.2f}%  "
-          f"Base stocks: {alloc['base_stocks']:.2f}%")
-    print(f"Target stocks: {alloc['target_stocks']:.2f}%  "
+    print(f"Key rate ({key_rate_date}): {key_rate:.2f}%  Composite Z ({composite_z_date}): {z_str}")
+    print(f"Base stocks: {alloc['base_stocks']:.2f}%  Target stocks: {alloc['target_stocks']:.2f}%  "
           f"Target bonds: {alloc['target_bonds']:.2f}%  Signal: {alloc['signal']}")
     print(f"Saved {ALLOC_OUT_JSON_PATH}")
     print(f"Saved {ALLOC_OUT_CSV_PATH}")
