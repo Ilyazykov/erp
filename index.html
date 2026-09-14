@@ -43,6 +43,7 @@
   <div class="tab" data-tab="layer2a">ERP &amp; Stocks/Bonds Allocation</div>
   <div class="tab" data-tab="layer2r">Yield per Stock &amp; Rebalancing</div>
   <div class="tab" data-tab="usstocks">US Stocks Z-score</div>
+  <div class="tab" data-tab="userp">US ERP</div>
 </div>
 
 <div id="sigmoid" class="chart-wrap active"><div id="plot_sigmoid_amp" style="height:480px"></div>
@@ -146,6 +147,26 @@
   <span class="loading">Loading current values…</span>
 </p>
 <div id="us_targetweights_table_wrap"></div>
+</div>
+
+<div id="userp" class="chart-wrap"><div id="plot_us_erp" style="height:420px"></div>
+<p class="note">
+  <b>EXPERIMENTAL</b> — US market-wide Equity Risk Premium, using Robert Shiller's own
+  published <b>Excess CAPE Yield</b> (monthly, 1871–present, updated directly from his
+  maintained spreadsheet — not recomputed from this site's 37-ticker basket).
+  Excess CAPE Yield = (1 / CAPE) − real long-term interest rate, i.e. the S&amp;P 500's
+  cyclically-adjusted earnings yield minus the real 10-year rate — conceptually the same idea
+  as the Russian portfolio's Layer 1 (Portfolio EY − OFZ 10Y), just for the whole US market.
+  This is NOT the same figure as Damodaran's annual "Implied ERP" (a different, DCF-based
+  methodology) — both are reputable but not interchangeable.
+</p>
+<div id="plot_us_erp_z" style="height:420px; margin-top:8px"></div>
+<p class="note">
+  Z-score of Excess CAPE Yield vs its own 36-month rolling history (computed on the full
+  1871–present series; only 2019+ shown here). <b>Above +1.5</b> → stocks unusually cheap vs
+  (real) rates → historically a buy signal. <b>Below −1.5</b> → stocks unusually expensive vs
+  rates → historically a trim signal.
+</p>
 </div>
 
 <script>
@@ -308,6 +329,15 @@ function renderChart(id) {
         HLINE(-1.5, '#e05252', 'dot'),
       ]), CONFIG);
     Plotly.newPlot('plot_us_targetweights', DATA.usTargetWeights, DATA.usTargetWeightsLayout, CONFIG);
+  } else if (id === 'userp') {
+    Plotly.newPlot('plot_us_erp', DATA.usErp,
+      layoutWith('%', [HLINE(0, '#6a7381', 'dot')]), CONFIG);
+    Plotly.newPlot('plot_us_erp_z', DATA.usErpZChart,
+      layoutWith('Z-score', [
+        HLINE(0, '#6a7381', 'dot'),
+        HLINE(1.5, '#3dd68c', 'dot'),
+        HLINE(-1.5, '#e05252', 'dot'),
+      ]), CONFIG);
   } else if (id === 'sigmoid') {
     const layoutAmp = Object.assign({}, LAYOUT_BASE, {
       xaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', title: 'USD/RUB rate', range: DATA.sigmoidAxisRange },
@@ -362,7 +392,7 @@ async function loadLastUpdated() {
 }
 
 async function loadData() {
-  const [rows, eyRows, usdRubRows, usdRubStats, usdRub5yRows, targetWeightsData, targetAllocationData, vkcoRows, vkcoRevenueRows, vkcoPredicted, usZscoreRows, usTargetWeightsData] = await Promise.all([
+  const [rows, eyRows, usdRubRows, usdRubStats, usdRub5yRows, targetWeightsData, targetAllocationData, vkcoRows, vkcoRevenueRows, vkcoPredicted, usZscoreRows, usTargetWeightsData, usErpRows] = await Promise.all([
     fetchCsv(`${DATA_DIR}/composite_valuation.csv`),
     fetchCsv(`${DATA_DIR}/erp_portfolio.csv`),
     fetchCsv(`${DATA_DIR}/usd_rub_history.csv`),
@@ -375,6 +405,7 @@ async function loadData() {
     fetchJson(`${DATA_DIR}/vkco_revenue_predicted.json`),
     fetchCsv(`${DATA_DIR}/us_zscore.csv`),
     fetchJson(`${DATA_DIR}/us_target_weights.json`),
+    fetchCsv(`${DATA_DIR}/us_erp.csv`),
   ]);
 
   const dates = rows.map(r => r.date + '-01');
@@ -503,6 +534,25 @@ async function loadData() {
       { visible: i < 5 },
     );
   });
+
+  // US ERP — Shiller's Excess CAPE Yield + its own Z-score, both already
+  // computed in the CSV (Z-score uses the FULL 1871-present history; only
+  // CHART_START (2019+) is shown here to match the rest of the site).
+  const US_ERP_CHART_START = '2019-01';
+  const usErpFiltered = usErpRows.filter(r => r.date >= US_ERP_CHART_START);
+  const usErpDates = usErpFiltered.map(r => r.date + '-01');
+  const usErpYield = usErpFiltered.map(r => val(r.excess_cape_yield_pct));
+  const usErpZ = usErpFiltered.map(r => val(r.z_score));
+
+  const usErp = [
+    jsSeries(usErpDates, usErpYield, 'Excess CAPE Yield, %', '#f0b429', { width: 2 }),
+  ];
+
+  const usErpZChart = [
+    jsSeries(usErpDates, usErpZ, 'Z-score', '#3dd68c', { width: 2.5 }),
+    erpFill(usErpDates, usErpZ, true),
+    erpFill(usErpDates, usErpZ, false),
+  ];
 
   // US target weights donut — same geometry/formula as the Russian portfolio's
   // targetWeights chart above: angular width = base weight, radial extent =
@@ -1050,7 +1100,7 @@ async function loadData() {
 
   return { layer1, layer1_individual: layer1Individual, layer2_rebal: layer2Rebal,
            layer2_alloc: layer2Alloc, revYield, fcfYield, vkcoRevenueV2, usZscore,
-           usTargetWeights, usTargetWeightsLayout,
+           usTargetWeights, usTargetWeightsLayout, usErp, usErpZChart,
            sigmoidAmp, sigmoidAmpShapes, sigmoidAmpAnnotations, wCny5yCombined,
            targetWeights, targetWeightsLayout, allocTarget: allocTargetTrace, allocTargetLayout,
            sigmoidAxisRange: [axisMin, axisMax] };
