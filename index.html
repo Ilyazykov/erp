@@ -170,7 +170,15 @@
   Z-score of Shiller's Excess CAPE Yield vs its own 36-month rolling history (computed on the
   full 1871–present series). <b>Above +1.5</b> → stocks unusually cheap vs
   (real) rates → historically a buy signal. <b>Below −1.5</b> → stocks unusually expensive vs
-  rates → historically a trim signal.
+  rates → historically a trim signal. This is the Z-score that drives the allocation donut below.
+</p>
+<div id="plot_damodaran_z" style="height:340px; margin-top:8px"></div>
+<p class="note">
+  <b>INFORMATIONAL ONLY</b> — the same 36-month rolling Z-score, computed instead on
+  <b>Damodaran's Implied ERP (T12m)</b> and on its own (much shorter, 2008-09–present) history.
+  A second, independent read of the same "cheap vs expensive" question, using forward-looking
+  DCF assumptions rather than Shiller's backward-looking earnings yield — shown for comparison
+  only. It does <b>not</b> feed into the allocation donut below, which uses Shiller's Z-score only.
 </p>
 <div id="plot_us_alloc_target" style="height:420px; margin-top:8px"></div>
 <p class="note" id="us_alloc_target_note">
@@ -400,6 +408,16 @@ function renderChart(id) {
     Plotly.newPlot('plot_us_erp_z', DATA.usErpZChart, usErpZLayout, CONFIG);
     autoFitYOnXChange('plot_us_erp', DATA.usErp);
     autoFitYOnXChange('plot_us_erp_z', DATA.usErpZChart);
+    const damodaranZLayout = Object.assign({}, layoutWith('Z-score', [
+        HLINE(0, '#6a7381', 'dot'),
+        HLINE(1.5, '#3dd68c', 'dot'),
+        HLINE(-1.5, '#e05252', 'dot'),
+      ]), {
+      yaxis: Object.assign({}, LAYOUT_BASE.yaxis, {
+        title: 'Z-score', autorange: true, rangemode: 'normal',
+      }),
+    });
+    Plotly.newPlot('plot_damodaran_z', DATA.damodaranZChart, damodaranZLayout, CONFIG);
     Plotly.newPlot('plot_us_alloc_target', DATA.usAllocTarget, DATA.usAllocTargetLayout, CONFIG);
   } else if (id === 'sigmoid') {
     const layoutAmp = Object.assign({}, LAYOUT_BASE, {
@@ -628,6 +646,18 @@ async function loadData() {
     jsSeries(usErpDates, usErpZ, 'Z-score', '#3dd68c', { width: 2.5 }),
     erpFill(usErpDates, usErpZ, true),
     erpFill(usErpDates, usErpZ, false),
+  ];
+
+  // Damodaran's OWN Z-score (informational only -- NOT used to drive the
+  // allocation donut below, which stays driven by Shiller's Z-score). Uses
+  // Damodaran's own date axis (2008-09+), not Shiller's (1871+), since its
+  // history is much shorter.
+  const damodaranDates = damodaranErpRows.map(r => r.date + '-01');
+  const damodaranZ = damodaranErpRows.map(r => val(r.z_score));
+  const damodaranZChart = [
+    jsSeries(damodaranDates, damodaranZ, "Damodaran's Z-score", '#5b9bd5', { width: 2.5 }),
+    erpFill(damodaranDates, damodaranZ, true),
+    erpFill(damodaranDates, damodaranZ, false),
   ];
 
   // US target weights donut — same geometry/formula as the Russian portfolio's
@@ -1306,7 +1336,7 @@ async function loadData() {
 
   return { layer1, layer1_individual: layer1Individual, layer2_rebal: layer2Rebal,
            layer2_alloc: layer2Alloc, revYield, fcfYield, vkcoRevenueV2, usZscore,
-           usTargetWeights, usTargetWeightsLayout, usErp, usErpZChart, usErpDefaultRange,
+           usTargetWeights, usTargetWeightsLayout, usErp, usErpZChart, usErpDefaultRange, damodaranZChart,
            usAllocTarget: usAllocTargetTrace, usAllocTargetLayout,
            sigmoidAmp, sigmoidAmpShapes, sigmoidAmpAnnotations, wCny5yCombined,
            targetWeights, targetWeightsLayout, allocTarget: allocTargetTrace, allocTargetLayout,
