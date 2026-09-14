@@ -152,18 +152,22 @@
 <div id="userp" class="chart-wrap"><div id="plot_us_erp" style="height:420px"></div>
 <p class="note">
   <b>EXPERIMENTAL</b> — US market-wide Equity Risk Premium, using Robert Shiller's own
-  published <b>Excess CAPE Yield</b> (monthly, 1871–present, updated directly from his
+  published <b>Excess CAPE Yield</b> (solid, monthly, 1871–present, updated directly from his
   maintained spreadsheet — not recomputed from this site's 37-ticker basket).
   Excess CAPE Yield = (1 / CAPE) − real long-term interest rate, i.e. the S&amp;P 500's
   cyclically-adjusted earnings yield minus the real 10-year rate — conceptually the same idea
   as the Russian portfolio's Layer 1 (Portfolio EY − OFZ 10Y), just for the whole US market.
-  This is NOT the same figure as Damodaran's annual "Implied ERP" (a different, DCF-based
-  methodology) — both are reputable but not interchangeable.
+  This is NOT the same figure as <b>Damodaran's Implied ERP (FCFE)</b> (dotted line — a
+  different, DCF-based methodology): Damodaran only publishes this ANNUALLY, so the dotted
+  line simply holds the latest published year's value flat across all its months (a step
+  function, not real monthly data) — the same approach finobservatory.org's own "monthly" ERP
+  chart uses under the hood. Full history (1871–present) is loaded; drag the range slider below
+  the chart, or the box below it, to zoom into any period — it opens on the last 10 years.
 </p>
 <div id="plot_us_erp_z" style="height:420px; margin-top:8px"></div>
 <p class="note">
-  Z-score of Excess CAPE Yield vs its own 36-month rolling history (computed on the full
-  1871–present series; only 2019+ shown here). <b>Above +1.5</b> → stocks unusually cheap vs
+  Z-score of Shiller's Excess CAPE Yield vs its own 36-month rolling history (computed on the
+  full 1871–present series). <b>Above +1.5</b> → stocks unusually cheap vs
   (real) rates → historically a buy signal. <b>Below −1.5</b> → stocks unusually expensive vs
   rates → historically a trim signal.
 </p>
@@ -335,14 +339,24 @@ function renderChart(id) {
       ]), CONFIG);
     Plotly.newPlot('plot_us_targetweights', DATA.usTargetWeights, DATA.usTargetWeightsLayout, CONFIG);
   } else if (id === 'userp') {
-    Plotly.newPlot('plot_us_erp', DATA.usErp,
-      layoutWith('%', [HLINE(0, '#6a7381', 'dot')]), CONFIG);
-    Plotly.newPlot('plot_us_erp_z', DATA.usErpZChart,
-      layoutWith('Z-score', [
+    const usErpLayout = Object.assign({}, layoutWith('%', [HLINE(0, '#6a7381', 'dot')]), {
+      xaxis: Object.assign({}, LAYOUT_BASE.xaxis, {
+        rangeslider: { visible: true, thickness: 0.08 },
+        range: DATA.usErpDefaultRange,
+      }),
+    });
+    const usErpZLayout = Object.assign({}, layoutWith('Z-score', [
         HLINE(0, '#6a7381', 'dot'),
         HLINE(1.5, '#3dd68c', 'dot'),
         HLINE(-1.5, '#e05252', 'dot'),
-      ]), CONFIG);
+      ]), {
+      xaxis: Object.assign({}, LAYOUT_BASE.xaxis, {
+        rangeslider: { visible: true, thickness: 0.08 },
+        range: DATA.usErpDefaultRange,
+      }),
+    });
+    Plotly.newPlot('plot_us_erp', DATA.usErp, usErpLayout, CONFIG);
+    Plotly.newPlot('plot_us_erp_z', DATA.usErpZChart, usErpZLayout, CONFIG);
     Plotly.newPlot('plot_us_alloc_target', DATA.usAllocTarget, DATA.usAllocTargetLayout, CONFIG);
   } else if (id === 'sigmoid') {
     const layoutAmp = Object.assign({}, LAYOUT_BASE, {
@@ -398,7 +412,7 @@ async function loadLastUpdated() {
 }
 
 async function loadData() {
-  const [rows, eyRows, usdRubRows, usdRubStats, usdRub5yRows, targetWeightsData, targetAllocationData, vkcoRows, vkcoRevenueRows, vkcoPredicted, usZscoreRows, usTargetWeightsData, usErpRows, usTargetAllocationData] = await Promise.all([
+  const [rows, eyRows, usdRubRows, usdRubStats, usdRub5yRows, targetWeightsData, targetAllocationData, vkcoRows, vkcoRevenueRows, vkcoPredicted, usZscoreRows, usTargetWeightsData, usErpRows, usTargetAllocationData, damodaranErpRows] = await Promise.all([
     fetchCsv(`${DATA_DIR}/composite_valuation.csv`),
     fetchCsv(`${DATA_DIR}/erp_portfolio.csv`),
     fetchCsv(`${DATA_DIR}/usd_rub_history.csv`),
@@ -413,6 +427,7 @@ async function loadData() {
     fetchJson(`${DATA_DIR}/us_target_weights.json`),
     fetchCsv(`${DATA_DIR}/us_erp.csv`),
     fetchJson(`${DATA_DIR}/us_target_allocation.json`),
+    fetchCsv(`${DATA_DIR}/damodaran_erp.csv`),
   ]);
 
   const dates = rows.map(r => r.date + '-01');
@@ -542,17 +557,27 @@ async function loadData() {
     );
   });
 
-  // US ERP — Shiller's Excess CAPE Yield + its own Z-score, both already
-  // computed in the CSV (Z-score uses the FULL 1871-present history; only
-  // CHART_START (2019+) is shown here to match the rest of the site).
-  const US_ERP_CHART_START = '2019-01';
-  const usErpFiltered = usErpRows.filter(r => r.date >= US_ERP_CHART_START);
-  const usErpDates = usErpFiltered.map(r => r.date + '-01');
-  const usErpYield = usErpFiltered.map(r => val(r.excess_cape_yield_pct));
-  const usErpZ = usErpFiltered.map(r => val(r.z_score));
+  // US ERP — Shiller's Excess CAPE Yield + its own Z-score, both computed
+  // from the FULL 1871-present history stored in the CSV. The full range is
+  // plotted; use the chart's zoom/pan/range-slider to focus on a period.
+  const usErpDates = usErpRows.map(r => r.date + '-01');
+  const usErpYield = usErpRows.map(r => val(r.excess_cape_yield_pct));
+  const usErpZ = usErpRows.map(r => val(r.z_score));
+  // Default visible window is the last 10 years; the full 1871-present
+  // history is loaded and reachable via the range-slider/zoom below it.
+  const usErpDefaultRange = usErpDates.length
+    ? [usErpDates[Math.max(0, usErpDates.length - 121)], usErpDates[usErpDates.length - 1]]
+    : undefined;
+
+  // Damodaran's Implied ERP (FCFE) -- annual, stepped flat across months
+  // (matching finobservatory.org's own "monthly" line, which is pinned to
+  // the same latest annual figure, not independently observed each month).
+  const damodaranByDate = new Map(damodaranErpRows.map(r => [r.date, val(r.implied_erp_pct)]));
+  const damodaranYield = usErpRows.map(r => damodaranByDate.has(r.date) ? damodaranByDate.get(r.date) : null);
 
   const usErp = [
-    jsSeries(usErpDates, usErpYield, 'Excess CAPE Yield, %', '#f0b429', { width: 2 }),
+    jsSeries(usErpDates, usErpYield, "Shiller's Excess CAPE Yield, %", '#f0b429', { width: 2 }),
+    jsSeries(usErpDates, damodaranYield, "Damodaran's Implied ERP (FCFE), % — annual, stepped", '#5b9bd5', { width: 1.5, dash: 'dot' }),
   ];
 
   const usErpZChart = [
@@ -1240,7 +1265,7 @@ async function loadData() {
 
   return { layer1, layer1_individual: layer1Individual, layer2_rebal: layer2Rebal,
            layer2_alloc: layer2Alloc, revYield, fcfYield, vkcoRevenueV2, usZscore,
-           usTargetWeights, usTargetWeightsLayout, usErp, usErpZChart,
+           usTargetWeights, usTargetWeightsLayout, usErp, usErpZChart, usErpDefaultRange,
            usAllocTarget: usAllocTargetTrace, usAllocTargetLayout,
            sigmoidAmp, sigmoidAmpShapes, sigmoidAmpAnnotations, wCny5yCombined,
            targetWeights, targetWeightsLayout, allocTarget: allocTargetTrace, allocTargetLayout,
