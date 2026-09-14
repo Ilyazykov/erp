@@ -761,13 +761,16 @@ async function loadData() {
   const usAllocZStr = usTargetAllocationData.z !== null ? usTargetAllocationData.z.toFixed(2) : 'n/a';
   document.getElementById('us_alloc_target_note').innerHTML = `
     <b>EXPERIMENTAL</b> — same illustrative allocation donut as the Russian portfolio's, driven
-    by US inputs instead: base stock share from the <b>US Federal Funds Rate</b>
+    by US inputs instead: base stock share is a 50/50 blend of the <b>US Federal Funds Rate</b>
     (<code>w(r) = 100 / (1 + e^((r&minus;${usTargetAllocationData.key_rate_midpoint})/${usTargetAllocationData.key_rate_slope}))</code>,
     r = <span class="stat">${usTargetAllocationData.fed_rate.toFixed(2)}%</span>
-    as of ${usTargetAllocationData.fed_rate_date} → base = <span class="stat">${usTargetAllocationData.base_stocks.toFixed(1)}%</span> stocks;
+    as of ${usTargetAllocationData.fed_rate_date} → <span class="stat">${usTargetAllocationData.rate_stocks.toFixed(1)}%</span> stocks;
     note the formula's constants are calibrated for the CBR's 5–21% rate range, not the Fed's —
-    at the Fed's much lower rate this pins the base share near 100% stocks, which is expected,
-    not a bug), then the same Z-gated correction applied via the <b>US ERP Z-score</b>
+    at the Fed's much lower rate this pins the rate-based share near 100% stocks, which is expected,
+    not a bug) and an age-based glide path (bonds% = age &minus; 10, age = <span class="stat">${usTargetAllocationData.age}</span>
+    → <span class="stat">${usTargetAllocationData.age_stocks.toFixed(1)}%</span> stocks)
+    → base = <span class="stat">${usTargetAllocationData.base_stocks.toFixed(1)}%</span> stocks,
+    then the same Z-gated correction applied via the <b>US ERP Z-score</b>
     (<span class="stat">${usAllocZStr}</span>, ${usTargetAllocationData.signal}) →
     target = <span class="stat">${usTargetAllocationData.target_stocks.toFixed(1)}%</span> stocks /
     <span class="stat">${usTargetAllocationData.target_bonds.toFixed(1)}%</span> bonds.
@@ -1191,10 +1194,13 @@ async function loadData() {
 
   const allocZStr = targetAllocationData.z !== null ? targetAllocationData.z.toFixed(2) : 'n/a';
   document.getElementById('alloc_target_note').innerHTML = `
-    <b>Target allocation</b> — base stock share from the CBR key rate
+    <b>Target allocation</b> — base stock share is a 50/50 blend of the CBR key rate
     (<code>w(r) = 100 / (1 + e^((r&minus;${targetAllocationData.key_rate_midpoint})/${targetAllocationData.key_rate_slope}))</code>,
     r = <span class="stat">${targetAllocationData.key_rate.toFixed(2)}%</span>
-    as of ${targetAllocationData.key_rate_date} → base = <span class="stat">${targetAllocationData.base_stocks.toFixed(1)}%</span> stocks),
+    as of ${targetAllocationData.key_rate_date} → <span class="stat">${targetAllocationData.rate_stocks.toFixed(1)}%</span> stocks)
+    and an age-based glide path (bonds% = age &minus; 10, age = <span class="stat">${targetAllocationData.age}</span>
+    → <span class="stat">${targetAllocationData.age_stocks.toFixed(1)}%</span> stocks)
+    → base = <span class="stat">${targetAllocationData.base_stocks.toFixed(1)}%</span> stocks,
     then the same Z-gated correction as the ticker weights applied via Composite ERP Z
     (<span class="stat">${allocZStr}</span>, ${targetAllocationData.signal}) →
     target = <span class="stat">${targetAllocationData.target_stocks.toFixed(1)}%</span> stocks /

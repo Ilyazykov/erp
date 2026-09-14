@@ -29,6 +29,19 @@ Z_CORRECTION_K = 3.0  # scales sqrt(excess) -> pp correction
 MIN_BASE_FRACTION = 0.20
 SIGMOID_K = 20.0
 
+# Age-based glide path, applied identically to the RU and US stocks/bonds
+# allocation base share (independent of, and blended 50/50 with, the
+# rate-based base share -- see calc_target_weights.py / calc_us_allocation.py).
+# Rule: bonds% = age - AGE_BONDS_OFFSET (a more aggressive-in-stocks variant
+# of the classic "bonds% = age" rule of thumb), clamped to [0, 100].
+BIRTH_YEAR = 1991
+AGE_BONDS_OFFSET = 10
+
+
+def stock_share_from_age(age: float) -> float:
+    bonds_share = max(0.0, min(100.0, age - AGE_BONDS_OFFSET))
+    return 100.0 - bonds_share
+
 
 def signal(z: float | None) -> str:
     if z is None:
