@@ -167,6 +167,11 @@
   (real) rates → historically a buy signal. <b>Below −1.5</b> → stocks unusually expensive vs
   rates → historically a trim signal.
 </p>
+<div id="plot_us_alloc_target" style="height:420px; margin-top:8px"></div>
+<p class="note" id="us_alloc_target_note">
+  <span class="loading">Loading current allocation…</span>
+</p>
+<div id="us_alloc_target_table_wrap"></div>
 </div>
 
 <script>
@@ -338,6 +343,7 @@ function renderChart(id) {
         HLINE(1.5, '#3dd68c', 'dot'),
         HLINE(-1.5, '#e05252', 'dot'),
       ]), CONFIG);
+    Plotly.newPlot('plot_us_alloc_target', DATA.usAllocTarget, DATA.usAllocTargetLayout, CONFIG);
   } else if (id === 'sigmoid') {
     const layoutAmp = Object.assign({}, LAYOUT_BASE, {
       xaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', title: 'USD/RUB rate', range: DATA.sigmoidAxisRange },
@@ -392,7 +398,7 @@ async function loadLastUpdated() {
 }
 
 async function loadData() {
-  const [rows, eyRows, usdRubRows, usdRubStats, usdRub5yRows, targetWeightsData, targetAllocationData, vkcoRows, vkcoRevenueRows, vkcoPredicted, usZscoreRows, usTargetWeightsData, usErpRows] = await Promise.all([
+  const [rows, eyRows, usdRubRows, usdRubStats, usdRub5yRows, targetWeightsData, targetAllocationData, vkcoRows, vkcoRevenueRows, vkcoPredicted, usZscoreRows, usTargetWeightsData, usErpRows, usTargetAllocationData] = await Promise.all([
     fetchCsv(`${DATA_DIR}/composite_valuation.csv`),
     fetchCsv(`${DATA_DIR}/erp_portfolio.csv`),
     fetchCsv(`${DATA_DIR}/usd_rub_history.csv`),
@@ -406,6 +412,7 @@ async function loadData() {
     fetchCsv(`${DATA_DIR}/us_zscore.csv`),
     fetchJson(`${DATA_DIR}/us_target_weights.json`),
     fetchCsv(`${DATA_DIR}/us_erp.csv`),
+    fetchJson(`${DATA_DIR}/us_target_allocation.json`),
   ]);
 
   const dates = rows.map(r => r.date + '-01');
@@ -665,6 +672,133 @@ async function loadData() {
             <td class="${zCls}">${zStr}</td>
             <td class="${adjCls}">${adjStr}</td>
             <td>${r.target.toFixed(2)}%</td>
+            <td class="${deltaCls}">${deltaStr}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+
+  // US Stocks vs Bonds allocation donut — same formula/geometry as the
+  // Russian portfolio's allocation donut above, but driven by the US Fed
+  // Funds Rate (base) and the US ERP Z-score (correction) instead of the
+  // CBR key rate and composite_erp_z. Purely illustrative.
+  const US_ALLOC_COLORS = { Stocks: '#4da8c8', Bonds: '#f0b429' };
+  const usAllocBase = { Stocks: usTargetAllocationData.base_stocks, Bonds: usTargetAllocationData.base_bonds };
+  const usAllocTarget = { Stocks: usTargetAllocationData.target_stocks, Bonds: usTargetAllocationData.target_bonds };
+  const usAllocZ = { Stocks: usTargetAllocationData.z, Bonds: usTargetAllocationData.z };
+  const usAllocAdjustment = { Stocks: usTargetAllocationData.stocks_adjustment, Bonds: usTargetAllocationData.bonds_adjustment };
+  const usAllocNames = ['Stocks', 'Bonds'];
+  let usAllocCursor = 0;
+  const usAllocTheta = [];
+  const usAllocWidth = [];
+  usAllocNames.forEach(n => {
+    const width = usAllocBase[n] / 100 * 360;
+    usAllocTheta.push(usAllocCursor + width / 2);
+    usAllocWidth.push(width);
+    usAllocCursor += width;
+  });
+
+  const US_ALLOC_R_BASE = 100;
+  const usAllocRadial = usAllocNames.map(n => US_ALLOC_R_BASE * (usAllocTarget[n] / usAllocBase[n]));
+  const usAllocMaxR = Math.max(US_ALLOC_R_BASE, ...usAllocRadial);
+
+  const usAllocTargetTrace = [
+    {
+      type: 'barpolar',
+      r: usAllocRadial,
+      theta: usAllocTheta,
+      width: usAllocWidth,
+      name: 'Target (relative to Base)',
+      marker: {
+        color: usAllocNames.map(n => US_ALLOC_COLORS[n]),
+        opacity: 0.85,
+        line: { color: '#0d1117', width: 1 },
+      },
+      hovertemplate: usAllocNames.map(n => {
+        const diff = usAllocTarget[n] - usAllocBase[n];
+        const diffStr = (diff >= 0 ? '+' : '') + diff.toFixed(2);
+        return `${n}<br>Base: <b>${usAllocBase[n].toFixed(2)}%</b> (sector angle)<br>` +
+               `Target: <b>${usAllocTarget[n].toFixed(2)}%</b> (${diffStr} п.п.)<extra></extra>`;
+      }),
+    },
+    {
+      type: 'scatterpolar',
+      mode: 'lines',
+      r: Array.from({ length: 73 }, () => US_ALLOC_R_BASE),
+      theta: Array.from({ length: 73 }, (_, i) => i * 5),
+      line: { color: '#e6edf3', width: 1.5, dash: 'dot' },
+      name: 'Base (common reference circle)',
+      hoverinfo: 'skip',
+    },
+    {
+      type: 'scatterpolar',
+      mode: 'text',
+      r: usAllocNames.map(() => usAllocMaxR * 1.14),
+      theta: usAllocTheta,
+      text: usAllocNames,
+      textfont: { color: usAllocNames.map(n => US_ALLOC_COLORS[n]), size: 13 },
+      showlegend: false,
+      hoverinfo: 'skip',
+    },
+  ];
+
+  const usAllocTargetLayout = {
+    paper_bgcolor: '#0d1117',
+    plot_bgcolor: '#0d1117',
+    font: { color: '#c9d1d9', size: 11 },
+    polar: {
+      domain: { x: [0.15, 0.85], y: [0.05, 0.95] },
+      bgcolor: '#0d1117',
+      radialaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', range: [0, usAllocMaxR * 1.25], showticklabels: false, ticksuffix: '' },
+      angularaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', showticklabels: false, rotation: 90, direction: 'clockwise' },
+    },
+    showlegend: true,
+    legend: { bgcolor: '#13191f', bordercolor: '#1e2830', borderwidth: 1, x: 1, y: 1 },
+    margin: { t: 20, r: 20, b: 20, l: 20 },
+  };
+
+  const usAllocZStr = usTargetAllocationData.z !== null ? usTargetAllocationData.z.toFixed(2) : 'n/a';
+  document.getElementById('us_alloc_target_note').innerHTML = `
+    <b>EXPERIMENTAL</b> — same illustrative allocation donut as the Russian portfolio's, driven
+    by US inputs instead: base stock share from the <b>US Federal Funds Rate</b>
+    (<code>w(r) = 100 / (1 + e^((r&minus;${usTargetAllocationData.key_rate_midpoint})/${usTargetAllocationData.key_rate_slope}))</code>,
+    r = <span class="stat">${usTargetAllocationData.fed_rate.toFixed(2)}%</span>
+    as of ${usTargetAllocationData.fed_rate_date} → base = <span class="stat">${usTargetAllocationData.base_stocks.toFixed(1)}%</span> stocks;
+    note the formula's constants are calibrated for the CBR's 5–21% rate range, not the Fed's —
+    at the Fed's much lower rate this pins the base share near 100% stocks, which is expected,
+    not a bug), then the same Z-gated correction applied via the <b>US ERP Z-score</b>
+    (<span class="stat">${usAllocZStr}</span>, ${usTargetAllocationData.signal}) →
+    target = <span class="stat">${usTargetAllocationData.target_stocks.toFixed(1)}%</span> stocks /
+    <span class="stat">${usTargetAllocationData.target_bonds.toFixed(1)}%</span> bonds.
+    No real allocation happens from this.<br>
+    Data as of ${usTargetAllocationData.date} (updated ${usTargetAllocationData.updated}).
+  `;
+
+  const usAllocTableRows = usAllocNames.slice().sort((a, b) => usAllocTarget[b] - usAllocTarget[a]);
+  document.getElementById('us_alloc_target_table_wrap').innerHTML = `
+    <table class="data-table">
+      <thead><tr>
+        <th>Category</th><th>Fed Rate</th><th>Base</th><th>Z-score</th><th>Adjustment</th><th>Target</th><th>&Delta; vs Base</th>
+      </tr></thead>
+      <tbody>
+        ${usAllocTableRows.map(n => {
+          const z = usAllocZ[n];
+          const zStr = z !== null ? (z >= 0 ? '+' : '') + z.toFixed(2) : '—';
+          const zCls = z === null ? 'muted' : (z > 1.5 ? 'pos' : (z < -1.5 ? 'neg' : 'muted'));
+          const adj = usAllocAdjustment[n];
+          const adjStr = adj !== null ? (adj >= 0 ? '+' : '') + adj.toFixed(2) + ' pp' : '—';
+          const delta = usAllocTarget[n] - usAllocBase[n];
+          const deltaStr = (delta >= 0 ? '+' : '') + delta.toFixed(2) + ' pp';
+          const deltaCls = delta > 0.05 ? 'pos' : (delta < -0.05 ? 'neg' : 'muted');
+          const adjCls = adj === null ? 'muted' : (adj > 0 ? 'pos' : (adj < 0 ? 'neg' : 'muted'));
+          return `<tr>
+            <td class="ticker" style="color:${US_ALLOC_COLORS[n]}">${n}</td>
+            <td>${usTargetAllocationData.fed_rate.toFixed(2)}%</td>
+            <td>${usAllocBase[n].toFixed(1)}%</td>
+            <td class="${zCls}">${zStr}</td>
+            <td class="${adjCls}">${adjStr}</td>
+            <td>${usAllocTarget[n].toFixed(1)}%</td>
             <td class="${deltaCls}">${deltaStr}</td>
           </tr>`;
         }).join('')}
@@ -1101,6 +1235,7 @@ async function loadData() {
   return { layer1, layer1_individual: layer1Individual, layer2_rebal: layer2Rebal,
            layer2_alloc: layer2Alloc, revYield, fcfYield, vkcoRevenueV2, usZscore,
            usTargetWeights, usTargetWeightsLayout, usErp, usErpZChart,
+           usAllocTarget: usAllocTargetTrace, usAllocTargetLayout,
            sigmoidAmp, sigmoidAmpShapes, sigmoidAmpAnnotations, wCny5yCombined,
            targetWeights, targetWeightsLayout, allocTarget: allocTargetTrace, allocTargetLayout,
            sigmoidAxisRange: [axisMin, axisMax] };

@@ -44,6 +44,12 @@ jobs:
       - name: Update US market-wide ERP (Shiller's Excess CAPE Yield)
         run: python erp_valuation/us_erp.py
 
+      - name: Update US Federal Funds Rate
+        run: python erp_valuation/fetch_fed_funds_rate.py
+
+      - name: Update US stocks/bonds allocation (not part of the portfolio)
+        run: python erp_valuation/calc_us_allocation.py
+
       - name: Commit and push changes
         run: |
           git config user.name "github-actions[bot]"
