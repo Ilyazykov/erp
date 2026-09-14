@@ -232,6 +232,40 @@ function erpFill(dates, values, above) {
   };
 }
 
+// Recomputes the Y range from only the data visible in the current X window
+// whenever that window changes (zoom, pan, or range-slider drag) -- Plotly's
+// yaxis.autorange only fits the FULL trace data on initial draw, so without
+// this a chart spanning a century-plus of history (e.g. US ERP, 1871-2026)
+// stays scaled to a rare historical outlier even after zooming into a recent
+// decade with much smaller values.
+function autoFitYOnXChange(divId, traces) {
+  const el = document.getElementById(divId);
+  let guard = false;
+  el.on('plotly_relayout', (ev) => {
+    if (guard) return;
+    const x0 = ev['xaxis.range[0]'] || (ev['xaxis.range'] && ev['xaxis.range'][0]);
+    const x1 = ev['xaxis.range[1]'] || (ev['xaxis.range'] && ev['xaxis.range'][1]);
+    if (!x0 || !x1) return; // not an x-range change (e.g. autosize, legend click)
+    const lo = new Date(x0).getTime();
+    const hi = new Date(x1).getTime();
+    let yMin = Infinity, yMax = -Infinity;
+    for (const t of traces) {
+      if (!t.x || !t.y) continue;
+      for (let i = 0; i < t.x.length; i++) {
+        const xt = new Date(t.x[i]).getTime();
+        const yv = t.y[i];
+        if (yv === null || yv === undefined || xt < lo || xt > hi) continue;
+        if (yv < yMin) yMin = yv;
+        if (yv > yMax) yMax = yv;
+      }
+    }
+    if (!isFinite(yMin) || !isFinite(yMax)) return;
+    const pad = (yMax - yMin) * 0.08 || 1;
+    guard = true;
+    Plotly.relayout(divId, { 'yaxis.range': [yMin - pad, yMax + pad] }).then(() => { guard = false; });
+  });
+}
+
 function wCny(x, m) {
   return 0.20 + 0.60 / (1 + Math.exp(15 * (x - m) / m));
 }
@@ -345,6 +379,9 @@ function renderChart(id) {
         rangeslider: { visible: true, thickness: 0.08 },
         range: DATA.usErpDefaultRange,
       }),
+      yaxis: Object.assign({}, LAYOUT_BASE.yaxis, {
+        title: '%', autorange: true, rangemode: 'normal',
+      }),
     });
     const usErpZLayout = Object.assign({}, layoutWith('Z-score', [
         HLINE(0, '#6a7381', 'dot'),
@@ -355,9 +392,14 @@ function renderChart(id) {
         rangeslider: { visible: true, thickness: 0.08 },
         range: DATA.usErpDefaultRange,
       }),
+      yaxis: Object.assign({}, LAYOUT_BASE.yaxis, {
+        title: 'Z-score', autorange: true, rangemode: 'normal',
+      }),
     });
     Plotly.newPlot('plot_us_erp', DATA.usErp, usErpLayout, CONFIG);
     Plotly.newPlot('plot_us_erp_z', DATA.usErpZChart, usErpZLayout, CONFIG);
+    autoFitYOnXChange('plot_us_erp', DATA.usErp);
+    autoFitYOnXChange('plot_us_erp_z', DATA.usErpZChart);
     Plotly.newPlot('plot_us_alloc_target', DATA.usAllocTarget, DATA.usAllocTargetLayout, CONFIG);
   } else if (id === 'sigmoid') {
     const layoutAmp = Object.assign({}, LAYOUT_BASE, {
