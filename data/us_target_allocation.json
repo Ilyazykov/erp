@@ -1,6 +1,6 @@
 {
   "date": "2026-09-14",
-  "updated": "2026-09-14 03:19:52 UTC",
+  "updated": "2026-09-14 03:34:24 UTC",
   "z_threshold": 1.5,
   "key_rate_midpoint": 10.322,
   "key_rate_slope": 2.531,
@@ -10,13 +10,13 @@
   "birth_year": 1991,
   "age": 35,
   "rate_stocks": 93.3641,
-  "age_stocks": 75.0,
-  "base_stocks": 84.1821,
-  "base_bonds": 15.8179,
+  "age_stocks": 70.0,
+  "base_stocks": 81.6821,
+  "base_bonds": 18.3179,
   "z": -2.3686,
   "signal": "trim",
   "stocks_adjustment": -3.7563,
   "bonds_adjustment": 3.7562571609682465,
-  "target_stocks": 80.4258,
-  "target_bonds": 19.5742
+  "target_stocks": 77.9258,
+  "target_bonds": 22.0742
 }

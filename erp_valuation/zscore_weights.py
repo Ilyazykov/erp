@@ -45,7 +45,7 @@ ALLOC_SIGMOID_K = 4.4
 # Rule: bonds% = age - AGE_BONDS_OFFSET (a more aggressive-in-stocks variant
 # of the classic "bonds% = age" rule of thumb), clamped to [0, 100].
 BIRTH_YEAR = 1991
-AGE_BONDS_OFFSET = 10
+AGE_BONDS_OFFSET = 5
 
 
 def stock_share_from_age(age: float) -> float:
