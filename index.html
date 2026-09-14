@@ -157,12 +157,13 @@
   Excess CAPE Yield = (1 / CAPE) − real long-term interest rate, i.e. the S&amp;P 500's
   cyclically-adjusted earnings yield minus the real 10-year rate — conceptually the same idea
   as the Russian portfolio's Layer 1 (Portfolio EY − OFZ 10Y), just for the whole US market.
-  This is NOT the same figure as <b>Damodaran's Implied ERP (FCFE)</b> (dotted line — a
-  different, DCF-based methodology): Damodaran only publishes this ANNUALLY, so the dotted
-  line simply holds the latest published year's value flat across all its months (a step
-  function, not real monthly data) — the same approach finobservatory.org's own "monthly" ERP
-  chart uses under the hood. Full history (1871–present) is loaded; drag the range slider below
-  the chart, or the box below it, to zoom into any period — it opens on the last 10 years.
+  This is NOT the same figure as <b>Damodaran's Implied ERP (T12m)</b> (dotted line — a
+  different, DCF-based methodology): a genuine monthly series Damodaran has recomputed and
+  published every month since September 2008, using trailing-12-month dividends + buybacks
+  against the current S&amp;P 500 level and Treasury rate (i.e. NOT his once-a-year headline
+  figure held flat — it moves every month on its own data). Full Shiller history (1871–present)
+  is loaded; drag the range slider below the chart, or the box below it, to zoom into any
+  period — it opens on the last 10 years (Damodaran's series only goes back to 2008-09).
 </p>
 <div id="plot_us_erp_z" style="height:420px; margin-top:8px"></div>
 <p class="note">
@@ -569,15 +570,16 @@ async function loadData() {
     ? [usErpDates[Math.max(0, usErpDates.length - 121)], usErpDates[usErpDates.length - 1]]
     : undefined;
 
-  // Damodaran's Implied ERP (FCFE) -- annual, stepped flat across months
-  // (matching finobservatory.org's own "monthly" line, which is pinned to
-  // the same latest annual figure, not independently observed each month).
-  const damodaranByDate = new Map(damodaranErpRows.map(r => [r.date, val(r.implied_erp_pct)]));
+  // Damodaran's ERP (T12m) -- his own genuine monthly series (recomputed
+  // every month since Sept 2008 from trailing-12-month dividends+buybacks
+  // vs the current S&P 500 level and Treasury rate), NOT a step function
+  // of his annual figure -- see damodaran_erp.py's docstring.
+  const damodaranByDate = new Map(damodaranErpRows.map(r => [r.date, val(r.implied_erp_t12m_pct)]));
   const damodaranYield = usErpRows.map(r => damodaranByDate.has(r.date) ? damodaranByDate.get(r.date) : null);
 
   const usErp = [
     jsSeries(usErpDates, usErpYield, "Shiller's Excess CAPE Yield, %", '#f0b429', { width: 2 }),
-    jsSeries(usErpDates, damodaranYield, "Damodaran's Implied ERP (FCFE), % — annual, stepped", '#5b9bd5', { width: 1.5, dash: 'dot' }),
+    jsSeries(usErpDates, damodaranYield, "Damodaran's Implied ERP (T12m), %", '#5b9bd5', { width: 1.5, dash: 'dot' }),
   ];
 
   const usErpZChart = [

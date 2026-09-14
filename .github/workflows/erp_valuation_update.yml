@@ -44,7 +44,7 @@ jobs:
       - name: Update US market-wide ERP (Shiller's Excess CAPE Yield)
         run: python erp_valuation/us_erp.py
 
-      - name: Update Damodaran's Implied ERP (annual, stepped monthly)
+      - name: Update Damodaran's Implied ERP (T12m, genuine monthly series)
         run: python erp_valuation/damodaran_erp.py
 
       - name: Update US Federal Funds Rate

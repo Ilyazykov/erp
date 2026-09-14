@@ -1,23 +1,28 @@
 """
-Damodaran's annual Implied ERP (FCFE), stepped across months for direct
-visual comparison against Shiller's Excess CAPE Yield on the US ERP tab.
+Damodaran's genuine monthly Implied ERP -- "ERP (T12m)" -- for direct visual
+comparison against Shiller's Excess CAPE Yield on the US ERP tab.
 
-There is no independently-published MONTHLY Implied ERP series from
-Damodaran -- his own site only publishes an ANNUAL figure (histimpl.xls,
-updated once a year). finobservatory.org's "Monthly, ERP (T12m)" chart is
-not independent monthly data either: it reuses the latest annual figure
-unchanged for every month until the next annual update (confirmed: their
-2026-08 "monthly" value equals the 2025 annual value exactly). This script
-reproduces that same step-function approach explicitly, rather than
-inventing a different one -- see the module's row construction below.
+NOTE (correcting an earlier version of this script): Damodaran's official
+*annual* spreadsheet (histimpl.xls) is NOT the right source for a monthly
+comparison -- an earlier version of this script stepped that annual figure
+flat across months, which does not match Damodaran's own real monthly
+series and reads as a staircase rather than the genuinely-varying line his
+own data shows. Damodaran in fact recomputes and republishes ERP every
+month (since September 2008), using trailing-twelve-month dividends +
+buybacks against the current S&P 500 level and Treasury rate -- see his
+blog post "The Price of Risk: An Equity Risk Premium Monologue!"
+(aswathdamodaran.blogspot.com): "Rather than compute the implied equity
+risk premium at the start of every year... I shifted to computing the
+equity risk premium for the S&P 500 at the start of every month, in
+September 2008." This script reads that genuine monthly series directly.
 
 Source (no auth required): Damodaran's own NYU Stern page
-    https://pages.stern.nyu.edu/~adamodar/pc/datasets/histimpl.xls
-    ("Historical Impl Premiums" sheet; "Implied ERP (FCFE)" column, one row
-    per year, latest year = latest available annual figure)
+    https://pages.stern.nyu.edu/~adamodar/pc/implprem/ERPbymonth.xlsx
+    ("Historical ERP" sheet; "ERP (T12m)" column, one row per month,
+    2008-09-present)
 
 Outputs:
-    data/damodaran_erp.csv   (date [YYYY-MM, stepped monthly], year, implied_erp_pct)
+    data/damodaran_erp.csv   (date [YYYY-MM], implied_erp_t12m_pct)
 
 Run:
     python erp_valuation/damodaran_erp.py
@@ -26,103 +31,68 @@ from __future__ import annotations
 
 import csv
 import urllib.request
-from datetime import date
 from pathlib import Path
 
-import xlrd
+import openpyxl
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = REPO_ROOT / "data"
 OUT_PATH = DATA_DIR / "damodaran_erp.csv"
 
-DAMODARAN_URL = "https://pages.stern.nyu.edu/~adamodar/pc/datasets/histimpl.xls"
-SHEET_NAME = "Historical Impl Premiums"
-YEAR_COL = 0
-IMPLIED_ERP_FCFE_COL = 15
+DAMODARAN_URL = "https://pages.stern.nyu.edu/~adamodar/pc/implprem/ERPbymonth.xlsx"
+SHEET_NAME = "Historical ERP"
+DATE_COL = 1  # "Start of month"
+ERP_T12M_COL = 10  # "ERP (T12m)" -- distinct from "ERP (Smoothed)"/"ERP (Normalized)"/etc.
 
 
-def fetch_damodaran_xls() -> bytes:
+def fetch_damodaran_xlsx() -> bytes:
     headers = {"User-Agent": "curl/8.0"}
     req = urllib.request.Request(DAMODARAN_URL, headers=headers)
     with urllib.request.urlopen(req, timeout=30) as r:
         return r.read()
 
 
-def parse_annual_implied_erp(xls_bytes: bytes) -> list[tuple[int, float]]:
-    """Returns list of (year, implied_erp_fraction), sorted by year."""
-    wb = xlrd.open_workbook(file_contents=xls_bytes)
-    sheet = wb.sheet_by_name(SHEET_NAME)
+def parse_monthly_erp(xlsx_bytes: bytes) -> list[dict]:
+    """Returns list of {date (YYYY-MM), implied_erp_t12m_pct}, sorted by date."""
+    tmp_path = DATA_DIR / "_damodaran_erp_tmp.xlsx"
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_path.write_bytes(xlsx_bytes)
+    try:
+        wb = openpyxl.load_workbook(tmp_path, data_only=True)
+        sheet = wb[SHEET_NAME]
 
-    rows = []
-    for r in range(sheet.nrows):
-        year_val = sheet.cell_value(r, YEAR_COL)
-        if not isinstance(year_val, float):
-            continue
-        year = int(year_val)
-        if year < 1900:
-            continue
-        erp_val = sheet.cell_value(r, IMPLIED_ERP_FCFE_COL)
-        if not isinstance(erp_val, float):
-            continue
-        rows.append((year, erp_val))
-    rows.sort(key=lambda x: x[0])
-    return rows
-
-
-def step_to_monthly(annual: list[tuple[int, float]], through: date) -> list[dict]:
-    """Reproduces finobservatory's step-function: each month's value equals
-    the most recently published annual figure at that point in time, held
-    flat until the next annual update. Only emits months from the first
-    available annual year through `through` (today, by default)."""
-    if not annual:
-        return []
-
-    by_year = dict(annual)
-    first_year = annual[0][0]
-    last_year = annual[-1][0]
-
-    out = []
-    year, month = first_year, 1
-    while (year, month) <= (through.year, through.month):
-        # The figure for `year` isn't published until some point during
-        # that year (Damodaran typically publishes in early January for
-        # the prior year); we approximate "current annual figure" as the
-        # latest year <= this year that has data, matching finobservatory's
-        # pinned-to-latest-annual behavior.
-        available_year = year if year in by_year else max(
-            (y for y in by_year if y <= year), default=None
-        )
-        if available_year is not None:
-            out.append({
-                "date": f"{year:04d}-{month:02d}",
-                "year": available_year,
-                "implied_erp_pct": round(by_year[available_year] * 100, 4),
+        rows = []
+        for r in range(2, sheet.max_row + 1):
+            date_val = sheet.cell(row=r, column=DATE_COL).value
+            erp_val = sheet.cell(row=r, column=ERP_T12M_COL).value
+            if date_val is None or erp_val is None:
+                continue
+            if not isinstance(erp_val, (int, float)):
+                continue
+            rows.append({
+                "date": f"{date_val.year:04d}-{date_val.month:02d}",
+                "implied_erp_t12m_pct": round(erp_val * 100, 4),
             })
-        month += 1
-        if month > 12:
-            month = 1
-            year += 1
-    return out
+        rows.sort(key=lambda x: x["date"])
+        return rows
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def main() -> int:
-    print("Fetching Damodaran's histimpl.xls (Implied ERP, annual)...")
-    xls_bytes = fetch_damodaran_xls()
-    annual = parse_annual_implied_erp(xls_bytes)
-    print(f"  Parsed {len(annual)} annual rows ({annual[0][0]} to {annual[-1][0]})")
+    print("Fetching Damodaran's ERPbymonth.xlsx (ERP T12m, monthly)...")
+    xlsx_bytes = fetch_damodaran_xlsx()
+    rows = parse_monthly_erp(xlsx_bytes)
+    print(f"  Parsed {len(rows)} monthly rows ({rows[0]['date']} to {rows[-1]['date']})")
 
-    monthly_rows = step_to_monthly(annual, date.today())
-
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
     with OUT_PATH.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["date", "year", "implied_erp_pct"])
+        w = csv.DictWriter(f, fieldnames=["date", "implied_erp_t12m_pct"])
         w.writeheader()
-        w.writerows(monthly_rows)
+        w.writerows(rows)
 
     print(f"Saved {OUT_PATH}")
-    print(f"Total rows: {len(monthly_rows)}")
-    last = monthly_rows[-1]
-    print(f"Latest ({last['date']}, pinned to annual {last['year']}): Implied ERP (FCFE) = {last['implied_erp_pct']}%")
+    last = rows[-1]
+    print(f"Latest ({last['date']}): ERP (T12m) = {last['implied_erp_t12m_pct']}%")
     return 0
 
 
