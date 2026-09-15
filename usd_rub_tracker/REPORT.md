@@ -1,10 +1,10 @@
 # USD/RUB Weight Report
 
-**Date:** 2026-09-14
-**Updated:** 2026-09-14 18:03:09 UTC
+**Date:** 2026-09-15
+**Updated:** 2026-09-15 16:51:00 UTC
 
-- Current USD/RUB rate (x): **84.3363**
-- 365-day average USD/RUB rate (m): **78.6751**
+- Current USD/RUB rate (x): **84.2362**
+- 365-day average USD/RUB rate (m): **78.6708**
 - w_CNY(x): **35%**
 - w_RUB(x): **65%**
 
