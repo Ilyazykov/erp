@@ -1,31 +1,31 @@
 {
-  "date": "2026-09-16",
-  "updated": "2026-09-16 17:10:34 UTC",
+  "date": "2026-09-17",
+  "updated": "2026-09-17 17:10:13 UTC",
   "z_threshold": 1.5,
   "weights": [
     {
       "ticker": "SBER",
       "base": 40,
-      "z": 2.1148,
+      "z": 2.3464,
       "signal": "buy",
-      "adjustment": 2.3523,
-      "target": 36.1784
+      "adjustment": 2.76,
+      "target": 36.1201
     },
     {
       "ticker": "YDEX",
       "base": 24,
-      "z": 2.056,
+      "z": 2.1976,
       "signal": "buy",
-      "adjustment": 2.237,
-      "target": 22.4123
+      "adjustment": 2.5057,
+      "target": 22.3898
     },
     {
       "ticker": "T",
       "base": 14,
-      "z": 2.1916,
+      "z": 2.3575,
       "signal": "buy",
-      "adjustment": 2.4949,
-      "target": 14.0903
+      "adjustment": 2.778,
+      "target": 14.1727
     },
     {
       "ticker": "DOMRF",
@@ -33,7 +33,7 @@
       "z": null,
       "signal": "n/a",
       "adjustment": null,
-      "target": 5.9796
+      "target": 5.913
     },
     {
       "ticker": "TRND",
@@ -41,15 +41,15 @@
       "z": null,
       "signal": "n/a",
       "adjustment": null,
-      "target": 4.2711
+      "target": 4.2236
     },
     {
       "ticker": "OZON",
       "base": 2,
-      "z": 2.8797,
+      "z": 2.8102,
       "signal": "buy",
-      "adjustment": 3.5238,
-      "target": 4.7186
+      "adjustment": 3.4339,
+      "target": 4.5901
     },
     {
       "ticker": "AKME",
@@ -57,7 +57,7 @@
       "z": null,
       "signal": "n/a",
       "adjustment": null,
-      "target": 1.7084
+      "target": 1.6894
     },
     {
       "ticker": "AKFN",
@@ -65,47 +65,47 @@
       "z": null,
       "signal": "n/a",
       "adjustment": null,
-      "target": 0.8542
+      "target": 0.8447
     },
     {
       "ticker": "ROSN",
       "base": 1,
-      "z": -1.1173,
+      "z": -0.9713,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 0.8542
+      "target": 0.8447
     },
     {
       "ticker": "VTBR",
       "base": 1,
-      "z": 1.8974,
+      "z": 1.9982,
       "signal": "buy",
-      "adjustment": 1.8912,
-      "target": 2.4697
+      "adjustment": 2.1175,
+      "target": 2.6334
     },
     {
       "ticker": "GMKN",
       "base": 1,
-      "z": 0.6225,
+      "z": 0.6405,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 0.8542
+      "target": 0.8447
     },
     {
       "ticker": "PLZL",
       "base": 1,
-      "z": 3.8166,
+      "z": 4.0469,
       "signal": "buy",
-      "adjustment": 4.5661,
-      "target": 4.7547
+      "adjustment": 4.7877,
+      "target": 4.889
     },
     {
       "ticker": "IRAO",
       "base": 1,
-      "z": 1.1325,
+      "z": 1.2117,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 0.8542
+      "target": 0.8447
     }
   ]
 }
