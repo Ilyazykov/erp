@@ -269,6 +269,17 @@ type TickerClass = 'moex_ofz' | 'moex_bond' | 'moex_share_or_etf_or_other' | 'cr
 // USD value without any special-casing in the `portfolio_value_usd` view.
 const RUB_DEPOSIT_PREFIX = 'ВКЛАД:';
 
+// MOEX-listed bond/money-market ETFs (BPIFs) whose holdings are bonds/cash
+// instruments, not equities -- but which the generic MOEX group classifier
+// (stock_ppif) can't distinguish from an equity ETF like AKME/AKFN/TRND,
+// since MOEX's API only exposes an instrument-type code, not the fund's
+// underlying asset class. User-confirmed list (from their broker's own
+// bond-portfolio breakdown) rather than guessed from fund names, since
+// name-based heuristics (e.g. matching "облигации") miss cases like SBBY
+// ("БПИФ Фонд Инструменты в юанях" -- no "bond" in the name at all, but
+// it's a bond fund) and would need constant upkeep as new funds list.
+const MOEX_BOND_ETF_TICKERS = new Set(['TBRU', 'SAFE', 'SBMM', 'AKMB', 'AKMM', 'TLCB', 'SBBY']);
+
 function classifyTicker(ticker: string): TickerClass {
   const t = ticker.toUpperCase();
   if (t.startsWith(RUB_DEPOSIT_PREFIX)) return 'rub_deposit';
@@ -477,7 +488,8 @@ async function fetchMoexPrices(tickers: string[]): Promise<Record<string, MoexRe
   log(`MOEX: batch share/ETF lookup for ${tickers.length} candidates...`);
   const shareHits = await moexFetchSharesBatch(tickers);
   for (const [t, info] of Object.entries(shareHits)) {
-    results[t] = { ...info, secid: t, asset_class: 'moex_share_or_etf' };
+    const assetClass = MOEX_BOND_ETF_TICKERS.has(t.toUpperCase()) ? 'moex_bond_etf' : 'moex_share_or_etf';
+    results[t] = { ...info, secid: t, asset_class: assetClass };
   }
   const remaining = tickers.filter((t) => !(t in results));
 
@@ -522,7 +534,8 @@ async function fetchMoexPrices(tickers: string[]): Promise<Record<string, MoexRe
         log(`  ${ticker}: MOEX security found (${secid}) but no market data on any board`);
         continue;
       }
-      results[ticker] = { ...hit[secid], secid, asset_class: 'moex_share_or_etf' };
+      const assetClass = MOEX_BOND_ETF_TICKERS.has(ticker.toUpperCase()) ? 'moex_bond_etf' : 'moex_share_or_etf';
+      results[ticker] = { ...hit[secid], secid, asset_class: assetClass };
     } else {
       log(`  ${ticker}: MOEX group '${group}' not handled, skipping`);
     }

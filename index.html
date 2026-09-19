@@ -1780,9 +1780,14 @@ async function mpRenderPortfolioPies() {
     })), ruStockTotal);
 
   // 3. Russian stocks vs Russian bonds: target from the ERP & Stocks/Bonds
-  //    Allocation tab's own base/target allocation.
+  //    Allocation tab's own base/target allocation. "Stocks" is the same
+  //    10-ticker target list as chart 2 (ruStockTotal) -- NOT every MOEX
+  //    share/ETF held. "Bonds" includes both plain bonds/OFZ and bond/
+  //    money-market ETFs (asset_class 'moex_bond_etf', e.g. TBRU/SAFE/
+  //    SBMM/AKMB/AKMM/TLCB/SBBY -- user-confirmed list, see
+  //    MOEX_BOND_ETF_TICKERS in the update-market-prices function).
   const ruBondsCurrent = priced
-    .filter(r => r.asset_class === 'moex_bond' || r.asset_class === 'moex_ofz')
+    .filter(r => r.asset_class === 'moex_bond' || r.asset_class === 'moex_ofz' || r.asset_class === 'moex_bond_etf')
     .reduce((s, r) => s + r.value_usd, 0);
   const allocRaw = DATA.ruAllocTargetRaw;
   if (allocRaw) {
@@ -1796,7 +1801,8 @@ async function mpRenderPortfolioPies() {
   // 4. RUB vs non-RUB bonds/deposits: target from the current w_CNY sigmoid
   //    value (the same figure driving the USD/RUB → CNY Weight chart above).
   const bondDepositRows = priced.filter(
-    r => r.asset_class === 'moex_bond' || r.asset_class === 'moex_ofz' || r.asset_class === 'rub_deposit',
+    r => r.asset_class === 'moex_bond' || r.asset_class === 'moex_ofz' ||
+         r.asset_class === 'moex_bond_etf' || r.asset_class === 'rub_deposit',
   );
   const rubCurrent = bondDepositRows.filter(r => r.currency === 'RUB').reduce((s, r) => s + r.value_usd, 0);
   const nonRubCurrent = bondDepositRows.filter(r => r.currency !== 'RUB').reduce((s, r) => s + r.value_usd, 0);
