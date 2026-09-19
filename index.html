@@ -82,9 +82,10 @@
   trailing 365-day average USD/RUB rate as of that day. <b>Cyan</b> — original fixed-k formula.
   <b>Purple</b> — volatility-amplified formula. USD/RUB rate overlaid on the right axis.
 </p>
+<h3 class="section-title" id="mp_pie_deposits_title" style="display:none">Your current portfolio — bonds &amp; deposits, RUB vs non-RUB</h3>
 <div id="plot_mp_pie_deposits" style="height:420px; max-width:520px; margin:8px auto 0; display:none"></div>
 <p class="note" id="mp_pie_deposits_note" style="display:none">
-  From your imported portfolio (My Portfolio tab): RUB-denominated bonds/deposits vs
+  Based on the trades you imported in the My Portfolio tab: RUB-denominated bonds/deposits vs
   non-RUB (CNY/USD/other currency) bonds/deposits, by current USD value.
 </p>
 </div>
@@ -106,10 +107,11 @@
   <span class="loading">Loading current allocation…</span>
 </p>
 <div id="alloc_target_table_wrap"></div>
+<h3 class="section-title" id="mp_pie_stocksbonds_title" style="display:none">Your current portfolio — stocks vs bonds</h3>
 <div id="plot_mp_pie_stocksbonds" style="height:420px; max-width:520px; margin:8px auto 0; display:none"></div>
 <p class="note" id="mp_pie_stocksbonds_note" style="display:none">
-  From your imported portfolio (My Portfolio tab): total Russian stocks vs total Russian
-  bonds, by current USD value.
+  Based on the trades you imported in the My Portfolio tab: total Russian stocks vs total
+  Russian bonds, by current USD value.
 </p>
 </div>
 
@@ -158,10 +160,11 @@
   <span class="loading">Loading current values…</span>
 </p>
 <div id="targetweights_table_wrap"></div>
+<h3 class="section-title" id="mp_pie_ru_stocks_title" style="display:none">Your current portfolio — Russian stocks breakdown</h3>
 <div id="plot_mp_pie_ru_stocks" style="height:420px; max-width:520px; margin:8px auto 0; display:none"></div>
 <p class="note" id="mp_pie_ru_stocks_note" style="display:none">
-  From your imported portfolio (My Portfolio tab): breakdown across the 10 Russian stocks
-  in this portfolio's target list, by current USD value.
+  Based on the trades you imported in the My Portfolio tab: breakdown across the 10 Russian
+  stocks in this portfolio's target list, by current USD value.
 </p>
 </div>
 
@@ -185,10 +188,11 @@
   <span class="loading">Loading current values…</span>
 </p>
 <div id="us_targetweights_table_wrap"></div>
+<h3 class="section-title" id="mp_pie_us_stocks_title" style="display:none">Your current portfolio — US stocks breakdown</h3>
 <div id="plot_mp_pie_us_stocks" style="height:420px; max-width:520px; margin:8px auto 0; display:none"></div>
 <p class="note" id="mp_pie_us_stocks_note" style="display:none">
-  From your imported portfolio (My Portfolio tab): breakdown across the US stocks in this
-  portfolio's target list (US_TICKERS), by current USD value.
+  Based on the trades you imported in the My Portfolio tab: breakdown across the US stocks in
+  this portfolio's target list, by current USD value.
 </p>
 </div>
 
@@ -1546,15 +1550,18 @@ function mpPieLayout(title) {
 function mpDrawPie(divId, noteId, labels, values, title) {
   const plotEl = document.getElementById(divId);
   const noteEl = document.getElementById(noteId);
+  const titleEl = document.getElementById(noteId.replace('_note', '_title'));
   if (!plotEl) return;
   const total = values.reduce((s, v) => s + v, 0);
   if (!total) {
     plotEl.style.display = 'none';
     if (noteEl) noteEl.style.display = 'none';
+    if (titleEl) titleEl.style.display = 'none';
     return;
   }
   plotEl.style.display = '';
   if (noteEl) noteEl.style.display = '';
+  if (titleEl) titleEl.style.display = '';
   Plotly.newPlot(divId, [{
     type: 'pie', labels, values,
     marker: { colors: PIE_COLORS },
@@ -1614,7 +1621,8 @@ function mpUpdateAuthUi(session) {
     document.getElementById('mp_signed_in').style.display = 'none';
     ['plot_mp_pie_us_stocks', 'plot_mp_pie_ru_stocks', 'plot_mp_pie_stocksbonds', 'plot_mp_pie_deposits']
       .forEach(id => { document.getElementById(id).style.display = 'none'; });
-    ['mp_pie_us_stocks_note', 'mp_pie_ru_stocks_note', 'mp_pie_stocksbonds_note', 'mp_pie_deposits_note']
+    ['mp_pie_us_stocks_note', 'mp_pie_ru_stocks_note', 'mp_pie_stocksbonds_note', 'mp_pie_deposits_note',
+     'mp_pie_us_stocks_title', 'mp_pie_ru_stocks_title', 'mp_pie_stocksbonds_title', 'mp_pie_deposits_title']
       .forEach(id => { document.getElementById(id).style.display = 'none'; });
   }
 }
