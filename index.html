@@ -179,6 +179,12 @@
       <button class="btn primary" id="mp_csv_upload">Upload</button>
     </div>
     <p class="empty-note" id="mp_csv_status"></p>
+
+    <div class="section-title">Current holdings</div>
+    <div id="mp_holdings_wrap"></div>
+
+    <div class="section-title">Cash flows (dividends, coupons, redemptions)</div>
+    <div id="mp_cashflows_wrap"></div>
   </div>
 </div>
 
@@ -1427,11 +1433,45 @@ document.getElementById('mp_csv_upload').addEventListener('click', async () => {
       statusEl.textContent = `Error: ${result.error || res.statusText}`;
       return;
     }
-    statusEl.textContent = `Imported ${result.imported} rows (${result.skipped} skipped, ${result.total_rows} parsed).`;
+    statusEl.textContent = `Imported ${result.imported} rows, removed ${result.removed} stale rows (${result.skipped} skipped, ${result.total_rows} parsed).`;
+    mpRenderHoldings();
+    mpRenderCashFlows();
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}`;
   }
 });
+
+function mpEscapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function mpRenderHoldings() {
+  const wrap = document.getElementById('mp_holdings_wrap');
+  const { data, error } = await sb.from('current_holdings').select('*').order('ticker');
+  if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
+  if (!data.length) { wrap.innerHTML = '<p class="empty-note">No holdings yet — import trades above.</p>'; return; }
+  wrap.innerHTML = `<table class="data-table"><thead><tr>
+    <th>Ticker</th><th>Quantity</th>
+  </tr></thead><tbody>${data.map(r => `<tr>
+    <td class="ticker">${mpEscapeHtml(r.ticker)}</td>
+    <td>${r.quantity}</td>
+  </tr>`).join('')}</tbody></table>`;
+}
+
+async function mpRenderCashFlows() {
+  const wrap = document.getElementById('mp_cashflows_wrap');
+  const { data, error } = await sb.from('cash_flows').select('*').order('ticker').order('side');
+  if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
+  if (!data.length) { wrap.innerHTML = '<p class="empty-note">No cash flows yet.</p>'; return; }
+  wrap.innerHTML = `<table class="data-table"><thead><tr>
+    <th>Ticker</th><th>Type</th><th>Currency</th><th>Total</th>
+  </tr></thead><tbody>${data.map(r => `<tr>
+    <td class="ticker">${mpEscapeHtml(r.ticker)}</td>
+    <td class="muted">${mpEscapeHtml(r.side)}</td>
+    <td class="muted">${mpEscapeHtml(r.currency || '')}</td>
+    <td>${r.total_amount}</td>
+  </tr>`).join('')}</tbody></table>`;
+}
 
 function mpUpdateAuthUi(session) {
   const btn = document.getElementById('btn_login');
@@ -1439,6 +1479,8 @@ function mpUpdateAuthUi(session) {
     btn.textContent = `Sign out (${session.user.email})`;
     document.getElementById('mp_signed_out').style.display = 'none';
     document.getElementById('mp_signed_in').style.display = '';
+    mpRenderHoldings();
+    mpRenderCashFlows();
   } else {
     btn.textContent = 'Sign in with Google';
     document.getElementById('mp_signed_out').style.display = '';

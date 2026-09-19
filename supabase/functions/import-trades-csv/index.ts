@@ -132,7 +132,7 @@ Deno.serve(async (req) => {
         nkd: parseNumber(cells[idx.nkd]),
         note: cells[idx.note] || null,
         external_source: 'snowball_csv',
-        external_id: `${i}:${event}:${cells[idx.date]}:${cells[idx.symbol]}:${cells[idx.quantity]}:${cells[idx.price]}`,
+        external_id: `${event}:${cells[idx.date]}:${cells[idx.symbol]}:${cells[idx.quantity]}:${cells[idx.price]}:${cells[idx.feeTax]}`,
       });
     }
 
@@ -141,17 +141,36 @@ Deno.serve(async (req) => {
         { status: 400, headers: corsHeaders });
     }
 
-    const { error: insertErr, count } = await supabase
+    // Full sync on every upload: this CSV is the source of truth for this
+    // source, so wipe all previously-imported rows and reinsert fresh. This
+    // is what makes deleted/edited Snowball trades disappear/update here too,
+    // and stays correct even if external_id's format changes between deploys.
+    const { error: deleteErr, count: deletedCount } = await supabase
       .from('trades')
-      .upsert(rows, { onConflict: 'user_id,external_source,external_id', ignoreDuplicates: true, count: 'exact' });
+      .delete({ count: 'exact' })
+      .eq('user_id', user.id)
+      .eq('external_source', 'snowball_csv');
+
+    if (deleteErr) {
+      return new Response(JSON.stringify({ error: deleteErr.message }),
+        { status: 500, headers: corsHeaders });
+    }
+
+    const { error: insertErr, count: insertedCount } = await supabase
+      .from('trades')
+      .insert(rows, { count: 'exact' });
 
     if (insertErr) {
       return new Response(JSON.stringify({ error: insertErr.message }),
         { status: 500, headers: corsHeaders });
     }
 
-    return new Response(JSON.stringify({ imported: count ?? rows.length, skipped, total_rows: rows.length }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({
+      imported: insertedCount ?? rows.length,
+      removed: deletedCount ?? 0,
+      skipped,
+      total_rows: rows.length,
+    }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (err) {
     return new Response(JSON.stringify({ error: String(err) }),
       { status: 500, headers: corsHeaders });
