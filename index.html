@@ -1438,7 +1438,8 @@ async function loadData() {
            // silently disagree with the number the user sees on that chart.
            currentWCny: sigmoidWCnyAmp,
            ruTickerColors: TICKER_COLORS,
-           usTickerColors: US_COLORS };
+           usTickerColors: US_COLORS,
+           currentUsdRub: sigmoidX };
 }
 
 loadLastUpdated();
@@ -1591,8 +1592,12 @@ function mpDonutLayout(maxR) {
 }
 
 // items: [{ label, target, current, color }], target/current in the same
-// unit (e.g. USD value, or % — only their ratio matters).
-function mpDrawTargetDonut(divId, noteId, items) {
+// unit (e.g. USD value, or % — only their ratio matters). `totalUsd` (the
+// USD sum this category's current% was computed against) is required to
+// turn the target/actual gap into an actionable "buy/sell $X" figure in
+// the table; pass it via each item, or as a shared `sharedTotalUsd` third
+// arg when every item shares the same denominator.
+function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd) {
   const plotEl = document.getElementById(divId);
   const noteEl = document.getElementById(noteId);
   const titleEl = document.getElementById(noteId.replace('_note', '_title'));
@@ -1626,18 +1631,31 @@ function mpDrawTargetDonut(divId, noteId, items) {
   const maxR = Math.max(R_BASE, ...radial);
 
   if (tableEl) {
+    const usdRubRate = DATA && DATA.currentUsdRub;
     tableEl.innerHTML = `<table class="data-table"><thead><tr>
-      <th>Label</th><th>Target %</th><th>Actual %</th><th>Diff</th>
+      <th>Label</th><th>Actual %</th><th>Target %</th><th>Buy / Sell (USD)</th><th>Buy / Sell (RUB)</th>
     </tr></thead><tbody>${usable.map(it => {
       const targetPct = totalTarget > 0 ? (it.target / totalTarget * 100) : 0;
-      const diff = it.current - targetPct;
-      const diffStr = (diff >= 0 ? '+' : '') + diff.toFixed(2) + ' pp';
-      const diffCls = diff > 0.05 ? 'pos' : (diff < -0.05 ? 'neg' : 'muted');
+      const totalUsd = it.totalUsd !== undefined ? it.totalUsd : sharedTotalUsd;
+      const diffPct = targetPct - it.current;
+      let actionCls = 'muted';
+      let usdStr = 'n/a';
+      let rubStr = 'n/a';
+      if (totalUsd) {
+        const deltaUsd = diffPct / 100 * totalUsd;
+        const verb = deltaUsd >= 0 ? 'Buy' : 'Sell';
+        actionCls = deltaUsd > 0.5 ? 'pos' : (deltaUsd < -0.5 ? 'neg' : 'muted');
+        usdStr = `${verb} $${Math.abs(deltaUsd).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+        if (usdRubRate) {
+          rubStr = `${verb} ₽${Math.abs(deltaUsd * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+        }
+      }
       return `<tr>
         <td class="ticker" style="color:${it.color}">${mpEscapeHtml(it.label)}</td>
-        <td>${targetPct.toFixed(2)}%</td>
         <td>${it.current.toFixed(2)}%</td>
-        <td class="${diffCls}">${diffStr}</td>
+        <td>${targetPct.toFixed(2)}%</td>
+        <td class="${actionCls}">${usdStr}</td>
+        <td class="${actionCls}">${rubStr}</td>
       </tr>`;
     }).join('')}</tbody></table>`;
   }
@@ -1695,7 +1713,7 @@ async function mpRenderPortfolioPies() {
     (DATA.usTargetWeightsRaw || []).map((r, i) => ({
       label: r.ticker, target: r.base, current: (valueByTicker[r.ticker] || 0) / (usTotal || 1) * 100,
       color: (DATA.usTickerColors || [])[i % (DATA.usTickerColors || [1]).length],
-    })));
+    })), usTotal);
 
   // 2. Russian stocks: same idea, using the 10-stock target list.
   const ruStockTotal = RU_STOCK_TICKERS.reduce((s, t) => s + (valueByTicker[t] || 0), 0);
@@ -1703,7 +1721,7 @@ async function mpRenderPortfolioPies() {
     (DATA.ruTargetWeightsRaw || []).map(r => ({
       label: r.ticker, target: r.base, current: (valueByTicker[r.ticker] || 0) / (ruStockTotal || 1) * 100,
       color: (DATA.ruTickerColors || {})[r.ticker] || '#8b949e',
-    })));
+    })), ruStockTotal);
 
   // 3. Russian stocks vs Russian bonds: target from the ERP & Stocks/Bonds
   //    Allocation tab's own base/target allocation.
@@ -1716,7 +1734,7 @@ async function mpRenderPortfolioPies() {
     mpDrawTargetDonut('plot_mp_pie_stocksbonds', 'mp_pie_stocksbonds_note', [
       { label: 'Stocks', target: allocRaw.target.Stocks, current: stocksBondsTotal ? ruStockTotal / stocksBondsTotal * 100 : 0, color: '#4da8c8' },
       { label: 'Bonds', target: allocRaw.target.Bonds, current: stocksBondsTotal ? ruBondsCurrent / stocksBondsTotal * 100 : 0, color: '#f0b429' },
-    ]);
+    ], stocksBondsTotal);
   }
 
   // 4. RUB vs non-RUB bonds/deposits: target from the current w_CNY sigmoid
@@ -1733,7 +1751,7 @@ async function mpRenderPortfolioPies() {
     mpDrawTargetDonut('plot_mp_pie_deposits', 'mp_pie_deposits_note', [
       { label: 'RUB', target: targetRubPct, current: bdTotal ? rubCurrent / bdTotal * 100 : 0, color: '#4da8c8' },
       { label: 'Non-RUB (CNY/other)', target: targetNonRubPct, current: bdTotal ? nonRubCurrent / bdTotal * 100 : 0, color: '#e05252' },
-    ]);
+    ], bdTotal);
   }
 }
 
