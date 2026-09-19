@@ -1,0 +1,27 @@
+name: Update portfolio market prices
+
+on:
+  schedule:
+    - cron: "40 12 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r erp_valuation/requirements.txt
+
+      - name: Fetch prices (MOEX/Yahoo) and upsert into Supabase market_prices
+        run: python erp_valuation/fetch_portfolio_prices.py
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
