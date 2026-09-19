@@ -1633,7 +1633,7 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd) {
   if (tableEl) {
     const usdRubRate = DATA && DATA.currentUsdRub;
     tableEl.innerHTML = `<table class="data-table"><thead><tr>
-      <th>Label</th><th>Actual %</th><th>Target %</th><th>Buy / Sell (USD)</th><th>Buy / Sell (RUB)</th>
+      <th>Label</th><th>Current (RUB)</th><th>Actual %</th><th>Target %</th><th>Buy / Sell (USD)</th><th>Buy / Sell (RUB)</th>
     </tr></thead><tbody>${usable.map(it => {
       const targetPct = totalTarget > 0 ? (it.target / totalTarget * 100) : 0;
       const totalUsd = it.totalUsd !== undefined ? it.totalUsd : sharedTotalUsd;
@@ -1641,7 +1641,12 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd) {
       let actionCls = 'muted';
       let usdStr = 'n/a';
       let rubStr = 'n/a';
+      let currentRubStr = 'n/a';
       if (totalUsd) {
+        const currentUsd = it.current / 100 * totalUsd;
+        if (usdRubRate) {
+          currentRubStr = `₽${(currentUsd * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+        }
         const deltaUsd = diffPct / 100 * totalUsd;
         const verb = deltaUsd >= 0 ? 'Buy' : 'Sell';
         actionCls = deltaUsd > 0.5 ? 'pos' : (deltaUsd < -0.5 ? 'neg' : 'muted');
@@ -1652,6 +1657,7 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd) {
       }
       return `<tr>
         <td class="ticker" style="color:${it.color}">${mpEscapeHtml(it.label)}</td>
+        <td>${currentRubStr}</td>
         <td>${it.current.toFixed(2)}%</td>
         <td>${targetPct.toFixed(2)}%</td>
         <td class="${actionCls}">${usdStr}</td>
