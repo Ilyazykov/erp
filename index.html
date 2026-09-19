@@ -1596,8 +1596,11 @@ function mpDonutLayout(maxR) {
 // USD sum this category's current% was computed against) is required to
 // turn the target/actual gap into an actionable "buy/sell $X" figure in
 // the table; pass it via each item, or as a shared `sharedTotalUsd` third
-// arg when every item shares the same denominator.
-function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd) {
+// arg when every item shares the same denominator. `actionColLabel`
+// (optional) lets one call site customize that column's header text (e.g.
+// "Target CNY sale (RUB)" for the RUB/CNY donut) instead of the generic
+// default, since the same function backs 4 differently-themed tables.
+function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel) {
   const plotEl = document.getElementById(divId);
   const noteEl = document.getElementById(noteId);
   const titleEl = document.getElementById(noteId.replace('_note', '_title'));
@@ -1633,13 +1636,12 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd) {
   if (tableEl) {
     const usdRubRate = DATA && DATA.currentUsdRub;
     tableEl.innerHTML = `<table class="data-table"><thead><tr>
-      <th>Label</th><th>Current (RUB)</th><th>Actual %</th><th>Target %</th><th>Buy / Sell (USD)</th><th>Buy / Sell (RUB)</th>
+      <th>Label</th><th>Current (RUB)</th><th>Actual %</th><th>Target %</th><th>${mpEscapeHtml(actionColLabel || 'Buy / Sell (RUB)')}</th>
     </tr></thead><tbody>${usable.map(it => {
       const targetPct = totalTarget > 0 ? (it.target / totalTarget * 100) : 0;
       const totalUsd = it.totalUsd !== undefined ? it.totalUsd : sharedTotalUsd;
       const diffPct = targetPct - it.current;
       let actionCls = 'muted';
-      let usdStr = 'n/a';
       let rubStr = 'n/a';
       let currentRubStr = 'n/a';
       if (totalUsd) {
@@ -1650,7 +1652,6 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd) {
         const deltaUsd = diffPct / 100 * totalUsd;
         const verb = deltaUsd >= 0 ? 'Buy' : 'Sell';
         actionCls = deltaUsd > 0.5 ? 'pos' : (deltaUsd < -0.5 ? 'neg' : 'muted');
-        usdStr = `${verb} $${Math.abs(deltaUsd).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
         if (usdRubRate) {
           rubStr = `${verb} ₽${Math.abs(deltaUsd * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
         }
@@ -1660,7 +1661,6 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd) {
         <td>${currentRubStr}</td>
         <td>${it.current.toFixed(2)}%</td>
         <td>${targetPct.toFixed(2)}%</td>
-        <td class="${actionCls}">${usdStr}</td>
         <td class="${actionCls}">${rubStr}</td>
       </tr>`;
     }).join('')}</tbody></table>`;
@@ -1757,7 +1757,7 @@ async function mpRenderPortfolioPies() {
     mpDrawTargetDonut('plot_mp_pie_deposits', 'mp_pie_deposits_note', [
       { label: 'RUB', target: targetRubPct, current: bdTotal ? rubCurrent / bdTotal * 100 : 0, color: '#4da8c8' },
       { label: 'Non-RUB (CNY/other)', target: targetNonRubPct, current: bdTotal ? nonRubCurrent / bdTotal * 100 : 0, color: '#e05252' },
-    ], bdTotal);
+    ], bdTotal, 'Target CNY sale (RUB)');
   }
 }
 
