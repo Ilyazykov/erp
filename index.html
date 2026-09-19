@@ -1761,21 +1761,24 @@ async function mpRenderPortfolioPies() {
   const valueByTicker = {};
   priced.forEach(r => { valueByTicker[r.ticker] = (valueByTicker[r.ticker] || 0) + r.value_usd; });
 
-  // 1. US stocks: sector width = each stock's US_TICKERS target weight,
-  //    radial extent = your actual USD value in that stock vs. what its
-  //    target weight implies your whole US book "should" be worth.
+  // 1. US stocks: sector width = each stock's actual (current) weight (see
+  //    mpDrawTargetDonut); radial extent = current/target, where target is
+  //    the Z-score-adjusted weight -- same "Target" column shown in the US
+  //    Stocks Z-score tab's own target-weights table above this chart, not
+  //    the pre-Z-score base/strategic weight.
   const usTotal = US_STOCK_TICKERS.reduce((s, t) => s + (valueByTicker[t] || 0), 0);
   mpDrawTargetDonut('plot_mp_pie_us_stocks', 'mp_pie_us_stocks_note',
     (DATA.usTargetWeightsRaw || []).map((r, i) => ({
-      label: r.ticker, target: r.base, current: (valueByTicker[r.ticker] || 0) / (usTotal || 1) * 100,
+      label: r.ticker, target: r.target, current: (valueByTicker[r.ticker] || 0) / (usTotal || 1) * 100,
       color: (DATA.usTickerColors || [])[i % (DATA.usTickerColors || [1]).length],
     })), usTotal);
 
-  // 2. Russian stocks: same idea, using the 10-stock target list.
+  // 2. Russian stocks: same idea, using the 10-stock target list and its
+  //    own Z-score-adjusted Target column.
   const ruStockTotal = RU_STOCK_TICKERS.reduce((s, t) => s + (valueByTicker[t] || 0), 0);
   mpDrawTargetDonut('plot_mp_pie_ru_stocks', 'mp_pie_ru_stocks_note',
     (DATA.ruTargetWeightsRaw || []).map(r => ({
-      label: r.ticker, target: r.base, current: (valueByTicker[r.ticker] || 0) / (ruStockTotal || 1) * 100,
+      label: r.ticker, target: r.target, current: (valueByTicker[r.ticker] || 0) / (ruStockTotal || 1) * 100,
       color: (DATA.ruTickerColors || {})[r.ticker] || '#8b949e',
     })), ruStockTotal);
 
