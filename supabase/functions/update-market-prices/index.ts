@@ -257,10 +257,21 @@ async function latestUsdRubRate(): Promise<number | null> {
 // Ticker classification
 // ---------------------------------------------------------------------------
 
-type TickerClass = 'moex_ofz' | 'moex_bond' | 'moex_share_or_etf_or_other' | 'crypto';
+type TickerClass = 'moex_ofz' | 'moex_bond' | 'moex_share_or_etf_or_other' | 'crypto' | 'rub_deposit';
+
+// Snowball represents a bank deposit/savings account as a synthetic ticker
+// like "ВКЛАД:Т16%13" (bank name/rate/term, not an ISIN or a real listed
+// instrument). Its `quantity` in `trades` is not a share count -- it's
+// already the RUB balance itself -- so there is no per-unit "price" to
+// look up; it just needs a RUB->USD conversion factor. See how this is
+// used below: price_usd is set to 1/usdRubRate so quantity * price_usd
+// (the standard formula every other asset class uses) yields the correct
+// USD value without any special-casing in the `portfolio_value_usd` view.
+const RUB_DEPOSIT_PREFIX = 'ВКЛАД:';
 
 function classifyTicker(ticker: string): TickerClass {
   const t = ticker.toUpperCase();
+  if (t.startsWith(RUB_DEPOSIT_PREFIX)) return 'rub_deposit';
   if (KNOWN_CRYPTO_TICKERS.has(t)) return 'crypto';
   if (t.startsWith(MOEX_CORP_BOND_ISIN_PREFIX)) return 'moex_bond';
   if (t.startsWith(MOEX_OFZ_ISIN_PREFIX) && t.length >= 10 && /\d/.test(t)) return 'moex_ofz';
@@ -687,6 +698,7 @@ async function runUpdate(): Promise<Record<string, unknown>> {
   // --- classify ---
   const moexCandidates: string[] = [];
   const cryptoCandidates: string[] = [];
+  const rubDepositCandidates: string[] = [];
   for (const t of tickers) {
     const cls = classifyTicker(t);
     if (cls === 'moex_ofz' || cls === 'moex_bond' || cls === 'moex_share_or_etf_or_other') {
@@ -695,10 +707,33 @@ async function runUpdate(): Promise<Record<string, unknown>> {
     if (cls === 'crypto') {
       cryptoCandidates.push(t);
     }
+    if (cls === 'rub_deposit') {
+      rubDepositCandidates.push(t);
+    }
   }
 
   const rowsOut: PriceRow[] = [];
   const resolved = new Set<string>();
+
+  // --- RUB bank deposits (quantity in `trades` is already the RUB
+  //     balance, not a unit count -- see classifyTicker) ---
+  if (rubDepositCandidates.length && usdRubRate !== null) {
+    const depositPriceUsd = 1 / usdRubRate;
+    for (const ticker of rubDepositCandidates) {
+      rowsOut.push({
+        ticker,
+        price_usd: Math.round(depositPriceUsd * 1e8) / 1e8,
+        native_price: 1,
+        currency: 'RUB',
+        asset_class: 'rub_deposit',
+        source: 'cbr_fx',
+        as_of: new Date().toISOString().slice(0, 10),
+      });
+      resolved.add(ticker);
+    }
+  } else if (rubDepositCandidates.length) {
+    log(`  ${rubDepositCandidates.length} RUB deposit ticker(s) found but no USD/RUB rate available, skipping`);
+  }
 
   // --- MOEX (shares, ETFs, corp bonds, OFZ) ---
   const moexHits = await fetchMoexPrices(moexCandidates);

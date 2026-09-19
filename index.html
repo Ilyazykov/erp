@@ -81,7 +81,13 @@
   w_CNY(t) computed daily over the last 5 years: x(t) is that day's USD/RUB rate, m(t) is the
   trailing 365-day average USD/RUB rate as of that day. <b>Cyan</b> — original fixed-k formula.
   <b>Purple</b> — volatility-amplified formula. USD/RUB rate overlaid on the right axis.
-</p></div>
+</p>
+<div id="plot_mp_pie_deposits" style="height:420px; max-width:520px; margin:8px auto 0; display:none"></div>
+<p class="note" id="mp_pie_deposits_note" style="display:none">
+  From your imported portfolio (My Portfolio tab): RUB-denominated bonds/deposits vs
+  non-RUB (CNY/USD/other currency) bonds/deposits, by current USD value.
+</p>
+</div>
 
 <div id="layer2a" class="chart-wrap"><div id="plot_layer1" style="height:480px"></div>
 <p class="note">
@@ -100,6 +106,11 @@
   <span class="loading">Loading current allocation…</span>
 </p>
 <div id="alloc_target_table_wrap"></div>
+<div id="plot_mp_pie_stocksbonds" style="height:420px; max-width:520px; margin:8px auto 0; display:none"></div>
+<p class="note" id="mp_pie_stocksbonds_note" style="display:none">
+  From your imported portfolio (My Portfolio tab): total Russian stocks vs total Russian
+  bonds, by current USD value.
+</p>
 </div>
 
 <div id="layer2r" class="chart-wrap"><div id="plot_layer1i" style="height:480px"></div>
@@ -147,6 +158,11 @@
   <span class="loading">Loading current values…</span>
 </p>
 <div id="targetweights_table_wrap"></div>
+<div id="plot_mp_pie_ru_stocks" style="height:420px; max-width:520px; margin:8px auto 0; display:none"></div>
+<p class="note" id="mp_pie_ru_stocks_note" style="display:none">
+  From your imported portfolio (My Portfolio tab): breakdown across the 10 Russian stocks
+  in this portfolio's target list, by current USD value.
+</p>
 </div>
 
 <div id="usstocks" class="chart-wrap"><div id="plot_us_zscore" style="height:640px"></div>
@@ -169,6 +185,11 @@
   <span class="loading">Loading current values…</span>
 </p>
 <div id="us_targetweights_table_wrap"></div>
+<div id="plot_mp_pie_us_stocks" style="height:420px; max-width:520px; margin:8px auto 0; display:none"></div>
+<p class="note" id="mp_pie_us_stocks_note" style="display:none">
+  From your imported portfolio (My Portfolio tab): breakdown across the US stocks in this
+  portfolio's target list (US_TICKERS), by current USD value.
+</p>
 </div>
 
 <div id="myportfolio" class="chart-wrap">
@@ -1438,6 +1459,7 @@ document.getElementById('mp_csv_upload').addEventListener('click', async () => {
     }
     statusEl.textContent = `Imported ${result.imported} rows, removed ${result.removed} stale rows (${result.skipped} skipped, ${result.total_rows} parsed).`;
     mpRenderHoldings();
+    mpRenderPortfolioPies();
     mpRenderCashFlows();
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}`;
@@ -1491,6 +1513,92 @@ async function mpRenderCashFlows() {
   </tr>`).join('')}</tbody></table>`;
 }
 
+// ---- Portfolio-composition pie charts (embedded in the existing tabs) ----
+// All four read the same portfolio_value_usd snapshot once, then slice it
+// differently client-side -- no extra network round-trips per chart.
+const RU_STOCK_TICKERS = ['SBER', 'YDEX', 'T', 'DOMRF', 'OZON', 'ROSN', 'VTBR', 'GMKN', 'PLZL', 'IRAO'];
+// Same 37-ticker list as US_TICKERS inside loadData()'s renderChart('usstocks')
+// closure -- duplicated here (tickers only, weights not needed) since that
+// one is local to loadData() and this code runs independently of chart
+// rendering/login state.
+const US_STOCK_TICKERS = [
+  'GOOGL', 'NVDA', 'LLY', 'CAT', 'LIN', 'GE', 'AMZN', 'WMT', 'XOM', 'NEE', 'PLD',
+  'JPM', 'BRK-B', 'JNJ', 'META', 'V', 'MA', 'HOOD', 'MSFT', 'AAPL', 'ABBV',
+  'TSLA', 'HD', 'PG', 'KO', 'SHEL', 'CVX', 'SHW', 'DUK', 'AMT', 'SOFI', 'XYZ',
+  'INTC', 'SPCX', 'FCX', 'SO', 'EQIX',
+];
+const PIE_COLORS = [
+  '#4da8c8', '#f0b429', '#3dd68c', '#22d3ee', '#e05252', '#a78bfa', '#fb923c',
+  '#34d399', '#fbbf24', '#f472b6', '#60a5fa', '#facc15', '#c084fc', '#fb7185',
+];
+
+function mpPieLayout(title) {
+  return {
+    paper_bgcolor: '#0d1117', plot_bgcolor: '#0d1117',
+    font: { color: '#c9d1d9', size: 11 },
+    margin: { l: 10, r: 10, t: 10, b: 10 },
+    showlegend: true,
+    legend: { orientation: 'h', y: -0.1, font: { size: 10 } },
+    annotations: title ? [{ text: title, showarrow: false, font: { size: 12, color: '#8b949e' } }] : [],
+  };
+}
+
+function mpDrawPie(divId, noteId, labels, values, title) {
+  const plotEl = document.getElementById(divId);
+  const noteEl = document.getElementById(noteId);
+  if (!plotEl) return;
+  const total = values.reduce((s, v) => s + v, 0);
+  if (!total) {
+    plotEl.style.display = 'none';
+    if (noteEl) noteEl.style.display = 'none';
+    return;
+  }
+  plotEl.style.display = '';
+  if (noteEl) noteEl.style.display = '';
+  Plotly.newPlot(divId, [{
+    type: 'pie', labels, values,
+    marker: { colors: PIE_COLORS },
+    textinfo: 'label+percent',
+    hovertemplate: '%{label}<br>$%{value:,.2f} (%{percent})<extra></extra>',
+    hole: 0.35,
+  }], mpPieLayout(title), { displayModeBar: false, responsive: true });
+}
+
+async function mpRenderPortfolioPies() {
+  const { data, error } = await sb.from('portfolio_value_usd').select('*');
+  if (error || !data) return;
+  const priced = data.filter(r => r.value_usd !== null);
+
+  // 1. US stocks (US Stocks Z-score tab) — only tickers in this portfolio's
+  //    US_TICKERS target list, sliced by each position's USD value.
+  const usRows = priced.filter(r => US_STOCK_TICKERS.includes(r.ticker));
+  mpDrawPie('plot_mp_pie_us_stocks', 'mp_pie_us_stocks_note',
+    usRows.map(r => r.ticker), usRows.map(r => r.value_usd));
+
+  // 2. Russian stocks (Yield per Stock & Rebalancing tab) — the 10-stock
+  //    target list.
+  const ruStockRows = priced.filter(r => RU_STOCK_TICKERS.includes(r.ticker));
+  mpDrawPie('plot_mp_pie_ru_stocks', 'mp_pie_ru_stocks_note',
+    ruStockRows.map(r => r.ticker), ruStockRows.map(r => r.value_usd));
+
+  // 3. Russian stocks vs Russian bonds, summed (ERP & Stocks/Bonds Allocation tab).
+  const ruBondRows = priced.filter(r => r.asset_class === 'moex_bond' || r.asset_class === 'moex_ofz');
+  const ruStocksTotal = ruStockRows.reduce((s, r) => s + r.value_usd, 0);
+  const ruBondsTotal = ruBondRows.reduce((s, r) => s + r.value_usd, 0);
+  mpDrawPie('plot_mp_pie_stocksbonds', 'mp_pie_stocksbonds_note',
+    ['Russian stocks', 'Russian bonds'], [ruStocksTotal, ruBondsTotal]);
+
+  // 4. Russian bonds/deposits split by currency: RUB vs everything else
+  //    (CNY/USD/etc) (USD/RUB → CNY Weight tab).
+  const bondAndDepositRows = priced.filter(
+    r => r.asset_class === 'moex_bond' || r.asset_class === 'moex_ofz' || r.asset_class === 'rub_deposit',
+  );
+  const rubTotal = bondAndDepositRows.filter(r => r.currency === 'RUB').reduce((s, r) => s + r.value_usd, 0);
+  const nonRubTotal = bondAndDepositRows.filter(r => r.currency !== 'RUB').reduce((s, r) => s + r.value_usd, 0);
+  mpDrawPie('plot_mp_pie_deposits', 'mp_pie_deposits_note',
+    ['RUB bonds/deposits', 'Non-RUB bonds/deposits'], [rubTotal, nonRubTotal]);
+}
+
 function mpUpdateAuthUi(session) {
   const btn = document.getElementById('btn_login');
   if (session) {
@@ -1498,11 +1606,16 @@ function mpUpdateAuthUi(session) {
     document.getElementById('mp_signed_out').style.display = 'none';
     document.getElementById('mp_signed_in').style.display = '';
     mpRenderHoldings();
+    mpRenderPortfolioPies();
     mpRenderCashFlows();
   } else {
     btn.textContent = 'Sign in with Google';
     document.getElementById('mp_signed_out').style.display = '';
     document.getElementById('mp_signed_in').style.display = 'none';
+    ['plot_mp_pie_us_stocks', 'plot_mp_pie_ru_stocks', 'plot_mp_pie_stocksbonds', 'plot_mp_pie_deposits']
+      .forEach(id => { document.getElementById(id).style.display = 'none'; });
+    ['mp_pie_us_stocks_note', 'mp_pie_ru_stocks_note', 'mp_pie_stocksbonds_note', 'mp_pie_deposits_note']
+      .forEach(id => { document.getElementById(id).style.display = 'none'; });
   }
 }
 
