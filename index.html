@@ -1636,7 +1636,9 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel)
   if (tableEl) {
     const usdRubRate = DATA && DATA.currentUsdRub;
     tableEl.innerHTML = `<table class="data-table"><thead><tr>
-      <th>Label</th><th>Current (RUB)</th><th>Actual %</th><th>Target %</th><th>${mpEscapeHtml(actionColLabel || 'Buy / Sell (RUB)')}</th>
+      <th>Label</th><th>Current (RUB)</th><th>Actual %</th><th>Target %</th><th>Target (RUB)</th>
+      <th>${mpEscapeHtml(actionColLabel || 'Buy / Sell (RUB)')}</th>
+      <th>Add externally (USD)</th><th>Resulting total (RUB)</th>
     </tr></thead><tbody>${usable.map(it => {
       const targetPct = totalTarget > 0 ? (it.target / totalTarget * 100) : 0;
       const totalUsd = it.totalUsd !== undefined ? it.totalUsd : sharedTotalUsd;
@@ -1644,10 +1646,16 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel)
       let actionCls = 'muted';
       let rubStr = 'n/a';
       let currentRubStr = 'n/a';
+      let targetRubStr = 'n/a';
+      let addExternalStr = 'n/a';
+      let resultingStr = 'n/a';
       if (totalUsd) {
         const currentUsd = it.current / 100 * totalUsd;
+        const targetUsd = targetPct / 100 * totalUsd;
+        const otherUsd = totalUsd - currentUsd; // every other category, held fixed
         if (usdRubRate) {
           currentRubStr = `₽${(currentUsd * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+          targetRubStr = `₽${(targetUsd * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
         }
         const deltaUsd = diffPct / 100 * totalUsd;
         const verb = deltaUsd >= 0 ? 'Buy' : 'Sell';
@@ -1655,13 +1663,40 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel)
         if (usdRubRate) {
           rubStr = `${verb} ₽${Math.abs(deltaUsd * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
         }
+        // Fresh money added ONLY to this category (everything else held
+        // fixed) so its share reaches targetPct:
+        // (current + X) / (total + X) = targetPct/100
+        // => X = (targetPct*other - (100-targetPct)*current) / (100-targetPct)
+        if (targetPct < 100) {
+          const addUsd = (targetPct * otherUsd - (100 - targetPct) * currentUsd) / (100 - targetPct);
+          if (addUsd > 0.5) {
+            addExternalStr = `+$${addUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+            if (usdRubRate) {
+              const newThisRub = (currentUsd + addUsd) * usdRubRate;
+              const otherRubStr = usdRubRate
+                ? usable.filter(o => o !== it).map(o => {
+                    const oUsd = o.current / 100 * totalUsd;
+                    return `${mpEscapeHtml(o.label)}: ₽${(oUsd * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+                  }).join(', ')
+                : '';
+              resultingStr = `${mpEscapeHtml(it.label)}: ₽${newThisRub.toLocaleString(undefined, { maximumFractionDigits: 0 })}` +
+                (otherRubStr ? `; ${otherRubStr}` : '');
+            }
+          } else {
+            addExternalStr = '—';
+            resultingStr = '—';
+          }
+        }
       }
       return `<tr>
         <td class="ticker" style="color:${it.color}">${mpEscapeHtml(it.label)}</td>
         <td>${currentRubStr}</td>
         <td>${it.current.toFixed(2)}%</td>
         <td>${targetPct.toFixed(2)}%</td>
+        <td>${targetRubStr}</td>
         <td class="${actionCls}">${rubStr}</td>
+        <td class="pos">${addExternalStr}</td>
+        <td>${resultingStr}</td>
       </tr>`;
     }).join('')}</tbody></table>`;
   }
