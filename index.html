@@ -1635,8 +1635,18 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel)
     cursor += w;
   });
 
+  // Radial extent is additive, not multiplicative: an equal-sized gap in
+  // percentage points (current% - target%) bulges/dips by the same visual
+  // amount regardless of how big the category's own target share is --
+  // e.g. RUB at -11.89pp and CNY at +11.89pp end up as mirror-image
+  // radii, rather than one dwarfing the other just because its target%
+  // happens to be a smaller denominator.
   const R_BASE = 100;
-  const radial = usable.map(it => R_BASE * (it.current / it.target));
+  const PP_SCALE = 2; // radius units per percentage-point of (current - target)
+  const radial = usable.map(it => {
+    const targetPct = totalTarget > 0 ? (it.target / totalTarget * 100) : 0;
+    return Math.max(0, R_BASE + (it.current - targetPct) * PP_SCALE);
+  });
   const maxR = Math.max(R_BASE, ...radial);
 
   if (tableEl) {
