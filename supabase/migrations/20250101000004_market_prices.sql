@@ -4,12 +4,14 @@
 -- This table is NOT user data -- it's public market prices, the same for
 -- everyone -- so it carries no user_id and needs no per-row RLS ownership
 -- check, just a read-everyone / write-nobody-except-service-role policy.
--- It is populated once a day by a GitHub Actions job (see
--- .github/workflows/market_prices_update.yml and
--- erp_valuation/fetch_portfolio_prices.py), which writes to it using the
--- Supabase service_role key -- the service role bypasses RLS entirely, so
--- the "no insert/update policy for anon/authenticated" below is what
--- actually keeps this table read-only from the browser.
+-- It is populated once a day by the `update-market-prices` Edge Function
+-- (see supabase/functions/update-market-prices/index.ts), triggered
+-- entirely inside Supabase by pg_cron + pg_net (see
+-- supabase/migrations/20250101000005_schedule_market_prices.sql) -- no
+-- GitHub Actions involved in this refresh. The function writes to this
+-- table using the Supabase service_role key -- the service role bypasses
+-- RLS entirely, so the "no insert/update policy for anon/authenticated"
+-- below is what actually keeps this table read-only from the browser.
 
 create table public.market_prices (
   ticker text primary key,
@@ -30,8 +32,9 @@ create policy "anyone can read market prices" on public.market_prices
   for select using (true);
 
 -- Deliberately no insert/update/delete policy for anon/authenticated roles:
--- only the service_role key (used exclusively by the daily GitHub Actions
--- job) can write here, since service_role bypasses RLS by design.
+-- only the service_role key (used exclusively by the daily
+-- update-market-prices Edge Function, invoked by pg_cron) can write here,
+-- since service_role bypasses RLS by design.
 
 -- Portfolio value in USD: joins each user's current_holdings quantity with
 -- the latest market_prices snapshot for that ticker. A ticker with no
