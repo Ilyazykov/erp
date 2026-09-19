@@ -1407,7 +1407,16 @@ async function loadData() {
            usAllocTarget: usAllocTargetTrace, usAllocTargetLayout,
            sigmoidAmp, sigmoidAmpShapes, sigmoidAmpAnnotations, wCny5yCombined,
            targetWeights, targetWeightsLayout, allocTarget: allocTargetTrace, allocTargetLayout,
-           sigmoidAxisRange: [axisMin, axisMax] };
+           sigmoidAxisRange: [axisMin, axisMax],
+           // Raw (non-chart-trace) target figures, reused by the My Portfolio
+           // pie charts to compare against the user's actual holdings —
+           // see mpRenderPortfolioPies().
+           ruTargetWeightsRaw: twRows,
+           usTargetWeightsRaw: usTwRows,
+           ruAllocTargetRaw: { base: allocBase, target: allocTarget },
+           currentWCny: wCny(sigmoidX, sigmoidM),
+           ruTickerColors: TICKER_COLORS,
+           usTickerColors: US_COLORS };
 }
 
 loadLastUpdated();
@@ -1531,29 +1540,38 @@ const US_STOCK_TICKERS = [
   'TSLA', 'HD', 'PG', 'KO', 'SHEL', 'CVX', 'SHW', 'DUK', 'AMT', 'SOFI', 'XYZ',
   'INTC', 'SPCX', 'FCX', 'SO', 'EQIX',
 ];
-const PIE_COLORS = [
-  '#4da8c8', '#f0b429', '#3dd68c', '#22d3ee', '#e05252', '#a78bfa', '#fb923c',
-  '#34d399', '#fbbf24', '#f472b6', '#60a5fa', '#facc15', '#c084fc', '#fb7185',
-];
 
-function mpPieLayout(title) {
+// Same "bulge past the dotted circle = overweight, dip short of it =
+// underweight" donut as targetWeights/usTargetWeights/allocTarget above,
+// but comparing the USER'S ACTUAL portfolio (from portfolio_value_usd)
+// against those same target weights, instead of comparing target-vs-base
+// within the strategy itself. Sector angular width = target weight (so
+// weights tile the full circle); radial extent = R_BASE * (current/target).
+function mpDonutLayout(maxR) {
   return {
     paper_bgcolor: '#0d1117', plot_bgcolor: '#0d1117',
-    font: { color: '#c9d1d9', size: 11 },
-    margin: { l: 10, r: 10, t: 10, b: 10 },
+    font: { color: '#c9d1d9', size: 10 },
+    polar: {
+      domain: { x: [0.1, 0.9], y: [0.06, 0.94] },
+      bgcolor: '#0d1117',
+      radialaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', range: [0, maxR * 1.25], showticklabels: false },
+      angularaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', showticklabels: false, rotation: 90, direction: 'clockwise' },
+    },
     showlegend: true,
-    legend: { orientation: 'h', y: -0.1, font: { size: 10 } },
-    annotations: title ? [{ text: title, showarrow: false, font: { size: 12, color: '#8b949e' } }] : [],
+    legend: { bgcolor: '#13191f', bordercolor: '#1e2830', borderwidth: 1, x: 0.5, y: -0.06, xanchor: 'center', yanchor: 'top', orientation: 'h', font: { size: 9 } },
+    margin: { t: 10, r: 10, b: 10, l: 10 },
   };
 }
 
-function mpDrawPie(divId, noteId, labels, values, title) {
+// items: [{ label, target, current, color }], target/current in the same
+// unit (e.g. USD value, or % — only their ratio matters).
+function mpDrawTargetDonut(divId, noteId, items) {
   const plotEl = document.getElementById(divId);
   const noteEl = document.getElementById(noteId);
   const titleEl = document.getElementById(noteId.replace('_note', '_title'));
   if (!plotEl) return;
-  const total = values.reduce((s, v) => s + v, 0);
-  if (!total) {
+  const usable = items.filter(it => it.target > 0);
+  if (!usable.length || !usable.some(it => it.current > 0)) {
     plotEl.style.display = 'none';
     if (noteEl) noteEl.style.display = 'none';
     if (titleEl) titleEl.style.display = 'none';
@@ -1562,48 +1580,115 @@ function mpDrawPie(divId, noteId, labels, values, title) {
   plotEl.style.display = '';
   if (noteEl) noteEl.style.display = '';
   if (titleEl) titleEl.style.display = '';
-  Plotly.newPlot(divId, [{
-    type: 'pie', labels, values,
-    marker: { colors: PIE_COLORS },
-    textinfo: 'label+percent',
-    hovertemplate: '%{label}<br>$%{value:,.2f} (%{percent})<extra></extra>',
-    hole: 0.35,
-  }], mpPieLayout(title), { displayModeBar: false, responsive: true });
+
+  const totalTarget = usable.reduce((s, it) => s + it.target, 0);
+  let cursor = 0;
+  const theta = [];
+  const width = [];
+  usable.forEach(it => {
+    const w = it.target / totalTarget * 360;
+    theta.push(cursor + w / 2);
+    width.push(w);
+    cursor += w;
+  });
+
+  const R_BASE = 100;
+  const radial = usable.map(it => R_BASE * (it.current / it.target));
+  const maxR = Math.max(R_BASE, ...radial);
+
+  const traces = [
+    {
+      type: 'barpolar',
+      r: radial, theta, width,
+      name: 'Your portfolio (relative to target)',
+      marker: {
+        color: usable.map(it => it.color),
+        opacity: 0.85,
+        line: { color: '#0d1117', width: 1 },
+      },
+      hovertemplate: usable.map((it, i) => {
+        const pct = totalTarget > 0 ? (it.target / totalTarget * 100) : 0;
+        return `${it.label}<br>Target: <b>${pct.toFixed(2)}%</b> (sector angle)<br>` +
+               `Your value: <b>$${it.current.toLocaleString(undefined, { maximumFractionDigits: 0 })}</b><extra></extra>`;
+      }),
+    },
+    {
+      type: 'scatterpolar', mode: 'lines',
+      r: Array.from({ length: 73 }, () => R_BASE),
+      theta: Array.from({ length: 73 }, (_, i) => i * 5),
+      line: { color: '#e6edf3', width: 1.5, dash: 'dot' },
+      name: 'Target (common reference circle)',
+      hoverinfo: 'skip',
+    },
+    {
+      type: 'scatterpolar', mode: 'text',
+      r: usable.map(() => maxR * 1.14),
+      theta,
+      text: usable.map(it => it.label),
+      textfont: { color: usable.map(it => it.color), size: 10 },
+      showlegend: false,
+      hoverinfo: 'skip',
+    },
+  ];
+  Plotly.newPlot(divId, traces, mpDonutLayout(maxR), { displayModeBar: false, responsive: true });
 }
 
 async function mpRenderPortfolioPies() {
+  if (!DATA) return;
   const { data, error } = await sb.from('portfolio_value_usd').select('*');
   if (error || !data) return;
   const priced = data.filter(r => r.value_usd !== null);
+  const valueByTicker = {};
+  priced.forEach(r => { valueByTicker[r.ticker] = (valueByTicker[r.ticker] || 0) + r.value_usd; });
 
-  // 1. US stocks (US Stocks Z-score tab) — only tickers in this portfolio's
-  //    US_TICKERS target list, sliced by each position's USD value.
-  const usRows = priced.filter(r => US_STOCK_TICKERS.includes(r.ticker));
-  mpDrawPie('plot_mp_pie_us_stocks', 'mp_pie_us_stocks_note',
-    usRows.map(r => r.ticker), usRows.map(r => r.value_usd));
+  // 1. US stocks: sector width = each stock's US_TICKERS target weight,
+  //    radial extent = your actual USD value in that stock vs. what its
+  //    target weight implies your whole US book "should" be worth.
+  const usTotal = US_STOCK_TICKERS.reduce((s, t) => s + (valueByTicker[t] || 0), 0);
+  mpDrawTargetDonut('plot_mp_pie_us_stocks', 'mp_pie_us_stocks_note',
+    (DATA.usTargetWeightsRaw || []).map((r, i) => ({
+      label: r.ticker, target: r.base, current: (valueByTicker[r.ticker] || 0) / (usTotal || 1) * 100,
+      color: (DATA.usTickerColors || [])[i % (DATA.usTickerColors || [1]).length],
+    })));
 
-  // 2. Russian stocks (Yield per Stock & Rebalancing tab) — the 10-stock
-  //    target list.
-  const ruStockRows = priced.filter(r => RU_STOCK_TICKERS.includes(r.ticker));
-  mpDrawPie('plot_mp_pie_ru_stocks', 'mp_pie_ru_stocks_note',
-    ruStockRows.map(r => r.ticker), ruStockRows.map(r => r.value_usd));
+  // 2. Russian stocks: same idea, using the 10-stock target list.
+  const ruStockTotal = RU_STOCK_TICKERS.reduce((s, t) => s + (valueByTicker[t] || 0), 0);
+  mpDrawTargetDonut('plot_mp_pie_ru_stocks', 'mp_pie_ru_stocks_note',
+    (DATA.ruTargetWeightsRaw || []).map(r => ({
+      label: r.ticker, target: r.base, current: (valueByTicker[r.ticker] || 0) / (ruStockTotal || 1) * 100,
+      color: (DATA.ruTickerColors || {})[r.ticker] || '#8b949e',
+    })));
 
-  // 3. Russian stocks vs Russian bonds, summed (ERP & Stocks/Bonds Allocation tab).
-  const ruBondRows = priced.filter(r => r.asset_class === 'moex_bond' || r.asset_class === 'moex_ofz');
-  const ruStocksTotal = ruStockRows.reduce((s, r) => s + r.value_usd, 0);
-  const ruBondsTotal = ruBondRows.reduce((s, r) => s + r.value_usd, 0);
-  mpDrawPie('plot_mp_pie_stocksbonds', 'mp_pie_stocksbonds_note',
-    ['Russian stocks', 'Russian bonds'], [ruStocksTotal, ruBondsTotal]);
+  // 3. Russian stocks vs Russian bonds: target from the ERP & Stocks/Bonds
+  //    Allocation tab's own base/target allocation.
+  const ruBondsCurrent = priced
+    .filter(r => r.asset_class === 'moex_bond' || r.asset_class === 'moex_ofz')
+    .reduce((s, r) => s + r.value_usd, 0);
+  const allocRaw = DATA.ruAllocTargetRaw;
+  if (allocRaw) {
+    const stocksBondsTotal = ruStockTotal + ruBondsCurrent;
+    mpDrawTargetDonut('plot_mp_pie_stocksbonds', 'mp_pie_stocksbonds_note', [
+      { label: 'Stocks', target: allocRaw.target.Stocks, current: stocksBondsTotal ? ruStockTotal / stocksBondsTotal * 100 : 0, color: '#4da8c8' },
+      { label: 'Bonds', target: allocRaw.target.Bonds, current: stocksBondsTotal ? ruBondsCurrent / stocksBondsTotal * 100 : 0, color: '#f0b429' },
+    ]);
+  }
 
-  // 4. Russian bonds/deposits split by currency: RUB vs everything else
-  //    (CNY/USD/etc) (USD/RUB → CNY Weight tab).
-  const bondAndDepositRows = priced.filter(
+  // 4. RUB vs non-RUB bonds/deposits: target from the current w_CNY sigmoid
+  //    value (the same figure driving the USD/RUB → CNY Weight chart above).
+  const bondDepositRows = priced.filter(
     r => r.asset_class === 'moex_bond' || r.asset_class === 'moex_ofz' || r.asset_class === 'rub_deposit',
   );
-  const rubTotal = bondAndDepositRows.filter(r => r.currency === 'RUB').reduce((s, r) => s + r.value_usd, 0);
-  const nonRubTotal = bondAndDepositRows.filter(r => r.currency !== 'RUB').reduce((s, r) => s + r.value_usd, 0);
-  mpDrawPie('plot_mp_pie_deposits', 'mp_pie_deposits_note',
-    ['RUB bonds/deposits', 'Non-RUB bonds/deposits'], [rubTotal, nonRubTotal]);
+  const rubCurrent = bondDepositRows.filter(r => r.currency === 'RUB').reduce((s, r) => s + r.value_usd, 0);
+  const nonRubCurrent = bondDepositRows.filter(r => r.currency !== 'RUB').reduce((s, r) => s + r.value_usd, 0);
+  if (DATA.currentWCny !== undefined && DATA.currentWCny !== null) {
+    const bdTotal = rubCurrent + nonRubCurrent;
+    const targetNonRubPct = DATA.currentWCny * 100;
+    const targetRubPct = 100 - targetNonRubPct;
+    mpDrawTargetDonut('plot_mp_pie_deposits', 'mp_pie_deposits_note', [
+      { label: 'RUB', target: targetRubPct, current: bdTotal ? rubCurrent / bdTotal * 100 : 0, color: '#4da8c8' },
+      { label: 'Non-RUB (CNY/other)', target: targetNonRubPct, current: bdTotal ? nonRubCurrent / bdTotal * 100 : 0, color: '#e05252' },
+    ]);
+  }
 }
 
 function mpUpdateAuthUi(session) {
