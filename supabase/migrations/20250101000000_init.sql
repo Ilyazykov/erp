@@ -24,18 +24,28 @@ create table public.target_weights_custom (
   unique (user_id, scenario_name, ticker)
 );
 
--- 3. Trade history (buy/sell log)
+-- 3. Trade / broker-event history (buy/sell/dividend/amortisation/repayment/stock_as_dividend)
 create table public.trades (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   ticker text not null,
-  side text not null check (side in ('buy', 'sell')),
+  side text not null check (side in ('buy', 'sell', 'dividend', 'amortisation', 'repayment', 'stock_as_dividend')),
   quantity numeric not null,
   price numeric not null,
   trade_date date not null,
+  currency text,
+  fee_tax numeric,
+  fee_currency text,
+  exchange text,
+  nkd numeric,
   note text,
+  external_source text,  -- e.g. 'snowball_csv', for de-duplicating repeated imports
+  external_id text,
   created_at timestamptz not null default now()
 );
+create unique index trades_external_unique
+  on public.trades (user_id, external_source, external_id)
+  where external_id is not null;
 
 -- Row Level Security: every user can only see/modify their own rows
 alter table public.portfolios enable row level security;

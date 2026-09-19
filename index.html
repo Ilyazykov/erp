@@ -173,36 +173,12 @@
 <div id="myportfolio" class="chart-wrap">
   <div id="mp_signed_out" class="empty-note">Sign in with Google (top of page) to manage your own portfolio, trades and target weights.</div>
   <div id="mp_signed_in" style="display:none">
-
-    <div class="section-title">Holdings</div>
+    <div class="section-title">Import trades from broker CSV</div>
     <div class="form-row">
-      <select id="mp_h_ticker"></select>
-      <input id="mp_h_qty" type="number" step="any" placeholder="Quantity">
-      <input id="mp_h_note" type="text" placeholder="Note (optional)">
-      <button class="btn primary" id="mp_h_add">Add / Update</button>
+      <input type="file" id="mp_csv_file" accept=".csv">
+      <button class="btn primary" id="mp_csv_upload">Upload</button>
     </div>
-    <div id="mp_holdings_wrap"></div>
-
-    <div class="section-title">Trade history</div>
-    <div class="form-row">
-      <select id="mp_t_ticker"></select>
-      <select id="mp_t_side"><option value="buy">Buy</option><option value="sell">Sell</option></select>
-      <input id="mp_t_qty" type="number" step="any" placeholder="Quantity">
-      <input id="mp_t_price" type="number" step="any" placeholder="Price">
-      <input id="mp_t_date" type="date">
-      <button class="btn primary" id="mp_t_add">Add trade</button>
-    </div>
-    <div id="mp_trades_wrap"></div>
-
-    <div class="section-title">Personal target weights</div>
-    <div class="form-row">
-      <input id="mp_w_scenario" type="text" placeholder="Scenario name" value="default">
-      <select id="mp_w_ticker"></select>
-      <input id="mp_w_weight" type="number" step="any" placeholder="Target weight %">
-      <button class="btn primary" id="mp_w_add">Add / Update</button>
-    </div>
-    <div id="mp_weights_wrap"></div>
-
+    <p class="empty-note" id="mp_csv_status"></p>
   </div>
 </div>
 
@@ -1412,129 +1388,10 @@ loadData().then(data => {
   console.error(err);
 });
 
-// ---- My Portfolio (Supabase) ----
+// ---- My Portfolio (Supabase auth only for now) ----
 const SUPABASE_URL = 'https://xdltomehejjtgzdxbiyx.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_C21SGa0MVRBIUg7RG0zpNA_bk0k_Khr';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-const MP_TICKERS = ['SBER', 'YDEX', 'T', 'DOMRF', 'OZON', 'ROSN', 'VTBR', 'GMKN', 'PLZL', 'IRAO'];
-
-function mpTickerOptions() {
-  return MP_TICKERS.map(t => `<option value="${t}">${t}</option>`).join('');
-}
-['mp_h_ticker', 'mp_t_ticker', 'mp_w_ticker'].forEach(id => {
-  const el = document.getElementById(id);
-  if (el) el.innerHTML = mpTickerOptions();
-});
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-
-async function mpRenderHoldings() {
-  const { data, error } = await sb.from('portfolios').select('*').order('ticker');
-  const wrap = document.getElementById('mp_holdings_wrap');
-  if (error) { wrap.innerHTML = `<p class="empty-note">${escapeHtml(error.message)}</p>`; return; }
-  if (!data.length) { wrap.innerHTML = '<p class="empty-note">No holdings yet.</p>'; return; }
-  wrap.innerHTML = `<table class="data-table"><thead><tr>
-    <th>Ticker</th><th>Quantity</th><th>Note</th><th></th>
-  </tr></thead><tbody>${data.map(r => `<tr>
-    <td class="ticker">${escapeHtml(r.ticker)}</td>
-    <td>${r.quantity ?? '—'}</td>
-    <td class="muted">${escapeHtml(r.note || '')}</td>
-    <td><button class="icon-btn" data-del-holding="${r.id}">delete</button></td>
-  </tr>`).join('')}</tbody></table>`;
-}
-
-async function mpRenderTrades() {
-  const { data, error } = await sb.from('trades').select('*').order('trade_date', { ascending: false });
-  const wrap = document.getElementById('mp_trades_wrap');
-  if (error) { wrap.innerHTML = `<p class="empty-note">${escapeHtml(error.message)}</p>`; return; }
-  if (!data.length) { wrap.innerHTML = '<p class="empty-note">No trades yet.</p>'; return; }
-  wrap.innerHTML = `<table class="data-table"><thead><tr>
-    <th>Date</th><th>Ticker</th><th>Side</th><th>Quantity</th><th>Price</th><th></th>
-  </tr></thead><tbody>${data.map(r => `<tr>
-    <td>${escapeHtml(r.trade_date)}</td>
-    <td class="ticker">${escapeHtml(r.ticker)}</td>
-    <td class="${r.side === 'buy' ? 'pos' : 'neg'}">${r.side}</td>
-    <td>${r.quantity}</td>
-    <td>${r.price}</td>
-    <td><button class="icon-btn" data-del-trade="${r.id}">delete</button></td>
-  </tr>`).join('')}</tbody></table>`;
-}
-
-async function mpRenderWeights() {
-  const { data, error } = await sb.from('target_weights_custom').select('*').order('scenario_name').order('ticker');
-  const wrap = document.getElementById('mp_weights_wrap');
-  if (error) { wrap.innerHTML = `<p class="empty-note">${escapeHtml(error.message)}</p>`; return; }
-  if (!data.length) { wrap.innerHTML = '<p class="empty-note">No target weights yet.</p>'; return; }
-  wrap.innerHTML = `<table class="data-table"><thead><tr>
-    <th>Scenario</th><th>Ticker</th><th>Target %</th><th></th>
-  </tr></thead><tbody>${data.map(r => `<tr>
-    <td>${escapeHtml(r.scenario_name)}</td>
-    <td class="ticker">${escapeHtml(r.ticker)}</td>
-    <td>${r.target_weight}</td>
-    <td><button class="icon-btn" data-del-weight="${r.id}">delete</button></td>
-  </tr>`).join('')}</tbody></table>`;
-}
-
-async function mpRenderAll() {
-  await Promise.all([mpRenderHoldings(), mpRenderTrades(), mpRenderWeights()]);
-}
-
-document.getElementById('mp_h_add').addEventListener('click', async () => {
-  const ticker = document.getElementById('mp_h_ticker').value;
-  const quantity = val(document.getElementById('mp_h_qty').value);
-  const note = document.getElementById('mp_h_note').value || null;
-  const { data: { user } } = await sb.auth.getUser();
-  if (!user) return;
-  const { error } = await sb.from('portfolios')
-    .upsert({ user_id: user.id, ticker, quantity, note }, { onConflict: 'user_id,ticker' });
-  if (error) { alert(error.message); return; }
-  document.getElementById('mp_h_qty').value = '';
-  document.getElementById('mp_h_note').value = '';
-  mpRenderHoldings();
-});
-
-document.getElementById('mp_t_add').addEventListener('click', async () => {
-  const ticker = document.getElementById('mp_t_ticker').value;
-  const side = document.getElementById('mp_t_side').value;
-  const quantity = val(document.getElementById('mp_t_qty').value);
-  const price = val(document.getElementById('mp_t_price').value);
-  const trade_date = document.getElementById('mp_t_date').value;
-  if (!quantity || !price || !trade_date) { alert('Quantity, price and date are required'); return; }
-  const { data: { user } } = await sb.auth.getUser();
-  if (!user) return;
-  const { error } = await sb.from('trades').insert({ user_id: user.id, ticker, side, quantity, price, trade_date });
-  if (error) { alert(error.message); return; }
-  document.getElementById('mp_t_qty').value = '';
-  document.getElementById('mp_t_price').value = '';
-  mpRenderTrades();
-});
-
-document.getElementById('mp_w_add').addEventListener('click', async () => {
-  const scenario_name = document.getElementById('mp_w_scenario').value || 'default';
-  const ticker = document.getElementById('mp_w_ticker').value;
-  const target_weight = val(document.getElementById('mp_w_weight').value);
-  if (target_weight === null) { alert('Target weight is required'); return; }
-  const { data: { user } } = await sb.auth.getUser();
-  if (!user) return;
-  const { error } = await sb.from('target_weights_custom')
-    .upsert({ user_id: user.id, scenario_name, ticker, target_weight },
-            { onConflict: 'user_id,scenario_name,ticker' });
-  if (error) { alert(error.message); return; }
-  document.getElementById('mp_w_weight').value = '';
-  mpRenderWeights();
-});
-
-document.addEventListener('click', async (e) => {
-  const delH = e.target.getAttribute('data-del-holding');
-  const delT = e.target.getAttribute('data-del-trade');
-  const delW = e.target.getAttribute('data-del-weight');
-  if (delH) { await sb.from('portfolios').delete().eq('id', delH); mpRenderHoldings(); }
-  if (delT) { await sb.from('trades').delete().eq('id', delT); mpRenderTrades(); }
-  if (delW) { await sb.from('target_weights_custom').delete().eq('id', delW); mpRenderWeights(); }
-});
 
 document.getElementById('btn_login').addEventListener('click', async () => {
   const { data: { session } } = await sb.auth.getSession();
@@ -1545,13 +1402,43 @@ document.getElementById('btn_login').addEventListener('click', async () => {
   }
 });
 
+document.getElementById('mp_csv_upload').addEventListener('click', async () => {
+  const fileInput = document.getElementById('mp_csv_file');
+  const statusEl = document.getElementById('mp_csv_status');
+  const file = fileInput.files[0];
+  if (!file) { statusEl.textContent = 'Choose a CSV file first.'; return; }
+
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) { statusEl.textContent = 'Sign in first.'; return; }
+
+  statusEl.textContent = 'Uploading and parsing on the server…';
+  try {
+    const csvText = await file.text();
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/import-trades-csv`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${session.access_token}`,
+        'Content-Type': 'text/csv',
+      },
+      body: csvText,
+    });
+    const result = await res.json();
+    if (!res.ok) {
+      statusEl.textContent = `Error: ${result.error || res.statusText}`;
+      return;
+    }
+    statusEl.textContent = `Imported ${result.imported} rows (${result.skipped} skipped, ${result.total_rows} parsed).`;
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`;
+  }
+});
+
 function mpUpdateAuthUi(session) {
   const btn = document.getElementById('btn_login');
   if (session) {
     btn.textContent = `Sign out (${session.user.email})`;
     document.getElementById('mp_signed_out').style.display = 'none';
     document.getElementById('mp_signed_in').style.display = '';
-    mpRenderAll();
   } else {
     btn.textContent = 'Sign in with Google';
     document.getElementById('mp_signed_out').style.display = '';
