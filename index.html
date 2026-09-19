@@ -1636,8 +1636,9 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel)
   if (tableEl) {
     const usdRubRate = DATA && DATA.currentUsdRub;
     tableEl.innerHTML = `<table class="data-table"><thead><tr>
-      <th>Label</th><th>Current (RUB)</th><th>Actual %</th><th>Target %</th><th>Target (RUB)</th>
+      <th>Label</th><th>Current (RUB)</th><th>Actual %</th><th>Target %</th>
       <th>${mpEscapeHtml(actionColLabel || 'Buy / Sell (RUB)')}</th>
+      <th>Target (RUB)</th>
       <th>Add externally (USD)</th><th>Resulting total (RUB)</th>
     </tr></thead><tbody>${usable.map(it => {
       const targetPct = totalTarget > 0 ? (it.target / totalTarget * 100) : 0;
@@ -1673,14 +1674,12 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel)
             addExternalStr = `+$${addUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
             if (usdRubRate) {
               const newThisRub = (currentUsd + addUsd) * usdRubRate;
-              const otherRubStr = usdRubRate
-                ? usable.filter(o => o !== it).map(o => {
-                    const oUsd = o.current / 100 * totalUsd;
-                    return `${mpEscapeHtml(o.label)}: ₽${(oUsd * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-                  }).join(', ')
-                : '';
-              resultingStr = `${mpEscapeHtml(it.label)}: ₽${newThisRub.toLocaleString(undefined, { maximumFractionDigits: 0 })}` +
-                (otherRubStr ? `; ${otherRubStr}` : '');
+              const lines = [`${mpEscapeHtml(it.label)}: ₽${newThisRub.toLocaleString(undefined, { maximumFractionDigits: 0 })}`];
+              usable.filter(o => o !== it).forEach(o => {
+                const oUsd = o.current / 100 * totalUsd;
+                lines.push(`${mpEscapeHtml(o.label)}: ₽${(oUsd * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })}`);
+              });
+              resultingStr = lines.join('<br>');
             }
           } else {
             addExternalStr = '—';
