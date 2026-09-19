@@ -1673,6 +1673,7 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel)
           if (addUsd > 0.5) {
             addExternalStr = `+$${addUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
             if (usdRubRate) {
+              addExternalStr += ` (₽${(addUsd * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })})`;
               resultingStr = `₽${((currentUsd + addUsd) * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
             }
           } else {
