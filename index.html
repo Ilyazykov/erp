@@ -1782,12 +1782,12 @@ async function mpRenderPortfolioPies() {
   // 3. Russian stocks vs Russian bonds: target from the ERP & Stocks/Bonds
   //    Allocation tab's own base/target allocation. "Stocks" is the same
   //    10-ticker target list as chart 2 (ruStockTotal) -- NOT every MOEX
-  //    share/ETF held. "Bonds" includes both plain bonds/OFZ and bond/
-  //    money-market ETFs (asset_class 'moex_bond_etf', e.g. TBRU/SAFE/
-  //    SBMM/AKMB/AKMM/TLCB/SBBY -- user-confirmed list, see
-  //    MOEX_BOND_ETF_TICKERS in the update-market-prices function).
+  //    share/ETF held. "Bonds" = anything classified as instrument_type
+  //    'bond' on Russian infrastructure -- plain bonds/OFZ, bond/money-
+  //    market ETFs (TBRU/SAFE/SBMM/AKMB/AKMM/TLCB/SBBY), and RUB deposits
+  //    -- see instrument_type assignment in update-market-prices/index.ts.
   const ruBondsCurrent = priced
-    .filter(r => r.asset_class === 'moex_bond' || r.asset_class === 'moex_ofz' || r.asset_class === 'moex_bond_etf')
+    .filter(r => r.infra_region === 'ru' && r.instrument_type === 'bond')
     .reduce((s, r) => s + r.value_usd, 0);
   const allocRaw = DATA.ruAllocTargetRaw;
   if (allocRaw) {
@@ -1800,19 +1800,14 @@ async function mpRenderPortfolioPies() {
 
   // 4. RUB vs non-RUB bonds/deposits: target from the current w_CNY sigmoid
   //    value (the same figure driving the USD/RUB → CNY Weight chart above).
-  // NON_RUB_BY_INTENT: MOEX quotes SBBY/TLCB's unit price in RUB (so our
-  // `currency` column says RUB for them), but both funds actually hold
-  // CNY/foreign-currency bonds -- treat them as non-RUB by what they
-  // actually are, not by the currency their MOEX quote happens to be
-  // denominated in.
-  const NON_RUB_BY_INTENT = new Set(['SBBY', 'TLCB']);
-  const bondDepositRows = priced.filter(
-    r => r.asset_class === 'moex_bond' || r.asset_class === 'moex_ofz' ||
-         r.asset_class === 'moex_bond_etf' || r.asset_class === 'rub_deposit',
-  );
-  const isNonRub = r => NON_RUB_BY_INTENT.has(r.ticker) || r.currency !== 'RUB';
-  const rubCurrent = bondDepositRows.filter(r => !isNonRub(r)).reduce((s, r) => s + r.value_usd, 0);
-  const nonRubCurrent = bondDepositRows.filter(isNonRub).reduce((s, r) => s + r.value_usd, 0);
+  // `currency` here already reflects what each fund actually holds (see
+  // CURRENCY_OVERRIDE_BY_TICKER in update-market-prices/index.ts -- e.g.
+  // SBBY/TLCB are stored as CNY even though MOEX quotes their unit price
+  // in RUB), so a plain currency check is correct with no special-casing
+  // needed on this side.
+  const bondDepositRows = priced.filter(r => r.instrument_type === 'bond');
+  const rubCurrent = bondDepositRows.filter(r => r.currency === 'RUB').reduce((s, r) => s + r.value_usd, 0);
+  const nonRubCurrent = bondDepositRows.filter(r => r.currency !== 'RUB').reduce((s, r) => s + r.value_usd, 0);
   if (DATA.currentWCny !== undefined && DATA.currentWCny !== null) {
     const bdTotal = rubCurrent + nonRubCurrent;
     const targetNonRubPct = DATA.currentWCny * 100;

@@ -280,6 +280,13 @@ const RUB_DEPOSIT_PREFIX = 'ВКЛАД:';
 // it's a bond fund) and would need constant upkeep as new funds list.
 const MOEX_BOND_ETF_TICKERS = new Set(['TBRU', 'SAFE', 'SBMM', 'AKMB', 'AKMM', 'TLCB', 'SBBY']);
 
+// Of the bond ETFs above, SBBY and TLCB specifically hold CNY/foreign-
+// currency bonds even though MOEX quotes their per-unit price in RUB --
+// override the stored `currency` to reflect what the fund actually holds,
+// not its quote currency, so RUB-vs-non-RUB groupings downstream (e.g.
+// the My Portfolio "CNY weight" chart) are correct. User-confirmed.
+const CURRENCY_OVERRIDE_BY_TICKER: Record<string, string> = { SBBY: 'CNY', TLCB: 'CNY' };
+
 function classifyTicker(ticker: string): TickerClass {
   const t = ticker.toUpperCase();
   if (t.startsWith(RUB_DEPOSIT_PREFIX)) return 'rub_deposit';
@@ -655,12 +662,17 @@ async function fetchDistinctTickers(supabase: any): Promise<string[] | null> {
   return [...tickers].sort();
 }
 
+type InfraRegion = 'ru' | 'foreign';
+type InstrumentType = 'stock' | 'bond' | 'gold' | 'crypto';
+
 interface PriceRow {
   ticker: string;
   price_usd: number;
   native_price: number | null;
   currency: string | null;
   asset_class: string;
+  infra_region: InfraRegion;
+  instrument_type: InstrumentType;
   source: string;
   as_of: string | null;
 }
@@ -739,6 +751,8 @@ async function runUpdate(): Promise<Record<string, unknown>> {
         native_price: 1,
         currency: 'RUB',
         asset_class: 'rub_deposit',
+        infra_region: 'ru',
+        instrument_type: 'bond',
         source: 'cbr_fx',
         as_of: new Date().toISOString().slice(0, 10),
       });
@@ -752,18 +766,33 @@ async function runUpdate(): Promise<Record<string, unknown>> {
   const moexHits = await fetchMoexPrices(moexCandidates);
   for (const [ticker, info] of Object.entries(moexHits)) {
     const priceNative = info.price_rub;
-    const currency = normalizeCurrency(info.currency) ?? 'RUB';
-    const priceUsd = await toUsd(priceNative, currency, usdRubRate);
+    const quoteCurrency = normalizeCurrency(info.currency) ?? 'RUB';
+    const priceUsd = await toUsd(priceNative, quoteCurrency, usdRubRate);
     if (priceUsd === null) {
-      log(`  ${ticker}: MOEX price found but could not convert ${currency} -> USD, skipping`);
+      log(`  ${ticker}: MOEX price found but could not convert ${quoteCurrency} -> USD, skipping`);
       continue;
     }
+    // MOEX prices some funds' units in RUB even though the fund's actual
+    // holdings are foreign-currency bonds (e.g. SBBY/TLCB hold CNY bonds
+    // but their per-unit price on MOEX is quoted in RUB). `price_usd`
+    // above is still correctly converted from that RUB quote -- only the
+    // stored `currency` label is overridden here, so downstream RUB-vs-
+    // non-RUB groupings (e.g. the My Portfolio "CNY weight" chart) reflect
+    // what the fund actually holds, not the currency its quote happens to
+    // be denominated in.
+    const currency = CURRENCY_OVERRIDE_BY_TICKER[ticker.toUpperCase()] ?? quoteCurrency;
+    const instrumentType: InstrumentType =
+      (info.asset_class === 'moex_bond' || info.asset_class === 'moex_ofz' || info.asset_class === 'moex_bond_etf')
+        ? 'bond'
+        : 'stock';
     rowsOut.push({
       ticker,
       price_usd: Math.round(priceUsd * 1e6) / 1e6,
       native_price: priceNative,
       currency,
       asset_class: info.asset_class,
+      infra_region: 'ru',
+      instrument_type: instrumentType,
       source: 'moex_iss',
       as_of: info.as_of,
     });
@@ -788,6 +817,8 @@ async function runUpdate(): Promise<Record<string, unknown>> {
       native_price: hit.price,
       currency: hit.currency,
       asset_class: 'crypto',
+      infra_region: 'foreign',
+      instrument_type: ticker.toUpperCase() === 'XAU' ? 'gold' : 'crypto',
       source: 'yahoo_finance',
       as_of: hit.as_of,
     });
@@ -826,6 +857,8 @@ async function runUpdate(): Promise<Record<string, unknown>> {
       native_price: hit.price,
       currency: hit.currency,
       asset_class: assetClass,
+      infra_region: 'foreign',
+      instrument_type: 'stock',
       source: 'yahoo_finance',
       as_of: hit.as_of,
     });
