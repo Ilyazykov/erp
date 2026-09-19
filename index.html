@@ -1618,12 +1618,18 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel)
   if (noteEl) noteEl.style.display = '';
   if (titleEl) titleEl.style.display = '';
 
+  // Sector angular WIDTH = actual share (so the donut visually tiles up to
+  // 100% of what you actually hold); RADIAL extent still = current/target,
+  // unchanged -- bulging past the dotted reference circle = overweight vs
+  // target, falling short = underweight, regardless of how wide the wedge
+  // itself is drawn.
   const totalTarget = usable.reduce((s, it) => s + it.target, 0);
+  const totalCurrent = usable.reduce((s, it) => s + it.current, 0);
   let cursor = 0;
   const theta = [];
   const width = [];
   usable.forEach(it => {
-    const w = it.target / totalTarget * 360;
+    const w = totalCurrent > 0 ? (it.current / totalCurrent * 360) : (360 / usable.length);
     theta.push(cursor + w / 2);
     width.push(w);
     cursor += w;
@@ -1712,8 +1718,8 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel)
       },
       hovertemplate: usable.map((it, i) => {
         const pct = totalTarget > 0 ? (it.target / totalTarget * 100) : 0;
-        return `${it.label}<br>Target: <b>${pct.toFixed(2)}%</b> (sector angle)<br>` +
-               `Actual: <b>${it.current.toFixed(2)}%</b><extra></extra>`;
+        return `${it.label}<br>Actual: <b>${it.current.toFixed(2)}%</b> (sector angle)<br>` +
+               `Target: <b>${pct.toFixed(2)}%</b><extra></extra>`;
       }),
     },
     {
