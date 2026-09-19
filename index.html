@@ -320,28 +320,41 @@ function erpFill(dates, values, above) {
 function autoFitYOnXChange(divId, traces) {
   const el = document.getElementById(divId);
   let guard = false;
+  let debounceTimer = null;
+  // Precompute each point's timestamp once (rather than `new Date(...)` on
+  // every relayout event) -- with ~150 years of monthly data across
+  // several traces, re-parsing every x value on every rangeslider drag
+  // event was the actual cause of the US ERP tab hanging/stuttering on
+  // open: the rangeslider itself fires relayout events during its own
+  // initialization, so this ran its full O(points) scan repeatedly before
+  // the user even touched anything.
+  const cachedTimes = traces.map(t => (t.x || []).map(x => new Date(x).getTime()));
   el.on('plotly_relayout', (ev) => {
     if (guard) return;
     const x0 = ev['xaxis.range[0]'] || (ev['xaxis.range'] && ev['xaxis.range'][0]);
     const x1 = ev['xaxis.range[1]'] || (ev['xaxis.range'] && ev['xaxis.range'][1]);
     if (!x0 || !x1) return; // not an x-range change (e.g. autosize, legend click)
-    const lo = new Date(x0).getTime();
-    const hi = new Date(x1).getTime();
-    let yMin = Infinity, yMax = -Infinity;
-    for (const t of traces) {
-      if (!t.x || !t.y) continue;
-      for (let i = 0; i < t.x.length; i++) {
-        const xt = new Date(t.x[i]).getTime();
-        const yv = t.y[i];
-        if (yv === null || yv === undefined || xt < lo || xt > hi) continue;
-        if (yv < yMin) yMin = yv;
-        if (yv > yMax) yMax = yv;
-      }
-    }
-    if (!isFinite(yMin) || !isFinite(yMax)) return;
-    const pad = (yMax - yMin) * 0.08 || 1;
-    guard = true;
-    Plotly.relayout(divId, { 'yaxis.range': [yMin - pad, yMax + pad] }).then(() => { guard = false; });
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      const lo = new Date(x0).getTime();
+      const hi = new Date(x1).getTime();
+      let yMin = Infinity, yMax = -Infinity;
+      traces.forEach((t, ti) => {
+        if (!t.y) return;
+        const times = cachedTimes[ti];
+        for (let i = 0; i < times.length; i++) {
+          const xt = times[i];
+          const yv = t.y[i];
+          if (yv === null || yv === undefined || xt < lo || xt > hi) continue;
+          if (yv < yMin) yMin = yv;
+          if (yv > yMax) yMax = yv;
+        }
+      });
+      if (!isFinite(yMin) || !isFinite(yMax)) return;
+      const pad = (yMax - yMin) * 0.08 || 1;
+      guard = true;
+      Plotly.relayout(divId, { 'yaxis.range': [yMin - pad, yMax + pad] }).then(() => { guard = false; });
+    }, 60);
   });
 }
 
@@ -1419,7 +1432,11 @@ async function loadData() {
            ruTargetWeightsRaw: twRows,
            usTargetWeightsRaw: usTwRows,
            ruAllocTargetRaw: { base: allocBase, target: allocTarget },
-           currentWCny: wCny(sigmoidX, sigmoidM),
+           // The chart's actual displayed/current target (red dot + "w_CNY = NN%"
+           // annotation on the sigmoid tab) is the volatility-amplified value,
+           // NOT the plain fixed-k=15 wCny() -- using the latter here would
+           // silently disagree with the number the user sees on that chart.
+           currentWCny: sigmoidWCnyAmp,
            ruTickerColors: TICKER_COLORS,
            usTickerColors: US_COLORS };
 }
