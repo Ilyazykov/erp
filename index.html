@@ -1800,14 +1800,14 @@ async function mpRenderPortfolioPies() {
 
   // 4. RUB vs non-RUB bonds/deposits: target from the current w_CNY sigmoid
   //    value (the same figure driving the USD/RUB → CNY Weight chart above).
-  // `currency` here already reflects what each fund actually holds (see
-  // CURRENCY_OVERRIDE_BY_TICKER in update-market-prices/index.ts -- e.g.
-  // SBBY/TLCB are stored as CNY even though MOEX quotes their unit price
-  // in RUB), so a plain currency check is correct with no special-casing
-  // needed on this side.
+  // Uses `underlying_currency` (what the asset's holdings are actually
+  // denominated in), not `currency` (the exchange's quote currency) --
+  // e.g. SBBY/TLCB are quoted in RUB on MOEX but hold CNY bonds, so
+  // underlying_currency='CNY' for them even though currency='RUB'. See
+  // UNDERLYING_CURRENCY_BY_TICKER in update-market-prices/index.ts.
   const bondDepositRows = priced.filter(r => r.instrument_type === 'bond');
-  const rubCurrent = bondDepositRows.filter(r => r.currency === 'RUB').reduce((s, r) => s + r.value_usd, 0);
-  const nonRubCurrent = bondDepositRows.filter(r => r.currency !== 'RUB').reduce((s, r) => s + r.value_usd, 0);
+  const rubCurrent = bondDepositRows.filter(r => r.underlying_currency === 'RUB').reduce((s, r) => s + r.value_usd, 0);
+  const nonRubCurrent = bondDepositRows.filter(r => r.underlying_currency !== 'RUB').reduce((s, r) => s + r.value_usd, 0);
   if (DATA.currentWCny !== undefined && DATA.currentWCny !== null) {
     const bdTotal = rubCurrent + nonRubCurrent;
     const targetNonRubPct = DATA.currentWCny * 100;

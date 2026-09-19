@@ -281,11 +281,14 @@ const RUB_DEPOSIT_PREFIX = 'ВКЛАД:';
 const MOEX_BOND_ETF_TICKERS = new Set(['TBRU', 'SAFE', 'SBMM', 'AKMB', 'AKMM', 'TLCB', 'SBBY']);
 
 // Of the bond ETFs above, SBBY and TLCB specifically hold CNY/foreign-
-// currency bonds even though MOEX quotes their per-unit price in RUB --
-// override the stored `currency` to reflect what the fund actually holds,
-// not its quote currency, so RUB-vs-non-RUB groupings downstream (e.g.
-// the My Portfolio "CNY weight" chart) are correct. User-confirmed.
-const CURRENCY_OVERRIDE_BY_TICKER: Record<string, string> = { SBBY: 'CNY', TLCB: 'CNY' };
+// currency bonds even though MOEX quotes their per-unit price in RUB.
+// `currency` always stores the honest MOEX quote currency (RUB for both);
+// this maps a ticker to what its holdings are actually denominated in,
+// written to the separate `underlying_currency` column instead, so
+// RUB-vs-non-RUB groupings downstream (e.g. the My Portfolio "CNY weight"
+// chart) can tell the two apart without `currency` itself lying about the
+// quote. User-confirmed list.
+const UNDERLYING_CURRENCY_BY_TICKER: Record<string, string> = { SBBY: 'CNY', TLCB: 'CNY' };
 
 function classifyTicker(ticker: string): TickerClass {
   const t = ticker.toUpperCase();
@@ -673,6 +676,7 @@ interface PriceRow {
   asset_class: string;
   infra_region: InfraRegion;
   instrument_type: InstrumentType;
+  underlying_currency: string | null;
   source: string;
   as_of: string | null;
 }
@@ -753,6 +757,7 @@ async function runUpdate(): Promise<Record<string, unknown>> {
         asset_class: 'rub_deposit',
         infra_region: 'ru',
         instrument_type: 'bond',
+        underlying_currency: 'RUB',
         source: 'cbr_fx',
         as_of: new Date().toISOString().slice(0, 10),
       });
@@ -772,27 +777,26 @@ async function runUpdate(): Promise<Record<string, unknown>> {
       log(`  ${ticker}: MOEX price found but could not convert ${quoteCurrency} -> USD, skipping`);
       continue;
     }
-    // MOEX prices some funds' units in RUB even though the fund's actual
-    // holdings are foreign-currency bonds (e.g. SBBY/TLCB hold CNY bonds
-    // but their per-unit price on MOEX is quoted in RUB). `price_usd`
-    // above is still correctly converted from that RUB quote -- only the
-    // stored `currency` label is overridden here, so downstream RUB-vs-
-    // non-RUB groupings (e.g. the My Portfolio "CNY weight" chart) reflect
-    // what the fund actually holds, not the currency its quote happens to
-    // be denominated in.
-    const currency = CURRENCY_OVERRIDE_BY_TICKER[ticker.toUpperCase()] ?? quoteCurrency;
+    // `currency` is always the honest MOEX quote currency. MOEX prices
+    // some funds' units in RUB even though the fund's actual holdings are
+    // foreign-currency bonds (e.g. SBBY/TLCB hold CNY bonds but their
+    // per-unit price on MOEX is quoted in RUB) -- that distinction is
+    // captured separately in `underlying_currency`, not by changing
+    // `currency` itself.
     const instrumentType: InstrumentType =
       (info.asset_class === 'moex_bond' || info.asset_class === 'moex_ofz' || info.asset_class === 'moex_bond_etf')
         ? 'bond'
         : 'stock';
+    const underlyingCurrency = UNDERLYING_CURRENCY_BY_TICKER[ticker.toUpperCase()] ?? quoteCurrency;
     rowsOut.push({
       ticker,
       price_usd: Math.round(priceUsd * 1e6) / 1e6,
       native_price: priceNative,
-      currency,
+      currency: quoteCurrency,
       asset_class: info.asset_class,
       infra_region: 'ru',
       instrument_type: instrumentType,
+      underlying_currency: underlyingCurrency,
       source: 'moex_iss',
       as_of: info.as_of,
     });
@@ -819,6 +823,7 @@ async function runUpdate(): Promise<Record<string, unknown>> {
       asset_class: 'crypto',
       infra_region: 'foreign',
       instrument_type: ticker.toUpperCase() === 'XAU' ? 'gold' : 'crypto',
+      underlying_currency: hit.currency,
       source: 'yahoo_finance',
       as_of: hit.as_of,
     });
@@ -859,6 +864,7 @@ async function runUpdate(): Promise<Record<string, unknown>> {
       asset_class: assetClass,
       infra_region: 'foreign',
       instrument_type: 'stock',
+      underlying_currency: hit.currency,
       source: 'yahoo_finance',
       as_of: hit.as_of,
     });
