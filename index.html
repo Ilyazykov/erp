@@ -1811,9 +1811,40 @@ function mpAllocatePoolByZPriorityWithLots(usable, totalUsd, userInjectionUsd) {
         }
       });
       pool -= placedThisPass;
-      // No ticker in this group could afford another whole share with
-      // what's left -- stop looping this group, carry the rest forward.
-      if (placedThisPass <= 0) break;
+      if (placedThisPass > 0) continue;
+      // Pro-rata placement stalled: every candidate's shortfall-weighted
+      // share rounded down to 0 shares, typically because a much larger
+      // shortfall in the same group ate most of the pool. Rather than
+      // stranding this money for the rest of the group (per the user: "if
+      // nothing else in this group can be bought but money is left, buy
+      // the cheap one anyway"), fall back to cheapest-first: hand out one
+      // lot at a time, cheapest candidate first, until nobody left in the
+      // group can afford even one more share. This never exceeds a
+      // ticker's own shortfall and (for gray/red) never crosses target,
+      // matching the same rounding rules as the pro-rata path above.
+      let placedFallback = 0;
+      for (;;) {
+        const candidates = usable
+          .filter(it => groupFilter(it) && isBelowTarget(it) && it.priceUsd > 0)
+          .sort((a, b) => a.priceUsd - b.priceUsd);
+        let placedThisRound = 0;
+        for (const it of candidates) {
+          if (pool <= 0) break;
+          const remaining = shortfallOf(it);
+          if (remaining <= 0) continue;
+          const cost = isGreenGroup
+            ? roundToLotAllowOvershoot(it, Math.min(remaining, pool), pool)
+            : roundDownToLot(it, Math.min(remaining, pool), pool);
+          if (cost > 0) {
+            deltaUsdByItem.set(it, deltaUsdByItem.get(it) + cost);
+            pool -= cost;
+            placedThisRound += cost;
+          }
+        }
+        if (placedThisRound <= 0) break;
+        placedFallback += placedThisRound;
+      }
+      if (placedFallback <= 0) break;
     }
   });
 
@@ -2096,6 +2127,21 @@ async function mpRenderPortfolioPies() {
     valueByTicker[r.ticker] = (valueByTicker[r.ticker] || 0) + r.value_usd;
     if (r.price_usd) priceUsdByTicker[r.ticker] = r.price_usd;
   });
+  // portfolio_value_usd only has rows for tickers the user actually holds
+  // (it's a left join FROM current_holdings) -- a target-list ticker with
+  // zero shares never gets a row there, so its price would otherwise show
+  // as n/a and the lot-aware allocator couldn't buy it from zero. Fetch
+  // market_prices directly (world-readable, no RLS restriction) for the
+  // rest of the target universe to fill those in.
+  const targetUniverseTickers = [...RU_STOCK_TICKERS, ...US_STOCK_TICKERS];
+  const missingPriceTickers = targetUniverseTickers.filter(t => !(t in priceUsdByTicker));
+  if (missingPriceTickers.length) {
+    const { data: extraPrices } = await sb.from('market_prices')
+      .select('ticker, price_usd').in('ticker', missingPriceTickers);
+    (extraPrices || []).forEach(r => {
+      if (r.price_usd) priceUsdByTicker[r.ticker] = r.price_usd;
+    });
+  }
 
   // 1. US stocks: sector width = each stock's actual (current) weight (see
   //    mpDrawTargetDonut); radial extent = current/target, where target is

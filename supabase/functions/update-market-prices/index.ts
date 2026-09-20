@@ -90,6 +90,21 @@ const HTTP_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
 };
 
+// The "My Portfolio" tab's target-weight tickers (US_STOCK_TICKERS /
+// RU_STOCK_TICKERS in index.html) -- kept in sync manually, same as
+// SEED_TICKERS below. Always fetched in addition to whatever's actually in
+// `trades`, so a ticker that's in the target allocation but not yet held
+// (e.g. current=$0, waiting to be bought) still gets a real price instead
+// of showing "n/a" in the Price / share column and being unbuyable by the
+// lot-aware allocator.
+const TARGET_UNIVERSE_TICKERS = [
+  'SBER', 'YDEX', 'T', 'DOMRF', 'TRND', 'OZON', 'AKME', 'AKFN', 'ROSN', 'VTBR', 'GMKN', 'PLZL', 'IRAO',
+  'GOOGL', 'NVDA', 'LLY', 'CAT', 'LIN', 'GE', 'AMZN', 'WMT', 'XOM', 'NEE', 'PLD',
+  'JPM', 'BRK-B', 'JNJ', 'META', 'V', 'MA', 'HOOD', 'MSFT', 'AAPL', 'ABBV',
+  'TSLA', 'HD', 'PG', 'KO', 'SHEL', 'CVX', 'SHW', 'DUK', 'AMT', 'SOFI', 'XYZ',
+  'INTC', 'SPCX', 'FCX', 'SO', 'EQIX',
+];
+
 // Bootstrap/offline-dev ticker set only -- used solely as a fallback when
 // the Supabase distinct-ticker query is unavailable or empty. NOT the
 // supported universe; see module docstring.
@@ -720,6 +735,9 @@ async function runUpdate(): Promise<Record<string, unknown>> {
   } else {
     log(`Found ${tickers.length} distinct tickers across all users' trades.`);
   }
+  // Always include the target-allocation universe too, regardless of what
+  // any user currently holds -- see TARGET_UNIVERSE_TICKERS.
+  tickers = [...new Set([...tickers, ...TARGET_UNIVERSE_TICKERS])].sort();
 
   const usdRubRate = await latestUsdRubRate();
   log(`Latest USD/RUB rate: ${usdRubRate}`);
