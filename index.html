@@ -163,6 +163,10 @@
 </p>
 <div id="targetweights_table_wrap"></div>
 <h3 class="section-title" id="mp_pie_ru_stocks_title" style="display:none">Your current portfolio — Russian stocks breakdown</h3>
+<div class="form-row" id="mp_ru_stocks_invest_row" style="display:none">
+  <label for="mp_ru_stocks_invest_amount">Money to allocate (RUB):</label>
+  <input type="number" id="mp_ru_stocks_invest_amount" step="any" min="0" placeholder="0" value="0">
+</div>
 <div id="plot_mp_pie_ru_stocks" style="height:420px; max-width:520px; margin:8px auto 0; display:none"></div>
 <p class="note" id="mp_pie_ru_stocks_note" style="display:none">
   Based on the trades you imported in the My Portfolio tab: breakdown across the 10 Russian
@@ -1600,62 +1604,73 @@ function mpDonutLayout(maxR) {
 // (optional) lets one call site customize that column's header text (e.g.
 // "Target CNY sale (RUB)" for the RUB/CNY donut) instead of the generic
 // default, since the same function backs 4 differently-themed tables.
-// Solves for a single external cash injection X (added once, split across
-// every ticker that needs buying) such that as many tickers as possible
-// land EXACTLY on their target% simultaneously, without selling anything
-// (tickers whose target the current holding already exceeds are held, not
-// sold, per the user's rule -- selling is reserved for Z < -1.5 tickers
-// specifically, handled by the caller before this runs). This is NOT the
-// same as computing each ticker's "add to reach target" independently
-// (that produces N mutually-inconsistent scenarios) -- seeing multiple
-// tickers underweight at once requires solving them together, since
-// buying into one shifts the shared total that every other %-target
-// depends on.
+// Allocates a user-supplied cash injection (plus proceeds from selling
+// down overweight Z<-1.5 tickers) across the portfolio to move as many
+// tickers as possible onto their target%, following a strict priority
+// order rather than one global simultaneous solve:
 //
-// Method: partition tickers into "underweight" (current% < target%) and
-// "overweight" (held fixed) sets, solve the total T' that makes every
-// underweight ticker's target% exact against T', then re-check the
-// partition against T' (a ticker very close to target may flip sides once
-// T' grows) and repeat until stable. Converges in practice within a few
-// iterations for a fixed ticker list.
-// Tickers with `sellPreferred` (Z < -1.5) are excluded from the buy
-// candidate pool entirely -- they should be sold down to target instead,
-// even if their current holding happens to be below target; only when a
-// caller determines a sell isn't possible should such a ticker be passed
-// in without sellPreferred set, at which point it's treated like any
-// other underweight candidate.
-function mpSolveGlobalBuyToTarget(usable, totalUsd) {
-  const T = totalUsd;
-  const currentUsdOf = (it) => it.current / 100 * T;
+//   0. pool = userInjectionUsd
+//   1. SELL every Z<-1.5 ticker that's currently ABOVE its target (down to
+//      target, never below) -- proceeds go into the pool. Recompute the
+//      portfolio total (unchanged by this step: money just moves from the
+//      asset into the pool) and derive each ticker's target in absolute
+//      USD from the ORIGINAL total (selling doesn't change the total, so
+//      target amounts don't move either).
+//   2. Z>+1.5 tickers that are below target split the pool, each getting
+//      a share proportional to ITS OWN shortfall (target - current) --
+//      capped so no one gets more than needed to exactly reach target.
+//   3. Any pool left over goes the same way to neutral-Z tickers
+//      (-1.5 <= Z <= 1.5) that are below target.
+//   4. Any pool still left over goes to Z<-1.5 tickers that are below
+//      target (didn't get sold in step 1 because they were already
+//      underweight).
+//
+// Returns { deltaUsdByItem, newTotalUsd } where deltaUsdByItem is signed
+// (negative = sold, positive = bought) and newTotalUsd = original total +
+// userInjectionUsd (selling doesn't change the total; only fresh money
+// does).
+function mpAllocatePoolByZPriority(usable, totalUsd, userInjectionUsd) {
   const totalTarget = usable.reduce((s, it) => s + it.target, 0);
-  const targetPctOf = (it) => totalTarget > 0 ? (it.target / totalTarget * 100) : 0;
-  const buyCandidates = usable.filter(it => !it.sellPreferred);
+  const targetUsdOf = (it) => totalTarget > 0 ? (it.target / totalTarget * totalUsd) : 0;
+  const currentUsdOf = (it) => it.current / 100 * totalUsd;
 
-  let underweight = new Set(buyCandidates.filter(it => currentUsdOf(it) < targetPctOf(it) / 100 * T));
-  let tPrime = T;
-  for (let iter = 0; iter < 25; iter++) {
-    const cU = [...underweight].reduce((s, it) => s + currentUsdOf(it), 0);
-    const sU = [...underweight].reduce((s, it) => s + targetPctOf(it), 0) / 100;
-    if (sU >= 1 || !underweight.size) break;
-    const nextTPrime = (T - cU) / (1 - sU);
-    const nextUnderweight = new Set(buyCandidates.filter(it => currentUsdOf(it) < targetPctOf(it) / 100 * nextTPrime));
-    tPrime = nextTPrime;
-    if (nextUnderweight.size === underweight.size && [...nextUnderweight].every(it => underweight.has(it))) {
-      underweight = nextUnderweight;
-      break;
-    }
-    underweight = nextUnderweight;
-  }
+  const deltaUsdByItem = new Map(usable.map(it => [it, 0]));
+  let pool = Math.max(0, userInjectionUsd || 0);
 
-  const buyUsdByItem = new Map();
+  // Step 1: sell overweight Z<-1.5 tickers down to target.
   usable.forEach(it => {
-    if (underweight.has(it)) {
-      buyUsdByItem.set(it, Math.max(0, targetPctOf(it) / 100 * tPrime - currentUsdOf(it)));
-    } else {
-      buyUsdByItem.set(it, 0);
+    if (it.z !== null && it.z !== undefined && it.z < -1.5) {
+      const excess = currentUsdOf(it) - targetUsdOf(it);
+      if (excess > 0) {
+        deltaUsdByItem.set(it, -excess);
+        pool += excess;
+      }
     }
   });
-  return { buyUsdByItem, newTotalUsd: tPrime };
+
+  // Steps 2-4: fill shortfalls in priority-group order, proportional to
+  // each ticker's own shortfall, never exceeding it.
+  const isBelowTarget = (it) => currentUsdOf(it) + deltaUsdByItem.get(it) < targetUsdOf(it) - 0.005;
+  const shortfallOf = (it) => targetUsdOf(it) - (currentUsdOf(it) + deltaUsdByItem.get(it));
+  const groups = [
+    usable.filter(it => it.z !== null && it.z !== undefined && it.z > 1.5 && isBelowTarget(it)),
+    usable.filter(it => (it.z === null || it.z === undefined || (it.z >= -1.5 && it.z <= 1.5)) && isBelowTarget(it)),
+    usable.filter(it => it.z !== null && it.z !== undefined && it.z < -1.5 && isBelowTarget(it)),
+  ];
+  for (const group of groups) {
+    if (pool <= 0 || !group.length) continue;
+    const totalShortfall = group.reduce((s, it) => s + shortfallOf(it), 0);
+    if (totalShortfall <= 0) continue;
+    if (pool >= totalShortfall) {
+      group.forEach(it => deltaUsdByItem.set(it, deltaUsdByItem.get(it) + shortfallOf(it)));
+      pool -= totalShortfall;
+    } else {
+      group.forEach(it => deltaUsdByItem.set(it, deltaUsdByItem.get(it) + shortfallOf(it) / totalShortfall * pool));
+      pool = 0;
+    }
+  }
+
+  return { deltaUsdByItem, newTotalUsd: totalUsd + Math.max(0, userInjectionUsd || 0), leftoverPoolUsd: pool };
 }
 
 function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel, opts) {
@@ -1663,16 +1678,19 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
   const noteEl = document.getElementById(noteId);
   const titleEl = document.getElementById(noteId.replace('_note', '_title'));
   const tableEl = document.getElementById(noteId.replace('_note', '_table_wrap'));
+  const investRowEl = (opts && opts.investRowId) ? document.getElementById(opts.investRowId) : null;
   if (!plotEl) return;
   const usable = items.filter(it => it.target > 0);
   if (!usable.length || !usable.some(it => it.current > 0)) {
     plotEl.style.display = 'none';
     if (noteEl) noteEl.style.display = 'none';
     if (titleEl) titleEl.style.display = 'none';
+    if (investRowEl) investRowEl.style.display = 'none';
     if (tableEl) tableEl.innerHTML = '';
     return;
   }
   plotEl.style.display = '';
+  if (investRowEl) investRowEl.style.display = '';
   if (noteEl) noteEl.style.display = '';
   if (titleEl) titleEl.style.display = '';
 
@@ -1707,25 +1725,28 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
   });
   const maxR = Math.max(R_BASE, ...radial);
 
-  if (tableEl && opts && opts.globalBuyLogic) {
+  if (tableEl && opts && opts.zPriorityAllocation) {
     const usdRubRate = DATA && DATA.currentUsdRub;
     const totalUsd = sharedTotalUsd;
-    const { buyUsdByItem, newTotalUsd } = totalUsd
-      ? mpSolveGlobalBuyToTarget(usable, totalUsd)
-      : { buyUsdByItem: new Map(), newTotalUsd: null };
+    const userInjectionRub = opts.userInjectionRub || 0;
+    const userInjectionUsd = usdRubRate ? userInjectionRub / usdRubRate : 0;
+    const { deltaUsdByItem, newTotalUsd, leftoverPoolUsd } = totalUsd
+      ? mpAllocatePoolByZPriority(usable, totalUsd, userInjectionUsd)
+      : { deltaUsdByItem: new Map(), newTotalUsd: null, leftoverPoolUsd: 0 };
     let totalCurrentRub = 0;
     let totalNewRub = 0;
     const rowsHtml = usable.map(it => {
       const currentUsd = totalUsd ? it.current / 100 * totalUsd : null;
       const currentRubStr = (usdRubRate && currentUsd !== null)
         ? `₽${(currentUsd * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })}` : 'n/a';
-      const buyUsd = buyUsdByItem.get(it) || 0;
-      let addExternalStr = '—';
-      if (it.sellPreferred) {
-        addExternalStr = 'Sell to target';
-      } else if (buyUsd > 0.5) {
-        addExternalStr = `+$${buyUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-        if (usdRubRate) addExternalStr += ` (₽${(buyUsd * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })})`;
+      const deltaUsd = deltaUsdByItem.get(it) || 0;
+      let actionStr = '—';
+      if (deltaUsd > 0.5) {
+        actionStr = `Buy $${deltaUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+        if (usdRubRate) actionStr += ` (₽${(deltaUsd * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })})`;
+      } else if (deltaUsd < -0.5) {
+        actionStr = `Sell $${Math.abs(deltaUsd).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+        if (usdRubRate) actionStr += ` (₽${(Math.abs(deltaUsd) * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })})`;
       }
       // Color reflects the Z-score signal (same thresholds as the Yield
       // per Stock & Rebalancing table's own Z-score column above), not
@@ -1733,14 +1754,13 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
       const actionCls = it.z === null || it.z === undefined ? 'muted' : (it.z > 1.5 ? 'pos' : (it.z < -1.5 ? 'neg' : 'muted'));
       const targetPct = totalTarget > 0 ? (it.target / totalTarget * 100) : 0;
       // Validation column: this row's share of the grand total AFTER
-      // applying the buy above -- computed independently from Actual %,
-      // so if the global solver is correct, every row here should sum to
-      // 100% and match its own Target % (except sellPreferred/held rows,
-      // which stay above target by design).
+      // applying the allocation above -- computed independently from
+      // Actual %, so if the allocator is correct, every row here should
+      // sum to 100%.
       let newPctStr = 'n/a';
       let newRubStr = 'n/a';
       if (currentUsd !== null && newTotalUsd) {
-        const newUsd = currentUsd + buyUsd;
+        const newUsd = currentUsd + deltaUsd;
         newPctStr = `${(newUsd / newTotalUsd * 100).toFixed(2)}%`;
         if (usdRubRate) {
           newRubStr = `₽${(newUsd * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
@@ -1753,7 +1773,7 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
         <td>${currentRubStr}</td>
         <td>${it.current.toFixed(2)}%</td>
         <td>${targetPct.toFixed(2)}%</td>
-        <td class="${actionCls}">${addExternalStr}</td>
+        <td class="${actionCls}">${actionStr}</td>
         <td>${newRubStr}</td>
         <td>${newPctStr}</td>
       </tr>`;
@@ -1768,8 +1788,11 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
       <td><b>100.00%</b></td>
     </tr>`;
     tableEl.innerHTML = `<table class="data-table"><thead><tr>
-      <th>Label</th><th>Current (RUB)</th><th>Actual %</th><th>Target %</th><th>Add externally (USD)</th><th>New (RUB)</th><th>New %</th>
-    </tr></thead><tbody>${rowsHtml}${totalRow}</tbody></table>`;
+      <th>Label</th><th>Current (RUB)</th><th>Actual %</th><th>Target %</th><th>Buy / Sell</th><th>New (RUB)</th><th>New %</th>
+    </tr></thead><tbody>${rowsHtml}${totalRow}</tbody></table>` +
+    (leftoverPoolUsd > 0.5 && usdRubRate
+      ? `<p class="empty-note">₽${(leftoverPoolUsd * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })} left unallocated -- every ticker below target has already been filled to it.</p>`
+      : '');
   } else if (tableEl) {
     const usdRubRate = DATA && DATA.currentUsdRub;
     tableEl.innerHTML = `<table class="data-table"><thead><tr>
@@ -1897,13 +1920,14 @@ async function mpRenderPortfolioPies() {
   // 2. Russian stocks: same idea, using the 10-stock target list and its
   //    own Z-score-adjusted Target column.
   const ruStockTotal = RU_STOCK_TICKERS.reduce((s, t) => s + (valueByTicker[t] || 0), 0);
+  const ruInvestInputEl = document.getElementById('mp_ru_stocks_invest_amount');
+  const ruUserInjectionRub = ruInvestInputEl ? (parseFloat(ruInvestInputEl.value) || 0) : 0;
   mpDrawTargetDonut('plot_mp_pie_ru_stocks', 'mp_pie_ru_stocks_note',
     (DATA.ruTargetWeightsRaw || []).map(r => ({
       label: r.ticker, target: r.target, current: (valueByTicker[r.ticker] || 0) / (ruStockTotal || 1) * 100,
       color: (DATA.ruTickerColors || {})[r.ticker] || '#8b949e',
       z: r.z,
-      sellPreferred: r.z !== null && r.z < -1.5,
-    })), ruStockTotal, null, { globalBuyLogic: true });
+    })), ruStockTotal, null, { zPriorityAllocation: true, userInjectionRub: ruUserInjectionRub, investRowId: 'mp_ru_stocks_invest_row' });
 
   // 3. Russian stocks vs Russian bonds: target from the ERP & Stocks/Bonds
   //    Allocation tab's own base/target allocation. "Stocks" is the same
@@ -1966,7 +1990,13 @@ function mpUpdateAuthUi(session) {
       .forEach(id => { document.getElementById(id).style.display = 'none'; });
     ['mp_pie_us_stocks_table_wrap', 'mp_pie_ru_stocks_table_wrap', 'mp_pie_stocksbonds_table_wrap', 'mp_pie_deposits_table_wrap']
       .forEach(id => { document.getElementById(id).innerHTML = ''; });
+    document.getElementById('mp_ru_stocks_invest_row').style.display = 'none';
   }
+}
+
+const mpRuStocksInvestInput = document.getElementById('mp_ru_stocks_invest_amount');
+if (mpRuStocksInvestInput) {
+  mpRuStocksInvestInput.addEventListener('input', () => { mpRenderPortfolioPies(); });
 }
 
 sb.auth.getSession().then(({ data: { session } }) => mpUpdateAuthUi(session));
