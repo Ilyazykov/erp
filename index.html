@@ -1971,7 +1971,14 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
     tableEl.innerHTML = `<table class="data-table"><thead><tr>
       <th>Label</th><th>Current ${moneyColLabel}</th><th>Price / share</th><th>Actual %</th><th>Target %</th><th>Buy / Sell</th><th>New ${moneyColLabel}</th><th>New %</th>
     </tr></thead><tbody>${rowsHtml}${totalRow}</tbody></table>` +
-    (leftoverPoolUsd > 0.5 && canDisplayMoney
+    // Threshold is in the DISPLAY currency, not USD -- leftoverPoolUsd is
+    // always in USD internally, but at RUB scale (~84 RUB/USD) a leftover
+    // of e.g. 22 RUB (~$0.26) previously fell under a flat "> 0.5" (USD)
+    // check and silently vanished, while a 50 RUB leftover (~$0.59) did
+    // show. Compare the actual displayed amount instead, so the message
+    // appears whenever there's at least ~0.5 of whichever currency is
+    // shown.
+    ((displayCcy === 'USD' ? leftoverPoolUsd : leftoverPoolUsd * (usdRubRate || 0)) > 0.5 && canDisplayMoney
       ? `<p class="empty-note">${fmtMoney(leftoverPoolUsd)} left unallocated -- every ticker below target has already been filled to it.</p>`
       : '');
   } else if (tableEl) {
