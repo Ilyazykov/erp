@@ -163,15 +163,15 @@
 </p>
 <div id="targetweights_table_wrap"></div>
 <h3 class="section-title" id="mp_pie_ru_stocks_title" style="display:none">Your current portfolio — Russian stocks breakdown</h3>
-<div class="form-row" id="mp_ru_stocks_invest_row" style="display:none">
+<div id="plot_mp_pie_ru_stocks" style="height:420px; max-width:520px; margin:8px auto 0; display:none"></div>
+<p class="note" id="mp_pie_ru_stocks_note" style="display:none">
+  Based on the trades you imported in the My Portfolio tab: breakdown across the Russian
+  stocks in this portfolio's target list, by current USD value.
+</p>
+<div class="form-row" id="mp_ru_stocks_invest_row" style="display:none; margin-top:12px">
   <label for="mp_ru_stocks_invest_amount">Money to allocate (RUB):</label>
   <input type="number" id="mp_ru_stocks_invest_amount" step="any" min="0" placeholder="0" value="0">
 </div>
-<div id="plot_mp_pie_ru_stocks" style="height:420px; max-width:520px; margin:8px auto 0; display:none"></div>
-<p class="note" id="mp_pie_ru_stocks_note" style="display:none">
-  Based on the trades you imported in the My Portfolio tab: breakdown across the 10 Russian
-  stocks in this portfolio's target list, by current USD value.
-</p>
 <div id="mp_pie_ru_stocks_table_wrap"></div>
 </div>
 
@@ -1561,7 +1561,11 @@ async function mpRenderCashFlows() {
 // ---- Portfolio-composition pie charts (embedded in the existing tabs) ----
 // All four read the same portfolio_value_usd snapshot once, then slice it
 // differently client-side -- no extra network round-trips per chart.
-const RU_STOCK_TICKERS = ['SBER', 'YDEX', 'T', 'DOMRF', 'OZON', 'ROSN', 'VTBR', 'GMKN', 'PLZL', 'IRAO'];
+// Same ticker set as data/target_weights.json (equities + the three
+// target-list funds TRND/AKME/AKFN). Must include every row shown in the
+// Russian-stocks donut, otherwise Actual%/New% are computed against a
+// smaller denominator than the RUB columns.
+const RU_STOCK_TICKERS = ['SBER', 'YDEX', 'T', 'DOMRF', 'TRND', 'OZON', 'AKME', 'AKFN', 'ROSN', 'VTBR', 'GMKN', 'PLZL', 'IRAO'];
 // Same 37-ticker list as US_TICKERS inside loadData()'s renderChart('usstocks')
 // closure -- duplicated here (tickers only, weights not needed) since that
 // one is local to loadData() and this code runs independently of chart
@@ -1609,13 +1613,12 @@ function mpDonutLayout(maxR) {
 // tickers as possible onto their target%, following a strict priority
 // order rather than one global simultaneous solve:
 //
-//   0. pool = userInjectionUsd
+//   0. pool = userInjectionUsd. Portfolio total for target amounts is
+//      original holdings + this injection (selling only moves money from
+//      a ticker into the pool; it does not change the total).
 //   1. SELL every Z<-1.5 ticker that's currently ABOVE its target (down to
-//      target, never below) -- proceeds go into the pool. Recompute the
-//      portfolio total (unchanged by this step: money just moves from the
-//      asset into the pool) and derive each ticker's target in absolute
-//      USD from the ORIGINAL total (selling doesn't change the total, so
-//      target amounts don't move either).
+//      target, never below) -- proceeds go into the pool. Absolute target
+//      USD = target% × (original total + injection).
 //   2. Z>+1.5 tickers that are below target split the pool, each getting
 //      a share proportional to ITS OWN shortfall (target - current) --
 //      capped so no one gets more than needed to exactly reach target.
@@ -1625,19 +1628,20 @@ function mpDonutLayout(maxR) {
 //      target (didn't get sold in step 1 because they were already
 //      underweight).
 //
-// Returns { deltaUsdByItem, newTotalUsd } where deltaUsdByItem is signed
-// (negative = sold, positive = bought) and newTotalUsd = original total +
-// userInjectionUsd (selling doesn't change the total; only fresh money
-// does).
+// Returns { deltaUsdByItem, newTotalUsd, leftoverPoolUsd } where
+// deltaUsdByItem is signed (negative = sold, positive = bought) and
+// newTotalUsd = original total + userInjectionUsd.
 function mpAllocatePoolByZPriority(usable, totalUsd, userInjectionUsd) {
   const totalTarget = usable.reduce((s, it) => s + it.target, 0);
-  const targetUsdOf = (it) => totalTarget > 0 ? (it.target / totalTarget * totalUsd) : 0;
+  const injection = Math.max(0, userInjectionUsd || 0);
+  const newTotalUsd = totalUsd + injection;
+  const targetUsdOf = (it) => totalTarget > 0 ? (it.target / totalTarget * newTotalUsd) : 0;
   const currentUsdOf = (it) => it.current / 100 * totalUsd;
 
   const deltaUsdByItem = new Map(usable.map(it => [it, 0]));
-  let pool = Math.max(0, userInjectionUsd || 0);
+  let pool = injection;
 
-  // Step 1: sell overweight Z<-1.5 tickers down to target.
+  // Step 1: sell overweight Z<-1.5 tickers down to the new target amount.
   usable.forEach(it => {
     if (it.z !== null && it.z !== undefined && it.z < -1.5) {
       const excess = currentUsdOf(it) - targetUsdOf(it);
@@ -1670,7 +1674,7 @@ function mpAllocatePoolByZPriority(usable, totalUsd, userInjectionUsd) {
     }
   }
 
-  return { deltaUsdByItem, newTotalUsd: totalUsd + Math.max(0, userInjectionUsd || 0), leftoverPoolUsd: pool };
+  return { deltaUsdByItem, newTotalUsd, leftoverPoolUsd: pool };
 }
 
 function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel, opts) {
@@ -1735,11 +1739,19 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
       : { deltaUsdByItem: new Map(), newTotalUsd: null, leftoverPoolUsd: 0 };
     let totalCurrentRub = 0;
     let totalNewRub = 0;
-    const rowsHtml = usable.map(it => {
+    const rowData = usable.map(it => {
       const currentUsd = totalUsd ? it.current / 100 * totalUsd : null;
+      const deltaUsd = deltaUsdByItem.get(it) || 0;
+      const newUsd = currentUsd !== null ? currentUsd + deltaUsd : null;
+      return { it, currentUsd, deltaUsd, newUsd };
+    });
+    // New % is each row's share of the allocated stock total (the New
+    // (RUB) column), not of original+injection which still includes any
+    // leftover cash that never made it into a ticker.
+    const allocatedNewUsd = rowData.reduce((s, r) => s + (r.newUsd || 0), 0);
+    const rowsHtml = rowData.map(({ it, currentUsd, deltaUsd, newUsd }) => {
       const currentRubStr = (usdRubRate && currentUsd !== null)
         ? `₽${(currentUsd * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })}` : 'n/a';
-      const deltaUsd = deltaUsdByItem.get(it) || 0;
       let actionStr = '—';
       if (deltaUsd > 0.5) {
         actionStr = `Buy $${deltaUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
@@ -1753,15 +1765,10 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
       // whether this row happens to be a buy/hold/sell action.
       const actionCls = it.z === null || it.z === undefined ? 'muted' : (it.z > 1.5 ? 'pos' : (it.z < -1.5 ? 'neg' : 'muted'));
       const targetPct = totalTarget > 0 ? (it.target / totalTarget * 100) : 0;
-      // Validation column: this row's share of the grand total AFTER
-      // applying the allocation above -- computed independently from
-      // Actual %, so if the allocator is correct, every row here should
-      // sum to 100%.
       let newPctStr = 'n/a';
       let newRubStr = 'n/a';
-      if (currentUsd !== null && newTotalUsd) {
-        const newUsd = currentUsd + deltaUsd;
-        newPctStr = `${(newUsd / newTotalUsd * 100).toFixed(2)}%`;
+      if (newUsd !== null && allocatedNewUsd) {
+        newPctStr = `${(newUsd / allocatedNewUsd * 100).toFixed(2)}%`;
         if (usdRubRate) {
           newRubStr = `₽${(newUsd * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
           totalCurrentRub += currentUsd * usdRubRate;
