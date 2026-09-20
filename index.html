@@ -1731,16 +1731,19 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
       // per Stock & Rebalancing table's own Z-score column above), not
       // whether this row happens to be a buy/hold/sell action.
       const actionCls = it.z === null || it.z === undefined ? 'muted' : (it.z > 1.5 ? 'pos' : (it.z < -1.5 ? 'neg' : 'muted'));
+      const targetPct = totalTarget > 0 ? (it.target / totalTarget * 100) : 0;
       // Validation column: this row's share of the grand total AFTER
       // applying the buy above -- computed independently from Actual %,
       // so if the global solver is correct, every row here should sum to
       // 100% and match its own Target % (except sellPreferred/held rows,
       // which stay above target by design).
       let newPctStr = 'n/a';
+      let newRubStr = 'n/a';
       if (currentUsd !== null && newTotalUsd) {
         const newUsd = currentUsd + buyUsd;
         newPctStr = `${(newUsd / newTotalUsd * 100).toFixed(2)}%`;
         if (usdRubRate) {
+          newRubStr = `₽${(newUsd * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
           totalCurrentRub += currentUsd * usdRubRate;
           totalNewRub += newUsd * usdRubRate;
         }
@@ -1749,7 +1752,9 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
         <td class="ticker" style="color:${it.color}">${mpEscapeHtml(it.label)}</td>
         <td>${currentRubStr}</td>
         <td>${it.current.toFixed(2)}%</td>
+        <td>${targetPct.toFixed(2)}%</td>
         <td class="${actionCls}">${addExternalStr}</td>
+        <td>${newRubStr}</td>
         <td>${newPctStr}</td>
       </tr>`;
     }).join('');
@@ -1757,11 +1762,13 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
       <td><b>Total</b></td>
       <td><b>${usdRubRate ? '₽' + totalCurrentRub.toLocaleString(undefined, { maximumFractionDigits: 0 }) : 'n/a'}</b></td>
       <td><b>100.00%</b></td>
+      <td><b>100.00%</b></td>
       <td><b>${usdRubRate ? '₽' + (totalNewRub - totalCurrentRub).toLocaleString(undefined, { maximumFractionDigits: 0 }) : ''}</b></td>
+      <td><b>${usdRubRate ? '₽' + totalNewRub.toLocaleString(undefined, { maximumFractionDigits: 0 }) : 'n/a'}</b></td>
       <td><b>100.00%</b></td>
     </tr>`;
     tableEl.innerHTML = `<table class="data-table"><thead><tr>
-      <th>Label</th><th>Current (RUB)</th><th>Actual %</th><th>Add externally (USD)</th><th>New %</th>
+      <th>Label</th><th>Current (RUB)</th><th>Actual %</th><th>Target %</th><th>Add externally (USD)</th><th>New (RUB)</th><th>New %</th>
     </tr></thead><tbody>${rowsHtml}${totalRow}</tbody></table>`;
   } else if (tableEl) {
     const usdRubRate = DATA && DATA.currentUsdRub;
