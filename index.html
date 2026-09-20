@@ -171,6 +171,7 @@
 <div class="form-row" id="mp_ru_stocks_invest_row" style="display:none; margin-top:12px">
   <label for="mp_ru_stocks_invest_amount">Money to allocate (RUB):</label>
   <input type="number" id="mp_ru_stocks_invest_amount" step="any" min="0" placeholder="0" value="0">
+  <label><input type="checkbox" id="mp_ru_stocks_respect_lots" checked> Account for share price (whole shares only)</label>
 </div>
 <div id="mp_pie_ru_stocks_table_wrap"></div>
 </div>
@@ -204,6 +205,7 @@
 <div class="form-row" id="mp_us_stocks_invest_row" style="display:none; margin-top:12px">
   <label for="mp_us_stocks_invest_amount">Money to allocate (USD):</label>
   <input type="number" id="mp_us_stocks_invest_amount" step="any" min="0" placeholder="0" value="0">
+  <label><input type="checkbox" id="mp_us_stocks_respect_lots" checked> Account for share price (whole shares only)</label>
 </div>
 <div id="mp_pie_us_stocks_table_wrap"></div>
 </div>
@@ -1612,10 +1614,13 @@ function mpDonutLayout(maxR) {
 // (optional) lets one call site customize that column's header text (e.g.
 // "Target CNY sale (RUB)" for the RUB/CNY donut) instead of the generic
 // default, since the same function backs 4 differently-themed tables.
-// Allocates a user-supplied cash injection (plus proceeds from selling
-// down overweight Z<-1.5 tickers) across the portfolio to move as many
-// tickers as possible onto their target%, following a strict priority
-// order rather than one global simultaneous solve:
+
+// LEGACY, unmodified: allocates a user-supplied cash injection (plus
+// proceeds from selling down overweight Z<-1.5 tickers) across the
+// portfolio in fractional dollar amounts -- no whole-share rounding at
+// all. Kept exactly as it was before whole-share support was added, so
+// the "Account for share price" checkbox can show a genuine before/after,
+// not a flag-toggled variant of the new code. Priority order:
 //
 //   0. pool = userInjectionUsd. Portfolio total for target amounts is
 //      original holdings + this injection (selling only moves money from
@@ -1635,7 +1640,7 @@ function mpDonutLayout(maxR) {
 // Returns { deltaUsdByItem, newTotalUsd, leftoverPoolUsd } where
 // deltaUsdByItem is signed (negative = sold, positive = bought) and
 // newTotalUsd = original total + userInjectionUsd.
-function mpAllocatePoolByZPriority(usable, totalUsd, userInjectionUsd) {
+function mpAllocatePoolByZPriorityLegacy(usable, totalUsd, userInjectionUsd) {
   const totalTarget = usable.reduce((s, it) => s + it.target, 0);
   const injection = Math.max(0, userInjectionUsd || 0);
   const newTotalUsd = totalUsd + injection;
@@ -1677,6 +1682,126 @@ function mpAllocatePoolByZPriority(usable, totalUsd, userInjectionUsd) {
       pool = 0;
     }
   }
+
+  return { deltaUsdByItem, newTotalUsd, leftoverPoolUsd: pool };
+}
+
+// NEW: same priority order as the legacy function above (sell Z<-1.5
+// overweight -> fill Z>1.5 shortfalls -> fill neutral -> fill remaining
+// Z<-1.5), but real trades happen in whole shares, not fractional dollar
+// amounts, so every buy/sell here is rounded to a whole-share quantity
+// using `priceUsd`. The dollars lost to rounding don't vanish -- they're
+// swept back into the pool and re-offered to the same group (in case a
+// cheaper ticker there can still absorb a whole share), then to the next
+// group in priority order, repeating until no group can place another
+// whole share. Tickers with an unknown priceUsd fall back to unrounded
+// (fractional) allocation, since there's no lot size to round to.
+//
+// Returns the same shape as the legacy function.
+function mpAllocatePoolByZPriorityWithLots(usable, totalUsd, userInjectionUsd) {
+  const totalTarget = usable.reduce((s, it) => s + it.target, 0);
+  const injection = Math.max(0, userInjectionUsd || 0);
+  const newTotalUsd = totalUsd + injection;
+  const targetUsdOf = (it) => totalTarget > 0 ? (it.target / totalTarget * newTotalUsd) : 0;
+  const currentUsdOf = (it) => it.current / 100 * totalUsd;
+  const roundDownToLot = (it, usdAmount) => {
+    if (!it.priceUsd || usdAmount <= 0) return usdAmount;
+    const shares = Math.floor(usdAmount / it.priceUsd);
+    return shares * it.priceUsd;
+  };
+  // For Z>1.5 (green-zone) tickers only: if the fractional remainder after
+  // rounding down is at least half a share AND there's enough pool left to
+  // cover the extra cost, round UP instead -- landing a hair past target
+  // is fine for a green-zone ticker specifically, per the user's rule.
+  // Gray/red-zone tickers never get this -- they only ever round down, so
+  // they can approach target but never cross it.
+  const roundToLotAllowOvershoot = (it, usdAmount, poolAvailable) => {
+    if (!it.priceUsd || usdAmount <= 0) return usdAmount;
+    const exactShares = usdAmount / it.priceUsd;
+    const flooredShares = Math.floor(exactShares);
+    const remainder = exactShares - flooredShares;
+    // poolAvailable must cover the FULL cost of the rounded-up share
+    // count, not just the incremental "extra" over the pro-rata share --
+    // `usdAmount` (this ticker's pro-rata cut) hasn't actually been spent
+    // yet at the point this is called, so the whole (flooredShares+1)
+    // purchase competes for the same uncommitted pool as every other
+    // ticker still to be processed this pass.
+    const roundedUpCost = (flooredShares + 1) * it.priceUsd;
+    if (remainder > 0 && poolAvailable >= roundedUpCost) {
+      return roundedUpCost;
+    }
+    return flooredShares * it.priceUsd;
+  };
+
+  const deltaUsdByItem = new Map(usable.map(it => [it, 0]));
+  let pool = injection;
+
+  // Step 1: sell overweight Z<-1.5 tickers down to the new target amount,
+  // rounding the sale down to whole shares (selling fewer shares than the
+  // uncapped excess, never more -- so the position stays at/above target,
+  // not dipping below it from an over-eager sale).
+  usable.forEach(it => {
+    if (it.z !== null && it.z !== undefined && it.z < -1.5) {
+      const excess = currentUsdOf(it) - targetUsdOf(it);
+      if (excess > 0) {
+        const roundedExcess = roundDownToLot(it, excess);
+        if (roundedExcess > 0) {
+          deltaUsdByItem.set(it, -roundedExcess);
+          pool += roundedExcess;
+        }
+      }
+    }
+  });
+
+  // Steps 2-4: fill shortfalls in priority-group order, proportional to
+  // each ticker's own shortfall, never exceeding it, rounded down to
+  // whole shares. Re-loop each group until it can't place another whole
+  // share with the pool on hand, then move any remainder to the next
+  // group -- this is what lets a smaller/cheaper ticker still get filled
+  // when an expensive one's rounding would otherwise strand cash in a
+  // group nobody else in it can use.
+  const isBelowTarget = (it) => currentUsdOf(it) + deltaUsdByItem.get(it) < targetUsdOf(it) - 0.005;
+  const shortfallOf = (it) => targetUsdOf(it) - (currentUsdOf(it) + deltaUsdByItem.get(it));
+  const groupFilters = [
+    it => it.z !== null && it.z !== undefined && it.z > 1.5,
+    it => it.z === null || it.z === undefined || (it.z >= -1.5 && it.z <= 1.5),
+    it => it.z !== null && it.z !== undefined && it.z < -1.5,
+  ];
+  groupFilters.forEach((groupFilter, groupIdx) => {
+    const isGreenGroup = groupIdx === 0;
+    if (pool <= 0) return;
+    // Re-evaluate membership every pass -- isBelowTarget/shortfallOf both
+    // depend on deltaUsdByItem, which this loop mutates.
+    for (let pass = 0; pass < 50; pass++) {
+      const group = usable.filter(it => groupFilter(it) && isBelowTarget(it));
+      if (!group.length || pool <= 0) break;
+      const totalShortfall = group.reduce((s, it) => s + shortfallOf(it), 0);
+      if (totalShortfall <= 0) break;
+      let placedThisPass = 0;
+      let remainingPool = pool;
+      group.forEach(it => {
+        const share = pool >= totalShortfall ? shortfallOf(it) : shortfallOf(it) / totalShortfall * pool;
+        // remainingPool (not the pre-pass `pool`) is what's actually still
+        // uncommitted at this point in the loop -- overshoot spends real
+        // money, so it must be checked/deducted against the running
+        // balance, not the pass's starting pool (which would let several
+        // green tickers in a row each independently "round up" against
+        // the same unspent cash and overdraw the pool).
+        const rounded = isGreenGroup
+          ? roundToLotAllowOvershoot(it, share, remainingPool)
+          : roundDownToLot(it, share);
+        if (rounded > 0) {
+          deltaUsdByItem.set(it, deltaUsdByItem.get(it) + rounded);
+          placedThisPass += rounded;
+          remainingPool -= rounded;
+        }
+      });
+      pool -= placedThisPass;
+      // No ticker in this group could afford another whole share with
+      // what's left -- stop looping this group, carry the rest forward.
+      if (placedThisPass <= 0) break;
+    }
+  });
 
   return { deltaUsdByItem, newTotalUsd, leftoverPoolUsd: pool };
 }
@@ -1753,8 +1878,15 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
     const userInjectionUsd = opts.userInjectionUsd !== undefined
       ? (opts.userInjectionUsd || 0)
       : (usdRubRate ? (opts.userInjectionRub || 0) / usdRubRate : 0);
+    // opts.respectLotSize (toggled by a checkbox next to the invest-amount
+    // input) switches the whole table between two genuinely separate
+    // functions -- the original fractional-dollar allocator (untouched)
+    // and the whole-share-aware one -- not a flag inside shared code, so
+    // the "old" path can never be silently affected by new-path changes.
+    const respectLotSize = opts.respectLotSize !== false;
+    const allocateFn = respectLotSize ? mpAllocatePoolByZPriorityWithLots : mpAllocatePoolByZPriorityLegacy;
     const { deltaUsdByItem, newTotalUsd, leftoverPoolUsd } = totalUsd
-      ? mpAllocatePoolByZPriority(usable, totalUsd, userInjectionUsd)
+      ? allocateFn(usable, totalUsd, userInjectionUsd)
       : { deltaUsdByItem: new Map(), newTotalUsd: null, leftoverPoolUsd: 0 };
     let totalCurrentUsd = 0;
     let totalNewUsdAgg = 0;
@@ -1926,7 +2058,11 @@ async function mpRenderPortfolioPies() {
   if (error || !data) return;
   const priced = data.filter(r => r.value_usd !== null);
   const valueByTicker = {};
-  priced.forEach(r => { valueByTicker[r.ticker] = (valueByTicker[r.ticker] || 0) + r.value_usd; });
+  const priceUsdByTicker = {};
+  priced.forEach(r => {
+    valueByTicker[r.ticker] = (valueByTicker[r.ticker] || 0) + r.value_usd;
+    if (r.price_usd) priceUsdByTicker[r.ticker] = r.price_usd;
+  });
 
   // 1. US stocks: sector width = each stock's actual (current) weight (see
   //    mpDrawTargetDonut); radial extent = current/target, where target is
@@ -1936,14 +2072,18 @@ async function mpRenderPortfolioPies() {
   const usTotal = US_STOCK_TICKERS.reduce((s, t) => s + (valueByTicker[t] || 0), 0);
   const usInvestInputEl = document.getElementById('mp_us_stocks_invest_amount');
   const usUserInjectionUsd = usInvestInputEl ? (parseFloat(usInvestInputEl.value) || 0) : 0;
+  const usRespectLotsEl = document.getElementById('mp_us_stocks_respect_lots');
+  const usRespectLotSize = usRespectLotsEl ? usRespectLotsEl.checked : true;
   mpDrawTargetDonut('plot_mp_pie_us_stocks', 'mp_pie_us_stocks_note',
     (DATA.usTargetWeightsRaw || []).map((r, i) => ({
       label: r.ticker, target: r.target, current: (valueByTicker[r.ticker] || 0) / (usTotal || 1) * 100,
       color: (DATA.usTickerColors || [])[i % (DATA.usTickerColors || [1]).length],
       z: r.z,
+      priceUsd: priceUsdByTicker[r.ticker] || null,
     })), usTotal, null, {
       zPriorityAllocation: true, userInjectionUsd: usUserInjectionUsd,
       investRowId: 'mp_us_stocks_invest_row', displayCurrency: 'USD',
+      respectLotSize: usRespectLotSize,
     });
 
   // 2. Russian stocks: same idea, using the target list (equities + TRND/AKME/AKFN) and its
@@ -1951,12 +2091,18 @@ async function mpRenderPortfolioPies() {
   const ruStockTotal = RU_STOCK_TICKERS.reduce((s, t) => s + (valueByTicker[t] || 0), 0);
   const ruInvestInputEl = document.getElementById('mp_ru_stocks_invest_amount');
   const ruUserInjectionRub = ruInvestInputEl ? (parseFloat(ruInvestInputEl.value) || 0) : 0;
+  const ruRespectLotsEl = document.getElementById('mp_ru_stocks_respect_lots');
+  const ruRespectLotSize = ruRespectLotsEl ? ruRespectLotsEl.checked : true;
   mpDrawTargetDonut('plot_mp_pie_ru_stocks', 'mp_pie_ru_stocks_note',
     (DATA.ruTargetWeightsRaw || []).map(r => ({
       label: r.ticker, target: r.target, current: (valueByTicker[r.ticker] || 0) / (ruStockTotal || 1) * 100,
       color: (DATA.ruTickerColors || {})[r.ticker] || '#8b949e',
       z: r.z,
-    })), ruStockTotal, null, { zPriorityAllocation: true, userInjectionRub: ruUserInjectionRub, investRowId: 'mp_ru_stocks_invest_row' });
+      priceUsd: priceUsdByTicker[r.ticker] || null,
+    })), ruStockTotal, null, {
+      zPriorityAllocation: true, userInjectionRub: ruUserInjectionRub,
+      investRowId: 'mp_ru_stocks_invest_row', respectLotSize: ruRespectLotSize,
+    });
 
   // 3. Russian stocks vs Russian bonds: target from the ERP & Stocks/Bonds
   //    Allocation tab's own base/target allocation. "Stocks" is the same
@@ -2027,6 +2173,10 @@ function mpUpdateAuthUi(session) {
 ['mp_ru_stocks_invest_amount', 'mp_us_stocks_invest_amount'].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener('input', () => { mpRenderPortfolioPies(); });
+});
+['mp_ru_stocks_respect_lots', 'mp_us_stocks_respect_lots'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('change', () => { mpRenderPortfolioPies(); });
 });
 
 sb.auth.getSession().then(({ data: { session } }) => mpUpdateAuthUi(session));
