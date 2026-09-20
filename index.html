@@ -1924,7 +1924,7 @@ async function mpRenderPortfolioPies() {
       color: (DATA.usTickerColors || [])[i % (DATA.usTickerColors || [1]).length],
     })), usTotal);
 
-  // 2. Russian stocks: same idea, using the 10-stock target list and its
+  // 2. Russian stocks: same idea, using the target list (equities + TRND/AKME/AKFN) and its
   //    own Z-score-adjusted Target column.
   const ruStockTotal = RU_STOCK_TICKERS.reduce((s, t) => s + (valueByTicker[t] || 0), 0);
   const ruInvestInputEl = document.getElementById('mp_ru_stocks_invest_amount');
@@ -1938,7 +1938,7 @@ async function mpRenderPortfolioPies() {
 
   // 3. Russian stocks vs Russian bonds: target from the ERP & Stocks/Bonds
   //    Allocation tab's own base/target allocation. "Stocks" is the same
-  //    10-ticker target list as chart 2 (ruStockTotal) -- NOT every MOEX
+  //    target-list as chart 2 (ruStockTotal) -- NOT every MOEX
   //    share/ETF held. "Bonds" = anything classified as instrument_type
   //    'bond' on Russian infrastructure -- plain bonds/OFZ, bond/money-
   //    market ETFs (TBRU/SAFE/SBMM/AKMB/AKMM/TLCB/SBBY), and RUB deposits
