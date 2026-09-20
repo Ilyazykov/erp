@@ -1811,17 +1811,21 @@ function mpAllocatePoolByZPriorityWithLots(usable, totalUsd, userInjectionUsd) {
         }
       });
       pool -= placedThisPass;
-      if (placedThisPass > 0) continue;
-      // Pro-rata placement stalled: every candidate's shortfall-weighted
-      // share rounded down to 0 shares, typically because a much larger
-      // shortfall in the same group ate most of the pool. Rather than
-      // stranding this money for the rest of the group (per the user: "if
-      // nothing else in this group can be bought but money is left, buy
-      // the cheap one anyway"), fall back to cheapest-first: hand out one
-      // lot at a time, cheapest candidate first, until nobody left in the
-      // group can afford even one more share. This never exceeds a
-      // ticker's own shortfall and (for gray/red) never crosses target,
-      // matching the same rounding rules as the pro-rata path above.
+      // Pro-rata split (above) rounds each candidate's shortfall-weighted
+      // share down independently -- so it routinely leaves cash on the
+      // table even when SOME candidate got a share this pass: an expensive
+      // ticker's pro-rata cut can be smaller than one of its own lots
+      // while a cheap ticker nearby still has room to buy more. Rather
+      // than only kicking in once an entire pass places nothing (which let
+      // a large basket of pricier below-target tickers get skipped for 50
+      // passes straight while a couple of cheap ones nickel-and-dimed the
+      // pool -- see the $734-left-unallocated case with 37 US tickers),
+      // run a cheapest-first mop-up after EVERY pass: hand out one lot at
+      // a time, cheapest candidate first, until nobody left in the group
+      // can afford even one more share. This never exceeds a ticker's own
+      // shortfall and (for gray/red) never crosses target, matching the
+      // same rounding rules as the pro-rata path above -- it only spends
+      // pool that pro-rata would otherwise have stranded.
       let placedFallback = 0;
       for (;;) {
         const candidates = usable
@@ -1844,7 +1848,32 @@ function mpAllocatePoolByZPriorityWithLots(usable, totalUsd, userInjectionUsd) {
         if (placedThisRound <= 0) break;
         placedFallback += placedThisRound;
       }
-      if (placedFallback <= 0) break;
+      // Last resort, gray (neutral) zone only: round-down-only placement
+      // above found NOTHING affordable at all this iteration -- every
+      // below-target candidate's own shortfall is smaller than its own
+      // lot price (e.g. shortfall $113 but the share costs $164), so
+      // rounding down can only ever produce 0 and the money would
+      // otherwise be permanently stranded even though the pool has plenty
+      // left. Per the user: only when there is truly no other choice,
+      // let the single cheapest gray-zone candidate overshoot past target
+      // by one lot. Red zone (Z<-1.5) never gets this -- it only ever
+      // rounds down, full stop.
+      let placedOvershootLastResort = 0;
+      if (placedThisPass <= 0 && placedFallback <= 0 && !isGreenGroup && groupIdx === 1) {
+        const cheapest = usable
+          .filter(it => groupFilter(it) && isBelowTarget(it) && it.priceUsd > 0 && it.priceUsd <= pool)
+          .sort((a, b) => a.priceUsd - b.priceUsd)[0];
+        if (cheapest) {
+          deltaUsdByItem.set(cheapest, deltaUsdByItem.get(cheapest) + cheapest.priceUsd);
+          pool -= cheapest.priceUsd;
+          placedOvershootLastResort = cheapest.priceUsd;
+        }
+      }
+      // Nothing placed anywhere this iteration (neither pro-rata, the
+      // mop-up, nor the last-resort overshoot could afford/place a share)
+      // -- further passes would be identical, so stop looping this group
+      // and carry the rest forward.
+      if (placedThisPass <= 0 && placedFallback <= 0 && placedOvershootLastResort <= 0) break;
     }
   });
 
