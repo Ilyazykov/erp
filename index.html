@@ -1901,18 +1901,45 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
   if (noteEl) noteEl.style.display = '';
   if (titleEl) titleEl.style.display = '';
 
-  // Sector angular WIDTH = actual share (so the donut visually tiles up to
-  // 100% of what you actually hold); RADIAL extent still = current/target,
-  // unchanged -- bulging past the dotted reference circle = overweight vs
-  // target, falling short = underweight, regardless of how wide the wedge
-  // itself is drawn.
   const totalTarget = usable.reduce((s, it) => s + it.target, 0);
-  const totalCurrent = usable.reduce((s, it) => s + it.current, 0);
+
+  // When the user has typed a nonzero "Money to allocate" amount, the
+  // donut itself should reflect what the portfolio would look like AFTER
+  // that allocation (New %), not the current holdings -- so moving the
+  // input updates the chart, not just the table below it. Falls back to
+  // Actual % (it.current) whenever there's no injection to simulate, or
+  // this donut doesn't use the z-priority allocator at all (StocksBonds/
+  // Deposits pass no userInjection*, so displayPctByItem stays null and
+  // every it.current is used unchanged).
+  let displayPctByItem = null;
+  if (opts && opts.zPriorityAllocation && sharedTotalUsd) {
+    const userInjectionUsd = opts.userInjectionUsd !== undefined
+      ? (opts.userInjectionUsd || 0)
+      : (DATA && DATA.currentUsdRub ? (opts.userInjectionRub || 0) / DATA.currentUsdRub : 0);
+    if (userInjectionUsd > 0) {
+      const respectLotSize = opts.respectLotSize !== false;
+      const allocateFn = respectLotSize ? mpAllocatePoolByZPriorityWithLots : mpAllocatePoolByZPriorityLegacy;
+      const { deltaUsdByItem } = allocateFn(usable, sharedTotalUsd, userInjectionUsd);
+      const newUsdByItem = usable.map(it => (it.current / 100 * sharedTotalUsd) + (deltaUsdByItem.get(it) || 0));
+      const allocatedNewUsd = newUsdByItem.reduce((s, v) => s + v, 0);
+      if (allocatedNewUsd > 0) {
+        displayPctByItem = new Map(usable.map((it, i) => [it, newUsdByItem[i] / allocatedNewUsd * 100]));
+      }
+    }
+  }
+  const pctOf = (it) => (displayPctByItem ? displayPctByItem.get(it) : it.current);
+
+  // Sector angular WIDTH = actual (or, with a pending allocation, New)
+  // share, so the donut visually tiles up to 100% of what it's showing;
+  // RADIAL extent still = that same share vs target -- bulging past the
+  // dotted reference circle = overweight vs target, falling short =
+  // underweight, regardless of how wide the wedge itself is drawn.
+  const totalCurrent = usable.reduce((s, it) => s + pctOf(it), 0);
   let cursor = 0;
   const theta = [];
   const width = [];
   usable.forEach(it => {
-    const w = totalCurrent > 0 ? (it.current / totalCurrent * 360) : (360 / usable.length);
+    const w = totalCurrent > 0 ? (pctOf(it) / totalCurrent * 360) : (360 / usable.length);
     theta.push(cursor + w / 2);
     width.push(w);
     cursor += w;
@@ -1928,7 +1955,7 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
   const PP_SCALE = 2; // radius units per percentage-point of (current - target)
   const radial = usable.map(it => {
     const targetPct = totalTarget > 0 ? (it.target / totalTarget * 100) : 0;
-    return Math.max(0, R_BASE + (it.current - targetPct) * PP_SCALE);
+    return Math.max(0, R_BASE + (pctOf(it) - targetPct) * PP_SCALE);
   });
   const maxR = Math.max(R_BASE, ...radial);
 
