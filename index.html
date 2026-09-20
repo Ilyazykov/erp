@@ -1736,6 +1736,17 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
   if (tableEl && opts && opts.zPriorityAllocation) {
     const usdRubRate = DATA && DATA.currentUsdRub;
     const totalUsd = sharedTotalUsd;
+    // Display everything in USD for tables that opt in (e.g. US stocks --
+    // no reason to route through a RUB conversion for a US-dollar book),
+    // RUB otherwise (e.g. Russian stocks).
+    const displayCcy = opts.displayCurrency === 'USD' ? 'USD' : 'RUB';
+    const fmtMoney = (usdAmount) => {
+      if (displayCcy === 'USD') return `$${usdAmount.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+      if (!usdRubRate) return 'n/a';
+      return `₽${(usdAmount * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+    };
+    const moneyColLabel = `(${displayCcy})`;
+    const canDisplayMoney = displayCcy === 'USD' || !!usdRubRate;
     // Accept the injection directly in USD (opts.userInjectionUsd, e.g. for
     // the US stocks table) or convert from RUB (opts.userInjectionRub, e.g.
     // for the Russian stocks table) -- whichever the caller provides.
@@ -1745,8 +1756,8 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
     const { deltaUsdByItem, newTotalUsd, leftoverPoolUsd } = totalUsd
       ? mpAllocatePoolByZPriority(usable, totalUsd, userInjectionUsd)
       : { deltaUsdByItem: new Map(), newTotalUsd: null, leftoverPoolUsd: 0 };
-    let totalCurrentRub = 0;
-    let totalNewRub = 0;
+    let totalCurrentUsd = 0;
+    let totalNewUsdAgg = 0;
     const rowData = usable.map(it => {
       const currentUsd = totalUsd ? it.current / 100 * totalUsd : null;
       const deltaUsd = deltaUsdByItem.get(it) || 0;
@@ -1754,19 +1765,16 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
       return { it, currentUsd, deltaUsd, newUsd };
     });
     // New % is each row's share of the allocated stock total (the New
-    // (RUB) column), not of original+injection which still includes any
+    // column), not of original+injection which still includes any
     // leftover cash that never made it into a ticker.
     const allocatedNewUsd = rowData.reduce((s, r) => s + (r.newUsd || 0), 0);
     const rowsHtml = rowData.map(({ it, currentUsd, deltaUsd, newUsd }) => {
-      const currentRubStr = (usdRubRate && currentUsd !== null)
-        ? `₽${(currentUsd * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })}` : 'n/a';
+      const currentStr = (canDisplayMoney && currentUsd !== null) ? fmtMoney(currentUsd) : 'n/a';
       let actionStr = '—';
       if (deltaUsd > 0.5) {
-        actionStr = `Buy $${deltaUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-        if (usdRubRate) actionStr += ` (₽${(deltaUsd * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })})`;
+        actionStr = `Buy ${fmtMoney(deltaUsd)}`;
       } else if (deltaUsd < -0.5) {
-        actionStr = `Sell $${Math.abs(deltaUsd).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-        if (usdRubRate) actionStr += ` (₽${(Math.abs(deltaUsd) * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })})`;
+        actionStr = `Sell ${fmtMoney(Math.abs(deltaUsd))}`;
       }
       // Color reflects the Z-score signal (same thresholds as the Yield
       // per Stock & Rebalancing table's own Z-score column above), not
@@ -1774,39 +1782,39 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
       const actionCls = it.z === null || it.z === undefined ? 'muted' : (it.z > 1.5 ? 'pos' : (it.z < -1.5 ? 'neg' : 'muted'));
       const targetPct = totalTarget > 0 ? (it.target / totalTarget * 100) : 0;
       let newPctStr = 'n/a';
-      let newRubStr = 'n/a';
+      let newStr = 'n/a';
       if (newUsd !== null && allocatedNewUsd) {
         newPctStr = `${(newUsd / allocatedNewUsd * 100).toFixed(2)}%`;
-        if (usdRubRate) {
-          newRubStr = `₽${(newUsd * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-          totalCurrentRub += currentUsd * usdRubRate;
-          totalNewRub += newUsd * usdRubRate;
+        if (canDisplayMoney) {
+          newStr = fmtMoney(newUsd);
+          totalCurrentUsd += currentUsd;
+          totalNewUsdAgg += newUsd;
         }
       }
       return `<tr>
         <td class="ticker" style="color:${it.color}">${mpEscapeHtml(it.label)}</td>
-        <td>${currentRubStr}</td>
+        <td>${currentStr}</td>
         <td>${it.current.toFixed(2)}%</td>
         <td>${targetPct.toFixed(2)}%</td>
         <td class="${actionCls}">${actionStr}</td>
-        <td>${newRubStr}</td>
+        <td>${newStr}</td>
         <td>${newPctStr}</td>
       </tr>`;
     }).join('');
     const totalRow = `<tr class="total-row">
       <td><b>Total</b></td>
-      <td><b>${usdRubRate ? '₽' + totalCurrentRub.toLocaleString(undefined, { maximumFractionDigits: 0 }) : 'n/a'}</b></td>
+      <td><b>${canDisplayMoney ? fmtMoney(totalCurrentUsd) : 'n/a'}</b></td>
       <td><b>100.00%</b></td>
       <td><b>100.00%</b></td>
-      <td><b>${usdRubRate ? '₽' + (totalNewRub - totalCurrentRub).toLocaleString(undefined, { maximumFractionDigits: 0 }) : ''}</b></td>
-      <td><b>${usdRubRate ? '₽' + totalNewRub.toLocaleString(undefined, { maximumFractionDigits: 0 }) : 'n/a'}</b></td>
+      <td><b>${canDisplayMoney ? fmtMoney(totalNewUsdAgg - totalCurrentUsd) : ''}</b></td>
+      <td><b>${canDisplayMoney ? fmtMoney(totalNewUsdAgg) : 'n/a'}</b></td>
       <td><b>100.00%</b></td>
     </tr>`;
     tableEl.innerHTML = `<table class="data-table"><thead><tr>
-      <th>Label</th><th>Current (RUB)</th><th>Actual %</th><th>Target %</th><th>Buy / Sell</th><th>New (RUB)</th><th>New %</th>
+      <th>Label</th><th>Current ${moneyColLabel}</th><th>Actual %</th><th>Target %</th><th>Buy / Sell</th><th>New ${moneyColLabel}</th><th>New %</th>
     </tr></thead><tbody>${rowsHtml}${totalRow}</tbody></table>` +
-    (leftoverPoolUsd > 0.5 && usdRubRate
-      ? `<p class="empty-note">₽${(leftoverPoolUsd * usdRubRate).toLocaleString(undefined, { maximumFractionDigits: 0 })} left unallocated -- every ticker below target has already been filled to it.</p>`
+    (leftoverPoolUsd > 0.5 && canDisplayMoney
+      ? `<p class="empty-note">${fmtMoney(leftoverPoolUsd)} left unallocated -- every ticker below target has already been filled to it.</p>`
       : '');
   } else if (tableEl) {
     const usdRubRate = DATA && DATA.currentUsdRub;
@@ -1933,7 +1941,10 @@ async function mpRenderPortfolioPies() {
       label: r.ticker, target: r.target, current: (valueByTicker[r.ticker] || 0) / (usTotal || 1) * 100,
       color: (DATA.usTickerColors || [])[i % (DATA.usTickerColors || [1]).length],
       z: r.z,
-    })), usTotal, null, { zPriorityAllocation: true, userInjectionUsd: usUserInjectionUsd, investRowId: 'mp_us_stocks_invest_row' });
+    })), usTotal, null, {
+      zPriorityAllocation: true, userInjectionUsd: usUserInjectionUsd,
+      investRowId: 'mp_us_stocks_invest_row', displayCurrency: 'USD',
+    });
 
   // 2. Russian stocks: same idea, using the target list (equities + TRND/AKME/AKFN) and its
   //    own Z-score-adjusted Target column.
