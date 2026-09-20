@@ -1704,9 +1704,17 @@ function mpAllocatePoolByZPriorityWithLots(usable, totalUsd, userInjectionUsd) {
   const newTotalUsd = totalUsd + injection;
   const targetUsdOf = (it) => totalTarget > 0 ? (it.target / totalTarget * newTotalUsd) : 0;
   const currentUsdOf = (it) => it.current / 100 * totalUsd;
-  const roundDownToLot = (it, usdAmount) => {
-    if (!it.priceUsd || usdAmount <= 0) return usdAmount;
-    const shares = Math.floor(usdAmount / it.priceUsd);
+  // poolAvailable caps the result, not just usdAmount -- when an earlier
+  // green-zone ticker's overshoot (see roundToLotAllowOvershoot) eats into
+  // what later tickers in the same pass expected to receive, their
+  // nominal pro-rata "share" can end up bigger than what's actually left
+  // in the pool. Flooring `usdAmount` alone (ignoring the real remaining
+  // balance) would then round to a share count the pool can't afford.
+  const roundDownToLot = (it, usdAmount, poolAvailable) => {
+    if (!it.priceUsd || usdAmount <= 0) return 0;
+    const capped = poolAvailable !== undefined ? Math.min(usdAmount, poolAvailable) : usdAmount;
+    if (capped <= 0) return 0;
+    const shares = Math.floor(capped / it.priceUsd);
     return shares * it.priceUsd;
   };
   // For Z>1.5 (green-zone) tickers only: if the fractional remainder after
@@ -1716,10 +1724,16 @@ function mpAllocatePoolByZPriorityWithLots(usable, totalUsd, userInjectionUsd) {
   // Gray/red-zone tickers never get this -- they only ever round down, so
   // they can approach target but never cross it.
   const roundToLotAllowOvershoot = (it, usdAmount, poolAvailable) => {
-    if (!it.priceUsd || usdAmount <= 0) return usdAmount;
+    if (!it.priceUsd || usdAmount <= 0) return 0;
+    // The floor/fallback path must also be capped by poolAvailable, not
+    // just the overshoot path -- usdAmount is this ticker's nominal
+    // pro-rata cut, which can exceed what's actually left in the pool if
+    // an earlier ticker in this same pass already overshot past its own
+    // cut (see roundDownToLot for the same issue on the non-green path).
+    const affordableShares = Math.floor(poolAvailable / it.priceUsd);
     const exactShares = usdAmount / it.priceUsd;
-    const flooredShares = Math.floor(exactShares);
-    const remainder = exactShares - flooredShares;
+    const flooredShares = Math.min(Math.floor(exactShares), affordableShares);
+    const remainder = exactShares - Math.floor(exactShares);
     // poolAvailable must cover the FULL cost of the rounded-up share
     // count, not just the incremental "extra" over the pro-rata share --
     // `usdAmount` (this ticker's pro-rata cut) hasn't actually been spent
@@ -1727,10 +1741,10 @@ function mpAllocatePoolByZPriorityWithLots(usable, totalUsd, userInjectionUsd) {
     // purchase competes for the same uncommitted pool as every other
     // ticker still to be processed this pass.
     const roundedUpCost = (flooredShares + 1) * it.priceUsd;
-    if (remainder > 0 && poolAvailable >= roundedUpCost) {
+    if (remainder > 0 && flooredShares === Math.floor(exactShares) && poolAvailable >= roundedUpCost) {
       return roundedUpCost;
     }
-    return flooredShares * it.priceUsd;
+    return Math.max(0, flooredShares) * it.priceUsd;
   };
 
   const deltaUsdByItem = new Map(usable.map(it => [it, 0]));
@@ -1789,7 +1803,7 @@ function mpAllocatePoolByZPriorityWithLots(usable, totalUsd, userInjectionUsd) {
         // the same unspent cash and overdraw the pool).
         const rounded = isGreenGroup
           ? roundToLotAllowOvershoot(it, share, remainingPool)
-          : roundDownToLot(it, share);
+          : roundDownToLot(it, share, remainingPool);
         if (rounded > 0) {
           deltaUsdByItem.set(it, deltaUsdByItem.get(it) + rounded);
           placedThisPass += rounded;
@@ -1902,11 +1916,21 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
     const allocatedNewUsd = rowData.reduce((s, r) => s + (r.newUsd || 0), 0);
     const rowsHtml = rowData.map(({ it, currentUsd, deltaUsd, newUsd }) => {
       const currentStr = (canDisplayMoney && currentUsd !== null) ? fmtMoney(currentUsd) : 'n/a';
+      const priceStr = (canDisplayMoney && it.priceUsd) ? fmtMoney(it.priceUsd) : 'n/a';
       let actionStr = '—';
+      // Show as "Buy N × price" whenever a per-share price is known (the
+      // actual number of whole shares traded), falling back to a plain
+      // dollar amount only for tickers with no known priceUsd.
       if (deltaUsd > 0.5) {
-        actionStr = `Buy ${fmtMoney(deltaUsd)}`;
+        const sharesBought = it.priceUsd ? Math.round(deltaUsd / it.priceUsd) : null;
+        actionStr = sharesBought
+          ? `Buy ${sharesBought} × ${fmtMoney(it.priceUsd)}`
+          : `Buy ${fmtMoney(deltaUsd)}`;
       } else if (deltaUsd < -0.5) {
-        actionStr = `Sell ${fmtMoney(Math.abs(deltaUsd))}`;
+        const sharesSold = it.priceUsd ? Math.round(Math.abs(deltaUsd) / it.priceUsd) : null;
+        actionStr = sharesSold
+          ? `Sell ${sharesSold} × ${fmtMoney(it.priceUsd)}`
+          : `Sell ${fmtMoney(Math.abs(deltaUsd))}`;
       }
       // Color reflects the Z-score signal (same thresholds as the Yield
       // per Stock & Rebalancing table's own Z-score column above), not
@@ -1926,6 +1950,7 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
       return `<tr>
         <td class="ticker" style="color:${it.color}">${mpEscapeHtml(it.label)}</td>
         <td>${currentStr}</td>
+        <td>${priceStr}</td>
         <td>${it.current.toFixed(2)}%</td>
         <td>${targetPct.toFixed(2)}%</td>
         <td class="${actionCls}">${actionStr}</td>
@@ -1936,6 +1961,7 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
     const totalRow = `<tr class="total-row">
       <td><b>Total</b></td>
       <td><b>${canDisplayMoney ? fmtMoney(totalCurrentUsd) : 'n/a'}</b></td>
+      <td></td>
       <td><b>100.00%</b></td>
       <td><b>100.00%</b></td>
       <td><b>${canDisplayMoney ? fmtMoney(totalNewUsdAgg - totalCurrentUsd) : ''}</b></td>
@@ -1943,7 +1969,7 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
       <td><b>100.00%</b></td>
     </tr>`;
     tableEl.innerHTML = `<table class="data-table"><thead><tr>
-      <th>Label</th><th>Current ${moneyColLabel}</th><th>Actual %</th><th>Target %</th><th>Buy / Sell</th><th>New ${moneyColLabel}</th><th>New %</th>
+      <th>Label</th><th>Current ${moneyColLabel}</th><th>Price / share</th><th>Actual %</th><th>Target %</th><th>Buy / Sell</th><th>New ${moneyColLabel}</th><th>New %</th>
     </tr></thead><tbody>${rowsHtml}${totalRow}</tbody></table>` +
     (leftoverPoolUsd > 0.5 && canDisplayMoney
       ? `<p class="empty-note">${fmtMoney(leftoverPoolUsd)} left unallocated -- every ticker below target has already been filled to it.</p>`
