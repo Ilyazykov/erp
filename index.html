@@ -201,6 +201,10 @@
   Based on the trades you imported in the My Portfolio tab: breakdown across the US stocks in
   this portfolio's target list, by current USD value.
 </p>
+<div class="form-row" id="mp_us_stocks_invest_row" style="display:none; margin-top:12px">
+  <label for="mp_us_stocks_invest_amount">Money to allocate (USD):</label>
+  <input type="number" id="mp_us_stocks_invest_amount" step="any" min="0" placeholder="0" value="0">
+</div>
 <div id="mp_pie_us_stocks_table_wrap"></div>
 </div>
 
@@ -1732,8 +1736,12 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
   if (tableEl && opts && opts.zPriorityAllocation) {
     const usdRubRate = DATA && DATA.currentUsdRub;
     const totalUsd = sharedTotalUsd;
-    const userInjectionRub = opts.userInjectionRub || 0;
-    const userInjectionUsd = usdRubRate ? userInjectionRub / usdRubRate : 0;
+    // Accept the injection directly in USD (opts.userInjectionUsd, e.g. for
+    // the US stocks table) or convert from RUB (opts.userInjectionRub, e.g.
+    // for the Russian stocks table) -- whichever the caller provides.
+    const userInjectionUsd = opts.userInjectionUsd !== undefined
+      ? (opts.userInjectionUsd || 0)
+      : (usdRubRate ? (opts.userInjectionRub || 0) / usdRubRate : 0);
     const { deltaUsdByItem, newTotalUsd, leftoverPoolUsd } = totalUsd
       ? mpAllocatePoolByZPriority(usable, totalUsd, userInjectionUsd)
       : { deltaUsdByItem: new Map(), newTotalUsd: null, leftoverPoolUsd: 0 };
@@ -1918,11 +1926,14 @@ async function mpRenderPortfolioPies() {
   //    Stocks Z-score tab's own target-weights table above this chart, not
   //    the pre-Z-score base/strategic weight.
   const usTotal = US_STOCK_TICKERS.reduce((s, t) => s + (valueByTicker[t] || 0), 0);
+  const usInvestInputEl = document.getElementById('mp_us_stocks_invest_amount');
+  const usUserInjectionUsd = usInvestInputEl ? (parseFloat(usInvestInputEl.value) || 0) : 0;
   mpDrawTargetDonut('plot_mp_pie_us_stocks', 'mp_pie_us_stocks_note',
     (DATA.usTargetWeightsRaw || []).map((r, i) => ({
       label: r.ticker, target: r.target, current: (valueByTicker[r.ticker] || 0) / (usTotal || 1) * 100,
       color: (DATA.usTickerColors || [])[i % (DATA.usTickerColors || [1]).length],
-    })), usTotal);
+      z: r.z,
+    })), usTotal, null, { zPriorityAllocation: true, userInjectionUsd: usUserInjectionUsd, investRowId: 'mp_us_stocks_invest_row' });
 
   // 2. Russian stocks: same idea, using the target list (equities + TRND/AKME/AKFN) and its
   //    own Z-score-adjusted Target column.
@@ -1998,13 +2009,14 @@ function mpUpdateAuthUi(session) {
     ['mp_pie_us_stocks_table_wrap', 'mp_pie_ru_stocks_table_wrap', 'mp_pie_stocksbonds_table_wrap', 'mp_pie_deposits_table_wrap']
       .forEach(id => { document.getElementById(id).innerHTML = ''; });
     document.getElementById('mp_ru_stocks_invest_row').style.display = 'none';
+    document.getElementById('mp_us_stocks_invest_row').style.display = 'none';
   }
 }
 
-const mpRuStocksInvestInput = document.getElementById('mp_ru_stocks_invest_amount');
-if (mpRuStocksInvestInput) {
-  mpRuStocksInvestInput.addEventListener('input', () => { mpRenderPortfolioPies(); });
-}
+['mp_ru_stocks_invest_amount', 'mp_us_stocks_invest_amount'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('input', () => { mpRenderPortfolioPies(); });
+});
 
 sb.auth.getSession().then(({ data: { session } }) => mpUpdateAuthUi(session));
 sb.auth.onAuthStateChange((_event, session) => mpUpdateAuthUi(session));
