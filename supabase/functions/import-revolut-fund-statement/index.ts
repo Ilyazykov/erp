@@ -31,10 +31,16 @@
 // Only BUY and SELL rows carry a non-empty "Quantity of shares" in this
 // export -- "Service Fee Charged", "Return PAID", "Return Reinvested", and
 // "Return WITHDRAWN" all leave both Price per share and Quantity of shares
-// blank (they're daily cash income/expense bookkeeping for the fund's own
-// return, or -- for WITHDRAWN -- a side note attached to a SELL row for the
-// same instant that already carries the actual share-count change) and are
-// skipped by the empty-quantity check below.
+// blank (they're the fund's own daily cash bookkeeping, not a change in how
+// many units you hold). "Service Fee Charged" and "Return PAID" are each
+// still real interest income/expense for that instant, so each such row is
+// imported as its own side='dividend' row (quantity = that row's own Value,
+// price=0, so it never touches holdings -- only feeds the cash_flows view).
+// "Return Reinvested" and "Return WITHDRAWN" are skipped instead of also
+// becoming a dividend row: they're the fund's internal transfer of already-
+// accounted-for accumulated interest into a fresh BUY/SELL (that BUY/SELL
+// row is what actually appears in trades) -- recording them too would
+// double-count the same money as both interest income and a purchase.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
@@ -42,6 +48,7 @@ interface FundRow {
   description: string;
   startedDate: string;
   currency: string;
+  value: number | null;
   pricePerShare: number | null;
   quantityOfShares: number | null;
 }
@@ -121,8 +128,13 @@ function parseFundStatement(text: string): FundRow[] {
       // columns are re-located by name every time a header line appears.
       const header = cells.map(h => h.trim());
       const col = (name: string) => header.indexOf(name);
+      // The native-currency value column is always the first "Value, ..."
+      // column (index 2) -- named "Value, <CCY>" in the dual-value blocks
+      // and "Value, EUR" in the EUR-native block, but always right after
+      // Description in both shapes, so it's found by position, not name.
       idx = {
         description: col('Description'),
+        value: 2,
         price: col('Price per share'),
         quantity: col('Quantity of shares'),
       };
@@ -140,6 +152,7 @@ function parseFundStatement(text: string): FundRow[] {
       description,
       startedDate: (cells[0] || '').trim(),
       currency: instrument.currency,
+      value: parseNum(cells[idx.value]),
       pricePerShare: parseNum(cells[idx.price]),
       quantityOfShares: parseNum(cells[idx.quantity]),
     });
@@ -180,55 +193,82 @@ Deno.serve(async (req) => {
         { status: 400, headers: corsHeaders });
     }
 
-    let skippedNoQuantity = 0;
+    let skippedNoQuantityNoValue = 0;
     let skippedBadDate = 0;
+    let interestRows = 0;
     const rows = [];
     const dupSeen = new Map<string, number>();
 
     for (const r of fundRows) {
-      if (r.quantityOfShares === null || r.quantityOfShares === 0) { skippedNoQuantity++; continue; }
       const isoDate = toIsoTimestamp(r.startedDate);
       if (!isoDate) { skippedBadDate++; continue; }
-
       const instrument = parseFundInstrument(r.description)!;
-      // Side comes from the description's own verb, NOT from the sign of
-      // Quantity of shares -- Revolut's export prints Quantity as a plain
-      // positive magnitude for BOTH BUY and SELL rows (the sign only shows
-      // up in the Value column), so `quantity > 0 ? buy : sell` silently
-      // mislabels every SELL as a BUY. By this point only BUY/SELL rows
-      // remain (Service Fee Charged, Return PAID, and Return Reinvested
-      // all leave Quantity of shares empty in the export and were already
-      // filtered out above), so anything not starting with "SELL" is BUY.
-      const side = /^sell\b/i.test(r.description) ? 'sell' : 'buy';
-      const quantity = Math.abs(r.quantityOfShares);
-      const price = r.pricePerShare ?? 1.0;  // fund share price is always ~1.00; CSV's own value used when present
 
-      // Two rows can share the same second/description/quantity (e.g. two
-      // identical fund purchases) -- an occurrence counter folded into
-      // external_id tells them apart instead of colliding on upsert.
-      const signature = `${r.startedDate}:${r.description}:${r.quantityOfShares}`;
-      const occurrence = dupSeen.get(signature) ?? 0;
-      dupSeen.set(signature, occurrence + 1);
+      if (r.quantityOfShares !== null && r.quantityOfShares !== 0) {
+        // Side comes from the description's own verb, NOT from the sign of
+        // Quantity of shares -- Revolut's export prints Quantity as a plain
+        // positive magnitude for BOTH BUY and SELL rows (the sign only shows
+        // up in the Value column), so `quantity > 0 ? buy : sell` silently
+        // mislabels every SELL as a BUY.
+        const side = /^sell\b/i.test(r.description) ? 'sell' : 'buy';
+        const quantity = Math.abs(r.quantityOfShares);
+        const price = r.pricePerShare ?? 1.0;  // fund share price is always ~1.00; CSV's own value used when present
 
-      rows.push({
-        user_id: user.id,
-        ticker: instrument.isin,
-        side,
-        quantity,
-        price,
-        trade_date: isoDate.slice(0, 10),
-        currency: r.currency,
-        account: 'Revolut',
-        note: r.description,
-        external_source: 'revolut_fund_csv',
-        external_id: occurrence === 0 ? signature : `${signature}:dup${occurrence}`,
-      });
+        // Two rows can share the same second/description/quantity (e.g. two
+        // identical fund purchases) -- an occurrence counter folded into
+        // external_id tells them apart instead of colliding on upsert.
+        const signature = `${r.startedDate}:${r.description}:${r.quantityOfShares}`;
+        const occurrence = dupSeen.get(signature) ?? 0;
+        dupSeen.set(signature, occurrence + 1);
+
+        rows.push({
+          user_id: user.id,
+          ticker: instrument.isin,
+          side,
+          quantity,
+          price,
+          trade_date: isoDate.slice(0, 10),
+          currency: r.currency,
+          account: 'Revolut',
+          note: r.description,
+          external_source: 'revolut_fund_csv',
+          external_id: occurrence === 0 ? signature : `${signature}:dup${occurrence}`,
+        });
+        continue;
+      }
+
+      // No share-count change (Service Fee Charged / Return PAID / Return
+      // Reinvested / Return WITHDRAWN) -- Return Reinvested and Return
+      // WITHDRAWN are pure internal bookkeeping already reflected by their
+      // paired BUY/SELL row above, so only Service Fee Charged and Return
+      // PAID carry real interest income/expense (their own Value column is
+      // non-zero) -- imported as a quantity=0 'dividend' row so cash_flows
+      // shows the actual interest the fund paid, distinct from a BUY that
+      // happens to be funded by reinvested interest.
+      if (r.value !== null && r.value !== 0 && !/^return reinvested|^return withdrawn/i.test(r.description)) {
+        interestRows++;
+        rows.push({
+          user_id: user.id,
+          ticker: instrument.isin,
+          side: 'dividend',
+          quantity: r.value,
+          price: 0,
+          trade_date: isoDate.slice(0, 10),
+          currency: r.currency,
+          account: 'Revolut',
+          note: r.description,
+          external_source: 'revolut_fund_csv',
+          external_id: `${r.startedDate}:${r.description}:interest`,
+        });
+      } else {
+        skippedNoQuantityNoValue++;
+      }
     }
 
     if (!rows.length) {
       return new Response(JSON.stringify({
-        error: 'No importable rows found (all rows had an empty or zero share quantity)',
-        skipped_no_quantity: skippedNoQuantity,
+        error: 'No importable rows found',
+        skipped_no_quantity_no_value: skippedNoQuantityNoValue,
         skipped_bad_date: skippedBadDate,
       }), { status: 400, headers: corsHeaders });
     }
@@ -245,7 +285,8 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({
       imported: count ?? rows.length,
       total_rows: fundRows.length,
-      skipped_no_quantity: skippedNoQuantity,
+      interest_rows: interestRows,
+      skipped_no_quantity_no_value: skippedNoQuantityNoValue,
       skipped_bad_date: skippedBadDate,
     }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (err) {

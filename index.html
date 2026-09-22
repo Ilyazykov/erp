@@ -1559,11 +1559,12 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
         + `(${result.total_rows} parsed, ${result.skipped_not_completed} not-completed, `
         + `${result.skipped_deposit} deposit rows skipped).`;
     } else if (kind === 'revolut_fund') {
-      statusEl.textContent = `Detected: ${label}. Imported ${result.imported} fund trades `
-        + `(${result.total_rows} rows with an instrument, ${result.skipped_no_quantity} `
-        + `skipped as non-BUY/SELL bookkeeping).`;
+      statusEl.textContent = `Detected: ${label}. Imported ${result.imported} rows `
+        + `(${result.total_rows} parsed, ${result.interest_rows} interest/fee rows, `
+        + `${result.skipped_no_quantity_no_value} skipped as zero-value bookkeeping).`;
       mpRenderHoldings();
       mpRenderPortfolioPies();
+      mpRenderCashFlows();
     } else {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} deposit trades `
         + `(${result.total_rows} parsed).`;
