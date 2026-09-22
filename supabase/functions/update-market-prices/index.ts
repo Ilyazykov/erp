@@ -132,8 +132,16 @@ const MOEX_CORP_BOND_ISIN_PREFIX = 'RU000A';
 
 // Yahoo suffixes tried, in order, for Western-exchange ETFs that don't
 // resolve on the plain (US) Yahoo symbol. Best-effort: whichever responds
-// first with a real price wins.
+// first with a real price wins -- but a UCITS ETF often lists on several
+// of these exchanges at once in different currencies (e.g. XSX6 trades on
+// both LSE in GBp and Xetra in EUR), and this list has no way to know
+// which specific listing a given user actually holds; it just picks
+// whichever exchange happens to be tried first (.L) and answers fastest.
+// WESTERN_ETF_EXCHANGE_OVERRIDE lets a specific ticker skip the generic
+// suffix search entirely and go straight to the listing the user actually
+// holds -- user-confirmed, same pattern as UNDERLYING_CURRENCY_BY_TICKER.
 const WESTERN_ETF_SUFFIXES = ['.L', '.DE', '.AS', '.SW', '.MI', '.PA'];
+const WESTERN_ETF_EXCHANGE_OVERRIDE: Record<string, string> = { XSX6: '.DE' };
 
 // Yahoo symbol overrides for crypto/metal tickers that don't follow the
 // plain <TICKER>-USD convention.
@@ -644,6 +652,11 @@ function fetchCryptoPrice(ticker: string): Promise<YahooHit | null> {
 }
 
 async function fetchWesternEtfPrice(ticker: string): Promise<YahooHit | null> {
+  const override = WESTERN_ETF_EXCHANGE_OVERRIDE[ticker.toUpperCase()];
+  if (override) {
+    const hit = await yahooFetchSymbol(`${ticker}${override}`);
+    return hit ? { ...hit, symbol: hit.symbol ?? `${ticker}${override}` } : null;
+  }
   // Best-effort: try common UCITS-ETF exchange suffixes in turn, use
   // whichever first returns a valid quote.
   for (const suffix of WESTERN_ETF_SUFFIXES) {
