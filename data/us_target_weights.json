@@ -1,271 +1,271 @@
 {
-  "date": "2026-09-21",
-  "updated": "2026-09-21 18:14:10 UTC",
+  "date": "2026-09-22",
+  "updated": "2026-09-22 16:58:55 UTC",
   "z_threshold": 1.5,
   "weights": [
     {
       "ticker": "GOOGL",
       "base": 6,
-      "z": -1.4096,
+      "z": -1.3635,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 6.3111
+      "target": 6.3377
     },
     {
       "ticker": "NVDA",
       "base": 5,
-      "z": 1.1929,
+      "z": 1.1631,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 5.2592
+      "target": 5.2814
     },
     {
       "ticker": "LLY",
       "base": 5,
-      "z": 0.1839,
+      "z": 0.1817,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 5.2592
+      "target": 5.2814
     },
     {
       "ticker": "CAT",
       "base": 5,
-      "z": -1.3748,
+      "z": -1.361,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 5.2592
+      "target": 5.2814
     },
     {
       "ticker": "LIN",
       "base": 5,
-      "z": -0.0389,
+      "z": -0.189,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 5.2592
+      "target": 5.2814
     },
     {
       "ticker": "GE",
       "base": 4,
-      "z": -0.4305,
+      "z": -0.4072,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 4.2074
+      "target": 4.2251
     },
     {
       "ticker": "AMZN",
       "base": 4,
-      "z": -1.2219,
+      "z": -1.1297,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 4.2074
+      "target": 4.2251
     },
     {
       "ticker": "WMT",
       "base": 4,
-      "z": 0.3673,
+      "z": 0.1976,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 4.2074
+      "target": 4.2251
     },
     {
       "ticker": "XOM",
       "base": 4,
-      "z": -1.4974,
-      "signal": "neutral",
-      "adjustment": 0,
-      "target": 4.2074
+      "z": -1.5094,
+      "signal": "trim",
+      "adjustment": -0.0281,
+      "target": 4.1954
     },
     {
       "ticker": "NEE",
       "base": 4,
-      "z": -0.5017,
+      "z": -0.5019,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 4.2074
+      "target": 4.2251
     },
     {
       "ticker": "PLD",
       "base": 4,
-      "z": -1.0648,
+      "z": -1.0645,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 4.2074
+      "target": 4.2251
     },
     {
       "ticker": "JPM",
       "base": 3,
-      "z": -1.4102,
+      "z": -1.2931,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 3.1555
+      "target": 3.1688
     },
     {
       "ticker": "BRK-B",
       "base": 3,
-      "z": -0.8349,
+      "z": -0.8335,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 3.1555
+      "target": 3.1688
     },
     {
       "ticker": "JNJ",
       "base": 3,
-      "z": -0.7146,
+      "z": -0.6891,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 3.1555
+      "target": 3.1688
     },
     {
       "ticker": "META",
       "base": 3,
-      "z": -1.3954,
+      "z": -1.3796,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 3.1555
+      "target": 3.1688
     },
     {
       "ticker": "V",
       "base": 2,
-      "z": -1.0457,
+      "z": -0.9415,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 2.1037
+      "target": 2.1126
     },
     {
       "ticker": "MA",
       "base": 2,
-      "z": 0.0845,
+      "z": 0.1903,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 2.1037
+      "target": 2.1126
     },
     {
       "ticker": "HOOD",
       "base": 2,
-      "z": -1.0558,
+      "z": -1.0525,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 2.1037
+      "target": 2.1126
     },
     {
       "ticker": "MSFT",
       "base": 2,
-      "z": 1.0413,
+      "z": 1.0786,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 2.1037
+      "target": 2.1126
     },
     {
       "ticker": "AAPL",
       "base": 2,
-      "z": -1.815,
+      "z": -1.8838,
       "signal": "trim",
-      "adjustment": -1.5883,
-      "target": 0.4331
+      "adjustment": -1.597,
+      "target": 0.4256
     },
     {
       "ticker": "ABBV",
       "base": 2,
-      "z": -1.4554,
+      "z": -1.45,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 2.1037
+      "target": 2.1126
     },
     {
       "ticker": "TSLA",
       "base": 2,
-      "z": -0.8165,
+      "z": -0.8214,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 2.1037
+      "target": 2.1126
     },
     {
       "ticker": "HD",
       "base": 2,
-      "z": 1.028,
+      "z": 0.8664,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 2.1037
+      "target": 2.1126
     },
     {
       "ticker": "PG",
       "base": 2,
-      "z": 1.4306,
+      "z": 1.3118,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 2.1037
+      "target": 2.1126
     },
     {
       "ticker": "KO",
       "base": 2,
-      "z": -1.5558,
+      "z": -1.6302,
       "signal": "trim",
-      "adjustment": -0.4105,
-      "target": 1.672
+      "adjustment": -1.1895,
+      "target": 0.8561
     },
     {
       "ticker": "SHEL",
       "base": 2,
-      "z": -1.6267,
+      "z": -1.6328,
       "signal": "trim",
-      "adjustment": -1.1641,
-      "target": 0.8792
+      "adjustment": -1.2076,
+      "target": 0.837
     },
     {
       "ticker": "CVX",
       "base": 2,
-      "z": -1.6054,
+      "z": -1.5649,
       "signal": "trim",
-      "adjustment": -0.9818,
-      "target": 1.071
+      "adjustment": -0.5217,
+      "target": 1.5615
     },
     {
       "ticker": "SHW",
       "base": 2,
-      "z": 0.3634,
+      "z": 0.2425,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 2.1037
+      "target": 2.1126
     },
     {
       "ticker": "DUK",
       "base": 2,
-      "z": -0.3023,
+      "z": -0.3053,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 2.1037
+      "target": 2.1126
     },
     {
       "ticker": "AMT",
       "base": 2,
-      "z": 1.2525,
+      "z": 1.1392,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 2.1037
+      "target": 2.1126
     },
     {
       "ticker": "SOFI",
       "base": 1.5,
-      "z": -0.4954,
+      "z": -0.5228,
       "signal": "neutral",
       "adjustment": 0.0,
-      "target": 1.5778
+      "target": 1.5844
     },
     {
       "ticker": "XYZ",
       "base": 1.5,
-      "z": -0.6431,
+      "z": -0.6267,
       "signal": "neutral",
       "adjustment": 0.0,
-      "target": 1.5778
+      "target": 1.5844
     },
     {
       "ticker": "INTC",
       "base": 1,
-      "z": -1.7663,
+      "z": -1.7653,
       "signal": "trim",
-      "adjustment": -0.7846,
-      "target": 0.2266
+      "adjustment": -0.7843,
+      "target": 0.2279
     },
     {
       "ticker": "SPCX",
@@ -273,23 +273,23 @@
       "z": null,
       "signal": "n/a",
       "adjustment": null,
-      "target": 1.0518
+      "target": 1.0563
     },
     {
       "ticker": "FCX",
       "base": 1,
-      "z": -0.9406,
+      "z": -0.9647,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 1.0518
+      "target": 1.0563
     },
     {
       "ticker": "SO",
       "base": 1,
-      "z": -0.9951,
+      "z": -0.9995,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 1.0518
+      "target": 1.0563
     },
     {
       "ticker": "EQIX",
@@ -297,7 +297,7 @@
       "z": -0.8292,
       "signal": "neutral",
       "adjustment": 0,
-      "target": 1.0518
+      "target": 1.0563
     }
   ]
 }
