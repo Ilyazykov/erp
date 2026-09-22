@@ -171,6 +171,19 @@ function normalizeCurrency(currency: string | null | undefined): string | null {
 // ~100x. Divide by 100 and use the major-unit ISO code for the FX lookup.
 const MINOR_UNIT_CURRENCIES: Record<string, string> = { GBp: 'GBP', ZAc: 'ZAR', ILa: 'ILS' };
 
+// Maps a possibly-minor-unit Yahoo currency code to its major-unit ISO
+// equivalent for STORAGE/display purposes (e.g. in market_prices.currency
+// and .underlying_currency) -- distinct from toUsd()'s own normalization,
+// which additionally rescales the price by /100. Without this, the same
+// underlying currency (GBP) could be written as two different strings
+// ("GBP" for one ticker, "GBp" for another) depending on which exchange
+// quoted it, splitting what should be one currency bucket into two in any
+// grouping/breakdown (e.g. the "broker x currency" summary table).
+function normalizeMinorUnitCurrency(currency: string | null): string | null {
+  if (currency === null) return null;
+  return MINOR_UNIT_CURRENCIES[currency] ?? currency;
+}
+
 function log(msg: string): void {
   console.log(msg);
 }
@@ -947,15 +960,16 @@ async function runUpdate(): Promise<Record<string, unknown>> {
       await sleep(150);
       continue;
     }
+    const cryptoCurrency = normalizeMinorUnitCurrency(hit.currency);
     rowsOut.push({
       ticker,
       price_usd: Math.round(priceUsd * 1e6) / 1e6,
       native_price: hit.price,
-      currency: hit.currency,
+      currency: cryptoCurrency,
       asset_class: 'crypto',
       infra_region: 'foreign',
       instrument_type: ticker.toUpperCase() === 'XAU' ? 'gold' : 'crypto',
-      underlying_currency: hit.currency,
+      underlying_currency: cryptoCurrency,
       source: 'yahoo_finance',
       as_of: hit.as_of,
     });
@@ -988,15 +1002,16 @@ async function runUpdate(): Promise<Record<string, unknown>> {
       await sleep(150);
       continue;
     }
+    const leftoverCurrency = normalizeMinorUnitCurrency(hit.currency);
     rowsOut.push({
       ticker,
       price_usd: Math.round(priceUsd * 1e6) / 1e6,
       native_price: hit.price,
-      currency: hit.currency,
+      currency: leftoverCurrency,
       asset_class: assetClass,
       infra_region: 'foreign',
       instrument_type: 'stock',
-      underlying_currency: hit.currency,
+      underlying_currency: leftoverCurrency,
       source: 'yahoo_finance',
       as_of: hit.as_of,
     });
