@@ -57,6 +57,19 @@ function parseDate(s: string): string | null {
   return m ? m[1] : null;
 }
 
+// Snowball's own synthetic ticker for a bank deposit uses a Cyrillic
+// prefix ("ВКЛАД:Т16%13" -- bank/rate/term, not a real ticker or ISIN).
+// update-market-prices/index.ts now classifies deposits under an English
+// DEPOSIT_PREFIX going forward (still recognizing the Cyrillic one too,
+// for rows imported before this change) -- but a fresh re-upload of the
+// same Snowball export is the natural point to normalize the ticker
+// itself to the new prefix, so newly-imported deposit rows read the same
+// way as the Revolut deposit importer's own tickers, instead of having
+// two different-looking prefixes for the same concept going forward.
+function normalizeDepositTicker(ticker: string): string {
+  return ticker.startsWith('ВКЛАД:') ? `DEPOSIT:${ticker.slice('ВКЛАД:'.length)}` : ticker;
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -120,7 +133,7 @@ Deno.serve(async (req) => {
 
       rows.push({
         user_id: user.id,
-        ticker: (cells[idx.symbol] || '').trim(),
+        ticker: normalizeDepositTicker((cells[idx.symbol] || '').trim()),
         side,
         quantity,
         price,

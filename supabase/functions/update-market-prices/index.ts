@@ -272,17 +272,26 @@ async function latestUsdRubRate(): Promise<number | null> {
 // Ticker classification
 // ---------------------------------------------------------------------------
 
-type TickerClass = 'moex_ofz' | 'moex_bond' | 'moex_share_or_etf_or_other' | 'crypto' | 'rub_deposit';
+type TickerClass = 'moex_ofz' | 'moex_bond' | 'moex_share_or_etf_or_other' | 'crypto' | 'deposit';
 
-// Snowball represents a bank deposit/savings account as a synthetic ticker
-// like "ВКЛАД:Т16%13" (bank name/rate/term, not an ISIN or a real listed
-// instrument). Its `quantity` in `trades` is not a share count -- it's
-// already the RUB balance itself -- so there is no per-unit "price" to
-// look up; it just needs a RUB->USD conversion factor. See how this is
-// used below: price_usd is set to 1/usdRubRate so quantity * price_usd
-// (the standard formula every other asset class uses) yields the correct
-// USD value without any special-casing in the `portfolio_value_usd` view.
-const RUB_DEPOSIT_PREFIX = 'ВКЛАД:';
+// A bank deposit/savings account is represented as a synthetic ticker,
+// not an ISIN or a real listed instrument -- e.g. "DEPOSIT:Revolut" for
+// Revolut Instant Access Savings. `DEPOSIT_PREFIX_LEGACY_CYRILLIC` covers
+// an older ticker convention ("ВКЛАД:Т16%13", bank name/rate/term) already
+// present in this user's existing trades from Snowball -- kept working
+// rather than requiring a data migration, but new imports use the English
+// prefix. Either way, the actual currency lives in that trade's own
+// `currency` column, not encoded into the ticker string, since `trades`
+// already has a column for exactly that (see fetchDepositCurrencies
+// below). `quantity` in `trades` is not a share count -- it's already the
+// balance itself, in whatever currency that trade recorded -- so there is
+// no per-unit "price" to look up; it just needs an FX conversion factor to
+// USD. See how this is used below: price_usd is set via
+// fxRateToUsd(currency, ...) so quantity * price_usd (the standard formula
+// every other asset class uses) yields the correct USD value without any
+// special-casing in the `portfolio_value_usd` view.
+const DEPOSIT_PREFIX = 'DEPOSIT:';
+const DEPOSIT_PREFIX_LEGACY_CYRILLIC = 'ВКЛАД:';
 
 // MOEX-listed bond/money-market ETFs (BPIFs) whose holdings are bonds/cash
 // instruments, not equities -- but which the generic MOEX group classifier
@@ -307,7 +316,7 @@ const UNDERLYING_CURRENCY_BY_TICKER: Record<string, string> = { SBBY: 'CNY', TLC
 
 function classifyTicker(ticker: string): TickerClass {
   const t = ticker.toUpperCase();
-  if (t.startsWith(RUB_DEPOSIT_PREFIX)) return 'rub_deposit';
+  if (t.startsWith(DEPOSIT_PREFIX) || t.startsWith(DEPOSIT_PREFIX_LEGACY_CYRILLIC)) return 'deposit';
   if (KNOWN_CRYPTO_TICKERS.has(t)) return 'crypto';
   if (t.startsWith(MOEX_CORP_BOND_ISIN_PREFIX)) return 'moex_bond';
   if (t.startsWith(MOEX_OFZ_ISIN_PREFIX) && t.length >= 10 && /\d/.test(t)) return 'moex_ofz';
@@ -680,6 +689,33 @@ async function fetchDistinctTickers(supabase: any): Promise<string[] | null> {
   return [...tickers].sort();
 }
 
+// deno-lint-ignore no-explicit-any
+async function fetchDepositCurrencies(supabase: any, depositTickers: string[]): Promise<Record<string, string>> {
+  // A deposit ticker (see DEPOSIT_PREFIX) carries no currency of its own --
+  // that lives in `trades.currency` for the rows that use it. Reads only
+  // ticker+currency (same cross-user, service-role, no-PII pattern as
+  // fetchDistinctTickers) and takes whichever currency appears first for
+  // each ticker; in practice a given user's deposit ticker is only ever
+  // recorded in one currency, so "first seen" is just "the" currency.
+  if (!depositTickers.length) return {};
+  const { data, error } = await supabase
+    .from('trades')
+    .select('ticker, currency')
+    .in('ticker', depositTickers);
+  if (error) {
+    log(`  deposit-currency query failed: ${error.message}`);
+    return {};
+  }
+  const out: Record<string, string> = {};
+  // deno-lint-ignore no-explicit-any
+  for (const row of data as any[]) {
+    if (row.ticker && row.currency && !(row.ticker in out)) {
+      out[row.ticker] = String(row.currency).toUpperCase();
+    }
+  }
+  return out;
+}
+
 type InfraRegion = 'ru' | 'foreign';
 type InstrumentType = 'stock' | 'bond' | 'gold' | 'crypto';
 
@@ -745,7 +781,7 @@ async function runUpdate(): Promise<Record<string, unknown>> {
   // --- classify ---
   const moexCandidates: string[] = [];
   const cryptoCandidates: string[] = [];
-  const rubDepositCandidates: string[] = [];
+  const depositCandidates: string[] = [];
   for (const t of tickers) {
     const cls = classifyTicker(t);
     if (cls === 'moex_ofz' || cls === 'moex_bond' || cls === 'moex_share_or_etf_or_other') {
@@ -754,35 +790,41 @@ async function runUpdate(): Promise<Record<string, unknown>> {
     if (cls === 'crypto') {
       cryptoCandidates.push(t);
     }
-    if (cls === 'rub_deposit') {
-      rubDepositCandidates.push(t);
+    if (cls === 'deposit') {
+      depositCandidates.push(t);
     }
   }
 
   const rowsOut: PriceRow[] = [];
   const resolved = new Set<string>();
 
-  // --- RUB bank deposits (quantity in `trades` is already the RUB
-  //     balance, not a unit count -- see classifyTicker) ---
-  if (rubDepositCandidates.length && usdRubRate !== null) {
-    const depositPriceUsd = 1 / usdRubRate;
-    for (const ticker of rubDepositCandidates) {
+  // --- Bank deposits (quantity in `trades` is already the balance in
+  //     that trade's own currency, not a unit count -- see classifyTicker).
+  //     Currency is per-ticker (fetched from `trades` itself, not guessed
+  //     from the ticker string), so this covers RUB deposits (Snowball's
+  //     "ВКЛАД:Т16%13") and non-RUB ones (e.g. "ВКЛАД:Revolut" for EUR/USD
+  //     Instant Access Savings) with the same code path. ---
+  if (depositCandidates.length) {
+    const depositCurrencies = await fetchDepositCurrencies(supabase, depositCandidates);
+    for (const ticker of depositCandidates) {
+      const currency = depositCurrencies[ticker];
+      if (!currency) { log(`  deposit ticker ${ticker}: no currency found in trades, skipping`); continue; }
+      const rate = await fxRateToUsd(currency, usdRubRate);
+      if (rate === null) { log(`  deposit ticker ${ticker}: no ${currency}->USD rate available, skipping`); continue; }
       rowsOut.push({
         ticker,
-        price_usd: Math.round(depositPriceUsd * 1e8) / 1e8,
+        price_usd: Math.round(rate * 1e8) / 1e8,
         native_price: 1,
-        currency: 'RUB',
-        asset_class: 'rub_deposit',
-        infra_region: 'ru',
+        currency,
+        asset_class: 'deposit',
+        infra_region: currency === 'RUB' ? 'ru' : 'foreign',
         instrument_type: 'bond',
-        underlying_currency: 'RUB',
-        source: 'cbr_fx',
+        underlying_currency: currency,
+        source: currency === 'RUB' ? 'cbr_fx' : 'yahoo_fx',
         as_of: new Date().toISOString().slice(0, 10),
       });
       resolved.add(ticker);
     }
-  } else if (rubDepositCandidates.length) {
-    log(`  ${rubDepositCandidates.length} RUB deposit ticker(s) found but no USD/RUB rate available, skipping`);
   }
 
   // --- MOEX (shares, ETFs, corp bonds, OFZ) ---
