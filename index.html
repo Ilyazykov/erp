@@ -2459,7 +2459,12 @@ async function mpRenderPortfolioPies() {
   // e.g. SBBY/TLCB are quoted in RUB on MOEX but hold CNY bonds, so
   // underlying_currency='CNY' for them even though currency='RUB'. See
   // UNDERLYING_CURRENCY_BY_TICKER in update-market-prices/index.ts.
-  const bondDepositRows = priced.filter(r => r.instrument_type === 'bond');
+  // infra_region === 'ru' restricts this to Russian-infrastructure bonds/
+  // deposits only (same scope as chart 3 above) -- without it, foreign
+  // instrument_type='bond' rows (Revolut money-market funds, Revolut
+  // deposits) would inflate "non-RUB" with holdings this chart was never
+  // meant to cover.
+  const bondDepositRows = priced.filter(r => r.instrument_type === 'bond' && r.infra_region === 'ru');
   const rubCurrent = bondDepositRows.filter(r => r.underlying_currency === 'RUB').reduce((s, r) => s + r.value_usd, 0);
   const nonRubCurrent = bondDepositRows.filter(r => r.underlying_currency !== 'RUB').reduce((s, r) => s + r.value_usd, 0);
   if (DATA.currentWCny !== undefined && DATA.currentWCny !== null) {
