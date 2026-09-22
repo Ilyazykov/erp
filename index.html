@@ -230,6 +230,16 @@
     </div>
     <p class="empty-note" id="mp_bank_csv_status"></p>
 
+    <div class="section-title">Import Flexible Cash Funds statement (Revolut CSV)</div>
+    <p class="note">Upload a Revolut Flexible Cash Funds (Savings) statement CSV. Each currency's BUY/SELL
+      rows are imported as trades of the fund itself (ticker = its ISIN) so they show up in your holdings
+      below, same as any brokerage stock.</p>
+    <div class="form-row">
+      <input type="file" id="mp_fund_csv_file" accept=".csv">
+      <button class="btn primary" id="mp_fund_csv_upload">Upload</button>
+    </div>
+    <p class="empty-note" id="mp_fund_csv_status"></p>
+
     <div class="section-title">Current holdings</div>
     <p class="note">USD values use the previous day's close, converted from RUB/EUR/native currency where needed —
       updated once a day, not real-time. A blank value means today's price fetch didn't resolve that ticker yet.</p>
@@ -1554,6 +1564,40 @@ document.getElementById('mp_bank_csv_upload').addEventListener('click', async ()
     }
     statusEl.textContent = `Imported ${result.imported} transactions (${result.total_rows} parsed, `
       + `${result.skipped_not_completed} not-completed, ${result.skipped_deposit} deposit rows skipped).`;
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`;
+  }
+});
+
+document.getElementById('mp_fund_csv_upload').addEventListener('click', async () => {
+  const fileInput = document.getElementById('mp_fund_csv_file');
+  const statusEl = document.getElementById('mp_fund_csv_status');
+  const file = fileInput.files[0];
+  if (!file) { statusEl.textContent = 'Choose a CSV file first.'; return; }
+
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) { statusEl.textContent = 'Sign in first.'; return; }
+
+  statusEl.textContent = 'Uploading and parsing on the server…';
+  try {
+    const csvText = await file.text();
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/import-revolut-fund-statement`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${session.access_token}`,
+        'Content-Type': 'text/csv',
+      },
+      body: csvText,
+    });
+    const result = await res.json();
+    if (!res.ok) {
+      statusEl.textContent = `Error: ${result.error || res.statusText}`;
+      return;
+    }
+    statusEl.textContent = `Imported ${result.imported} fund trades (${result.total_rows} rows with an `
+      + `instrument, ${result.skipped_no_quantity} skipped as non-BUY/SELL bookkeeping).`;
+    mpRenderHoldings();
+    mpRenderPortfolioPies();
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}`;
   }
