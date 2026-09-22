@@ -272,7 +272,7 @@ async function latestUsdRubRate(): Promise<number | null> {
 // Ticker classification
 // ---------------------------------------------------------------------------
 
-type TickerClass = 'moex_ofz' | 'moex_bond' | 'moex_share_or_etf_or_other' | 'crypto' | 'deposit';
+type TickerClass = 'moex_ofz' | 'moex_bond' | 'moex_share_or_etf_or_other' | 'crypto' | 'deposit' | 'money_market_fund';
 
 // A bank deposit/savings account is represented as a synthetic ticker,
 // not an ISIN or a real listed instrument -- e.g. "DEPOSIT:Revolut" for
@@ -292,6 +292,19 @@ type TickerClass = 'moex_ofz' | 'moex_bond' | 'moex_share_or_etf_or_other' | 'cr
 // special-casing in the `portfolio_value_usd` view.
 const DEPOSIT_PREFIX = 'DEPOSIT:';
 const DEPOSIT_PREFIX_LEGACY_CYRILLIC = 'ВКЛАД:';
+
+// Revolut's Flexible Cash Funds are money-market funds (Fidelity
+// Institutional Liquidity Fund plc share classes) whose ticker is the
+// fund's own ISIN -- not a MOEX or Yahoo-listed instrument, so the generic
+// "everything else" resolution path below would spend requests searching
+// for it as a US stock/ETF and never find it. Its per-unit price is
+// pinned at ~1.00 in its own currency by design (a money-market fund keeps
+// its NAV stable, unlike a bond whose price floats with rates), so like a
+// bank deposit it only needs an FX conversion, not a real price lookup --
+// see the money-market handling below, which mirrors the deposit one.
+// User-confirmed list of the three share classes actually held (USD/GBP/
+// EUR Class R); a new share class would need to be added here.
+const MONEY_MARKET_FUND_ISINS = new Set(['IE000H9J0QX4', 'IE0002RUHW32', 'IE000AZVL3K0']);
 
 // MOEX-listed bond/money-market ETFs (BPIFs) whose holdings are bonds/cash
 // instruments, not equities -- but which the generic MOEX group classifier
@@ -317,6 +330,7 @@ const UNDERLYING_CURRENCY_BY_TICKER: Record<string, string> = { SBBY: 'CNY', TLC
 function classifyTicker(ticker: string): TickerClass {
   const t = ticker.toUpperCase();
   if (t.startsWith(DEPOSIT_PREFIX) || t.startsWith(DEPOSIT_PREFIX_LEGACY_CYRILLIC)) return 'deposit';
+  if (MONEY_MARKET_FUND_ISINS.has(t)) return 'money_market_fund';
   if (KNOWN_CRYPTO_TICKERS.has(t)) return 'crypto';
   if (t.startsWith(MOEX_CORP_BOND_ISIN_PREFIX)) return 'moex_bond';
   if (t.startsWith(MOEX_OFZ_ISIN_PREFIX) && t.length >= 10 && /\d/.test(t)) return 'moex_ofz';
@@ -690,20 +704,23 @@ async function fetchDistinctTickers(supabase: any): Promise<string[] | null> {
 }
 
 // deno-lint-ignore no-explicit-any
-async function fetchDepositCurrencies(supabase: any, depositTickers: string[]): Promise<Record<string, string>> {
-  // A deposit ticker (see DEPOSIT_PREFIX) carries no currency of its own --
-  // that lives in `trades.currency` for the rows that use it. Reads only
-  // ticker+currency (same cross-user, service-role, no-PII pattern as
-  // fetchDistinctTickers) and takes whichever currency appears first for
-  // each ticker; in practice a given user's deposit ticker is only ever
-  // recorded in one currency, so "first seen" is just "the" currency.
-  if (!depositTickers.length) return {};
+async function fetchTickerCurrencies(supabase: any, tickers: string[]): Promise<Record<string, string>> {
+  // A deposit or money-market-fund ticker carries no currency of its own --
+  // that lives in `trades.currency` for the rows that use it (a deposit
+  // ticker has no ISIN/exchange currency at all; a fund ISIN like
+  // IE000H9J0QX4 is shared across USD/GBP/EUR Class R share classes, so the
+  // ticker string alone doesn't say which). Reads only ticker+currency
+  // (same cross-user, service-role, no-PII pattern as fetchDistinctTickers)
+  // and takes whichever currency appears first for each ticker; in practice
+  // a given user only ever records a specific ticker in one currency, so
+  // "first seen" is just "the" currency.
+  if (!tickers.length) return {};
   const { data, error } = await supabase
     .from('trades')
     .select('ticker, currency')
-    .in('ticker', depositTickers);
+    .in('ticker', tickers);
   if (error) {
-    log(`  deposit-currency query failed: ${error.message}`);
+    log(`  ticker-currency query failed: ${error.message}`);
     return {};
   }
   const out: Record<string, string> = {};
@@ -782,6 +799,7 @@ async function runUpdate(): Promise<Record<string, unknown>> {
   const moexCandidates: string[] = [];
   const cryptoCandidates: string[] = [];
   const depositCandidates: string[] = [];
+  const moneyMarketCandidates: string[] = [];
   for (const t of tickers) {
     const cls = classifyTicker(t);
     if (cls === 'moex_ofz' || cls === 'moex_bond' || cls === 'moex_share_or_etf_or_other') {
@@ -792,6 +810,9 @@ async function runUpdate(): Promise<Record<string, unknown>> {
     }
     if (cls === 'deposit') {
       depositCandidates.push(t);
+    }
+    if (cls === 'money_market_fund') {
+      moneyMarketCandidates.push(t);
     }
   }
 
@@ -805,7 +826,7 @@ async function runUpdate(): Promise<Record<string, unknown>> {
   //     "ВКЛАД:Т16%13") and non-RUB ones (e.g. "ВКЛАД:Revolut" for EUR/USD
   //     Instant Access Savings) with the same code path. ---
   if (depositCandidates.length) {
-    const depositCurrencies = await fetchDepositCurrencies(supabase, depositCandidates);
+    const depositCurrencies = await fetchTickerCurrencies(supabase, depositCandidates);
     for (const ticker of depositCandidates) {
       const currency = depositCurrencies[ticker];
       if (!currency) { log(`  deposit ticker ${ticker}: no currency found in trades, skipping`); continue; }
@@ -818,6 +839,36 @@ async function runUpdate(): Promise<Record<string, unknown>> {
         currency,
         asset_class: 'deposit',
         infra_region: currency === 'RUB' ? 'ru' : 'foreign',
+        instrument_type: 'bond',
+        underlying_currency: currency,
+        source: currency === 'RUB' ? 'cbr_fx' : 'yahoo_fx',
+        as_of: new Date().toISOString().slice(0, 10),
+      });
+      resolved.add(ticker);
+    }
+  }
+
+  // --- Money-market funds (Revolut Flexible Cash Funds) -- NAV is pinned
+  //     at ~1.00 in the fund's own currency by design, so like a deposit
+  //     this only needs an FX conversion, not a real price lookup. Unlike
+  //     a deposit ticker, the same ISIN can appear in `trades` under more
+  //     than one currency in principle (Class R share classes are USD/GBP/
+  //     EUR-specific in practice, one currency per ISIN, but the lookup is
+  //     still per-ticker rather than assumed). ---
+  if (moneyMarketCandidates.length) {
+    const fundCurrencies = await fetchTickerCurrencies(supabase, moneyMarketCandidates);
+    for (const ticker of moneyMarketCandidates) {
+      const currency = fundCurrencies[ticker];
+      if (!currency) { log(`  money-market fund ${ticker}: no currency found in trades, skipping`); continue; }
+      const rate = await fxRateToUsd(currency, usdRubRate);
+      if (rate === null) { log(`  money-market fund ${ticker}: no ${currency}->USD rate available, skipping`); continue; }
+      rowsOut.push({
+        ticker,
+        price_usd: Math.round(rate * 1e8) / 1e8,
+        native_price: 1,
+        currency,
+        asset_class: 'money_market_fund',
+        infra_region: 'foreign',
         instrument_type: 'bond',
         underlying_currency: currency,
         source: currency === 'RUB' ? 'cbr_fx' : 'yahoo_fx',
