@@ -698,15 +698,28 @@ async function fetchDistinctTickers(supabase: any): Promise<string[] | null> {
   // quantities, prices, or user_id leave this function. Returns null on
   // any failure (caller falls back to SEED_TICKERS), or a possibly-empty
   // list.
-  const { data, error } = await supabase.from('trades').select('ticker');
-  if (error) {
-    log(`  distinct-ticker query failed, will fall back to seed list: ${error.message}`);
-    return null;
-  }
+  //
+  // Paged in batches of 1000: PostgREST caps an unbounded select() at 1000
+  // rows by default, so a single unpaged query silently truncates once
+  // `trades` grows past that (as it now can, since each fund-statement
+  // interest row is its own trades row) -- some tickers would then never
+  // even reach classification, let alone show up as "unresolved".
+  const pageSize = 1000;
   const tickers = new Set<string>();
-  // deno-lint-ignore no-explicit-any
-  for (const row of data as any[]) {
-    if (row.ticker) tickers.add(String(row.ticker).trim());
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabase
+      .from('trades')
+      .select('ticker')
+      .range(from, from + pageSize - 1);
+    if (error) {
+      log(`  distinct-ticker query failed, will fall back to seed list: ${error.message}`);
+      return null;
+    }
+    // deno-lint-ignore no-explicit-any
+    for (const row of data as any[]) {
+      if (row.ticker) tickers.add(String(row.ticker).trim());
+    }
+    if (data.length < pageSize) break;
   }
   return [...tickers].sort();
 }
