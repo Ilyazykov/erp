@@ -151,6 +151,7 @@ Deno.serve(async (req) => {
 
     let skippedBadDate = 0;
     const rows = [];
+    const dupSeen = new Map<string, number>();
     for (const r of depositRows) {
       const tradeDate = parseDate(r.startedDate);
       if (!tradeDate) { skippedBadDate++; continue; }
@@ -162,6 +163,13 @@ Deno.serve(async (req) => {
       // and gets reinvested as its own purchase; this deposit has no such
       // separate accounting -- the interest row IS the balance increase).
       const side = /^withdrawal/i.test(r.description) ? 'sell' : 'buy';
+
+      // Two rows on the same day can legitimately share date/description/
+      // amount/currency (e.g. interest paid twice in identical amounts) --
+      // an occurrence counter folded into external_id tells them apart.
+      const signature = `${r.startedDate}:${r.description}:${r.amount}:${r.currency}`;
+      const occurrence = dupSeen.get(signature) ?? 0;
+      dupSeen.set(signature, occurrence + 1);
 
       rows.push({
         user_id: user.id,
@@ -181,7 +189,7 @@ Deno.serve(async (req) => {
         account: 'Revolut',
         note: r.description,
         external_source: 'revolut_deposit_csv',
-        external_id: `${r.startedDate}:${r.description}:${r.amount}:${r.currency}`,
+        external_id: occurrence === 0 ? signature : `${signature}:dup${occurrence}`,
       });
     }
 

@@ -194,6 +194,7 @@ Deno.serve(async (req) => {
     let skippedBadDate = 0;
 
     const rows = [];
+    const dupSeen = new Map<string, number>();
     for (const r of csvRows) {
       if (r.state !== 'COMPLETED') { skippedNotCompleted++; continue; }
       // Deposit-product rows (Instant Access Savings) are their own
@@ -203,6 +204,13 @@ Deno.serve(async (req) => {
 
       const isoDate = toIsoTimestamp(r.startedDate);
       if (!isoDate) { skippedBadDate++; continue; }
+
+      // Two rows can share the same second/description/amount/currency
+      // (e.g. two identical transfers) -- an occurrence counter folded
+      // into external_id tells them apart instead of colliding on upsert.
+      const signature = `${r.startedDate}:${r.description}:${r.amount}:${r.currency}`;
+      const occurrence = dupSeen.get(signature) ?? 0;
+      dupSeen.set(signature, occurrence + 1);
 
       rows.push({
         user_id: user.id,
@@ -222,7 +230,7 @@ Deno.serve(async (req) => {
         // full date-range replace. Re-uploading the same or an overlapping
         // export produces the identical key, so the upsert below quietly
         // no-ops on rows already present instead of duplicating them.
-        external_id: `${r.startedDate}:${r.description}:${r.amount}:${r.currency}`,
+        external_id: occurrence === 0 ? signature : `${signature}:dup${occurrence}`,
       });
     }
 

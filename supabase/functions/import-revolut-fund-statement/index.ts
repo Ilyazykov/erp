@@ -183,6 +183,7 @@ Deno.serve(async (req) => {
     let skippedNoQuantity = 0;
     let skippedBadDate = 0;
     const rows = [];
+    const dupSeen = new Map<string, number>();
 
     for (const r of fundRows) {
       if (r.quantityOfShares === null || r.quantityOfShares === 0) { skippedNoQuantity++; continue; }
@@ -202,6 +203,13 @@ Deno.serve(async (req) => {
       const quantity = Math.abs(r.quantityOfShares);
       const price = r.pricePerShare ?? 1.0;  // fund share price is always ~1.00; CSV's own value used when present
 
+      // Two rows can share the same second/description/quantity (e.g. two
+      // identical fund purchases) -- an occurrence counter folded into
+      // external_id tells them apart instead of colliding on upsert.
+      const signature = `${r.startedDate}:${r.description}:${r.quantityOfShares}`;
+      const occurrence = dupSeen.get(signature) ?? 0;
+      dupSeen.set(signature, occurrence + 1);
+
       rows.push({
         user_id: user.id,
         ticker: instrument.isin,
@@ -213,7 +221,7 @@ Deno.serve(async (req) => {
         account: 'Revolut',
         note: r.description,
         external_source: 'revolut_fund_csv',
-        external_id: `${r.startedDate}:${r.description}:${r.quantityOfShares}`,
+        external_id: occurrence === 0 ? signature : `${signature}:dup${occurrence}`,
       });
     }
 
