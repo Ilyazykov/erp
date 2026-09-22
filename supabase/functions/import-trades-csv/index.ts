@@ -119,6 +119,15 @@ Deno.serve(async (req) => {
 
     const rows = [];
     let skipped = 0;
+    // Snowball can legitimately export two separate trades on the same day
+    // for the same symbol with identical price/quantity/feeTax (e.g. two
+    // separate 1-unit buys filled at the same price) -- those rows are
+    // otherwise indistinguishable, so a per-duplicate occurrence counter is
+    // folded into external_id as a tie-breaker. Keyed on the *pre-dedup*
+    // signature (not the row's position in the file), so inserting/removing
+    // unrelated rows elsewhere in a later export doesn't reshuffle the ids
+    // of these -- only a change in the count of that exact duplicate would.
+    const dupSeen = new Map<string, number>();
     for (let i = 1; i < lines.length; i++) {
       const cells = parseCsvLine(lines[i]);
       const event = (cells[idx.event] || '').trim();
@@ -130,6 +139,10 @@ Deno.serve(async (req) => {
       const quantity = parseNumber(cells[idx.quantity]);
       const price = parseNumber(cells[idx.price]);
       if (!trade_date || quantity === null || price === null) { skipped++; continue; }
+
+      const signature = `${event}:${cells[idx.date]}:${cells[idx.symbol]}:${cells[idx.quantity]}:${cells[idx.price]}:${cells[idx.feeTax]}`;
+      const occurrence = dupSeen.get(signature) ?? 0;
+      dupSeen.set(signature, occurrence + 1);
 
       rows.push({
         user_id: user.id,
@@ -145,7 +158,7 @@ Deno.serve(async (req) => {
         nkd: parseNumber(cells[idx.nkd]),
         note: cells[idx.note] || null,
         external_source: 'snowball_csv',
-        external_id: `${event}:${cells[idx.date]}:${cells[idx.symbol]}:${cells[idx.quantity]}:${cells[idx.price]}:${cells[idx.feeTax]}`,
+        external_id: occurrence === 0 ? signature : `${signature}:dup${occurrence}`,
       });
     }
 
