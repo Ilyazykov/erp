@@ -230,6 +230,18 @@
 
     <div class="section-title">Cash flows (dividends, coupons, redemptions)</div>
     <div id="mp_cashflows_wrap"></div>
+
+    <div class="section-title">Portfolio by broker × currency</div>
+    <div id="mp_broker_currency_wrap"></div>
+
+    <div class="section-title">Portfolio by broker × asset class</div>
+    <div id="mp_broker_assetclass_wrap"></div>
+
+    <div class="section-title">Equities by index</div>
+    <div id="mp_equity_index_wrap"></div>
+
+    <div class="section-title">Bonds by type</div>
+    <div id="mp_bond_subtype_wrap"></div>
   </div>
 </div>
 
@@ -1554,6 +1566,10 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
       mpRenderHoldings();
       mpRenderPortfolioPies();
       mpRenderCashFlows();
+      mpRenderBrokerCurrency();
+      mpRenderBrokerAssetClass();
+      mpRenderEquityByIndex();
+      mpRenderBondByType();
     } else if (kind === 'revolut_account') {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} transactions `
         + `(${result.total_rows} parsed, ${result.skipped_not_completed} not-completed, `
@@ -1565,11 +1581,19 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
       mpRenderHoldings();
       mpRenderPortfolioPies();
       mpRenderCashFlows();
+      mpRenderBrokerCurrency();
+      mpRenderBrokerAssetClass();
+      mpRenderEquityByIndex();
+      mpRenderBondByType();
     } else {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} deposit trades `
         + `(${result.total_rows} parsed).`;
       mpRenderHoldings();
       mpRenderPortfolioPies();
+      mpRenderBrokerCurrency();
+      mpRenderBrokerAssetClass();
+      mpRenderEquityByIndex();
+      mpRenderBondByType();
     }
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}`;
@@ -1623,6 +1647,93 @@ async function mpRenderCashFlows() {
   </tr>`).join('')}</tbody></table>`;
 }
 
+// Builds a broker(row) x category(column) pivot table in USD from an array
+// of {account, [categoryField], value_usd} rows -- shared by
+// mpRenderBrokerCurrency and mpRenderBrokerAssetClass, which differ only in
+// which field supplies the column and how a column label is displayed.
+function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage) {
+  if (!data.length) { wrap.innerHTML = `<p class="empty-note">${emptyMessage}</p>`; return; }
+  const priced = data.filter(r => r.value_usd !== null);
+  const accounts = [...new Set(priced.map(r => r.account))].sort();
+  const categories = [...new Set(priced.map(r => r[categoryField]))].sort();
+  const cell = {};
+  for (const r of priced) {
+    const key = `${r.account} ${r[categoryField]}`;
+    cell[key] = (cell[key] || 0) + r.value_usd;
+  }
+  const rowTotal = a => categories.reduce((s, c) => s + (cell[`${a} ${c}`] || 0), 0);
+  const colTotal = c => accounts.reduce((s, a) => s + (cell[`${a} ${c}`] || 0), 0);
+  const grandTotal = accounts.reduce((s, a) => s + rowTotal(a), 0);
+  const anyMissing = data.some(r => r.value_usd === null);
+  wrap.innerHTML = `<table class="data-table"><thead><tr>
+    <th>Broker</th>${categories.map(c => `<th>${mpEscapeHtml(c)}</th>`).join('')}<th>Total</th>
+  </tr></thead><tbody>${accounts.map(a => `<tr>
+    <td class="ticker">${mpEscapeHtml(a)}</td>
+    ${categories.map(c => `<td>${mpFormatUsd(cell[`${a} ${c}`] || 0)}</td>`).join('')}
+    <td><b>${mpFormatUsd(rowTotal(a))}</b></td>
+  </tr>`).join('')}
+  <tr class="total-row"><td><b>Total</b></td>
+    ${categories.map(c => `<td><b>${mpFormatUsd(colTotal(c))}</b></td>`).join('')}
+    <td><b>${mpFormatUsd(grandTotal)}</b></td>
+  </tr></tbody></table>
+  ${anyMissing ? '<p class="empty-note">Some tickers have no price yet — totals are a partial sum.</p>' : ''}`;
+}
+
+async function mpRenderBrokerCurrency() {
+  const wrap = document.getElementById('mp_broker_currency_wrap');
+  const { data, error } = await sb.from('portfolio_value_usd_by_account').select('*');
+  if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
+  mpRenderBrokerPivot(wrap, data, 'currency', 'No holdings yet — import trades above.');
+}
+
+async function mpRenderBrokerAssetClass() {
+  const wrap = document.getElementById('mp_broker_assetclass_wrap');
+  const { data, error } = await sb.from('portfolio_value_usd_by_account').select('*');
+  if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
+  mpRenderBrokerPivot(wrap, data, 'instrument_type', 'No holdings yet — import trades above.');
+}
+
+// Builds a single-column-of-buckets breakdown table (category name -> USD
+// value) -- shared by mpRenderEquityByIndex and mpRenderBondByType, which
+// differ only in which rows they keep and how each row maps to a bucket.
+function mpRenderBucketTable(wrap, rows, bucketOf, emptyMessage) {
+  if (!rows.length) { wrap.innerHTML = `<p class="empty-note">${emptyMessage}</p>`; return; }
+  const priced = rows.filter(r => r.value_usd !== null);
+  const totals = {};
+  for (const r of priced) {
+    const bucket = bucketOf(r);
+    totals[bucket] = (totals[bucket] || 0) + r.value_usd;
+  }
+  const buckets = Object.keys(totals).sort();
+  const grandTotal = buckets.reduce((s, b) => s + totals[b], 0);
+  const anyMissing = rows.some(r => r.value_usd === null);
+  wrap.innerHTML = `<table class="data-table"><thead><tr>
+    <th>Category</th><th>Value (USD)</th>
+  </tr></thead><tbody>${buckets.map(b => `<tr>
+    <td class="ticker">${mpEscapeHtml(b)}</td>
+    <td>${mpFormatUsd(totals[b])}</td>
+  </tr>`).join('')}
+  <tr class="total-row"><td><b>Total</b></td><td><b>${mpFormatUsd(grandTotal)}</b></td></tr>
+  </tbody></table>
+  ${anyMissing ? '<p class="empty-note">Some tickers have no price yet — total is a partial sum.</p>' : ''}`;
+}
+
+async function mpRenderEquityByIndex() {
+  const wrap = document.getElementById('mp_equity_index_wrap');
+  const { data, error } = await sb.from('portfolio_value_usd').select('*');
+  if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
+  const equities = data.filter(r => r.instrument_type === 'stock');
+  mpRenderBucketTable(wrap, equities, r => EQUITY_INDEX_BY_TICKER[r.ticker] || 'Other', 'No equity holdings yet.');
+}
+
+async function mpRenderBondByType() {
+  const wrap = document.getElementById('mp_bond_subtype_wrap');
+  const { data, error } = await sb.from('portfolio_value_usd').select('*');
+  if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
+  const bonds = data.filter(r => r.instrument_type === 'bond');
+  mpRenderBucketTable(wrap, bonds, mpBondSubtype, 'No bond/deposit holdings yet.');
+}
+
 // ---- Portfolio-composition pie charts (embedded in the existing tabs) ----
 // All four read the same portfolio_value_usd snapshot once, then slice it
 // differently client-side -- no extra network round-trips per chart.
@@ -1641,6 +1752,30 @@ const US_STOCK_TICKERS = [
   'TSLA', 'HD', 'PG', 'KO', 'SHEL', 'CVX', 'SHW', 'DUK', 'AMT', 'SOFI', 'XYZ',
   'INTC', 'SPCX', 'FCX', 'SO', 'EQIX',
 ];
+
+// Ticker -> equity index name, for the "Equities by index" summary table.
+// Deliberately incomplete -- an unmapped ticker falls into an "Other"
+// bucket in mpRenderEquityByIndex rather than blocking the table. Extend
+// as more index membership is confirmed.
+const EQUITY_INDEX_BY_TICKER = {};
+for (const t of US_STOCK_TICKERS) EQUITY_INDEX_BY_TICKER[t] = 'S&P500';
+for (const t of RU_STOCK_TICKERS) EQUITY_INDEX_BY_TICKER[t] = 'MOEX';
+EQUITY_INDEX_BY_TICKER.CSPX = 'S&P500';   // iShares Core S&P 500 UCITS ETF
+EQUITY_INDEX_BY_TICKER.VUAA = 'S&P500';   // Vanguard S&P 500 UCITS ETF
+EQUITY_INDEX_BY_TICKER.VWCE = 'STOXX600'; // Vanguard FTSE All-World -- closest listed proxy available today
+EQUITY_INDEX_BY_TICKER.VWRA = 'Акции мира';
+
+// Ticker -> bond/fixed-income sub-type, for the "Bonds by type" summary
+// table. Deliberately incomplete -- falls back to a generic bucket derived
+// from infra_region/asset_class for anything not explicitly listed here.
+const BOND_SUBTYPE_BY_TICKER = { SBBY: 'Облигации 🇨🇳', TLCB: 'Облигации 🇨🇳' };
+function mpBondSubtype(row) {
+  if (BOND_SUBTYPE_BY_TICKER[row.ticker]) return BOND_SUBTYPE_BY_TICKER[row.ticker];
+  if (row.asset_class === 'deposit' || row.asset_class === 'money_market_fund') {
+    return row.underlying_currency === 'RUB' ? 'Вклады 🇷🇺' : 'Вклады';
+  }
+  return row.infra_region === 'ru' ? 'Облигации 🇷🇺' : 'Облигации';
+}
 
 // Same "bulge past the dotted circle = overweight, dip short of it =
 // underweight" donut as targetWeights/usTargetWeights/allocTarget above,
@@ -2348,6 +2483,10 @@ function mpUpdateAuthUi(session) {
     mpRenderHoldings();
     mpRenderPortfolioPies();
     mpRenderCashFlows();
+    mpRenderBrokerCurrency();
+    mpRenderBrokerAssetClass();
+    mpRenderEquityByIndex();
+    mpRenderBondByType();
   } else {
     btn.textContent = 'Sign in with Google';
     document.getElementById('mp_signed_out').style.display = '';
@@ -2357,7 +2496,8 @@ function mpUpdateAuthUi(session) {
     ['mp_pie_us_stocks_note', 'mp_pie_ru_stocks_note', 'mp_pie_stocksbonds_note', 'mp_pie_deposits_note',
      'mp_pie_us_stocks_title', 'mp_pie_ru_stocks_title', 'mp_pie_stocksbonds_title', 'mp_pie_deposits_title']
       .forEach(id => { document.getElementById(id).style.display = 'none'; });
-    ['mp_pie_us_stocks_table_wrap', 'mp_pie_ru_stocks_table_wrap', 'mp_pie_stocksbonds_table_wrap', 'mp_pie_deposits_table_wrap']
+    ['mp_pie_us_stocks_table_wrap', 'mp_pie_ru_stocks_table_wrap', 'mp_pie_stocksbonds_table_wrap', 'mp_pie_deposits_table_wrap',
+     'mp_broker_currency_wrap', 'mp_broker_assetclass_wrap', 'mp_equity_index_wrap', 'mp_bond_subtype_wrap']
       .forEach(id => { document.getElementById(id).innerHTML = ''; });
     document.getElementById('mp_ru_stocks_invest_row').style.display = 'none';
     document.getElementById('mp_us_stocks_invest_row').style.display = 'none';
