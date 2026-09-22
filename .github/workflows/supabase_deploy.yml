@@ -30,17 +30,7 @@ jobs:
 
       - name: Deploy Edge Functions
         run: |
-          supabase functions deploy import-trades-csv --project-ref "$SUPABASE_PROJECT_REF"
-          supabase functions deploy import-revolut-statement --project-ref "$SUPABASE_PROJECT_REF"
-          supabase functions deploy import-revolut-fund-statement --project-ref "$SUPABASE_PROJECT_REF"
-          supabase functions deploy import-revolut-deposit-statement --project-ref "$SUPABASE_PROJECT_REF"
-          # --no-verify-jwt: this function is invoked by pg_cron (see
-          # supabase/migrations/20250101000005_schedule_market_prices.sql),
-          # which has no end-user session/JWT to present. The function
-          # itself only ever uses its own service-role credentials to read
-          # trades/write market_prices, regardless of caller, so this does
-          # not loosen who can write price data -- it only lets the
-          # platform-level request through so cron can reach it at all.
+          supabase functions deploy --project-ref "$SUPABASE_PROJECT_REF"
           supabase functions deploy update-market-prices --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
