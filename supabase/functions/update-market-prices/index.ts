@@ -660,10 +660,18 @@ async function fxRateToUsd(currency: string, usdRubRate: number | null): Promise
   if (c === 'USD') return 1.0;
   if (c === 'RUB' || c === 'SUR') return usdRubRate ? 1.0 / usdRubRate : null;
   if (c in fxCache) return fxCache[c];
-  const hit = await yahooFetchSymbol(`${c}USD=X`);
-  const rate = hit ? hit.price : null;
+  // A single transient failure (network blip, rate limit) shouldn't
+  // permanently blank out every asset in this currency for the rest of the
+  // run -- only a null result is cached after retrying a few times, not on
+  // the first miss.
+  let rate: number | null = null;
+  for (let attempt = 0; attempt < 3 && rate === null; attempt++) {
+    if (attempt > 0) await sleep(300);
+    const hit = await yahooFetchSymbol(`${c}USD=X`);
+    rate = hit ? hit.price : null;
+  }
   fxCache[c] = rate;
-  if (rate === null) log(`  no FX rate found for ${c} -> USD`);
+  if (rate === null) log(`  no FX rate found for ${c} -> USD after retries`);
   return rate;
 }
 
