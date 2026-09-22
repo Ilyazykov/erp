@@ -1,0 +1,15 @@
+-- Which account/broker/bank/exchange a trade physically happened on (e.g.
+-- "Freedom24", "IBKR", "Тинькофф", "Binance") -- distinct from the existing
+-- `exchange` column, which names the market the INSTRUMENT itself trades on
+-- (e.g. "MOEX", "NASDAQ"), not where the user's own position/cash sits. The
+-- user's asset tracking spans many accounts (see the bank/broker/exchange
+-- list they maintain manually today: Revolut, Wise, Freedom24, IBKR,
+-- Тинькофф, Сбер, Binance, Bybit, Cryptocom, ...), and every trade needs to
+-- be attributable to one of them for future per-account breakdowns (see
+-- TODO.md section 2, "Full Net Worth" tables/donuts grouped by account).
+--
+-- Nullable: existing Snowball-imported trades (stocks and crypto alike)
+-- predate this column and have no account recorded -- left NULL rather
+-- than guessed, to be filled in later (manually, or by a future import
+-- path that knows its own source account).
+alter table public.trades add column if not exists account text;
