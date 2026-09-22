@@ -1689,18 +1689,61 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage) {
   ${anyMissing ? '<p class="empty-note">Some tickers have no price yet — totals are a partial sum.</p>' : ''}`;
 }
 
+// Plain bank cash (checking-account balances -- Bank of Cyprus, Revolut
+// current accounts) never appears in `trades`/`portfolio_value_usd_by_account`
+// at all -- it's not a priced asset, it's just money sitting in an
+// account (see bank_transactions' own docstring on why it's a separate
+// table). To still show it alongside holdings in the broker x currency /
+// broker x asset-class tables, this reads the single most recent
+// balance_after per (account, currency) from bank_transactions and
+// converts it to USD via the FX:<CCY> synthetic tickers that
+// update-market-prices publishes into market_prices (see that function's
+// "FX rates" section) -- the same table every other price comes from, so
+// no separate FX-fetching code is needed on the client.
+async function mpFetchCashRows() {
+  const { data, error } = await sb.from('bank_transactions')
+    .select('account, currency, balance_after, tx_date')
+    .not('balance_after', 'is', null)
+    .order('tx_date', { ascending: false });
+  if (error || !data) return [];
+
+  // First row seen per (account, currency) is the latest, since the
+  // query is already sorted newest-first.
+  const latest = new Map();
+  for (const r of data) {
+    const key = `${r.account} ${r.currency}`;
+    if (!latest.has(key)) latest.set(key, r);
+  }
+  if (!latest.size) return [];
+
+  const { data: fxRows } = await sb.from('market_prices')
+    .select('ticker, price_usd')
+    .in('ticker', [...new Set([...latest.values()].map(r => `FX:${r.currency}`))]);
+  const fxByCurrency = {};
+  for (const r of fxRows || []) fxByCurrency[r.ticker.slice(3)] = r.price_usd;
+
+  return [...latest.values()].map(r => ({
+    account: r.account,
+    currency: r.currency,
+    instrument_type: 'cash',
+    value_usd: r.currency in fxByCurrency ? r.balance_after * fxByCurrency[r.currency] : null,
+  }));
+}
+
 async function mpRenderBrokerCurrency() {
   const wrap = document.getElementById('mp_broker_currency_wrap');
   const { data, error } = await sb.from('portfolio_value_usd_by_account').select('*');
   if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
-  mpRenderBrokerPivot(wrap, data, 'currency', 'No holdings yet — import trades above.');
+  const cashRows = await mpFetchCashRows();
+  mpRenderBrokerPivot(wrap, [...data, ...cashRows], 'currency', 'No holdings yet — import trades above.');
 }
 
 async function mpRenderBrokerAssetClass() {
   const wrap = document.getElementById('mp_broker_assetclass_wrap');
   const { data, error } = await sb.from('portfolio_value_usd_by_account').select('*');
   if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
-  mpRenderBrokerPivot(wrap, data, 'instrument_type', 'No holdings yet — import trades above.');
+  const cashRows = await mpFetchCashRows();
+  mpRenderBrokerPivot(wrap, [...data, ...cashRows], 'instrument_type', 'No holdings yet — import trades above.');
 }
 
 // Builds a single-column-of-buckets breakdown table (category name -> USD

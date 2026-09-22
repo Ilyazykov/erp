@@ -26,6 +26,11 @@
 // CSV, which already carries a signed Amount column, Bank of Cyprus splits
 // debit/credit into two unsigned columns that need combining.
 //
+// balance_after comes straight from the CSV's own "Indicative balance"
+// column -- this is what lets a cash-balance view take the single most
+// recent row per (account, currency) and trust it as the actual running
+// balance, instead of re-summing every amount from the start of history.
+//
 // There's no per-row timestamp (just a plain calendar date), and Bank of
 // Cyprus's own "Reference number" is often blank (e.g. plain card
 // purchases carry no reference), so the dedup key is
@@ -40,6 +45,7 @@ interface BocRow {
   description: string;
   transactionType: string;
   amount: number;
+  balanceAfter: number | null;
 }
 
 function parseCsvLine(line: string): string[] {
@@ -82,7 +88,7 @@ function parseEuroNumber(s: string): number | null {
 function parseRows(text: string): BocRow[] {
   const lines = text.split(/\r\n|\r|\n/).filter(l => l.trim().length > 0);
 
-  let idx: { date: number; description: number; type: number; debit: number; credit: number } | null = null;
+  let idx: { date: number; description: number; type: number; debit: number; credit: number; balance: number } | null = null;
   const rows: BocRow[] = [];
   for (const line of lines) {
     const cells = parseCsvLine(line);
@@ -92,7 +98,7 @@ function parseRows(text: string): BocRow[] {
         const col = (name: string) => header.indexOf(name);
         idx = {
           date: col('Date'), description: col('Description'), type: col('Transaction type'),
-          debit: col('Debit'), credit: col('Credit'),
+          debit: col('Debit'), credit: col('Credit'), balance: col('Indicative balance'),
         };
       }
       continue;
@@ -111,6 +117,7 @@ function parseRows(text: string): BocRow[] {
       description,
       transactionType: (cells[idx.type] || '').trim(),
       amount: credit !== null ? credit : -(debit as number),
+      balanceAfter: idx.balance >= 0 ? parseEuroNumber(cells[idx.balance] || '') : null,
     });
   }
   return rows;
@@ -200,7 +207,7 @@ Deno.serve(async (req) => {
         amount: r.amount,
         currency: 'EUR',
         category: categorize(r.transactionType, r.description),
-        balance_after: null,
+        balance_after: r.balanceAfter,
         external_source: 'boc_csv',
         external_id: occurrence === 0 ? signature : `${signature}:dup${occurrence}`,
       });

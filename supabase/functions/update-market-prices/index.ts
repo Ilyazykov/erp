@@ -781,7 +781,7 @@ async function fetchTickerCurrencies(supabase: any, tickers: string[]): Promise<
 }
 
 type InfraRegion = 'ru' | 'foreign';
-type InstrumentType = 'stock' | 'bond' | 'gold' | 'crypto';
+type InstrumentType = 'stock' | 'bond' | 'gold' | 'crypto' | 'fx_rate';
 
 interface PriceRow {
   ticker: string;
@@ -865,6 +865,33 @@ async function runUpdate(): Promise<Record<string, unknown>> {
 
   const rowsOut: PriceRow[] = [];
   const resolved = new Set<string>();
+
+  // --- FX rates (<CCY>->USD), published as their own synthetic tickers
+  //     "FX:<CCY>" so the frontend can convert a plain cash balance (e.g.
+  //     a bank statement's EUR/GBP balance_after, which never appears in
+  //     `trades` and so has no ticker of its own) to USD without needing
+  //     its own copy of FX logic -- it just reads market_prices like any
+  //     other price. CASH_FX_CURRENCIES is the closed set of currencies
+  //     actually seen across bank account statements (Bank of Cyprus,
+  //     Revolut) today; extend it if a new account currency shows up. ---
+  const CASH_FX_CURRENCIES = ['USD', 'EUR', 'GBP'];
+  for (const currency of CASH_FX_CURRENCIES) {
+    const rate = await fxRateToUsd(currency, usdRubRate);
+    if (rate === null) { log(`  FX rate ${currency}->USD: unavailable, skipping FX:${currency}`); continue; }
+    rowsOut.push({
+      ticker: `FX:${currency}`,
+      price_usd: Math.round(rate * 1e8) / 1e8,
+      native_price: 1,
+      currency,
+      asset_class: 'fx_rate',
+      infra_region: 'foreign',
+      instrument_type: 'fx_rate',
+      underlying_currency: currency,
+      source: currency === 'USD' ? 'identity' : 'yahoo_fx',
+      as_of: new Date().toISOString().slice(0, 10),
+    });
+    resolved.add(`FX:${currency}`);
+  }
 
   // --- Bank deposits (quantity in `trades` is already the balance in
   //     that trade's own currency, not a unit count -- see classifyTicker).
