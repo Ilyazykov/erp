@@ -1925,14 +1925,15 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
         <td class="muted">—</td>
       </tr>`
     : '';
-  // Flags only make sense for the broker x currency table (fxByCurrency is
-  // only passed there) -- the broker x asset-class table's columns aren't
-  // ISO currencies, so mpEscapeHtml(c) is used unflagged there.
+  // Currency flags only make sense when the columns are ISO currencies
+  // (fxByCurrency is only passed for the broker x currency table) -- the
+  // broker x asset-class table's columns are asset classes, so
+  // mpEscapeHtml(c) is used unflagged there.
   const headerLabel = c => fxByCurrency && c in MP_CURRENCY_FLAGS
     ? `${mpEscapeHtml(c)} ${MP_CURRENCY_FLAGS[c]}` : mpEscapeHtml(c);
-  // Same fxByCurrency gate as headerLabel above -- broker flags are a
-  // broker x currency table feature only.
-  const brokerLabel = a => fxByCurrency && a in MP_BROKER_FLAGS
+  // Broker flags identify the broker itself, not its columns, so unlike
+  // headerLabel above they apply regardless of what the columns represent.
+  const brokerLabel = a => a in MP_BROKER_FLAGS
     ? `${mpEscapeHtml(a)} ${MP_BROKER_FLAGS[a]}` : mpEscapeHtml(a);
   wrap.innerHTML = `<table class="data-table"><thead><tr>
     <th class="corner">Broker</th>${categories.map(c => `<th>${headerLabel(c)}</th>`).join('')}<th class="corner">Total</th>
