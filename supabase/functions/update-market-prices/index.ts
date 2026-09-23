@@ -867,14 +867,15 @@ async function runUpdate(): Promise<Record<string, unknown>> {
   const resolved = new Set<string>();
 
   // --- FX rates (<CCY>->USD), published as their own synthetic tickers
-  //     "FX:<CCY>" so the frontend can convert a plain cash balance (e.g.
-  //     a bank statement's EUR/GBP balance_after, which never appears in
-  //     `trades` and so has no ticker of its own) to USD without needing
-  //     its own copy of FX logic -- it just reads market_prices like any
-  //     other price. CASH_FX_CURRENCIES is the closed set of currencies
-  //     actually seen across bank account statements (Bank of Cyprus,
-  //     Revolut) today; extend it if a new account currency shows up. ---
-  const CASH_FX_CURRENCIES = ['USD', 'EUR', 'GBP'];
+  //     "FX:<CCY>" so the frontend can convert any USD-denominated value
+  //     back to its own native currency (or convert a plain cash balance,
+  //     e.g. a bank statement's EUR/GBP balance_after, which never
+  //     appears in `trades` and so has no ticker of its own) without
+  //     needing its own copy of FX logic -- it just reads market_prices
+  //     like any other price. CASH_FX_CURRENCIES is the closed set of
+  //     currencies actually seen across bank statements and holdings
+  //     today; extend it if a new currency shows up. ---
+  const CASH_FX_CURRENCIES = ['USD', 'EUR', 'GBP', 'RUB', 'CNY'];
   for (const currency of CASH_FX_CURRENCIES) {
     const rate = await fxRateToUsd(currency, usdRubRate);
     if (rate === null) { log(`  FX rate ${currency}->USD: unavailable, skipping FX:${currency}`); continue; }
@@ -887,7 +888,7 @@ async function runUpdate(): Promise<Record<string, unknown>> {
       infra_region: 'foreign',
       instrument_type: 'fx_rate',
       underlying_currency: currency,
-      source: currency === 'USD' ? 'identity' : 'yahoo_fx',
+      source: currency === 'USD' ? 'identity' : currency === 'RUB' ? 'cbr_fx' : 'yahoo_fx',
       as_of: new Date().toISOString().slice(0, 10),
     });
     resolved.add(`FX:${currency}`);

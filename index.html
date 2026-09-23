@@ -1619,6 +1619,17 @@ function mpFormatUsd(n) {
   return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 }
 
+function mpFormatCurrency(n, currency) {
+  if (n === null || n === undefined) return '<span class="muted">—</span>';
+  try {
+    return n.toLocaleString('en-US', { style: 'currency', currency, maximumFractionDigits: 2 });
+  } catch {
+    // Intl.NumberFormat throws on a currency code it doesn't recognize --
+    // fall back to a plain "<code> <amount>" instead of erroring the table.
+    return `${currency} ${n.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+  }
+}
+
 async function mpRenderHoldings() {
   const wrap = document.getElementById('mp_holdings_wrap');
   // portfolio_value_usd (supabase/migrations/20250101000004_market_prices.sql) left-joins
@@ -1657,36 +1668,71 @@ async function mpRenderCashFlows() {
   </tr>`).join('')}</tbody></table>`;
 }
 
-// Builds a broker(row) x category(column) pivot table in USD from an array
-// of {account, [categoryField], value_usd} rows -- shared by
+// Builds a broker(row) x category(column) pivot table from an array of
+// {account, [categoryField], value_usd} rows -- shared by
 // mpRenderBrokerCurrency and mpRenderBrokerAssetClass, which differ only in
 // which field supplies the column and how a column label is displayed.
-function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage) {
+//
+// When fxByCurrency is given (only for the broker x currency table, where
+// each column genuinely IS a currency), each cell is shown converted back
+// to that column's own native currency (value_usd / fxByCurrency[currency])
+// instead of USD, and an extra "Total (native)" row is inserted above the
+// USD total row -- so e.g. the EUR column reads in euros, not USD-via-EUR.
+// Cross-currency figures (the per-broker row total, and the grand total)
+// have no single native currency to show, so those stay in USD always.
+function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurrency) {
   if (!data.length) { wrap.innerHTML = `<p class="empty-note">${emptyMessage}</p>`; return; }
   const priced = data.filter(r => r.value_usd !== null);
   const accounts = [...new Set(priced.map(r => r.account))].sort();
   const categories = [...new Set(priced.map(r => r[categoryField]))].sort();
   const cell = {};
   for (const r of priced) {
-    const key = `${r.account} ${r[categoryField]}`;
+    const key = `${r.account} ${r[categoryField]}`;
     cell[key] = (cell[key] || 0) + r.value_usd;
   }
-  const rowTotal = a => categories.reduce((s, c) => s + (cell[`${a} ${c}`] || 0), 0);
-  const colTotal = c => accounts.reduce((s, a) => s + (cell[`${a} ${c}`] || 0), 0);
+  const rowTotal = a => categories.reduce((s, c) => s + (cell[`${a} ${c}`] || 0), 0);
+  const colTotal = c => accounts.reduce((s, a) => s + (cell[`${a} ${c}`] || 0), 0);
   const grandTotal = accounts.reduce((s, a) => s + rowTotal(a), 0);
   const anyMissing = data.some(r => r.value_usd === null);
+  const cellDisplay = (usd, category) => {
+    if (fxByCurrency && category in fxByCurrency) return mpFormatCurrency(usd / fxByCurrency[category], category);
+    return mpFormatUsd(usd);
+  };
+  const nativeTotalRow = fxByCurrency
+    ? `<tr class="total-row"><td><b>Total (native)</b></td>
+        ${categories.map(c => `<td><b>${cellDisplay(colTotal(c), c)}</b></td>`).join('')}
+        <td class="muted">—</td>
+      </tr>`
+    : '';
   wrap.innerHTML = `<table class="data-table"><thead><tr>
     <th>Broker</th>${categories.map(c => `<th>${mpEscapeHtml(c)}</th>`).join('')}<th>Total</th>
   </tr></thead><tbody>${accounts.map(a => `<tr>
     <td class="ticker">${mpEscapeHtml(a)}</td>
-    ${categories.map(c => `<td>${mpFormatUsd(cell[`${a} ${c}`] || 0)}</td>`).join('')}
+    ${categories.map(c => `<td>${cellDisplay(cell[`${a} ${c}`] || 0, c)}</td>`).join('')}
     <td><b>${mpFormatUsd(rowTotal(a))}</b></td>
   </tr>`).join('')}
-  <tr class="total-row"><td><b>Total</b></td>
+  ${nativeTotalRow}
+  <tr class="total-row"><td><b>Total (USD)</b></td>
     ${categories.map(c => `<td><b>${mpFormatUsd(colTotal(c))}</b></td>`).join('')}
     <td><b>${mpFormatUsd(grandTotal)}</b></td>
   </tr></tbody></table>
   ${anyMissing ? '<p class="empty-note">Some tickers have no price yet — totals are a partial sum.</p>' : ''}`;
+}
+
+// Reads the FX:<CCY> synthetic tickers update-market-prices publishes
+// into market_prices (see that function's "FX rates" section) for the
+// given currency codes, returning {currency: usdPerUnit}. Shared by
+// mpFetchCashRows (to convert a cash balance to USD) and
+// mpRenderBrokerCurrency (to convert a USD total back to a column's own
+// native currency for display).
+async function mpFetchFxByCurrency(currencies) {
+  if (!currencies.length) return {};
+  const { data } = await sb.from('market_prices')
+    .select('ticker, price_usd')
+    .in('ticker', [...new Set(currencies)].map(c => `FX:${c}`));
+  const fxByCurrency = {};
+  for (const r of data || []) fxByCurrency[r.ticker.slice(3)] = r.price_usd;
+  return fxByCurrency;
 }
 
 // Plain bank cash (checking-account balances -- Bank of Cyprus, Revolut
@@ -1696,11 +1742,8 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage) {
 // table). To still show it alongside holdings in the broker x currency /
 // broker x asset-class tables, this reads the single most recent
 // balance_after per (account, currency) from bank_transactions and
-// converts it to USD via the FX:<CCY> synthetic tickers that
-// update-market-prices publishes into market_prices (see that function's
-// "FX rates" section) -- the same table every other price comes from, so
-// no separate FX-fetching code is needed on the client.
-async function mpFetchCashRows() {
+// converts it to USD using the already-fetched fxByCurrency map.
+async function mpFetchCashRows(fxByCurrency) {
   const { data, error } = await sb.from('bank_transactions')
     .select('account, currency, balance_after, tx_date')
     .not('balance_after', 'is', null)
@@ -1711,16 +1754,10 @@ async function mpFetchCashRows() {
   // query is already sorted newest-first.
   const latest = new Map();
   for (const r of data) {
-    const key = `${r.account} ${r.currency}`;
+    const key = `${r.account} ${r.currency}`;
     if (!latest.has(key)) latest.set(key, r);
   }
   if (!latest.size) return [];
-
-  const { data: fxRows } = await sb.from('market_prices')
-    .select('ticker, price_usd')
-    .in('ticker', [...new Set([...latest.values()].map(r => `FX:${r.currency}`))]);
-  const fxByCurrency = {};
-  for (const r of fxRows || []) fxByCurrency[r.ticker.slice(3)] = r.price_usd;
 
   return [...latest.values()].map(r => ({
     account: r.account,
@@ -1734,15 +1771,18 @@ async function mpRenderBrokerCurrency() {
   const wrap = document.getElementById('mp_broker_currency_wrap');
   const { data, error } = await sb.from('portfolio_value_usd_by_account').select('*');
   if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
-  const cashRows = await mpFetchCashRows();
-  mpRenderBrokerPivot(wrap, [...data, ...cashRows], 'currency', 'No holdings yet — import trades above.');
+  const currencies = [...new Set(data.map(r => r.currency)), 'USD', 'EUR', 'GBP', 'RUB', 'CNY'];
+  const fxByCurrency = await mpFetchFxByCurrency(currencies);
+  const cashRows = await mpFetchCashRows(fxByCurrency);
+  mpRenderBrokerPivot(wrap, [...data, ...cashRows], 'currency', 'No holdings yet — import trades above.', fxByCurrency);
 }
 
 async function mpRenderBrokerAssetClass() {
   const wrap = document.getElementById('mp_broker_assetclass_wrap');
   const { data, error } = await sb.from('portfolio_value_usd_by_account').select('*');
   if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
-  const cashRows = await mpFetchCashRows();
+  const fxByCurrency = await mpFetchFxByCurrency(['USD', 'EUR', 'GBP', 'RUB', 'CNY']);
+  const cashRows = await mpFetchCashRows(fxByCurrency);
   mpRenderBrokerPivot(wrap, [...data, ...cashRows], 'instrument_type', 'No holdings yet — import trades above.');
 }
 
