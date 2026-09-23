@@ -223,6 +223,14 @@
     </div>
     <p class="empty-note" id="mp_any_csv_status"></p>
 
+    <div class="section-title">Export Bank of Cyprus fund trades to Snowball</div>
+    <p class="note">Generates a Snowball-importable CSV from the trades already stored here for the
+      Bank of Cyprus money-market fund share classes (IE0002RUHW32, IE000AZVL3K0, IE000H9J0QX4).</p>
+    <div class="form-row">
+      <button class="btn primary" id="mp_boc_snowball_export">Download Snowball CSV</button>
+    </div>
+    <p class="empty-note" id="mp_boc_snowball_status"></p>
+
     <div class="section-title">Current holdings</div>
     <p class="note">USD values use the previous day's close, converted from RUB/EUR/native currency where needed —
       updated once a day, not real-time. A blank value means today's price fetch didn't resolve that ticker yet.</p>
@@ -1605,6 +1613,77 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
       mpRenderEquityByIndex();
       mpRenderBondByType();
     }
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`;
+  }
+});
+
+// Maps this app's `trades.side` values to Snowball's `Event` column, and
+// builds a Snowball-format CSV row per trade -- see Snowball's "custom
+// broker" template for the full column semantics.
+const MP_BOC_SNOWBALL_EVENT = {
+  buy: 'Buy',
+  sell: 'Sell',
+  dividend: 'Dividend',
+  stock_as_dividend: 'Stock_As_Dividend',
+  amortisation: 'Amortisation',
+  repayment: 'Repayment',
+};
+const MP_BOC_SNOWBALL_ISINS = ['IE0002RUHW32', 'IE000AZVL3K0', 'IE000H9J0QX4'];
+
+function mpCsvField(v) {
+  const s = v === null || v === undefined ? '' : String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+document.getElementById('mp_boc_snowball_export').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_boc_snowball_status');
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) { statusEl.textContent = 'Sign in first.'; return; }
+
+  statusEl.textContent = 'Loading trades…';
+  try {
+    const { data: trades, error } = await sb
+      .from('trades')
+      .select('ticker, side, quantity, price, trade_date, currency, fee_tax')
+      .in('ticker', MP_BOC_SNOWBALL_ISINS)
+      .order('trade_date', { ascending: true });
+    if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
+    if (!trades || !trades.length) {
+      statusEl.textContent = 'No trades found for these ISINs.';
+      return;
+    }
+
+    const header = ['Event', 'Date', 'Symbol', 'Price', 'Quantity', 'Currency', 'FeeTax', 'Exchange', 'NKD', 'FeeCurrency'];
+    const lines = [header.join(',')];
+    for (const t of trades) {
+      const event = MP_BOC_SNOWBALL_EVENT[t.side];
+      if (!event) continue;
+      lines.push([
+        event,
+        t.trade_date,
+        t.ticker,
+        t.price,
+        t.quantity,
+        t.currency || '',
+        t.fee_tax || 0,
+        'CUSTOM_HOLDING',
+        0,
+        t.currency || '',
+      ].map(mpCsvField).join(','));
+    }
+
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `boc_fund_snowball_export_${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+
+    statusEl.textContent = `Downloaded ${lines.length - 1} rows.`;
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}`;
   }
