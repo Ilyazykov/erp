@@ -26,14 +26,16 @@
   .data-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 12px; }
   .data-table th, .data-table td { padding: 6px 10px; text-align: right; border-bottom: 1px solid #1e2830; }
   .data-table th:first-child, .data-table td:first-child { text-align: left; }
-  .data-table th { color: #8b949e; font-weight: 600; font-size: 0.78rem; }
-  .data-table td.ticker { font-weight: 600; }
+  .data-table th { color: #8b949e; font-weight: 600; font-size: 0.78rem; background: #171d25; }
+  .data-table td.ticker { font-weight: 600; background: #171d25; }
   .data-table td.pos { color: #3dd68c; }
   .data-table td.neg { color: #e05252; }
   .data-table td.muted { color: #6a7381; }
   .data-table .zero { color: #4b5560; font-size: 0.78rem; }
   .data-table tbody tr:hover { background: #13191f; }
-  .data-table tr.total-row td { border-top: 2px solid #2a3540; border-bottom: none; }
+  .data-table tbody tr:hover td.ticker { background: #1a222b; }
+  .data-table tr.total-row td { border-top: 2px solid #2a3540; border-bottom: none; background: #1c242e; }
+  .data-table tr.total-row td.ticker { background: #222c38; }
   .auth-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; font-size: 0.85rem; }
   .btn { padding: 6px 14px; border-radius: 6px; border: 1px solid #1e2830; background: #13191f;
          color: #c9d1d9; cursor: pointer; font-size: 0.85rem; }
@@ -61,15 +63,15 @@
 </div>
 
 <div class="tabs">
-  <div class="tab" data-tab="myportfolio">My Portfolio</div>
-  <div class="tab active" data-tab="sigmoid">USD/RUB → CNY Weight (current + 5Y)</div>
+  <div class="tab active" data-tab="myportfolio">My Portfolio</div>
+  <div class="tab" data-tab="sigmoid">USD/RUB → CNY Weight (current + 5Y)</div>
   <div class="tab" data-tab="layer2a">ERP &amp; Stocks/Bonds Allocation</div>
   <div class="tab" data-tab="layer2r">Yield per Stock &amp; Rebalancing</div>
   <div class="tab" data-tab="usstocks">US Stocks Z-score</div>
   <div class="tab" data-tab="userp">US ERP</div>
 </div>
 
-<div id="sigmoid" class="chart-wrap active"><div id="plot_sigmoid_amp" style="height:480px"></div>
+<div id="sigmoid" class="chart-wrap"><div id="plot_sigmoid_amp" style="height:480px"></div>
 <p class="note" id="sigmoid_amp_note">
   w_CNY(x) = 0.20 + 0.60 / (1 + exp(k_eff·(x−m)/m)), k_eff = 15 · (σ₉₀/m) / 0.0209
   (σ₉₀ = 90-day rolling std dev of the rate). At typical volatility k_eff ≈ 15 (matches
@@ -211,7 +213,7 @@
 <div id="mp_pie_us_stocks_table_wrap"></div>
 </div>
 
-<div id="myportfolio" class="chart-wrap">
+<div id="myportfolio" class="chart-wrap active">
   <div id="mp_signed_out" class="empty-note">Sign in with Google (top of page) to manage your own portfolio, trades and target weights.</div>
   <div id="mp_signed_in" style="display:none">
     <div class="section-title">Import CSV</div>
