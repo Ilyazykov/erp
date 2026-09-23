@@ -223,13 +223,13 @@
     </div>
     <p class="empty-note" id="mp_any_csv_status"></p>
 
-    <div class="section-title">Export Bank of Cyprus fund trades to Snowball</div>
+    <div class="section-title">Export Revolut fund trades to Snowball</div>
     <p class="note">Generates a Snowball-importable CSV from the trades already stored here for the
-      Bank of Cyprus money-market fund share classes (IE0002RUHW32, IE000AZVL3K0, IE000H9J0QX4).</p>
+      Revolut Flexible Cash Funds money-market fund share classes (IE0002RUHW32, IE000AZVL3K0, IE000H9J0QX4).</p>
     <div class="form-row">
-      <button class="btn primary" id="mp_boc_snowball_export">Download Snowball CSV</button>
+      <button class="btn primary" id="mp_fund_snowball_export">Download Snowball CSV</button>
     </div>
-    <p class="empty-note" id="mp_boc_snowball_status"></p>
+    <p class="empty-note" id="mp_fund_snowball_status"></p>
 
     <div class="section-title">Current holdings</div>
     <p class="note">USD values use the previous day's close, converted from RUB/EUR/native currency where needed —
@@ -1621,7 +1621,7 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
 // Maps this app's `trades.side` values to Snowball's `Event` column, and
 // builds a Snowball-format CSV row per trade -- see Snowball's "custom
 // broker" template for the full column semantics.
-const MP_BOC_SNOWBALL_EVENT = {
+const MP_FUND_SNOWBALL_EVENT = {
   buy: 'Buy',
   sell: 'Sell',
   dividend: 'Dividend',
@@ -1629,26 +1629,45 @@ const MP_BOC_SNOWBALL_EVENT = {
   amortisation: 'Amortisation',
   repayment: 'Repayment',
 };
-const MP_BOC_SNOWBALL_ISINS = ['IE0002RUHW32', 'IE000AZVL3K0', 'IE000H9J0QX4'];
+const MP_FUND_SNOWBALL_ISINS = ['IE0002RUHW32', 'IE000AZVL3K0', 'IE000H9J0QX4'];
 
 function mpCsvField(v) {
   const s = v === null || v === undefined ? '' : String(v);
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-document.getElementById('mp_boc_snowball_export').addEventListener('click', async () => {
-  const statusEl = document.getElementById('mp_boc_snowball_status');
+// Snowball's own export uses European decimal formatting (comma, not dot)
+// throughout its CSV, including this EUFUND asset class -- matching it
+// avoids re-parsing issues on import.
+function mpSnowballNumber(v) {
+  if (v === null || v === undefined) return '';
+  return String(v).replace('.', ',');
+}
+
+document.getElementById('mp_fund_snowball_export').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_fund_snowball_status');
   const { data: { session } } = await sb.auth.getSession();
   if (!session) { statusEl.textContent = 'Sign in first.'; return; }
 
   statusEl.textContent = 'Loading trades…';
   try {
-    const { data: trades, error } = await sb
-      .from('trades')
-      .select('ticker, side, quantity, price, trade_date, currency, fee_tax')
-      .in('ticker', MP_BOC_SNOWBALL_ISINS)
-      .order('trade_date', { ascending: true });
-    if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
+    // Supabase/PostgREST caps a single response at 1000 rows by default --
+    // this ticker set easily exceeds that (daily dividend/fee rows across
+    // 3 currencies), so page through with .range() until a page comes back
+    // short, instead of silently truncating history at row 1000.
+    const trades = [];
+    const PAGE_SIZE = 1000;
+    for (let from = 0; ; from += PAGE_SIZE) {
+      const { data: page, error } = await sb
+        .from('trades')
+        .select('ticker, side, quantity, price, trade_date, currency, fee_tax')
+        .in('ticker', MP_FUND_SNOWBALL_ISINS)
+        .order('trade_date', { ascending: true })
+        .range(from, from + PAGE_SIZE - 1);
+      if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
+      trades.push(...page);
+      if (page.length < PAGE_SIZE) break;
+    }
     if (!trades || !trades.length) {
       statusEl.textContent = 'No trades found for these ISINs.';
       return;
@@ -1657,18 +1676,18 @@ document.getElementById('mp_boc_snowball_export').addEventListener('click', asyn
     const header = ['Event', 'Date', 'Symbol', 'Price', 'Quantity', 'Currency', 'FeeTax', 'Exchange', 'NKD', 'FeeCurrency'];
     const lines = [header.join(',')];
     for (const t of trades) {
-      const event = MP_BOC_SNOWBALL_EVENT[t.side];
+      const event = MP_FUND_SNOWBALL_EVENT[t.side];
       if (!event) continue;
       lines.push([
         event,
         t.trade_date,
         t.ticker,
-        t.price,
-        t.quantity,
+        mpSnowballNumber(t.price),
+        mpSnowballNumber(t.quantity),
         t.currency || '',
-        t.fee_tax || 0,
-        'CUSTOM_HOLDING',
-        0,
+        mpSnowballNumber(t.fee_tax || 0),
+        'EUFUND',
+        '',
         t.currency || '',
       ].map(mpCsvField).join(','));
     }
@@ -1677,7 +1696,7 @@ document.getElementById('mp_boc_snowball_export').addEventListener('click', asyn
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `boc_fund_snowball_export_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `revolut_fund_snowball_export_${new Date().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(a);
     a.click();
     a.remove();
