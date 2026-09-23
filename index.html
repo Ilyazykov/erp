@@ -1998,20 +1998,21 @@ async function mpFetchCashRows(fxByCurrency) {
   }));
 }
 
-// crypto/metal holdings (asset_class 'crypto', which also covers XAU --
-// see update-market-prices' instrument_type split) are quoted in USD in
-// market_prices (there's no "BTC currency"), so unlike a plain cash
-// balance they can't be grouped by the `currency` column -- that would
-// dump every coin into a single misleading "USD" bucket. Each such row's
-// own ticker (BTC, ETH, XAU, ...) becomes its display-unit column instead,
-// alongside the ISO-currency columns everything else uses.
+// crypto/metal holdings (asset_class 'crypto' or 'gold' -- see
+// update-market-prices' isGold split) are quoted in USD in market_prices
+// (there's no "BTC currency"), so unlike a plain cash balance they can't
+// be grouped by the `currency` column -- that would dump every coin into
+// a single misleading "USD" bucket. Each such row's own ticker (BTC, ETH,
+// XAU, ...) becomes its display-unit column instead, alongside the
+// ISO-currency columns everything else uses.
 // XAUT (Tether Gold, an ERC-20 redeemable 1-for-1 for a troy ounce of
 // physical gold) tracks the same spot price as XAU -- this table cares
 // about "how much gold exposure", not which wrapper holds it, so XAUT's
 // USD value folds into the XAU column instead of getting its own.
+const MP_UNIT_QUOTED_ASSET_CLASSES = new Set(['crypto', 'gold']);
 function mpBrokerCurrencyUnit(r) {
   if (r.ticker === 'XAUT') return 'XAU';
-  return r.asset_class === 'crypto' ? r.ticker : r.currency;
+  return MP_UNIT_QUOTED_ASSET_CLASSES.has(r.asset_class) ? r.ticker : r.currency;
 }
 
 async function mpRenderBrokerCurrency() {
@@ -2027,7 +2028,7 @@ async function mpRenderBrokerCurrency() {
   // lands under the merged 'XAU' key too -- needed for the native-unit
   // display to still work when there's no separate real XAU holding.
   for (const r of data) {
-    if (r.asset_class === 'crypto' && r.price_usd !== null) fxByCurrency[mpBrokerCurrencyUnit(r)] = r.price_usd;
+    if (MP_UNIT_QUOTED_ASSET_CLASSES.has(r.asset_class) && r.price_usd !== null) fxByCurrency[mpBrokerCurrencyUnit(r)] = r.price_usd;
   }
   const cashRows = await mpFetchCashRows(fxByCurrency);
   const rows = [...data, ...cashRows].map(r => ({ ...r, currency: mpBrokerCurrencyUnit(r) }));
