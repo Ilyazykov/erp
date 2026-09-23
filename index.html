@@ -37,6 +37,7 @@
   .data-table tbody tr:hover td.ticker, .data-table tbody tr:hover td:last-child { background: #1a222b; }
   .data-table tr.total-row td { border-top: 2px solid #2a3540; border-bottom: none; background: #1c242e; }
   .data-table tr.total-row td.ticker, .data-table tr.total-row td:last-child { background: #222c38; }
+  .data-table th.corner { background: #222c38; }
   .auth-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; font-size: 0.85rem; }
   .btn { padding: 6px 14px; border-radius: 6px; border: 1px solid #1e2830; background: #13191f;
          color: #c9d1d9; cursor: pointer; font-size: 0.85rem; }
@@ -1915,10 +1916,11 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
   const anyMissing = data.some(r => r.value_usd === null);
   const cellDisplay = (usd, category) => {
     if (fxByCurrency && category in fxByCurrency) return mpFormatCurrency(usd / fxByCurrency[category], category);
+    if (usd === 0) return '<span class="zero">0</span>';
     return mpFormatUsd(usd);
   };
   const nativeTotalRow = fxByCurrency
-    ? `<tr class="total-row"><td><b>Total (native)</b></td>
+    ? `<tr class="total-row"><td class="ticker"><b>Total (native)</b></td>
         ${categories.map(c => `<td><b>${cellDisplay(colTotal(c), c)}</b></td>`).join('')}
         <td class="muted">—</td>
       </tr>`
@@ -1933,14 +1935,14 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
   const brokerLabel = a => fxByCurrency && a in MP_BROKER_FLAGS
     ? `${mpEscapeHtml(a)} ${MP_BROKER_FLAGS[a]}` : mpEscapeHtml(a);
   wrap.innerHTML = `<table class="data-table"><thead><tr>
-    <th>Broker</th>${categories.map(c => `<th>${headerLabel(c)}</th>`).join('')}<th>Total</th>
+    <th class="corner">Broker</th>${categories.map(c => `<th>${headerLabel(c)}</th>`).join('')}<th class="corner">Total</th>
   </tr></thead><tbody>${accounts.map(a => `<tr>
     <td class="ticker">${brokerLabel(a)}</td>
     ${categories.map(c => `<td>${cellDisplay(cell[`${a} ${c}`] || 0, c)}</td>`).join('')}
     <td><b>${mpFormatUsd(rowTotal(a))}</b></td>
   </tr>`).join('')}
   ${nativeTotalRow}
-  <tr class="total-row"><td><b>Total (USD)</b></td>
+  <tr class="total-row"><td class="ticker"><b>Total (USD)</b></td>
     ${categories.map(c => `<td><b>${mpFormatUsd(colTotal(c))}</b></td>`).join('')}
     <td><b>${mpFormatUsd(grandTotal)}</b></td>
   </tr></tbody></table>

@@ -34,8 +34,9 @@
 //   - moex: Russian shares, MOEX-listed ETFs/BPIFs, corporate bonds (ISIN
 //     prefix RU000A...) and OFZ government bonds (ISIN prefix SU...).
 //     Priced via the MOEX ISS API (iss.moex.com, free, no auth).
-//   - crypto: BTC, ETH, XAU, XAUT, or any other symbol that isn't
-//     conclusively MOEX and resolves against Yahoo's <TICKER>-USD symbol.
+//   - crypto: BTC, ETH, or any other symbol that isn't conclusively MOEX
+//     and resolves against Yahoo's <TICKER>-USD symbol (XAU/XAUT are
+//     classified as gold instead, see isGold below).
 //   - western_etf: UCITS ETFs (VUAA, VWCE, VWRA, CSPX, XSX6, ...) that
 //     don't resolve on the plain Yahoo US endpoint -- resolved best-effort
 //     by trying a handful of common exchange suffixes.
@@ -1002,14 +1003,15 @@ async function runUpdate(): Promise<Record<string, unknown>> {
       continue;
     }
     const cryptoCurrency = normalizeMinorUnitCurrency(hit.currency);
+    const isGold = ticker.toUpperCase() === 'XAU' || ticker.toUpperCase() === 'XAUT';
     rowsOut.push({
       ticker,
       price_usd: Math.round(priceUsd * 1e6) / 1e6,
       native_price: hit.price,
       currency: cryptoCurrency,
-      asset_class: 'crypto',
+      asset_class: isGold ? 'gold' : 'crypto',
       infra_region: 'foreign',
-      instrument_type: ticker.toUpperCase() === 'XAU' ? 'gold' : 'crypto',
+      instrument_type: isGold ? 'gold' : 'crypto',
       underlying_currency: cryptoCurrency,
       source: 'yahoo_finance',
       as_of: hit.as_of,
