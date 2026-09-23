@@ -1885,7 +1885,7 @@ async function mpRenderBrokerCurrency() {
   const wrap = document.getElementById('mp_broker_currency_wrap');
   const { data, error } = await sb.from('portfolio_value_usd_by_account').select('*');
   if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
-  const currencies = [...new Set(data.map(r => r.currency)), 'USD', 'EUR', 'GBP', 'RUB', 'CNY'];
+  const currencies = [...new Set(data.map(r => r.currency)), 'USD', 'EUR', 'GBP', 'RUB', 'CNY', 'TRY'];
   const fxByCurrency = await mpFetchFxByCurrency(currencies);
   const cashRows = await mpFetchCashRows(fxByCurrency);
   mpRenderBrokerPivot(wrap, [...data, ...cashRows], 'currency', 'No holdings yet — import trades above.', fxByCurrency);
@@ -1895,7 +1895,7 @@ async function mpRenderBrokerAssetClass() {
   const wrap = document.getElementById('mp_broker_assetclass_wrap');
   const { data, error } = await sb.from('portfolio_value_usd_by_account').select('*');
   if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
-  const fxByCurrency = await mpFetchFxByCurrency(['USD', 'EUR', 'GBP', 'RUB', 'CNY']);
+  const fxByCurrency = await mpFetchFxByCurrency(['USD', 'EUR', 'GBP', 'RUB', 'CNY', 'TRY']);
   const cashRows = await mpFetchCashRows(fxByCurrency);
   mpRenderBrokerPivot(wrap, [...data, ...cashRows], 'instrument_type', 'No holdings yet — import trades above.');
 }

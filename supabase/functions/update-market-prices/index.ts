@@ -875,7 +875,7 @@ async function runUpdate(): Promise<Record<string, unknown>> {
   //     like any other price. CASH_FX_CURRENCIES is the closed set of
   //     currencies actually seen across bank statements and holdings
   //     today; extend it if a new currency shows up. ---
-  const CASH_FX_CURRENCIES = ['USD', 'EUR', 'GBP', 'RUB', 'CNY'];
+  const CASH_FX_CURRENCIES = ['USD', 'EUR', 'GBP', 'RUB', 'CNY', 'TRY'];
   for (const currency of CASH_FX_CURRENCIES) {
     const rate = await fxRateToUsd(currency, usdRubRate);
     if (rate === null) { log(`  FX rate ${currency}->USD: unavailable, skipping FX:${currency}`); continue; }
