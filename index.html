@@ -2024,14 +2024,17 @@ async function mpFetchCashRows(fxByCurrency) {
 const MP_UNIT_QUOTED_ASSET_CLASSES = new Set(['crypto', 'gold']);
 function mpBrokerCurrencyUnit(r) {
   if (r.ticker === 'XAUT') return 'XAU';
-  return MP_UNIT_QUOTED_ASSET_CLASSES.has(r.asset_class) ? r.ticker : r.currency;
+  // underlying_currency (not currency) so CNY-denominated MOEX funds like
+  // SBBY/TLCB/AMNY land in the CNY column instead of RUB, which is only
+  // the exchange's quote currency, not what the fund's holdings are in.
+  return MP_UNIT_QUOTED_ASSET_CLASSES.has(r.asset_class) ? r.ticker : (r.underlying_currency || r.currency);
 }
 
 async function mpRenderBrokerCurrency() {
   const wrap = document.getElementById('mp_broker_currency_wrap');
   const { data, error } = await sb.from('portfolio_value_usd_by_account').select('*');
   if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
-  const currencies = [...new Set(data.map(r => r.currency)), 'USD', 'EUR', 'GBP', 'RUB', 'CNY', 'TRY', 'RSD'];
+  const currencies = [...new Set(data.map(r => r.underlying_currency || r.currency)), 'USD', 'EUR', 'GBP', 'RUB', 'CNY', 'TRY', 'RSD'];
   const fxByCurrency = await mpFetchFxByCurrency(currencies);
   // Fold in a USD-per-unit rate for each crypto/metal ticker too, straight
   // from this same query's own price_usd -- no second round-trip needed,
