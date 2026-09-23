@@ -32,10 +32,11 @@
   .data-table td.neg { color: #e05252; }
   .data-table td.muted { color: #6a7381; }
   .data-table .zero { color: #4b5560; font-size: 0.78rem; }
+  .data-table th:last-child, .data-table td:last-child { background: #171d25; }
   .data-table tbody tr:hover { background: #13191f; }
-  .data-table tbody tr:hover td.ticker { background: #1a222b; }
+  .data-table tbody tr:hover td.ticker, .data-table tbody tr:hover td:last-child { background: #1a222b; }
   .data-table tr.total-row td { border-top: 2px solid #2a3540; border-bottom: none; background: #1c242e; }
-  .data-table tr.total-row td.ticker { background: #222c38; }
+  .data-table tr.total-row td.ticker, .data-table tr.total-row td:last-child { background: #222c38; }
   .auth-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; font-size: 0.85rem; }
   .btn { padding: 6px 14px; border-radius: 6px; border: 1px solid #1e2830; background: #13191f;
          color: #c9d1d9; cursor: pointer; font-size: 0.85rem; }
