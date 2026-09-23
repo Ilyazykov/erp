@@ -1745,20 +1745,46 @@ function mpFormatUsd(n) {
   return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 }
 
-function mpFormatCurrency(n, currency) {
+// Single-glyph symbols for currencies Intl.NumberFormat doesn't already
+// render as one (it gives USD/EUR/GBP/CNY their symbols natively, but
+// spells RUB/TRY out as the bare code) -- keeps the broker x currency
+// table's body cells compact. RSD has no widely-recognized single glyph,
+// so it's left to fall through to the bare-number path below.
+const MP_CURRENCY_SYMBOLS = { RUB: '₽', TRY: '₺' };
+
+// withCode=false (the default, used for the broker x currency table's own
+// body cells, which already have a column header naming the unit) omits
+// the currency/ticker code entirely -- just the symbol (if one exists) and
+// the number -- so a wide row of many currency/crypto columns stays
+// scannable instead of repeating "RUB"/"BTC"/... in every cell.
+// withCode=true (used for that table's "Total (native)" row, which sums
+// across brokers and so needs to restate which unit each column is) keeps
+// the code prefix for anything without a recognized symbol.
+//
+// Precision: real currencies stay at 2 decimals; crypto/metal tickers
+// (anything Intl.NumberFormat's style:'currency' doesn't reject, like
+// BTC/ETH, plus ones it does reject, like XAUT) get up to 8 -- a holding
+// of 0.04 BTC or 0.35 ETH is meaningless rounded to cents.
+function mpFormatCurrency(n, currency, withCode = false) {
   if (n === null || n === undefined) return '<span class="muted">—</span>';
+  const isCrypto = MP_CURRENCY_COLUMN_ORDER.slice(7).includes(currency) || !MP_ISO_CURRENCIES.has(currency);
+  if (isCrypto) {
+    const amount = n.toLocaleString('en-US', { maximumFractionDigits: 8 });
+    return withCode ? `${currency} ${amount}` : amount;
+  }
   try {
-    return n.toLocaleString('en-US', { style: 'currency', currency, maximumFractionDigits: 2 });
+    const formatted = n.toLocaleString('en-US', { style: 'currency', currency, maximumFractionDigits: 2 });
+    if (withCode || currency in MP_CURRENCY_SYMBOLS === false) return formatted;
+    // Intl already spelled the code out (RUB/TRY) -- swap it for our symbol.
+    return formatted.replace(currency, MP_CURRENCY_SYMBOLS[currency]);
   } catch {
-    // Intl.NumberFormat throws on a currency code it doesn't recognize --
-    // e.g. a crypto/metal ticker (BTC, ETH, XAU, ...) used as a display
-    // unit in the broker x currency table. Falls back to a plain
-    // "<code> <amount>" instead of erroring the table, with more decimal
-    // places than a real currency needs -- a fractional BTC/ETH holding
-    // rounds to nothing at 2 digits.
-    return `${currency} ${n.toLocaleString('en-US', { maximumFractionDigits: 8 })}`;
+    // Unrecognized ISO code (shouldn't happen for the fiat currencies this
+    // table deals with, but keeps the table from erroring if one shows up).
+    const amount = n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+    return withCode ? `${currency} ${amount}` : amount;
   }
 }
+const MP_ISO_CURRENCIES = new Set(['USD', 'EUR', 'GBP', 'RUB', 'TRY', 'RSD', 'CNY']);
 
 async function mpRenderHoldings() {
   const wrap = document.getElementById('mp_holdings_wrap');
