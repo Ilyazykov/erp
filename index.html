@@ -1751,8 +1751,12 @@ function mpFormatCurrency(n, currency) {
     return n.toLocaleString('en-US', { style: 'currency', currency, maximumFractionDigits: 2 });
   } catch {
     // Intl.NumberFormat throws on a currency code it doesn't recognize --
-    // fall back to a plain "<code> <amount>" instead of erroring the table.
-    return `${currency} ${n.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+    // e.g. a crypto/metal ticker (BTC, ETH, XAU, ...) used as a display
+    // unit in the broker x currency table. Falls back to a plain
+    // "<code> <amount>" instead of erroring the table, with more decimal
+    // places than a real currency needs -- a fractional BTC/ETH holding
+    // rounds to nothing at 2 digits.
+    return `${currency} ${n.toLocaleString('en-US', { maximumFractionDigits: 8 })}`;
   }
 }
 
@@ -1807,10 +1811,14 @@ async function mpRenderCashFlows() {
 // Cross-currency figures (the per-broker row total, and the grand total)
 // have no single native currency to show, so those stay in USD always.
 // Fixed display order for the broker x currency table's columns (major
-// currencies first, in the order the user actually cares to scan them),
-// rather than alphabetical -- any currency not listed here (a new one
-// showing up in the data) falls back after these, alphabetically.
-const MP_CURRENCY_COLUMN_ORDER = ['USD', 'EUR', 'GBP', 'RUB', 'TRY', 'RSD', 'CNY'];
+// currencies first, then crypto/metal tickers, in the order the user
+// actually cares to scan them), rather than alphabetical -- any
+// currency/ticker not listed here (a new one showing up in the data)
+// falls back after these, alphabetically.
+const MP_CURRENCY_COLUMN_ORDER = [
+  'USD', 'EUR', 'GBP', 'RUB', 'TRY', 'RSD', 'CNY',
+  'XAU', 'BTC', 'ETH', 'SOL', 'TON', 'TAO', 'TRX', 'DOGE',
+];
 
 // Fixed display order for broker rows, matching the user's own tracking
 // spreadsheet -- '(unspecified)' first (mostly Snowball-imported trades
@@ -1922,14 +1930,32 @@ async function mpFetchCashRows(fxByCurrency) {
   }));
 }
 
+// crypto/metal holdings (asset_class 'crypto', which also covers XAU --
+// see update-market-prices' instrument_type split) are quoted in USD in
+// market_prices (there's no "BTC currency"), so unlike a plain cash
+// balance they can't be grouped by the `currency` column -- that would
+// dump every coin into a single misleading "USD" bucket. Each such row's
+// own ticker (BTC, ETH, XAU, ...) becomes its display-unit column instead,
+// alongside the ISO-currency columns everything else uses.
+function mpBrokerCurrencyUnit(r) {
+  return r.asset_class === 'crypto' ? r.ticker : r.currency;
+}
+
 async function mpRenderBrokerCurrency() {
   const wrap = document.getElementById('mp_broker_currency_wrap');
   const { data, error } = await sb.from('portfolio_value_usd_by_account').select('*');
   if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
   const currencies = [...new Set(data.map(r => r.currency)), 'USD', 'EUR', 'GBP', 'RUB', 'CNY', 'TRY', 'RSD'];
   const fxByCurrency = await mpFetchFxByCurrency(currencies);
+  // Fold in a USD-per-unit rate for each crypto/metal ticker too, straight
+  // from this same query's own price_usd -- no second round-trip needed,
+  // since portfolio_value_usd_by_account already joins market_prices.
+  for (const r of data) {
+    if (r.asset_class === 'crypto' && r.price_usd !== null) fxByCurrency[r.ticker] = r.price_usd;
+  }
   const cashRows = await mpFetchCashRows(fxByCurrency);
-  mpRenderBrokerPivot(wrap, [...data, ...cashRows], 'currency', 'No holdings yet — import trades above.', fxByCurrency);
+  const rows = [...data, ...cashRows].map(r => ({ ...r, currency: mpBrokerCurrencyUnit(r) }));
+  mpRenderBrokerPivot(wrap, rows, 'currency', 'No holdings yet — import trades above.', fxByCurrency);
 }
 
 async function mpRenderBrokerAssetClass() {
