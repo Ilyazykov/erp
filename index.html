@@ -31,7 +31,7 @@
   .data-table td.pos { color: #3dd68c; }
   .data-table td.neg { color: #e05252; }
   .data-table td.muted { color: #6a7381; }
-  .data-table td.zero { color: #4b5560; font-size: 0.78rem; }
+  .data-table .zero { color: #4b5560; font-size: 0.78rem; }
   .data-table tbody tr:hover { background: #13191f; }
   .data-table tr.total-row td { border-top: 2px solid #2a3540; border-bottom: none; }
   .auth-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; font-size: 0.85rem; }
@@ -1974,7 +1974,12 @@ async function mpFetchCashRows(fxByCurrency) {
 // dump every coin into a single misleading "USD" bucket. Each such row's
 // own ticker (BTC, ETH, XAU, ...) becomes its display-unit column instead,
 // alongside the ISO-currency columns everything else uses.
+// XAUT (Tether Gold, an ERC-20 redeemable 1-for-1 for a troy ounce of
+// physical gold) tracks the same spot price as XAU -- this table cares
+// about "how much gold exposure", not which wrapper holds it, so XAUT's
+// USD value folds into the XAU column instead of getting its own.
 function mpBrokerCurrencyUnit(r) {
+  if (r.ticker === 'XAUT') return 'XAU';
   return r.asset_class === 'crypto' ? r.ticker : r.currency;
 }
 
@@ -1987,8 +1992,11 @@ async function mpRenderBrokerCurrency() {
   // Fold in a USD-per-unit rate for each crypto/metal ticker too, straight
   // from this same query's own price_usd -- no second round-trip needed,
   // since portfolio_value_usd_by_account already joins market_prices.
+  // Keyed by mpBrokerCurrencyUnit (not the raw ticker) so XAUT's price
+  // lands under the merged 'XAU' key too -- needed for the native-unit
+  // display to still work when there's no separate real XAU holding.
   for (const r of data) {
-    if (r.asset_class === 'crypto' && r.price_usd !== null) fxByCurrency[r.ticker] = r.price_usd;
+    if (r.asset_class === 'crypto' && r.price_usd !== null) fxByCurrency[mpBrokerCurrencyUnit(r)] = r.price_usd;
   }
   const cashRows = await mpFetchCashRows(fxByCurrency);
   const rows = [...data, ...cashRows].map(r => ({ ...r, currency: mpBrokerCurrencyUnit(r) }));
