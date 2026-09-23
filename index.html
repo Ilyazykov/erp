@@ -1924,7 +1924,7 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
   // only passed there) -- the broker x asset-class table's columns aren't
   // ISO currencies, so mpEscapeHtml(c) is used unflagged there.
   const headerLabel = c => fxByCurrency && c in MP_CURRENCY_FLAGS
-    ? `${MP_CURRENCY_FLAGS[c]} ${mpEscapeHtml(c)}` : mpEscapeHtml(c);
+    ? `${mpEscapeHtml(c)} ${MP_CURRENCY_FLAGS[c]}` : mpEscapeHtml(c);
   // Same fxByCurrency gate as headerLabel above -- broker flags are a
   // broker x currency table feature only.
   const brokerLabel = a => fxByCurrency && a in MP_BROKER_FLAGS
