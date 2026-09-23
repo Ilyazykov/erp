@@ -337,17 +337,17 @@ const MONEY_MARKET_FUND_ISINS = new Set(['IE000H9J0QX4', 'IE0002RUHW32', 'IE000A
 // name-based heuristics (e.g. matching "облигации") miss cases like SBBY
 // ("БПИФ Фонд Инструменты в юанях" -- no "bond" in the name at all, but
 // it's a bond fund) and would need constant upkeep as new funds list.
-const MOEX_BOND_ETF_TICKERS = new Set(['TBRU', 'SAFE', 'SBMM', 'AKMB', 'AKMM', 'TLCB', 'SBBY']);
+const MOEX_BOND_ETF_TICKERS = new Set(['TBRU', 'SAFE', 'SBMM', 'AKMB', 'AKMM', 'TLCB', 'SBBY', 'AMNY']);
 
-// Of the bond ETFs above, SBBY and TLCB specifically hold CNY/foreign-
+// Of the bond ETFs above, SBBY, TLCB and AMNY specifically hold CNY/foreign-
 // currency bonds even though MOEX quotes their per-unit price in RUB.
-// `currency` always stores the honest MOEX quote currency (RUB for both);
+// `currency` always stores the honest MOEX quote currency (RUB for all);
 // this maps a ticker to what its holdings are actually denominated in,
 // written to the separate `underlying_currency` column instead, so
 // RUB-vs-non-RUB groupings downstream (e.g. the My Portfolio "CNY weight"
 // chart) can tell the two apart without `currency` itself lying about the
 // quote. User-confirmed list.
-const UNDERLYING_CURRENCY_BY_TICKER: Record<string, string> = { SBBY: 'CNY', TLCB: 'CNY' };
+const UNDERLYING_CURRENCY_BY_TICKER: Record<string, string> = { SBBY: 'CNY', TLCB: 'CNY', AMNY: 'CNY' };
 
 function classifyTicker(ticker: string): TickerClass {
   const t = ticker.toUpperCase();
