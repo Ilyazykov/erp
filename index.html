@@ -215,10 +215,11 @@
   <div id="mp_signed_in" style="display:none">
     <div class="section-title">Import CSV</div>
     <p class="note">Upload a broker trades CSV (Snowball), a Revolut account statement, a Revolut Flexible
-      Cash Funds statement, a Revolut Instant Access Savings statement, or a Bank of Cyprus transaction
-      history export — the file type is detected automatically from its header row.</p>
+      Cash Funds statement, a Revolut Instant Access Savings statement, a Bank of Cyprus transaction
+      history export, or a Ziraat Bank account activity export (.xlsx) — the file type is detected
+      automatically from its header row or extension.</p>
     <div class="form-row">
-      <input type="file" id="mp_any_csv_file" accept=".csv">
+      <input type="file" id="mp_any_csv_file" accept=".csv,.xlsx">
       <button class="btn primary" id="mp_any_csv_upload">Upload</button>
     </div>
     <p class="empty-note" id="mp_any_csv_status"></p>
@@ -1541,9 +1542,18 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
   if (!session) { statusEl.textContent = 'Sign in first.'; return; }
 
   try {
-    const csvText = await file.text();
-    const headerLine = csvText.split(/\r\n|\r|\n/)[0] || '';
-    const kind = mpDetectCsvKind(headerLine, csvText);
+    // Ziraat Bank's own export is a real .xlsx, not CSV -- detected by
+    // extension alone (reading it as text would be meaningless) and sent
+    // as raw bytes; the Edge Function parses the workbook server-side.
+    const isXlsx = /\.xlsx$/i.test(file.name);
+    let kind, csvText;
+    if (isXlsx) {
+      kind = 'ziraat_xlsx';
+    } else {
+      csvText = await file.text();
+      const headerLine = csvText.split(/\r\n|\r|\n/)[0] || '';
+      kind = mpDetectCsvKind(headerLine, csvText);
+    }
     if (!kind) {
       statusEl.textContent = 'Unrecognized CSV format — expected a Snowball trades export, '
         + 'a Revolut account statement, a Revolut Flexible Cash Funds statement, a Revolut '
@@ -1557,6 +1567,7 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
       revolut_fund: { fn: 'import-revolut-fund-statement', label: 'Revolut Flexible Cash Funds statement' },
       revolut_deposit: { fn: 'import-revolut-deposit-statement', label: 'Revolut Instant Access Savings statement' },
       boc_account: { fn: 'import-boc-statement', label: 'Bank of Cyprus transaction history' },
+      ziraat_xlsx: { fn: 'import-ziraat-statement', label: 'Ziraat Bank account activity' },
     };
     const { fn, label } = endpoints[kind];
     statusEl.textContent = `Detected: ${label}. Uploading and parsing on the server…`;
@@ -1565,9 +1576,11 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${session.access_token}`,
-        'Content-Type': 'text/csv',
+        'Content-Type': isXlsx
+          ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+          : 'text/csv',
       },
-      body: csvText,
+      body: isXlsx ? await file.arrayBuffer() : csvText,
     });
     const result = await res.json();
     if (!res.ok) {
@@ -1591,6 +1604,9 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
         + `${result.skipped_deposit} deposit rows skipped).`;
     } else if (kind === 'boc_account') {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} transactions `
+        + `(${result.total_rows} parsed, ${result.skipped_bad_date} skipped as bad date).`;
+    } else if (kind === 'ziraat_xlsx') {
+      statusEl.textContent = `Detected: ${label} (${result.currency}). Imported ${result.imported} transactions `
         + `(${result.total_rows} parsed, ${result.skipped_bad_date} skipped as bad date).`;
     } else if (kind === 'revolut_fund') {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} rows `
