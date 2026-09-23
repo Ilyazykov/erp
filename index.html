@@ -1806,11 +1806,40 @@ async function mpRenderCashFlows() {
 // USD total row -- so e.g. the EUR column reads in euros, not USD-via-EUR.
 // Cross-currency figures (the per-broker row total, and the grand total)
 // have no single native currency to show, so those stay in USD always.
+// Fixed display order for the broker x currency table's columns (major
+// currencies first, in the order the user actually cares to scan them),
+// rather than alphabetical -- any currency not listed here (a new one
+// showing up in the data) falls back after these, alphabetically.
+const MP_CURRENCY_COLUMN_ORDER = ['USD', 'EUR', 'GBP', 'RUB', 'TRY', 'RSD', 'CNY'];
+
+// Fixed display order for broker rows, matching the user's own tracking
+// spreadsheet -- '(unspecified)' first (mostly Snowball-imported trades
+// with no account recorded), then brokers in the spreadsheet's own order.
+// Any account not listed here falls back after these, alphabetically.
+const MP_BROKER_ROW_ORDER = [
+  '(unspecified)', 'Revolut', 'Wise', 'Bank of Cyprus', 'IBKR', 'Freedom24',
+  'Ziraat Bank', 'Raiffeisen',
+];
+
 function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurrency) {
   if (!data.length) { wrap.innerHTML = `<p class="empty-note">${emptyMessage}</p>`; return; }
   const priced = data.filter(r => r.value_usd !== null);
-  const accounts = [...new Set(priced.map(r => r.account))].sort();
-  const categories = [...new Set(priced.map(r => r[categoryField]))].sort();
+  const accounts = [...new Set(priced.map(r => r.account))].sort((a, b) => {
+    const ia = MP_BROKER_ROW_ORDER.indexOf(a), ib = MP_BROKER_ROW_ORDER.indexOf(b);
+    if (ia === -1 && ib === -1) return a.localeCompare(b);
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
+  const categories = fxByCurrency
+    ? [...new Set(priced.map(r => r[categoryField]))].sort((a, b) => {
+        const ia = MP_CURRENCY_COLUMN_ORDER.indexOf(a), ib = MP_CURRENCY_COLUMN_ORDER.indexOf(b);
+        if (ia === -1 && ib === -1) return a.localeCompare(b);
+        if (ia === -1) return 1;
+        if (ib === -1) return -1;
+        return ia - ib;
+      })
+    : [...new Set(priced.map(r => r[categoryField]))].sort();
   const cell = {};
   for (const r of priced) {
     const key = `${r.account} ${r[categoryField]}`;
