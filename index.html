@@ -61,12 +61,12 @@
 </div>
 
 <div class="tabs">
+  <div class="tab" data-tab="myportfolio">My Portfolio</div>
   <div class="tab active" data-tab="sigmoid">USD/RUB → CNY Weight (current + 5Y)</div>
   <div class="tab" data-tab="layer2a">ERP &amp; Stocks/Bonds Allocation</div>
   <div class="tab" data-tab="layer2r">Yield per Stock &amp; Rebalancing</div>
   <div class="tab" data-tab="usstocks">US Stocks Z-score</div>
   <div class="tab" data-tab="userp">US ERP</div>
-  <div class="tab" data-tab="myportfolio">My Portfolio</div>
 </div>
 
 <div id="sigmoid" class="chart-wrap active"><div id="plot_sigmoid_amp" style="height:480px"></div>
@@ -234,14 +234,6 @@
     </div>
     <p class="empty-note" id="mp_fund_snowball_status"></p>
 
-    <div class="section-title">Current holdings</div>
-    <p class="note">USD values use the previous day's close, converted from RUB/EUR/native currency where needed —
-      updated once a day, not real-time. A blank value means today's price fetch didn't resolve that ticker yet.</p>
-    <div id="mp_holdings_wrap"></div>
-
-    <div class="section-title">Cash flows (dividends, coupons, redemptions)</div>
-    <div id="mp_cashflows_wrap"></div>
-
     <div class="section-title">Portfolio by broker × currency</div>
     <div id="mp_broker_currency_wrap"></div>
 
@@ -253,6 +245,14 @@
 
     <div class="section-title">Bonds by type</div>
     <div id="mp_bond_subtype_wrap"></div>
+
+    <div class="section-title">Current holdings</div>
+    <p class="note">USD values use the previous day's close, converted from RUB/EUR/native currency where needed —
+      updated once a day, not real-time. A blank value means today's price fetch didn't resolve that ticker yet.</p>
+    <div id="mp_holdings_wrap"></div>
+
+    <div class="section-title">Cash flows (dividends, coupons, redemptions)</div>
+    <div id="mp_cashflows_wrap"></div>
   </div>
 </div>
 
