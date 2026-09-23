@@ -1861,6 +1861,11 @@ const MP_CURRENCY_COLUMN_ORDER = [
   'XAU', 'BTC', 'ETH', 'SOL', 'TON', 'TAO', 'TRX', 'DOGE',
 ];
 
+// Fixed display order for the broker x asset-class table's columns,
+// matching the user's own tracking spreadsheet (Акции, Облигации,
+// Вклады, Кэш, Золото, Крипта) rather than alphabetical.
+const MP_ASSET_CLASS_COLUMN_ORDER = ['stock', 'bond', 'cash', 'gold', 'crypto'];
+
 // Country flag shown next to each ISO currency's column header in the
 // broker x currency table, matching the user's own tracking spreadsheet.
 // EUR has no single issuing country, so it gets the EU flag; crypto/metal
@@ -1905,7 +1910,13 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
         if (ib === -1) return -1;
         return ia - ib;
       })
-    : [...new Set(priced.map(r => r[categoryField]))].sort();
+    : [...new Set(priced.map(r => r[categoryField]))].sort((a, b) => {
+        const ia = MP_ASSET_CLASS_COLUMN_ORDER.indexOf(a), ib = MP_ASSET_CLASS_COLUMN_ORDER.indexOf(b);
+        if (ia === -1 && ib === -1) return a.localeCompare(b);
+        if (ia === -1) return 1;
+        if (ib === -1) return -1;
+        return ia - ib;
+      });
   const cell = {};
   for (const r of priced) {
     const key = `${r.account} ${r[categoryField]}`;
