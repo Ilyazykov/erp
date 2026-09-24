@@ -1864,7 +1864,7 @@ const MP_CURRENCY_COLUMN_ORDER = [
 // Fixed display order for the broker x asset-class table's columns,
 // matching the user's own tracking spreadsheet (Акции, Облигации,
 // Вклады, Кэш, Золото, Крипта) rather than alphabetical.
-const MP_ASSET_CLASS_COLUMN_ORDER = ['stock', 'bond', 'cash', 'gold', 'crypto'];
+const MP_ASSET_CLASS_COLUMN_ORDER = ['stock', 'bond', 'deposit', 'cash', 'gold', 'crypto'];
 
 // Country flag shown next to each ISO currency's column header in the
 // broker x currency table, matching the user's own tracking spreadsheet.
@@ -2096,7 +2096,7 @@ async function mpRenderBondByType() {
   const wrap = document.getElementById('mp_bond_subtype_wrap');
   const { data, error } = await sb.from('portfolio_value_usd').select('*');
   if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
-  const bonds = data.filter(r => r.instrument_type === 'bond');
+  const bonds = data.filter(r => r.instrument_type === 'bond' || r.instrument_type === 'deposit');
   mpRenderBucketTable(wrap, bonds, mpBondSubtype, 'No bond/deposit holdings yet.');
 }
 
@@ -2807,7 +2807,7 @@ async function mpRenderPortfolioPies() {
   //    market ETFs (TBRU/SAFE/SBMM/AKMB/AKMM/TLCB/SBBY), and RUB deposits
   //    -- see instrument_type assignment in update-market-prices/index.ts.
   const ruBondsCurrent = priced
-    .filter(r => r.infra_region === 'ru' && r.instrument_type === 'bond')
+    .filter(r => r.infra_region === 'ru' && (r.instrument_type === 'bond' || r.instrument_type === 'deposit'))
     .reduce((s, r) => s + r.value_usd, 0);
   const allocRaw = DATA.ruAllocTargetRaw;
   if (allocRaw) {
@@ -2830,7 +2830,7 @@ async function mpRenderPortfolioPies() {
   // instrument_type='bond' rows (Revolut money-market funds, Revolut
   // deposits) would inflate "non-RUB" with holdings this chart was never
   // meant to cover.
-  const bondDepositRows = priced.filter(r => r.instrument_type === 'bond' && r.infra_region === 'ru');
+  const bondDepositRows = priced.filter(r => (r.instrument_type === 'bond' || r.instrument_type === 'deposit') && r.infra_region === 'ru');
   const rubCurrent = bondDepositRows.filter(r => r.underlying_currency === 'RUB').reduce((s, r) => s + r.value_usd, 0);
   const nonRubCurrent = bondDepositRows.filter(r => r.underlying_currency !== 'RUB').reduce((s, r) => s + r.value_usd, 0);
   if (DATA.currentWCny !== undefined && DATA.currentWCny !== null) {

@@ -782,7 +782,7 @@ async function fetchTickerCurrencies(supabase: any, tickers: string[]): Promise<
 }
 
 type InfraRegion = 'ru' | 'foreign';
-type InstrumentType = 'stock' | 'bond' | 'gold' | 'crypto' | 'fx_rate';
+type InstrumentType = 'stock' | 'bond' | 'deposit' | 'gold' | 'crypto' | 'fx_rate';
 
 interface PriceRow {
   ticker: string;
@@ -915,7 +915,7 @@ async function runUpdate(): Promise<Record<string, unknown>> {
         currency,
         asset_class: 'deposit',
         infra_region: currency === 'RUB' ? 'ru' : 'foreign',
-        instrument_type: 'bond',
+        instrument_type: 'deposit',
         underlying_currency: currency,
         source: currency === 'RUB' ? 'cbr_fx' : 'yahoo_fx',
         as_of: new Date().toISOString().slice(0, 10),
