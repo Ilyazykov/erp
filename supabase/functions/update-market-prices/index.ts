@@ -945,7 +945,7 @@ async function runUpdate(): Promise<Record<string, unknown>> {
         currency,
         asset_class: 'money_market_fund',
         infra_region: 'foreign',
-        instrument_type: 'bond',
+        instrument_type: 'deposit',
         underlying_currency: currency,
         source: currency === 'RUB' ? 'cbr_fx' : 'yahoo_fx',
         as_of: new Date().toISOString().slice(0, 10),
