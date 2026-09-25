@@ -129,7 +129,7 @@ function parseRows(text: string): BankRow[] {
 // Best-effort keyword categorization, same style/purpose as the other
 // importers' CATEGORY_RULES.
 const CATEGORY_RULES: [RegExp, string][] = [
-  [/капитализация процентов|выплата процентов/i, 'interest'],
+  [/капитализация процентов|выплата процентов|interest on the balance/i, 'interest'],
   [/перевод между счетами одного клиента|intrabank transfer from contract|internal transfer to contract/i, 'internal_transfer'],
   [/перевод сбп|external bank transfer/i, 'transfer'],
   [/transfer fee/i, 'bank_fee'],
