@@ -141,10 +141,10 @@ function parseRows(text: string): BankRow[] {
 // importers' CATEGORY_RULES.
 const CATEGORY_RULES: [RegExp, string][] = [
   [/капитализация процентов|выплата процентов|interest on the balance/i, 'interest'],
-  [/перевод между счетами одного клиента|intrabank transfer from contract|internal transfer to contract/i, 'internal_transfer'],
-  [/перевод сбп|external bank transfer/i, 'transfer'],
+  [/перевод между счетами одного клиента|внутрибанковский перевод между счетами|intrabank transfer from contract|internal transfer to contract/i, 'internal_transfer'],
+  [/перевод сбп|систем\S* быстрых платежей|external bank transfer/i, 'transfer'],
   [/transfer fee/i, 'bank_fee'],
-  [/taxi|siticard|metro|aeroexpress|rzd/i, 'transport'],
+  [/taxi|siticard|metro|aeroexpress|rzd|russian\s+railways/i, 'transport'],
   [/delivery club|lavka|samokat|eda\.yandex|wolt/i, 'food_delivery'],
   [/pyaterochka|perekrestok|magnit|vkusvill|lenta/i, 'groceries'],
   [/yandex\*\d+\*plus/i, 'utilities_or_shopping'],
