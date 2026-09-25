@@ -18,7 +18,10 @@
 // per-account running balance after that row -- negative for a credit
 // card's outstanding debt, so the card correctly counts against the
 // bank's total in the broker pivot tables. Extra columns (e.g. the
-// original foreign-currency amount) are ignored.
+// original foreign-currency amount) are ignored, except an optional
+// `category_bank` (the bank's own category label, e.g. Sber's "Transfer via
+// FPS" / "Супермаркеты"), which is fed to the keyword categorizer alongside
+// the description.
 //
 // `bank` becomes the `account` label, so every account at one bank
 // collapses into a single row in the broker pivot tables (same idea as
@@ -40,8 +43,9 @@
 // the same occurrence-counter tie-breaker as the other importers for
 // legitimate same-minute duplicates.
 //
-// Savings accounts (product 'savings_account' -- T-Bank's накопительный
-// счёт, Yandex's "Сейв": interest-bearing on-demand deposits) are not cash
+// Savings accounts and term deposits (product 'savings_account' -- T-Bank's
+// накопительный счёт, Yandex's "Сейв", Alfa's "Альфа-Счёт на ежедневный
+// остаток"; 'term_deposit' -- Sber's вклады) are not cash
 // and don't go to `bank_transactions` at all. They're written to `trades`
 // exactly the way import-revolut-deposit-statement writes Revolut Instant
 // Access Savings: synthetic ticker "DEPOSIT:<bank> <currency>", deposit or
@@ -55,6 +59,7 @@ interface BankRow {
   bank: string;
   accountNumber: string;
   product: string;
+  categoryBank: string;
   date: string;
   time: string;
   description: string;
@@ -96,7 +101,7 @@ function parseRows(text: string): BankRow[] {
   const lines = text.split(/\r\n|\r|\n/).filter(l => l.trim().length > 0);
 
   let idx: {
-    bank: number; accountNumber: number; product: number; date: number; time: number; description: number;
+    bank: number; accountNumber: number; product: number; categoryBank: number; date: number; time: number; description: number;
     amount: number; currency: number; balance: number;
   } | null = null;
   const rows: BankRow[] = [];
@@ -107,7 +112,8 @@ function parseRows(text: string): BankRow[] {
       if (header[0] === 'bank' && header[1] === 'account_number' && header[2] === 'product') {
         const col = (name: string) => header.indexOf(name);
         idx = {
-          bank: col('bank'), accountNumber: col('account_number'), product: col('product'), date: col('date'), time: col('time'),
+          bank: col('bank'), accountNumber: col('account_number'), product: col('product'),
+          categoryBank: col('category_bank'), date: col('date'), time: col('time'),
           description: col('description'), amount: col('amount'), currency: col('currency'),
           balance: col('balance'),
         };
@@ -125,6 +131,7 @@ function parseRows(text: string): BankRow[] {
     rows.push({
       bank,
       product: (cells[idx.product] || '').trim(),
+      categoryBank: idx.categoryBank >= 0 ? (cells[idx.categoryBank] || '').trim() : '',
       accountNumber: (cells[idx.accountNumber] || '').trim(),
       date,
       time: /^\d{2}:\d{2}$/.test(time) ? time : '',
@@ -142,15 +149,15 @@ function parseRows(text: string): BankRow[] {
 const CATEGORY_RULES: [RegExp, string][] = [
   [/капитализация процентов|выплата процентов|interest on the balance/i, 'interest'],
   [/перевод между счетами одного клиента|внутрибанковский перевод между счетами|intrabank transfer from contract|internal transfer to contract/i, 'internal_transfer'],
-  [/перевод сбп|систем\S* быстрых платежей|external bank transfer/i, 'transfer'],
+  [/перевод сбп|систем\S* быстрых платежей|external bank transfer|via fps|перевод (на|с) карт|(inbound|outbound) card transfer/i, 'transfer'],
   [/transfer fee/i, 'bank_fee'],
-  [/taxi|siticard|metro|aeroexpress|rzd|russian\s+railways/i, 'transport'],
+  [/taxi|siticard|metro|aeroexpress|rzd|russian\s+railways|^транспорт$|\btransport\b/i, 'transport'],
   [/delivery club|lavka|samokat|eda\.yandex|wolt/i, 'food_delivery'],
-  [/pyaterochka|perekrestok|magnit|vkusvill|lenta/i, 'groceries'],
+  [/pyaterochka|perekrestok|magnit|vkusvill|lenta|супермаркет|supermarket/i, 'groceries'],
   [/yandex\*\d+\*plus/i, 'utilities_or_shopping'],
 ];
 
-const DEPOSIT_PRODUCTS = new Set(['savings_account']);
+const DEPOSIT_PRODUCTS = new Set(['savings_account', 'term_deposit']);
 
 function categorize(description: string): string | null {
   for (const [re, cat] of CATEGORY_RULES) {
@@ -242,7 +249,7 @@ Deno.serve(async (req) => {
         counterparty: null,
         amount: r.amount,
         currency: r.currency,
-        category: categorize(r.description),
+        category: categorize(r.categoryBank ? `${r.description} ${r.categoryBank}` : r.description),
         balance_after: r.balance,
         external_source: externalSource,
         external_id: externalId,
