@@ -1622,9 +1622,20 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
     } else if (kind === 'boc_account') {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} transactions `
         + `(${result.total_rows} parsed, ${result.skipped_bad_date} skipped as bad date).`;
-    } else if (kind === 'raiffeisen_account' || kind === 'bank_csv') {
+    } else if (kind === 'raiffeisen_account') {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} transactions `
         + `(${result.total_rows} parsed).`;
+      mpRenderBrokerCurrency();
+      mpRenderBrokerAssetClass();
+    } else if (kind === 'bank_csv') {
+      statusEl.textContent = `Detected: ${label}. Imported ${result.imported} transactions and `
+        + `${result.imported_deposit} savings-account deposit trades (${result.total_rows} parsed).`;
+      if (result.imported_deposit) {
+        mpRenderHoldings();
+        mpRenderPortfolioPies();
+        mpRenderEquityByIndex();
+        mpRenderBondByType();
+      }
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
     } else if (kind === 'ziraat_xlsx') {

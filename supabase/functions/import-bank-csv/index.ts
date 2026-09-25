@@ -39,12 +39,22 @@
 // The dedup key is (account_number, date, time, description, amount) with
 // the same occurrence-counter tie-breaker as the other importers for
 // legitimate same-minute duplicates.
+//
+// Savings accounts (product 'savings_account' -- T-Bank's накопительный
+// счёт, Yandex's "Сейв": interest-bearing on-demand deposits) are not cash
+// and don't go to `bank_transactions` at all. They're written to `trades`
+// exactly the way import-revolut-deposit-statement writes Revolut Instant
+// Access Savings: synthetic ticker "DEPOSIT:<bank> <currency>", deposit or
+// interest -> buy, withdrawal -> sell, quantity = the amount itself,
+// price 1 -- so they show up as asset class 'deposit' (priced via FX by
+// update-market-prices) instead of in the cash column.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 interface BankRow {
   bank: string;
   accountNumber: string;
+  product: string;
   date: string;
   time: string;
   description: string;
@@ -86,7 +96,7 @@ function parseRows(text: string): BankRow[] {
   const lines = text.split(/\r\n|\r|\n/).filter(l => l.trim().length > 0);
 
   let idx: {
-    bank: number; accountNumber: number; date: number; time: number; description: number;
+    bank: number; accountNumber: number; product: number; date: number; time: number; description: number;
     amount: number; currency: number; balance: number;
   } | null = null;
   const rows: BankRow[] = [];
@@ -97,7 +107,7 @@ function parseRows(text: string): BankRow[] {
       if (header[0] === 'bank' && header[1] === 'account_number' && header[2] === 'product') {
         const col = (name: string) => header.indexOf(name);
         idx = {
-          bank: col('bank'), accountNumber: col('account_number'), date: col('date'), time: col('time'),
+          bank: col('bank'), accountNumber: col('account_number'), product: col('product'), date: col('date'), time: col('time'),
           description: col('description'), amount: col('amount'), currency: col('currency'),
           balance: col('balance'),
         };
@@ -114,6 +124,7 @@ function parseRows(text: string): BankRow[] {
     const time = (cells[idx.time] || '').trim();
     rows.push({
       bank,
+      product: (cells[idx.product] || '').trim(),
       accountNumber: (cells[idx.accountNumber] || '').trim(),
       date,
       time: /^\d{2}:\d{2}$/.test(time) ? time : '',
@@ -138,6 +149,8 @@ const CATEGORY_RULES: [RegExp, string][] = [
   [/pyaterochka|perekrestok|magnit|vkusvill|lenta/i, 'groceries'],
   [/yandex\*\d+\*plus/i, 'utilities_or_shopping'],
 ];
+
+const DEPOSIT_PRODUCTS = new Set(['savings_account']);
 
 function categorize(description: string): string | null {
   for (const [re, cat] of CATEGORY_RULES) {
@@ -182,6 +195,7 @@ Deno.serve(async (req) => {
     // Untimed rows (Yandex Save) -> 00:00:SS by in-day order.
     const untimedSeq = new Map<string, number>();
     const rows = [];
+    const depositRows = [];
     const dupSeen = new Map<string, number>();
     for (const r of csvRows) {
       let clock: string;
@@ -194,10 +208,31 @@ Deno.serve(async (req) => {
         clock = `00:00:${String(Math.min(seq, 59)).padStart(2, '0')}`;
       }
 
-      const externalSource = `${r.bank.toLowerCase().replace(/[^a-z0-9]+/g, '_')}_csv:${r.accountNumber}`;
+      const bankSlug = r.bank.toLowerCase().replace(/[^a-z0-9]+/g, '_');
       const signature = `${r.accountNumber}:${r.date}:${r.time}:${r.description}:${r.amount}`;
       const occurrence = dupSeen.get(signature) ?? 0;
       dupSeen.set(signature, occurrence + 1);
+      const externalId = occurrence === 0 ? signature : `${signature}:dup${occurrence}`;
+
+      if (DEPOSIT_PRODUCTS.has(r.product)) {
+        if (r.amount === 0) continue;
+        depositRows.push({
+          user_id: user.id,
+          ticker: `DEPOSIT:${r.bank} ${r.currency}`,
+          side: r.amount < 0 ? 'sell' : 'buy',
+          quantity: Math.abs(r.amount),
+          price: 1,
+          trade_date: r.date,
+          currency: r.currency,
+          account: r.bank,
+          note: r.description,
+          external_source: `${bankSlug}_deposit_csv:${r.accountNumber}`,
+          external_id: externalId,
+        });
+        continue;
+      }
+
+      const externalSource = `${bankSlug}_csv:${r.accountNumber}`;
 
       rows.push({
         user_id: user.id,
@@ -210,21 +245,37 @@ Deno.serve(async (req) => {
         category: categorize(r.description),
         balance_after: r.balance,
         external_source: externalSource,
-        external_id: occurrence === 0 ? signature : `${signature}:dup${occurrence}`,
+        external_id: externalId,
       });
     }
 
-    const { error: upsertErr, count } = await supabase
-      .from('bank_transactions')
-      .upsert(rows, { onConflict: 'user_id,external_source,external_id', count: 'exact' });
+    let imported = 0;
+    if (rows.length) {
+      const { error: upsertErr, count } = await supabase
+        .from('bank_transactions')
+        .upsert(rows, { onConflict: 'user_id,external_source,external_id', count: 'exact' });
+      if (upsertErr) {
+        return new Response(JSON.stringify({ error: upsertErr.message }),
+          { status: 500, headers: corsHeaders });
+      }
+      imported = count ?? rows.length;
+    }
 
-    if (upsertErr) {
-      return new Response(JSON.stringify({ error: upsertErr.message }),
-        { status: 500, headers: corsHeaders });
+    let importedDeposit = 0;
+    if (depositRows.length) {
+      const { error: upsertErr, count } = await supabase
+        .from('trades')
+        .upsert(depositRows, { onConflict: 'user_id,external_source,external_id', count: 'exact' });
+      if (upsertErr) {
+        return new Response(JSON.stringify({ error: upsertErr.message }),
+          { status: 500, headers: corsHeaders });
+      }
+      importedDeposit = count ?? depositRows.length;
     }
 
     return new Response(JSON.stringify({
-      imported: count ?? rows.length,
+      imported,
+      imported_deposit: importedDeposit,
       total_rows: csvRows.length,
     }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (err) {
