@@ -22,25 +22,22 @@
 //
 // `bank` becomes the `account` label, so every account at one bank
 // collapses into a single row in the broker pivot tables (same idea as
-// Raiffeisen's two accounts sharing "Raiffeisen"). But when two accounts
-// at one bank share a currency (Yandex current account + Save deposit,
-// both RUB), the cash-balance view (mpFetchCashRows in index.html, which
-// trusts the single most recent balance_after per (account, currency))
-// would otherwise only ever see whichever account moved last.
-// balance_after is therefore stored as the combined balance across every
-// account_number of that bank in the CSV as of that row, not the
-// per-account CSV balance -- so upload all of one bank's statements
-// together in one CSV.
+// Raiffeisen's two accounts sharing "Raiffeisen"). balance_after is the
+// per-account CSV balance, and external_source is per account
+// ('t_bank_csv:<account_number>') -- that's what lets the cash-balance view
+// (mpFetchCashRows in index.html) take the latest balance per
+// (account, currency, external_source) and sum those, so two same-currency
+// accounts at one bank (T-Bank debit + credit card, Yandex current + Save)
+// can be uploaded as separate CSVs and still both count.
 //
 // tx_date carries the Moscow wall-clock time labelled as UTC (same "keep
 // the calendar date intact" choice as the other importers' T00:00:00Z).
 // Untimed rows get 00:00:SS with SS = row order within the day -- that
 // keeps them ordered among themselves and ahead of every timed row that
-// day, which is also the order the combined balance is accumulated in.
+// day, so the day's last row really is the latest by tx_date.
 //
-// external_source is derived per bank ('yandex_bank_csv', 't_bank_csv'),
-// and the dedup key is (account_number, date, time, description, amount)
-// with the same occurrence-counter tie-breaker as the other importers for
+// The dedup key is (account_number, date, time, description, amount) with
+// the same occurrence-counter tie-breaker as the other importers for
 // legitimate same-minute duplicates.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
@@ -182,11 +179,11 @@ Deno.serve(async (req) => {
         { status: 400, headers: corsHeaders });
     }
 
-    // Assign each row its tx_date first (untimed Save rows -> 00:00:SS by
-    // in-day order), then walk everything chronologically to build the
-    // combined cross-account balance.
+    // Untimed rows (Yandex Save) -> 00:00:SS by in-day order.
     const untimedSeq = new Map<string, number>();
-    const timed = csvRows.map((r, i) => {
+    const rows = [];
+    const dupSeen = new Map<string, number>();
+    for (const r of csvRows) {
       let clock: string;
       if (r.time) {
         clock = `${r.time}:00`;
@@ -196,24 +193,8 @@ Deno.serve(async (req) => {
         untimedSeq.set(key, seq + 1);
         clock = `00:00:${String(Math.min(seq, 59)).padStart(2, '0')}`;
       }
-      return { ...r, txDate: `${r.date}T${clock}Z`, order: i };
-    });
-    timed.sort((a, b) => a.txDate.localeCompare(b.txDate) || a.order - b.order);
 
-    const latestBalance = new Map<string, number>();
-    const rows = [];
-    const dupSeen = new Map<string, number>();
-    for (const r of timed) {
-      let balanceAfter: number | null = null;
-      if (r.balance !== null) {
-        latestBalance.set(`${r.bank}\t${r.currency}\t${r.accountNumber}`, r.balance);
-        let sum = 0;
-        const prefix = `${r.bank}\t${r.currency}\t`;
-        for (const [k, v] of latestBalance) if (k.startsWith(prefix)) sum += v;
-        balanceAfter = Math.round(sum * 100) / 100;
-      }
-
-      const externalSource = `${r.bank.toLowerCase().replace(/[^a-z0-9]+/g, '_')}_csv`;
+      const externalSource = `${r.bank.toLowerCase().replace(/[^a-z0-9]+/g, '_')}_csv:${r.accountNumber}`;
       const signature = `${r.accountNumber}:${r.date}:${r.time}:${r.description}:${r.amount}`;
       const occurrence = dupSeen.get(signature) ?? 0;
       dupSeen.set(signature, occurrence + 1);
@@ -221,13 +202,13 @@ Deno.serve(async (req) => {
       rows.push({
         user_id: user.id,
         account: r.bank,
-        tx_date: r.txDate,
+        tx_date: `${r.date}T${clock}Z`,
         description: r.description,
         counterparty: null,
         amount: r.amount,
         currency: r.currency,
         category: categorize(r.description),
-        balance_after: balanceAfter,
+        balance_after: r.balance,
         external_source: externalSource,
         external_id: occurrence === 0 ? signature : `${signature}:dup${occurrence}`,
       });
