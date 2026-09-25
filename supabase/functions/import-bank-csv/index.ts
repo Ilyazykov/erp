@@ -1,51 +1,52 @@
-// Supabase Edge Function: import-yandex-statement
+// Supabase Edge Function: import-bank-csv
 //
-// Parses this project's own combined Yandex Bank transaction CSV and
-// inserts the resulting rows into `bank_transactions` -- same destination
-// table and shape as import-raiffeisen-statement / import-boc-statement,
-// just a different source bank.
-//
-// Like Raiffeisen, Yandex Bank offers no CSV export -- only PDF "Выписка по
-// договору" statements, one per contract (the current account "Банковский
-// счёт" and the "Сейв" on-demand savings deposit each get their own PDF).
-// Those PDFs were extracted once, out of band, into this project's own flat
-// CSV shape (see statements/yandex_combined.csv) -- this importer only has
-// to parse that intermediate CSV, not a PDF.
+// Parses this project's own flat bank-transaction CSV -- the shape PDF-only
+// banks' statements get extracted into, out of band (Yandex Bank, T-Bank:
+// neither offers a CSV export) -- and inserts the rows into
+// `bank_transactions`, same destination table and shape as
+// import-raiffeisen-statement / import-boc-statement. Unlike those, one
+// importer serves several banks: the bank's display name travels in the
+// CSV's own `bank` column instead of being hardcoded here.
 //
 // CSV shape (this project's own, not a bank export):
-//   account_number,product,currency,date,time,card,description,amount,
-//   balance,source_file
-// Dates are ISO (YYYY-MM-DD); time is Moscow wall-clock HH:MM, present for
-// the current account only (the Save statement carries no time of day).
-// amount is already signed (positive = credit, negative = debit), matching
-// `bank_transactions.amount`'s convention. balance is the per-account
-// running balance after that row.
+//   bank,account_number,product,currency,date,time,card,description,amount,
+//   balance[,amount_orig_value,amount_orig_currency],source_file
+// Dates are ISO (YYYY-MM-DD); time is Moscow wall-clock HH:MM where the
+// statement gives one (Yandex's Save deposit statement doesn't). amount is
+// already signed in the account currency (positive = credit, negative =
+// debit), matching `bank_transactions.amount`'s convention. balance is the
+// per-account running balance after that row -- negative for a credit
+// card's outstanding debt, so the card correctly counts against the
+// bank's total in the broker pivot tables. Extra columns (e.g. the
+// original foreign-currency amount) are ignored.
 //
-// Both accounts share one `account` label ("Yandex Bank") so they collapse
-// into a single row in the broker pivot tables, same as Raiffeisen's two
-// accounts -- but unlike Raiffeisen (RSD vs EUR) both are RUB, so the
-// cash-balance view (mpFetchCashRows in index.html, which trusts the single
-// most recent balance_after per (account, currency)) would otherwise only
-// ever see whichever account moved last. balance_after is therefore stored
-// as the combined balance across every account_number in the CSV as of
-// that row, not the per-account CSV balance -- so upload both statements
+// `bank` becomes the `account` label, so every account at one bank
+// collapses into a single row in the broker pivot tables (same idea as
+// Raiffeisen's two accounts sharing "Raiffeisen"). But when two accounts
+// at one bank share a currency (Yandex current account + Save deposit,
+// both RUB), the cash-balance view (mpFetchCashRows in index.html, which
+// trusts the single most recent balance_after per (account, currency))
+// would otherwise only ever see whichever account moved last.
+// balance_after is therefore stored as the combined balance across every
+// account_number of that bank in the CSV as of that row, not the
+// per-account CSV balance -- so upload all of one bank's statements
 // together in one CSV.
 //
 // tx_date carries the Moscow wall-clock time labelled as UTC (same "keep
 // the calendar date intact" choice as the other importers' T00:00:00Z).
-// Save rows have no time, so they get 00:00:SS with SS = row order within
-// the day -- that keeps them ordered among themselves and ahead of every
-// timed current-account row that day, which is also the order the
-// combined balance is accumulated in.
+// Untimed rows get 00:00:SS with SS = row order within the day -- that
+// keeps them ordered among themselves and ahead of every timed row that
+// day, which is also the order the combined balance is accumulated in.
 //
-// Dedup key is (account_number, date, time, description, amount) with the
-// same occurrence-counter tie-breaker as the other importers for
-// legitimate same-day duplicates (e.g. daily "Капитализация процентов"
-// rows never collide, but same-day identical transfers can).
+// external_source is derived per bank ('yandex_bank_csv', 't_bank_csv'),
+// and the dedup key is (account_number, date, time, description, amount)
+// with the same occurrence-counter tie-breaker as the other importers for
+// legitimate same-minute duplicates.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
-interface YandexRow {
+interface BankRow {
+  bank: string;
   accountNumber: string;
   date: string;
   time: string;
@@ -84,22 +85,22 @@ function parseNumber(s: string): number | null {
   return Number.isNaN(n) ? null : n;
 }
 
-function parseRows(text: string): YandexRow[] {
+function parseRows(text: string): BankRow[] {
   const lines = text.split(/\r\n|\r|\n/).filter(l => l.trim().length > 0);
 
   let idx: {
-    accountNumber: number; date: number; time: number; description: number;
+    bank: number; accountNumber: number; date: number; time: number; description: number;
     amount: number; currency: number; balance: number;
   } | null = null;
-  const rows: YandexRow[] = [];
+  const rows: BankRow[] = [];
   for (const line of lines) {
     const cells = parseCsvLine(line);
     if (!idx) {
       const header = cells.map(h => h.trim());
-      if (header[0] === 'account_number' && header[1] === 'product') {
+      if (header[0] === 'bank' && header[1] === 'account_number' && header[2] === 'product') {
         const col = (name: string) => header.indexOf(name);
         idx = {
-          accountNumber: col('account_number'), date: col('date'), time: col('time'),
+          bank: col('bank'), accountNumber: col('account_number'), date: col('date'), time: col('time'),
           description: col('description'), amount: col('amount'), currency: col('currency'),
           balance: col('balance'),
         };
@@ -110,10 +111,12 @@ function parseRows(text: string): YandexRow[] {
     const date = (cells[idx.date] || '').trim();
     const description = (cells[idx.description] || '').trim();
     const amount = parseNumber(cells[idx.amount] || '');
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !description || amount === null) continue;
+    const bank = (cells[idx.bank] || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !description || amount === null || !bank) continue;
 
     const time = (cells[idx.time] || '').trim();
     rows.push({
+      bank,
       accountNumber: (cells[idx.accountNumber] || '').trim(),
       date,
       time: /^\d{2}:\d{2}$/.test(time) ? time : '',
@@ -130,8 +133,12 @@ function parseRows(text: string): YandexRow[] {
 // importers' CATEGORY_RULES.
 const CATEGORY_RULES: [RegExp, string][] = [
   [/капитализация процентов|выплата процентов/i, 'interest'],
-  [/перевод между счетами одного клиента/i, 'internal_transfer'],
-  [/перевод сбп/i, 'transfer'],
+  [/перевод между счетами одного клиента|intrabank transfer from contract|internal transfer to contract/i, 'internal_transfer'],
+  [/перевод сбп|external bank transfer/i, 'transfer'],
+  [/transfer fee/i, 'bank_fee'],
+  [/taxi|siticard|metro|aeroexpress|rzd/i, 'transport'],
+  [/delivery club|lavka|samokat|eda\.yandex|wolt/i, 'food_delivery'],
+  [/pyaterochka|perekrestok|magnit|vkusvill|lenta/i, 'groceries'],
   [/yandex\*\d+\*plus/i, 'utilities_or_shopping'],
 ];
 
@@ -175,8 +182,6 @@ Deno.serve(async (req) => {
         { status: 400, headers: corsHeaders });
     }
 
-    const account = 'Yandex Bank';
-
     // Assign each row its tx_date first (untimed Save rows -> 00:00:SS by
     // in-day order), then walk everything chronologically to build the
     // combined cross-account balance.
@@ -186,7 +191,7 @@ Deno.serve(async (req) => {
       if (r.time) {
         clock = `${r.time}:00`;
       } else {
-        const key = `${r.accountNumber}:${r.date}`;
+        const key = `${r.bank}:${r.accountNumber}:${r.date}`;
         const seq = untimedSeq.get(key) ?? 0;
         untimedSeq.set(key, seq + 1);
         clock = `00:00:${String(Math.min(seq, 59)).padStart(2, '0')}`;
@@ -201,19 +206,21 @@ Deno.serve(async (req) => {
     for (const r of timed) {
       let balanceAfter: number | null = null;
       if (r.balance !== null) {
-        latestBalance.set(`${r.accountNumber}:${r.currency}`, r.balance);
+        latestBalance.set(`${r.bank}\t${r.currency}\t${r.accountNumber}`, r.balance);
         let sum = 0;
-        for (const [k, v] of latestBalance) if (k.endsWith(`:${r.currency}`)) sum += v;
+        const prefix = `${r.bank}\t${r.currency}\t`;
+        for (const [k, v] of latestBalance) if (k.startsWith(prefix)) sum += v;
         balanceAfter = Math.round(sum * 100) / 100;
       }
 
+      const externalSource = `${r.bank.toLowerCase().replace(/[^a-z0-9]+/g, '_')}_csv`;
       const signature = `${r.accountNumber}:${r.date}:${r.time}:${r.description}:${r.amount}`;
       const occurrence = dupSeen.get(signature) ?? 0;
       dupSeen.set(signature, occurrence + 1);
 
       rows.push({
         user_id: user.id,
-        account,
+        account: r.bank,
         tx_date: r.txDate,
         description: r.description,
         counterparty: null,
@@ -221,7 +228,7 @@ Deno.serve(async (req) => {
         currency: r.currency,
         category: categorize(r.description),
         balance_after: balanceAfter,
-        external_source: 'yandex_csv',
+        external_source: externalSource,
         external_id: occurrence === 0 ? signature : `${signature}:dup${occurrence}`,
       });
     }
