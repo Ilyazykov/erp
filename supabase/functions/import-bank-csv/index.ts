@@ -11,7 +11,8 @@
 // CSV shape (this project's own, not a bank export):
 //   bank,account_number,product,currency,date,time,card,description,amount,
 //   balance[,amount_orig_value,amount_orig_currency],source_file
-// Dates are ISO (YYYY-MM-DD); time is Moscow wall-clock HH:MM where the
+// Dates are ISO (YYYY-MM-DD); time is Moscow wall-clock HH:MM (or HH:MM:SS,
+// e.g. Ozon -- two rows can share a minute) where the
 // statement gives one (Yandex's Save deposit statement doesn't). amount is
 // already signed in the account currency (positive = credit, negative =
 // debit), matching `bank_transactions.amount`'s convention. balance is the
@@ -147,7 +148,7 @@ function parseRows(text: string): BankRow[] {
       note: idx.note >= 0 ? (cells[idx.note] || '').trim() : '',
       accountNumber: (cells[idx.accountNumber] || '').trim(),
       date,
-      time: /^\d{2}:\d{2}$/.test(time) ? time : '',
+      time: /^\d{2}:\d{2}(:\d{2})?$/.test(time) ? time : '',
       description,
       amount,
       currency: (cells[idx.currency] || '').trim(),
@@ -220,7 +221,7 @@ Deno.serve(async (req) => {
     for (const r of csvRows) {
       let clock: string;
       if (r.time) {
-        clock = `${r.time}:00`;
+        clock = r.time.length === 5 ? `${r.time}:00` : r.time;
       } else {
         const key = `${r.bank}:${r.accountNumber}:${r.date}`;
         const seq = untimedSeq.get(key) ?? 0;
