@@ -238,6 +238,25 @@
     </div>
     <p class="empty-note" id="mp_fund_snowball_status"></p>
 
+    <div class="section-title">Crypto wallets</div>
+    <p class="note">Non-custodial wallets (Trust Wallet, …): balances and full transaction history come straight
+      from the blockchain — Ethereum (ETH and every token) via Blockscout, TRON (TRX, staked TRX included, and TRC-20
+      tokens) via TronGrid. The address is stored privately (only you can read it) and is only ever sent to the
+      explorers from the server. Synced daily and with the button below. Tokens without a market price (usually
+      airdropped spam) are kept but not counted in the portfolio.</p>
+    <div class="form-row">
+      <select id="mp_wallet_chain">
+        <option value="ethereum">Ethereum (0x…)</option>
+        <option value="tron">TRON (T…)</option>
+      </select>
+      <input type="text" id="mp_wallet_address" placeholder="Wallet address" size="46" autocomplete="off" spellcheck="false">
+      <input type="text" id="mp_wallet_account" value="Trust" size="10" title="Broker row label in the tables">
+      <button class="btn primary" id="mp_wallet_add">Add wallet</button>
+      <button class="btn" id="mp_wallet_sync">Sync now</button>
+    </div>
+    <p class="empty-note" id="mp_wallet_status"></p>
+    <div id="mp_wallets_wrap"></div>
+
     <div class="section-title">Portfolio by broker × currency</div>
     <div id="mp_broker_currency_wrap"></div>
 
@@ -1830,7 +1849,7 @@ async function mpRenderHoldings() {
   wrap.innerHTML = `<table class="data-table"><thead><tr>
     <th>Ticker</th><th>Quantity</th><th>Price (USD)</th><th>Value (USD)</th>
   </tr></thead><tbody>${data.map(r => `<tr>
-    <td class="ticker">${mpEscapeHtml(r.ticker)}</td>
+    <td class="ticker">${mpEscapeHtml(r.ticker.startsWith('TOKEN:') ? `${r.underlying_currency || '?'} (${r.ticker.split(':')[1]} token)` : r.ticker)}</td>
     <td>${r.quantity}</td>
     <td>${mpFormatUsd(r.price_usd)}</td>
     <td>${mpFormatUsd(r.value_usd)}</td>
@@ -1902,7 +1921,7 @@ const MP_CURRENCY_FLAGS = {
 // Any account not listed here falls back after these, alphabetically.
 const MP_BROKER_ROW_ORDER = [
   '(unspecified)', 'Revolut', 'Wise', 'Bank of Cyprus', 'IBKR', 'Freedom24',
-  'Ziraat Bank', 'Raiffeisen', 'Sber', 'T-Bank', 'Alfa', 'Ozon Bank', 'Yandex Bank', 'Telegram',
+  'Ziraat Bank', 'Raiffeisen', 'Sber', 'T-Bank', 'Alfa', 'Ozon Bank', 'Yandex Bank', 'Telegram', 'Trust',
 ];
 
 // Flag/emoji shown next to each broker's row label, matching the user's
@@ -2070,6 +2089,10 @@ async function mpFetchCashRows(fxByCurrency) {
 const MP_UNIT_QUOTED_ASSET_CLASSES = new Set(['crypto', 'gold']);
 function mpBrokerCurrencyUnit(r) {
   if (r.ticker === 'XAUT') return 'XAU';
+  // On-chain tokens are keyed 'TOKEN:<chain>:<contract>' (see
+  // sync-crypto-wallets); their column is the token's symbol, which the
+  // sync function stores in underlying_currency.
+  if (r.ticker && r.ticker.startsWith('TOKEN:')) return r.underlying_currency || r.ticker;
   // underlying_currency (not currency) so CNY-denominated MOEX funds like
   // SBBY/TLCB/AMNY land in the CNY column instead of RUB, which is only
   // the exchange's quote currency, not what the fund's holdings are in.
@@ -2890,6 +2913,148 @@ async function mpRenderPortfolioPies() {
   }
 }
 
+// ---- Crypto wallets (non-custodial, synced from the blockchain) ----
+// The address itself is private (RLS on crypto_wallets) and only shown here,
+// shortened; sync-crypto-wallets does all explorer requests server-side.
+const MP_WALLET_ADDRESS_RE = { ethereum: /^0x[0-9a-fA-F]{40}$/, tron: /^T[1-9A-HJ-NP-Za-km-z]{33}$/ };
+const mpShortAddress = a => `${a.slice(0, 6)}…${a.slice(-4)}`;
+
+function mpFormatQty(q) {
+  const n = Number(q);
+  if (!isFinite(n)) return mpEscapeHtml(String(q));
+  return n.toLocaleString('en-US', { maximumFractionDigits: n >= 1 ? 4 : 8 });
+}
+
+async function mpRenderWallets() {
+  const wrap = document.getElementById('mp_wallets_wrap');
+  const { data: wallets, error } = await sb.from('crypto_wallets')
+    .select('id, chain, address, account, last_synced_at, last_sync_error').order('created_at');
+  if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
+  if (!wallets.length) { wrap.innerHTML = '<p class="empty-note">No wallets yet — add an address above.</p>'; return; }
+
+  const { data: balances } = await sb.from('wallet_balances')
+    .select('wallet_id, chain, contract, symbol, name, quantity, price_usd, ticker');
+  const tickers = [...new Set((balances || []).map(b => b.ticker).filter(Boolean))];
+  const prices = {};
+  if (tickers.length) {
+    const { data: mp } = await sb.from('market_prices').select('ticker, price_usd').in('ticker', tickers);
+    for (const r of mp || []) prices[r.ticker] = r.price_usd;
+  }
+  const { data: txs } = await sb.from('wallet_transactions')
+    .select('wallet_id, tx_time, kind, symbol, amount, counterparty, status')
+    .order('tx_time', { ascending: false }).limit(30);
+  const walletLabel = id => {
+    const w = wallets.find(x => x.id === id);
+    return w ? `${w.account} · ${w.chain}` : '';
+  };
+
+  const walletRows = wallets.map(w => `<tr>
+    <td class="ticker">${mpEscapeHtml(w.account)}</td>
+    <td>${mpEscapeHtml(w.chain)}</td>
+    <td><code>${mpEscapeHtml(mpShortAddress(w.address))}</code></td>
+    <td>${w.last_synced_at ? new Date(w.last_synced_at).toLocaleString() : '<span class="muted">never</span>'}</td>
+    <td>${w.last_sync_error ? `<span class="neg">${mpEscapeHtml(w.last_sync_error)}</span>` : '<span class="muted">ok</span>'}</td>
+    <td><button class="icon-btn" data-wallet-delete="${w.id}" title="Remove wallet">✕</button></td>
+  </tr>`).join('');
+
+  const rows = (balances || []).map(b => {
+    const price = b.ticker ? (prices[b.ticker] ?? b.price_usd) : null;
+    const value = price !== null && price !== undefined ? Number(b.quantity) * price : null;
+    return { ...b, price, value };
+  });
+  const counted = rows.filter(r => r.ticker).sort((a, b) => (b.value || 0) - (a.value || 0));
+  const uncounted = rows.filter(r => !r.ticker);
+  const total = counted.reduce((s, r) => s + (r.value || 0), 0);
+  const tokenRow = r => `<tr>
+    <td class="ticker">${mpEscapeHtml(r.symbol || '?')}</td>
+    <td>${mpEscapeHtml(walletLabel(r.wallet_id))}</td>
+    <td>${mpFormatQty(r.quantity)}</td>
+    <td>${mpFormatUsd(r.price ?? null)}</td>
+    <td>${mpFormatUsd(r.value)}</td>
+  </tr>`;
+
+  wrap.innerHTML = `<table class="data-table"><thead><tr>
+      <th>Wallet</th><th>Chain</th><th>Address</th><th>Last sync</th><th>Status</th><th></th>
+    </tr></thead><tbody>${walletRows}</tbody></table>
+    <table class="data-table"><thead><tr>
+      <th>Asset</th><th>Wallet</th><th>Quantity</th><th>Price (USD)</th><th>Value (USD)</th>
+    </tr></thead><tbody>${counted.map(tokenRow).join('') || '<tr><td colspan="5" class="muted">No balances yet — press Sync now.</td></tr>'}
+    <tr class="total-row"><td colspan="4"><b>Total</b></td><td><b>${mpFormatUsd(total)}</b></td></tr>
+    </tbody></table>
+    ${uncounted.length ? `<details class="note"><summary>${uncounted.length} token(s) without a market price — not counted</summary>
+      <table class="data-table"><thead><tr><th>Asset</th><th>Wallet</th><th>Quantity</th><th>Contract</th></tr></thead>
+      <tbody>${uncounted.map(r => `<tr><td class="ticker">${mpEscapeHtml(r.symbol || '?')}</td>
+        <td>${mpEscapeHtml(walletLabel(r.wallet_id))}</td><td>${mpFormatQty(r.quantity)}</td>
+        <td><code>${mpEscapeHtml(mpShortAddress(r.contract || ''))}</code></td></tr>`).join('')}</tbody></table>
+    </details>` : ''}
+    ${(txs || []).length ? `<details class="note"><summary>Latest ${txs.length} wallet transactions</summary>
+      <table class="data-table"><thead><tr><th>Date</th><th>Wallet</th><th>Type</th><th>Asset</th><th>Amount</th><th>Counterparty</th></tr></thead>
+      <tbody>${txs.map(t => `<tr><td>${new Date(t.tx_time).toLocaleString()}</td>
+        <td>${mpEscapeHtml(walletLabel(t.wallet_id))}</td><td>${mpEscapeHtml(t.kind)}</td>
+        <td>${mpEscapeHtml(t.symbol || '?')}</td>
+        <td class="${Number(t.amount) < 0 ? 'neg' : 'pos'}">${mpFormatQty(t.amount)}</td>
+        <td>${t.counterparty ? `<code>${mpEscapeHtml(mpShortAddress(t.counterparty))}</code>` : '<span class="muted">—</span>'}</td></tr>`).join('')}
+      </tbody></table></details>` : ''}`;
+
+  wrap.querySelectorAll('[data-wallet-delete]').forEach(btn => btn.addEventListener('click', async () => {
+    if (!confirm('Remove this wallet together with its synced balances and history?')) return;
+    const { error: delErr } = await sb.from('crypto_wallets').delete().eq('id', btn.dataset.walletDelete);
+    document.getElementById('mp_wallet_status').textContent = delErr ? `Error: ${delErr.message}` : 'Wallet removed.';
+    mpRefreshAfterWalletChange();
+  }));
+}
+
+function mpRefreshAfterWalletChange() {
+  mpRenderWallets();
+  mpRenderHoldings();
+  mpRenderPortfolioPies();
+  mpRenderBrokerCurrency();
+  mpRenderBrokerAssetClass();
+}
+
+async function mpSyncWallets() {
+  const statusEl = document.getElementById('mp_wallet_status');
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) { statusEl.textContent = 'Sign in first.'; return; }
+  statusEl.textContent = 'Syncing with the blockchain… (the first sync of a wallet walks its whole history and can take a minute or two)';
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/sync-crypto-wallets`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    const result = await res.json();
+    if (!res.ok) { statusEl.textContent = `Error: ${result.error || res.statusText}`; return; }
+    statusEl.textContent = result.results.map(r => r.error
+      ? `${r.chain}: error — ${r.error}`
+      : `${r.chain}: ${r.assets} assets (${r.priced} counted), ${r.new_transactions} new transactions`
+        + (r.warnings && r.warnings.length ? ` — ${r.warnings.join('; ')}` : '')).join(' · ') || 'No wallets to sync.';
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`;
+  }
+  mpRefreshAfterWalletChange();
+}
+
+document.getElementById('mp_wallet_add').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_wallet_status');
+  const chain = document.getElementById('mp_wallet_chain').value;
+  const address = document.getElementById('mp_wallet_address').value.trim();
+  const account = document.getElementById('mp_wallet_account').value.trim() || 'Trust';
+  if (!MP_WALLET_ADDRESS_RE[chain].test(address)) {
+    statusEl.textContent = chain === 'ethereum'
+      ? 'That doesn\'t look like an Ethereum address (0x followed by 40 hex characters).'
+      : 'That doesn\'t look like a TRON address (starts with T, 34 characters).';
+    return;
+  }
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) { statusEl.textContent = 'Sign in first.'; return; }
+  const { error } = await sb.from('crypto_wallets').insert({ user_id: session.user.id, chain, address, account });
+  if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
+  document.getElementById('mp_wallet_address').value = '';
+  await mpSyncWallets();
+});
+document.getElementById('mp_wallet_sync').addEventListener('click', mpSyncWallets);
+
 function mpUpdateAuthUi(session) {
   const btn = document.getElementById('btn_login');
   mpIsSignedIn = !!session;
@@ -2904,6 +3069,7 @@ function mpUpdateAuthUi(session) {
     mpRenderBrokerAssetClass();
     mpRenderEquityByIndex();
     mpRenderBondByType();
+    mpRenderWallets();
   } else {
     btn.textContent = 'Sign in with Google';
     document.getElementById('mp_signed_out').style.display = '';

@@ -152,6 +152,9 @@ const CRYPTO_YAHOO_OVERRIDES: Record<string, string> = {
 };
 const KNOWN_CRYPTO_TICKERS = new Set([
   'BTC', 'ETH', 'XAU', 'XAUT', 'SOL', 'USDT', 'USDC', 'BNB', 'XRP', 'DOGE', 'ADA', 'TON',
+  // TRON (Trust Wallet, synced by sync-crypto-wallets). Must be listed here:
+  // unlisted, "TRX" would resolve to TRX Gold Corp on NYSE American.
+  'TRX',
 ]);
 
 // Only these ISS "group" values represent an instrument actually traded on
@@ -770,6 +773,21 @@ async function fetchDistinctTickers(supabase: any): Promise<string[] | null> {
       if (row.ticker) tickers.add(String(row.ticker).trim());
     }
     if (data.length < pageSize) break;
+  }
+  // On-chain wallet holdings (sync-crypto-wallets) are priced here too --
+  // except 'TOKEN:<chain>:<contract>' tickers, which the sync function
+  // prices itself from the explorer's own USD price.
+  const { data: walletRows, error: walletErr } = await supabase
+    .from('wallet_balances')
+    .select('ticker')
+    .not('ticker', 'is', null);
+  if (walletErr) {
+    log(`  wallet-ticker query failed (wallet holdings won't be priced this run): ${walletErr.message}`);
+  } else {
+    // deno-lint-ignore no-explicit-any
+    for (const row of walletRows as any[]) {
+      if (row.ticker && !String(row.ticker).startsWith('TOKEN:')) tickers.add(String(row.ticker).trim());
+    }
   }
   return [...tickers].sort();
 }
