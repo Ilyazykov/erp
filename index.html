@@ -1880,7 +1880,9 @@ const MP_CURRENCY_COLUMN_ORDER = [
 // Fixed display order for the broker x asset-class table's columns,
 // matching the user's own tracking spreadsheet (Акции, Облигации,
 // Вклады, Кэш, Золото, Крипта) rather than alphabetical.
-const MP_ASSET_CLASS_COLUMN_ORDER = ['stock', 'bond', 'deposit', 'cash', 'gold', 'crypto'];
+const MP_ASSET_CLASS_COLUMN_ORDER = ['stock', 'bond', 'deposit', 'liquid', 'cash', 'credit', 'gold', 'crypto'];
+// Column headers that differ from the raw instrument_type value.
+const MP_ASSET_CLASS_LABELS = { liquid: 'liquid assets' };
 
 // Country flag shown next to each ISO currency's column header in the
 // broker x currency table, matching the user's own tracking spreadsheet.
@@ -1958,7 +1960,7 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
   // broker x asset-class table's columns are asset classes, so
   // mpEscapeHtml(c) is used unflagged there.
   const headerLabel = c => fxByCurrency && c in MP_CURRENCY_FLAGS
-    ? `${mpEscapeHtml(c)} ${MP_CURRENCY_FLAGS[c]}` : mpEscapeHtml(c);
+    ? `${mpEscapeHtml(c)} ${MP_CURRENCY_FLAGS[c]}` : mpEscapeHtml(fxByCurrency ? c : MP_ASSET_CLASS_LABELS[c] || c);
   // Broker flags identify the broker itself, not its columns, so unlike
   // headerLabel above they apply regardless of what the columns represent.
   const brokerLabel = a => a in MP_BROKER_FLAGS
@@ -2009,7 +2011,7 @@ async function mpFetchFxByCurrency(currencies) {
 // instead of the most recently active one hiding the other.
 async function mpFetchCashRows(fxByCurrency) {
   const { data, error } = await sb.from('bank_transactions')
-    .select('account, currency, balance_after, tx_date, external_source')
+    .select('account, currency, balance_after, tx_date, external_source, product')
     .not('balance_after', 'is', null)
     .order('tx_date', { ascending: false });
   if (error || !data) return [];
@@ -2021,19 +2023,31 @@ async function mpFetchCashRows(fxByCurrency) {
     const key = `${r.account} ${r.currency} ${r.external_source}`;
     if (!latest.has(key)) latest.set(key, r);
   }
+  // A credit card's balance goes to its own 'credit' column, which only
+  // ever holds zero or negative amounts (debt); an overpaid card's positive
+  // balance is just cash. Everything else is 'cash'.
   const totals = new Map();
-  for (const r of latest.values()) {
-    const key = `${r.account} ${r.currency}`;
-    const t = totals.get(key) || { account: r.account, currency: r.currency, balance: 0 };
-    t.balance += Number(r.balance_after);
+  const add = (account, currency, type, amount) => {
+    const key = `${account} ${currency} ${type}`;
+    const t = totals.get(key) || { account, currency, type, balance: 0 };
+    t.balance += amount;
     totals.set(key, t);
+  };
+  for (const r of latest.values()) {
+    const bal = Number(r.balance_after);
+    if (r.product === 'credit_card') {
+      add(r.account, r.currency, 'credit', Math.min(bal, 0));
+      if (bal > 0) add(r.account, r.currency, 'cash', bal);
+    } else {
+      add(r.account, r.currency, 'cash', bal);
+    }
   }
   if (!totals.size) return [];
 
   return [...totals.values()].map(t => ({
     account: t.account,
     currency: t.currency,
-    instrument_type: 'cash',
+    instrument_type: t.type,
     value_usd: t.currency in fxByCurrency ? t.balance * fxByCurrency[t.currency] : null,
   }));
 }
@@ -2124,7 +2138,7 @@ async function mpRenderBondByType() {
   const wrap = document.getElementById('mp_bond_subtype_wrap');
   const { data, error } = await sb.from('portfolio_value_usd').select('*');
   if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
-  const bonds = data.filter(r => r.instrument_type === 'bond' || r.instrument_type === 'deposit');
+  const bonds = data.filter(r => ['bond', 'deposit', 'liquid'].includes(r.instrument_type));
   mpRenderBucketTable(wrap, bonds, mpBondSubtype, 'No bond/deposit holdings yet.');
 }
 
@@ -2165,7 +2179,7 @@ EQUITY_INDEX_BY_TICKER.VWRA = 'Акции мира';
 const BOND_SUBTYPE_BY_TICKER = { SBBY: 'Облигации 🇨🇳', TLCB: 'Облигации 🇨🇳' };
 function mpBondSubtype(row) {
   if (BOND_SUBTYPE_BY_TICKER[row.ticker]) return BOND_SUBTYPE_BY_TICKER[row.ticker];
-  if (row.asset_class === 'deposit' || row.asset_class === 'money_market_fund') {
+  if (row.asset_class === 'deposit' || row.asset_class === 'savings_account' || row.asset_class === 'money_market_fund') {
     return row.underlying_currency === 'RUB' ? 'Вклады 🇷🇺' : 'Вклады';
   }
   return row.infra_region === 'ru' ? 'Облигации 🇷🇺' : 'Облигации';
@@ -2835,7 +2849,7 @@ async function mpRenderPortfolioPies() {
   //    market ETFs (TBRU/SAFE/SBMM/AKMB/AKMM/TLCB/SBBY), and RUB deposits
   //    -- see instrument_type assignment in update-market-prices/index.ts.
   const ruBondsCurrent = priced
-    .filter(r => r.infra_region === 'ru' && (r.instrument_type === 'bond' || r.instrument_type === 'deposit'))
+    .filter(r => r.infra_region === 'ru' && ['bond', 'deposit', 'liquid'].includes(r.instrument_type))
     .reduce((s, r) => s + r.value_usd, 0);
   const allocRaw = DATA.ruAllocTargetRaw;
   if (allocRaw) {
@@ -2858,7 +2872,7 @@ async function mpRenderPortfolioPies() {
   // instrument_type='bond' rows (Revolut money-market funds, Revolut
   // deposits) would inflate "non-RUB" with holdings this chart was never
   // meant to cover.
-  const bondDepositRows = priced.filter(r => (r.instrument_type === 'bond' || r.instrument_type === 'deposit') && r.infra_region === 'ru');
+  const bondDepositRows = priced.filter(r => ['bond', 'deposit', 'liquid'].includes(r.instrument_type) && r.infra_region === 'ru');
   const rubCurrent = bondDepositRows.filter(r => r.underlying_currency === 'RUB').reduce((s, r) => s + r.value_usd, 0);
   const nonRubCurrent = bondDepositRows.filter(r => r.underlying_currency !== 'RUB').reduce((s, r) => s + r.value_usd, 0);
   if (DATA.currentWCny !== undefined && DATA.currentWCny !== null) {
