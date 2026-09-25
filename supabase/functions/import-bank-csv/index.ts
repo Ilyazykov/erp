@@ -21,7 +21,10 @@
 // original foreign-currency amount) are ignored, except an optional
 // `category_bank` (the bank's own category label, e.g. Sber's "Transfer via
 // FPS" / "Супермаркеты"), which is fed to the keyword categorizer alongside
-// the description.
+// the description, and optional `synthetic` / `note`: synthetic=true marks a
+// bookkeeping row that isn't a real transaction (e.g. UniCredit's "no data
+// from here until the account was closed" row), stored in
+// bank_transactions.synthetic with the explanation in `note`.
 //
 // `bank` becomes the `account` label, so every account at one bank
 // collapses into a single row in the broker pivot tables (same idea as
@@ -60,6 +63,8 @@ interface BankRow {
   accountNumber: string;
   product: string;
   categoryBank: string;
+  synthetic: boolean;
+  note: string;
   date: string;
   time: string;
   description: string;
@@ -101,7 +106,8 @@ function parseRows(text: string): BankRow[] {
   const lines = text.split(/\r\n|\r|\n/).filter(l => l.trim().length > 0);
 
   let idx: {
-    bank: number; accountNumber: number; product: number; categoryBank: number; date: number; time: number; description: number;
+    bank: number; accountNumber: number; product: number; categoryBank: number;
+    synthetic: number; note: number; date: number; time: number; description: number;
     amount: number; currency: number; balance: number;
   } | null = null;
   const rows: BankRow[] = [];
@@ -113,7 +119,7 @@ function parseRows(text: string): BankRow[] {
         const col = (name: string) => header.indexOf(name);
         idx = {
           bank: col('bank'), accountNumber: col('account_number'), product: col('product'),
-          categoryBank: col('category_bank'), date: col('date'), time: col('time'),
+          categoryBank: col('category_bank'), synthetic: col('synthetic'), note: col('note'), date: col('date'), time: col('time'),
           description: col('description'), amount: col('amount'), currency: col('currency'),
           balance: col('balance'),
         };
@@ -132,6 +138,8 @@ function parseRows(text: string): BankRow[] {
       bank,
       product: (cells[idx.product] || '').trim(),
       categoryBank: idx.categoryBank >= 0 ? (cells[idx.categoryBank] || '').trim() : '',
+      synthetic: idx.synthetic >= 0 && /^true$/i.test((cells[idx.synthetic] || '').trim()),
+      note: idx.note >= 0 ? (cells[idx.note] || '').trim() : '',
       accountNumber: (cells[idx.accountNumber] || '').trim(),
       date,
       time: /^\d{2}:\d{2}$/.test(time) ? time : '',
@@ -249,8 +257,11 @@ Deno.serve(async (req) => {
         counterparty: null,
         amount: r.amount,
         currency: r.currency,
-        category: categorize(r.categoryBank ? `${r.description} ${r.categoryBank}` : r.description),
+        category: r.synthetic ? null
+          : categorize(r.categoryBank ? `${r.description} ${r.categoryBank}` : r.description),
         balance_after: r.balance,
+        synthetic: r.synthetic,
+        note: r.note || null,
         external_source: externalSource,
         external_id: externalId,
       });
