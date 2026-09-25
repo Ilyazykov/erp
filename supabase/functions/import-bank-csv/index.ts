@@ -53,11 +53,16 @@
 // накопительный счёт, Yandex's "Сейв", Alfa's "Альфа-Счёт на ежедневный
 // остаток"; 'term_deposit' -- Sber's вклады) are not cash
 // and don't go to `bank_transactions` at all. They're written to `trades`
-// exactly the way import-revolut-deposit-statement writes Revolut Instant
-// Access Savings: synthetic ticker "DEPOSIT:<bank> <currency>", deposit or
-// interest -> buy, withdrawal -> sell, quantity = the amount itself,
-// price 1 -- so they show up as asset class 'deposit' (priced via FX by
-// update-market-prices) instead of in the cash column.
+// the way import-revolut-deposit-statement writes Revolut Instant Access
+// Savings: synthetic ticker "SAVINGS:<bank> <currency>" for a savings
+// account (withdrawable any time without loss) or "DEPOSIT:<bank>
+// <currency>" for a term deposit, deposit or interest -> buy, withdrawal ->
+// sell, quantity = the amount itself, price 1 -- so they show up as asset
+// class 'savings' / 'deposit' (priced via FX by update-market-prices)
+// instead of in the cash column.
+//
+// Every other row keeps its CSV `product` in bank_transactions.product, so
+// the cash view can put a credit card's balance in its own 'credit' column.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
@@ -239,7 +244,7 @@ Deno.serve(async (req) => {
         if (r.amount === 0) continue;
         depositRows.push({
           user_id: user.id,
-          ticker: `DEPOSIT:${r.bank} ${r.currency}`,
+          ticker: `${r.product === 'savings_account' ? 'SAVINGS' : 'DEPOSIT'}:${r.bank} ${r.currency}`,
           side: r.amount < 0 ? 'sell' : 'buy',
           quantity: Math.abs(r.amount),
           price: 1,
@@ -266,6 +271,7 @@ Deno.serve(async (req) => {
         category: r.syntheticKind ? null
           : categorize(r.categoryBank ? `${r.description} ${r.categoryBank}` : r.description),
         balance_after: r.balance,
+        product: r.product || null,
         synthetic: r.syntheticKind !== null,
         synthetic_kind: r.syntheticKind,
         data_gap_until: r.dataGapUntil,

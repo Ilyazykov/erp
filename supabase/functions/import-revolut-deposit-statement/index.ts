@@ -180,7 +180,9 @@ Deno.serve(async (req) => {
         // running balance) -- one shared ticker would mix two currencies'
         // balances into a single quantity and give fetchDepositCurrencies
         // in update-market-prices no way to know which FX rate applies.
-        ticker: `DEPOSIT:Revolut ${r.currency}`,
+        // SAVINGS: (not DEPOSIT:) -- instant access, withdrawable any time
+        // without loss; see 20250101000012_savings_and_credit_classes.sql
+        ticker: `SAVINGS:Revolut ${r.currency}`,
         side,
         quantity: r.amount,
         price: 1,

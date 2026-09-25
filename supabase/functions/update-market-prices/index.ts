@@ -294,7 +294,7 @@ async function latestUsdRubRate(): Promise<number | null> {
 // Ticker classification
 // ---------------------------------------------------------------------------
 
-type TickerClass = 'moex_ofz' | 'moex_bond' | 'moex_share_or_etf_or_other' | 'crypto' | 'deposit' | 'money_market_fund';
+type TickerClass = 'moex_ofz' | 'moex_bond' | 'moex_share_or_etf_or_other' | 'crypto' | 'deposit' | 'savings' | 'money_market_fund';
 
 // A bank deposit/savings account is represented as a synthetic ticker,
 // not an ISIN or a real listed instrument -- e.g. "DEPOSIT:Revolut" for
@@ -314,6 +314,14 @@ type TickerClass = 'moex_ofz' | 'moex_bond' | 'moex_share_or_etf_or_other' | 'cr
 // special-casing in the `portfolio_value_usd` view.
 const DEPOSIT_PREFIX = 'DEPOSIT:';
 const DEPOSIT_PREFIX_LEGACY_CYRILLIC = 'ВКЛАД:';
+// A savings account -- money withdrawable at any time without losing
+// anything (Yandex "Сейв", T-Bank/Alfa/Ozon накопительные счета, Revolut
+// Instant Access Savings) -- is the same kind of synthetic ticker, priced
+// the same way, but with its own prefix so it gets instrument_type
+// 'liquid' ("liquid assets" column) instead of 'deposit' (a term deposit
+// whose early withdrawal loses interest). See
+// 20250101000012_savings_and_credit_classes.sql.
+const SAVINGS_PREFIX = 'SAVINGS:';
 
 // Revolut's Flexible Cash Funds are money-market funds (Fidelity
 // Institutional Liquidity Fund plc share classes) whose ticker is the
@@ -339,6 +347,20 @@ const MONEY_MARKET_FUND_ISINS = new Set(['IE000H9J0QX4', 'IE0002RUHW32', 'IE000A
 // it's a bond fund) and would need constant upkeep as new funds list.
 const MOEX_BOND_ETF_TICKERS = new Set(['TBRU', 'SAFE', 'SBMM', 'AKMB', 'AKMM', 'TLCB', 'SBBY', 'AMNY']);
 
+// Of those, the money-market ones -- withdrawable at any time without loss,
+// so they go to the "liquid assets" column (instrument_type 'liquid',
+// asset_class 'money_market_fund', same as Revolut's funds) instead of
+// 'bond'. User-confirmed: SBMM (Первая Сберегательный), AKMM (Альфа
+// Денежный рынок), AMNY (АТОН Накопительный в юанях). SAFE / TBRU / AKMB /
+// TLCB / SBBY stay bonds.
+const MOEX_MONEY_MARKET_ETF_TICKERS = new Set(['SBMM', 'AKMM', 'AMNY']);
+
+function moexFundAssetClass(ticker: string): string {
+  const t = ticker.toUpperCase();
+  if (MOEX_MONEY_MARKET_ETF_TICKERS.has(t)) return 'money_market_fund';
+  return MOEX_BOND_ETF_TICKERS.has(t) ? 'moex_bond_etf' : 'moex_share_or_etf';
+}
+
 // Of the bond ETFs above, SBBY, TLCB and AMNY specifically hold CNY/foreign-
 // currency bonds even though MOEX quotes their per-unit price in RUB.
 // `currency` always stores the honest MOEX quote currency (RUB for all);
@@ -351,6 +373,7 @@ const UNDERLYING_CURRENCY_BY_TICKER: Record<string, string> = { SBBY: 'CNY', TLC
 
 function classifyTicker(ticker: string): TickerClass {
   const t = ticker.toUpperCase();
+  if (t.startsWith(SAVINGS_PREFIX)) return 'savings';
   if (t.startsWith(DEPOSIT_PREFIX) || t.startsWith(DEPOSIT_PREFIX_LEGACY_CYRILLIC)) return 'deposit';
   if (MONEY_MARKET_FUND_ISINS.has(t)) return 'money_market_fund';
   if (KNOWN_CRYPTO_TICKERS.has(t)) return 'crypto';
@@ -558,7 +581,7 @@ async function fetchMoexPrices(tickers: string[]): Promise<Record<string, MoexRe
   log(`MOEX: batch share/ETF lookup for ${tickers.length} candidates...`);
   const shareHits = await moexFetchSharesBatch(tickers);
   for (const [t, info] of Object.entries(shareHits)) {
-    const assetClass = MOEX_BOND_ETF_TICKERS.has(t.toUpperCase()) ? 'moex_bond_etf' : 'moex_share_or_etf';
+    const assetClass = moexFundAssetClass(t);
     results[t] = { ...info, secid: t, asset_class: assetClass };
   }
   const remaining = tickers.filter((t) => !(t in results));
@@ -604,7 +627,7 @@ async function fetchMoexPrices(tickers: string[]): Promise<Record<string, MoexRe
         log(`  ${ticker}: MOEX security found (${secid}) but no market data on any board`);
         continue;
       }
-      const assetClass = MOEX_BOND_ETF_TICKERS.has(ticker.toUpperCase()) ? 'moex_bond_etf' : 'moex_share_or_etf';
+      const assetClass = moexFundAssetClass(ticker);
       results[ticker] = { ...hit[secid], secid, asset_class: assetClass };
     } else {
       log(`  ${ticker}: MOEX group '${group}' not handled, skipping`);
@@ -782,7 +805,7 @@ async function fetchTickerCurrencies(supabase: any, tickers: string[]): Promise<
 }
 
 type InfraRegion = 'ru' | 'foreign';
-type InstrumentType = 'stock' | 'bond' | 'deposit' | 'gold' | 'crypto' | 'fx_rate';
+type InstrumentType = 'stock' | 'bond' | 'deposit' | 'liquid' | 'gold' | 'crypto' | 'fx_rate';
 
 interface PriceRow {
   ticker: string;
@@ -856,7 +879,7 @@ async function runUpdate(): Promise<Record<string, unknown>> {
     if (cls === 'crypto') {
       cryptoCandidates.push(t);
     }
-    if (cls === 'deposit') {
+    if (cls === 'deposit' || cls === 'savings') {
       depositCandidates.push(t);
     }
     if (cls === 'money_market_fund') {
@@ -904,6 +927,7 @@ async function runUpdate(): Promise<Record<string, unknown>> {
   if (depositCandidates.length) {
     const depositCurrencies = await fetchTickerCurrencies(supabase, depositCandidates);
     for (const ticker of depositCandidates) {
+      const isSavings = classifyTicker(ticker) === 'savings';
       const currency = depositCurrencies[ticker];
       if (!currency) { log(`  deposit ticker ${ticker}: no currency found in trades, skipping`); continue; }
       const rate = await fxRateToUsd(currency, usdRubRate);
@@ -913,9 +937,9 @@ async function runUpdate(): Promise<Record<string, unknown>> {
         price_usd: Math.round(rate * 1e8) / 1e8,
         native_price: 1,
         currency,
-        asset_class: 'deposit',
+        asset_class: isSavings ? 'savings_account' : 'deposit',
         infra_region: currency === 'RUB' ? 'ru' : 'foreign',
-        instrument_type: 'deposit',
+        instrument_type: isSavings ? 'liquid' : 'deposit',
         underlying_currency: currency,
         source: currency === 'RUB' ? 'cbr_fx' : 'yahoo_fx',
         as_of: new Date().toISOString().slice(0, 10),
@@ -945,7 +969,8 @@ async function runUpdate(): Promise<Record<string, unknown>> {
         currency,
         asset_class: 'money_market_fund',
         infra_region: 'foreign',
-        instrument_type: 'deposit',
+        // withdrawable at any time -> liquid assets, not a term deposit
+        instrument_type: 'liquid',
         underlying_currency: currency,
         source: currency === 'RUB' ? 'cbr_fx' : 'yahoo_fx',
         as_of: new Date().toISOString().slice(0, 10),
@@ -971,7 +996,8 @@ async function runUpdate(): Promise<Record<string, unknown>> {
     // captured separately in `underlying_currency`, not by changing
     // `currency` itself.
     const instrumentType: InstrumentType =
-      (info.asset_class === 'moex_bond' || info.asset_class === 'moex_ofz' || info.asset_class === 'moex_bond_etf')
+      info.asset_class === 'money_market_fund' ? 'liquid'
+      : (info.asset_class === 'moex_bond' || info.asset_class === 'moex_ofz' || info.asset_class === 'moex_bond_etf')
         ? 'bond'
         : 'stock';
     const underlyingCurrency = UNDERLYING_CURRENCY_BY_TICKER[ticker.toUpperCase()] ?? quoteCurrency;
