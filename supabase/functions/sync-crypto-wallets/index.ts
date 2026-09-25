@@ -9,6 +9,10 @@
 //   tron     -- TronGrid (api.trongrid.io/v1): TRX balance (staked and
 //               unstaking TRX included -- still owned), TRC-20 balances,
 //               native and TRC-20 transfers
+//   bitcoin  -- mempool.space: BTC balance, every transaction's net effect
+//               on the address plus the fee it paid
+//   solana   -- public mainnet RPC: SOL and SPL token balances, per-tx SOL /
+//               token balance changes (pre/post balances) plus fees
 // and writes them to `wallet_balances` / `wallet_transactions` (see
 // migrations/20250101000013_crypto_wallets.sql for what each column means
 // and how balances feed the holdings views).
@@ -30,8 +34,9 @@
 // nothing not already stored, so the first sync walks the whole history and
 // later ones only the new tail.
 //
-// Pricing: 'ETH' / 'TRX' / 'USDT' / 'USDC' tickers are priced by
-// update-market-prices like any other crypto. Any other token the explorer
+// Pricing: 'ETH' / 'TRX' / 'USDT' / 'USDC' tickers (Lido stETH included as
+// 'ETH' -- see KNOWN_TOKEN_TICKERS) are priced by update-market-prices like
+// any other crypto. Any other token the explorer
 // prices (and which has a real market -- market cap or 24h volume, to keep
 // airdropped scam tokens with made-up prices out) gets a
 // 'TOKEN:<chain>:<contract>' ticker whose market_prices row this function
@@ -41,20 +46,39 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 const BLOCKSCOUT = 'https://eth.blockscout.com/api/v2';
+// Keyless public Ethereum JSON-RPC nodes, tried in order. Balances are read
+// from the chain itself (eth_getBalance / ERC-20 balanceOf) rather than from
+// Blockscout's token-balances, which is a cache: rebasing tokens like
+// Lido's stETH grow every day without a Transfer event, and Blockscout's
+// figure for them goes stale (0.26 vs the real 0.34 stETH on the user's
+// wallet).
+const ETH_RPCS = ['https://ethereum-rpc.publicnode.com', 'https://eth.drpc.org'];
 const TRONGRID = 'https://api.trongrid.io';
+const MEMPOOL = 'https://mempool.space/api';
+const SOLANA_RPC = 'https://api.mainnet-beta.solana.com';
+const SPL_TOKEN_PROGRAMS = ['TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'];
 const MAX_PAGES = 200;
 
-// Canonical stablecoin contracts -> the plain ticker update-market-prices
-// already prices. Keyed by contract, never by symbol: scam tokens copy the
-// "USDT" symbol all the time.
-const STABLECOINS: Record<string, Record<string, string>> = {
+// Token contracts counted as a plain ticker update-market-prices already
+// prices. Keyed by contract, never by symbol: scam tokens copy the "USDT"
+// symbol all the time.
+//   - canonical stablecoins -> USDT / USDC
+//   - Lido stETH -> ETH: staked ETH redeemable 1:1, and the user counts it
+//     as ETH (wstETH is NOT 1:1 -- it's worth more than 1 ETH -- so it isn't
+//     mapped).
+const KNOWN_TOKEN_TICKERS: Record<string, Record<string, string>> = {
   ethereum: {
     '0xdac17f958d2ee523a2206206994597c13d831ec7': 'USDT',
     '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48': 'USDC',
+    '0xae7ab96520de3a18e5e111b5eaab095312d7fe84': 'ETH',  // Lido stETH
   },
   tron: {
     TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t: 'USDT',
     TEkxiTehnzSmSe2XqrBj4w32RUN966rdz8: 'USDC',
+  },
+  solana: {
+    EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: 'USDC',
+    Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB: 'USDT',
   },
 };
 
@@ -158,6 +182,29 @@ async function blockscoutPages(path: string, known: Set<string>, keyOf: (it: any
   return out;
 }
 
+// JSON-RPC batch against the first node that answers; returns results in
+// call order (null where a single call failed).
+async function ethRpcBatch(calls: { method: string; params: unknown[] }[]): Promise<(string | null)[]> {
+  let lastErr: unknown;
+  for (const rpc of ETH_RPCS) {
+    try {
+      const out: (string | null)[] = [];
+      for (let i = 0; i < calls.length; i += 50) {
+        const chunk = calls.slice(i, i + 50);
+        const res = await getJson(rpc, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(chunk.map((c, j) => ({ jsonrpc: '2.0', id: j, ...c }))),
+        }, 2);
+        const byId: Record<number, any> = {};
+        for (const r of Array.isArray(res) ? res : [res]) byId[r.id] = r;
+        for (let j = 0; j < chunk.length; j++) out.push(byId[j]?.result ?? null);
+      }
+      return out;
+    } catch (err) { lastErr = err; }
+  }
+  throw new Error(`Ethereum RPC unavailable: ${lastErr}`);
+}
+
 function hasRealMarket(t: any): boolean {
   return !!t.exchange_rate && (!!t.circulating_market_cap || !!t.volume_24h);
 }
@@ -165,21 +212,37 @@ function hasRealMarket(t: any): boolean {
 async function syncEthereum(w: Wallet, knownTx: Set<string>, warnings: string[]): Promise<{ balances: Balance[]; txs: Tx[] }> {
   const a = w.address.toLowerCase();
   const info = await getJson(`${BLOCKSCOUT}/addresses/${w.address}`);
+  const tokens = await getJson(`${BLOCKSCOUT}/addresses/${w.address}/token-balances`);
+  // Live balances straight from the chain: ETH, and balanceOf for every
+  // ERC-20 Blockscout lists (it's the token *list* we take from Blockscout).
+  const erc20 = tokens.filter((tb: any) => tb.token?.type === 'ERC-20');
+  const owner = w.address.toLowerCase().replace('0x', '').padStart(64, '0');
+  const live = await ethRpcBatch([
+    { method: 'eth_getBalance', params: [w.address, 'latest'] },
+    ...erc20.map((tb: any) => ({
+      method: 'eth_call',
+      params: [{ to: tb.token.address_hash || tb.token.address, data: '0x70a08231' + owner }, 'latest'],
+    })),
+  ]);
+  const liveOf = new Map<string, string>();
+  erc20.forEach((tb: any, i: number) => {
+    const r = live[i + 1];
+    if (r && r !== '0x') liveOf.set(String(tb.token.address_hash || tb.token.address).toLowerCase(), BigInt(r).toString());
+  });
   const balances: Balance[] = [{
     contract: '', symbol: 'ETH', name: 'Ether', decimals: 18,
-    quantity: formatUnits(info.coin_balance || '0', 18),
+    quantity: formatUnits(live[0] ? BigInt(live[0]).toString() : (info.coin_balance || '0'), 18),
     price_usd: info.exchange_rate ? Number(info.exchange_rate) : null, ticker: 'ETH',
   }];
-  const tokens = await getJson(`${BLOCKSCOUT}/addresses/${w.address}/token-balances`);
   for (const tb of tokens) {
     const t = tb.token || {};
     const contract = String(t.address_hash || t.address || '').toLowerCase();
     const decimals = t.decimals != null ? Number(t.decimals) : (t.type === 'ERC-20' ? 18 : 0);
-    const stable = STABLECOINS.ethereum[contract];
+    const stable = KNOWN_TOKEN_TICKERS.ethereum[contract];
     const priced = t.type === 'ERC-20' && hasRealMarket(t);
     balances.push({
       contract, symbol: t.symbol ?? null, name: t.name ?? null, decimals,
-      quantity: formatUnits(tb.value || '0', decimals),
+      quantity: formatUnits(liveOf.get(contract) ?? tb.value ?? '0', decimals),
       price_usd: t.exchange_rate ? Number(t.exchange_rate) : null,
       ticker: stable ?? (priced ? `TOKEN:ethereum:${contract}` : null),
     });
@@ -324,8 +387,134 @@ async function syncTron(w: Wallet, knownTx: Set<string>): Promise<{ balances: Ba
     const m = meta[contract];
     balances.push({
       contract, symbol: m.symbol, name: null, decimals: m.decimals,
-      quantity: formatUnits(raw, m.decimals), price_usd: null, ticker: STABLECOINS.tron[contract] ?? null,
+      quantity: formatUnits(raw, m.decimals), price_usd: null, ticker: KNOWN_TOKEN_TICKERS.tron[contract] ?? null,
     });
+  }
+  return { balances, txs };
+}
+
+// ---------------------------------------------------------------------------
+// Bitcoin via mempool.space
+// ---------------------------------------------------------------------------
+async function syncBitcoin(w: Wallet, knownTx: Set<string>): Promise<{ balances: Balance[]; txs: Tx[] }> {
+  const a = w.address;
+  const info = await getJson(`${MEMPOOL}/address/${a}`);
+  const sats = (info.chain_stats.funded_txo_sum - info.chain_stats.spent_txo_sum)
+    + (info.mempool_stats.funded_txo_sum - info.mempool_stats.spent_txo_sum);
+
+  // First page: mempool + newest 25 confirmed; then 25 at a time after the
+  // last confirmed txid seen.
+  const all: any[] = [];
+  let page = await getJson(`${MEMPOOL}/address/${a}/txs`);
+  for (let i = 0; i < MAX_PAGES; i++) {
+    all.push(...page);
+    const confirmed = page.filter((t: any) => t.status?.confirmed);
+    if (!page.length || page.every((t: any) => knownTx.has(t.txid)) || confirmed.length < 25) break;
+    page = await getJson(`${MEMPOOL}/address/${a}/txs/chain/${confirmed[confirmed.length - 1].txid}`);
+    await sleep(200);
+  }
+
+  const txs: Tx[] = [];
+  const seen = new Set<string>();
+  for (const t of all) {
+    if (seen.has(t.txid)) continue;
+    seen.add(t.txid);
+    const sent = t.vin.reduce((s: number, v: any) => s + (v.prevout?.scriptpubkey_address === a ? v.prevout.value : 0), 0);
+    const recv = t.vout.reduce((s: number, v: any) => s + (v.scriptpubkey_address === a ? v.value : 0), 0);
+    const base = {
+      tx_hash: t.txid, tx_time: new Date((t.status?.block_time ?? Date.now() / 1000) * 1000).toISOString(),
+      contract: '', symbol: 'BTC', decimals: 8, status: t.status?.confirmed ? 'confirmed' : 'unconfirmed',
+    };
+    const other = sent
+      ? t.vout.find((v: any) => v.scriptpubkey_address && v.scriptpubkey_address !== a)?.scriptpubkey_address
+      : t.vin.find((v: any) => v.prevout?.scriptpubkey_address && v.prevout.scriptpubkey_address !== a)?.prevout.scriptpubkey_address;
+    // net effect on the address = recv - sent; of that, the fee is its own row
+    const fee = sent ? t.fee : 0;
+    const net = recv - sent + fee;
+    if (net !== 0) txs.push({ ...base, seq: 0, kind: 'native', amount: formatUnits(net, 8), counterparty: other ?? null });
+    if (fee) txs.push({ ...base, seq: 0, kind: 'fee', amount: formatUnits(-fee, 8), counterparty: null });
+  }
+  return {
+    balances: [{ contract: '', symbol: 'BTC', name: 'Bitcoin', decimals: 8, quantity: formatUnits(sats, 8), price_usd: null, ticker: 'BTC' }],
+    txs,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Solana via the public mainnet RPC
+// ---------------------------------------------------------------------------
+async function solRpc(method: string, params: unknown[]): Promise<any> {
+  const d = await getJson(SOLANA_RPC, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+  });
+  if (d.error) throw new Error(`solana ${method}: ${d.error.message}`);
+  return d.result;
+}
+
+async function syncSolana(w: Wallet, knownTx: Set<string>): Promise<{ balances: Balance[]; txs: Tx[] }> {
+  const a = w.address;
+  const lamports = (await solRpc('getBalance', [a])).value;
+  const balances: Balance[] = [{ contract: '', symbol: 'SOL', name: 'Solana', decimals: 9, quantity: formatUnits(lamports, 9), price_usd: null, ticker: 'SOL' }];
+
+  // SPL balances (both token programs), summed per mint.
+  const byMint = new Map<string, { raw: bigint; decimals: number }>();
+  for (const programId of SPL_TOKEN_PROGRAMS) {
+    const accs = (await solRpc('getTokenAccountsByOwner', [a, { programId }, { encoding: 'jsonParsed' }])).value;
+    for (const acc of accs) {
+      const info = acc.account.data.parsed.info;
+      const cur = byMint.get(info.mint) ?? { raw: 0n, decimals: info.tokenAmount.decimals };
+      cur.raw += BigInt(info.tokenAmount.amount);
+      byMint.set(info.mint, cur);
+    }
+  }
+  for (const [mint, { raw, decimals }] of byMint) {
+    const ticker = KNOWN_TOKEN_TICKERS.solana[mint] ?? null;
+    balances.push({ contract: mint, symbol: ticker, name: null, decimals, quantity: formatUnits(raw, decimals), price_usd: null, ticker });
+  }
+
+  // History: newest-first signatures until an already-stored one, then each
+  // new transaction's own pre/post balances for this address.
+  const sigs: any[] = [];
+  let before: string | undefined;
+  for (let i = 0; i < MAX_PAGES; i++) {
+    const page = await solRpc('getSignaturesForAddress', [a, { limit: 1000, ...(before ? { before } : {}) }]);
+    const fresh = page.filter((s: any) => !knownTx.has(s.signature));
+    sigs.push(...fresh);
+    if (page.length < 1000 || fresh.length < page.length) break;
+    before = page[page.length - 1].signature;
+  }
+  const txs: Tx[] = [];
+  for (const s of sigs) {
+    const t = await solRpc('getTransaction', [s.signature, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }]);
+    await sleep(120);
+    if (!t) continue;
+    const keys = t.transaction.message.accountKeys.map((k: any) => (typeof k === 'string' ? k : k.pubkey));
+    const i = keys.indexOf(a);
+    const base = {
+      tx_hash: s.signature, tx_time: new Date((t.blockTime ?? Date.now() / 1000) * 1000).toISOString(),
+      status: t.meta?.err ? 'failed' : 'ok', counterparty: null as string | null,
+    };
+    const fee = keys[0] === a ? Number(t.meta?.fee || 0) : 0;
+    if (i >= 0) {
+      const net = Number(t.meta.postBalances[i]) - Number(t.meta.preBalances[i]) + fee;
+      if (net !== 0) txs.push({ ...base, seq: 0, kind: 'native', contract: '', symbol: 'SOL', decimals: 9, amount: formatUnits(net, 9) });
+      if (fee) txs.push({ ...base, seq: 0, kind: 'fee', contract: '', symbol: 'SOL', decimals: 9, amount: formatUnits(-fee, 9) });
+    }
+    const delta = new Map<string, { raw: bigint; decimals: number }>();
+    for (const [list, sign] of [[t.meta?.preTokenBalances || [], -1n], [t.meta?.postTokenBalances || [], 1n]] as const) {
+      for (const tb of list) {
+        if (tb.owner !== a) continue;
+        const cur = delta.get(tb.mint) ?? { raw: 0n, decimals: tb.uiTokenAmount.decimals };
+        cur.raw += sign * BigInt(tb.uiTokenAmount.amount);
+        delta.set(tb.mint, cur);
+      }
+    }
+    let seq = 0;
+    for (const [mint, { raw, decimals }] of delta) {
+      if (raw === 0n) continue;
+      txs.push({ ...base, seq: seq++, kind: 'token', contract: mint, symbol: KNOWN_TOKEN_TICKERS.solana[mint] ?? null, decimals, amount: formatUnits(raw, decimals) });
+    }
   }
   return { balances, txs };
 }
@@ -338,7 +527,11 @@ async function syncWallet(db: any, w: Wallet) {
   const known = new Set<string>((existing || []).map((r: any) => r.tx_hash));
 
   const warnings: string[] = [];
-  const { balances, txs } = w.chain === 'ethereum' ? await syncEthereum(w, known, warnings) : await syncTron(w, known);
+  const { balances, txs } =
+    w.chain === 'ethereum' ? await syncEthereum(w, known, warnings)
+    : w.chain === 'tron' ? await syncTron(w, known)
+    : w.chain === 'bitcoin' ? await syncBitcoin(w, known)
+    : await syncSolana(w, known);
 
   const now = new Date().toISOString();
   const { error: delErr } = await db.from('wallet_balances').delete().eq('wallet_id', w.id);

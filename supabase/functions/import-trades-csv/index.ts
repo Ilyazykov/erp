@@ -10,6 +10,11 @@
 //
 // CUSTOM_HOLDING_PRICE / CUSTOM_HOLDING_SETTINGS rows are historical price
 // points, not trades, and are skipped.
+//
+// Rows noted "trust" (Snowball's own Note column) are skipped too: they're
+// trades in Trust Wallet, whose balance and history now come straight from
+// the blockchain (sync-crypto-wallets) -- importing them as well would count
+// the same coins twice.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
@@ -119,6 +124,7 @@ Deno.serve(async (req) => {
 
     const rows = [];
     let skipped = 0;
+    let skippedTrust = 0;
     // Snowball can legitimately export two separate trades on the same day
     // for the same symbol with identical price/quantity/feeTax (e.g. two
     // separate 1-unit buys filled at the same price) -- those rows are
@@ -134,6 +140,7 @@ Deno.serve(async (req) => {
       if (SKIPPED_EVENTS.has(event)) { skipped++; continue; }
       const side = EVENT_TO_SIDE[event];
       if (!side) { skipped++; continue; }
+      if ((cells[idx.note] || '').trim().toLowerCase() === 'trust') { skippedTrust++; continue; }
 
       const trade_date = parseDate(cells[idx.date] || '');
       const quantity = parseNumber(cells[idx.quantity]);
@@ -195,6 +202,7 @@ Deno.serve(async (req) => {
       imported: insertedCount ?? rows.length,
       removed: deletedCount ?? 0,
       skipped,
+      skipped_trust: skippedTrust,
       total_rows: rows.length,
     }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (err) {

@@ -240,16 +240,14 @@
 
     <div class="section-title">Crypto wallets</div>
     <p class="note">Non-custodial wallets (Trust Wallet, …): balances and full transaction history come straight
-      from the blockchain — Ethereum (ETH and every token) via Blockscout, TRON (TRX, staked TRX included, and TRC-20
-      tokens) via TronGrid. The address is stored privately (only you can read it) and is only ever sent to the
-      explorers from the server. Synced daily and with the button below. Tokens without a market price (usually
-      airdropped spam) are kept but not counted in the portfolio.</p>
+      from the blockchain — Ethereum (ETH and every token), TRON (TRX incl. staked, TRC-20 tokens), Bitcoin and
+      Solana (SOL, SPL tokens). Paste any address — the network is recognised from the address itself. The address
+      is stored privately (only you can read it) and is only ever sent to the explorers from the server. Synced
+      daily and with the button below. Tokens without a market price (usually airdropped spam) are kept but not
+      counted in the portfolio.</p>
     <div class="form-row">
-      <select id="mp_wallet_chain">
-        <option value="ethereum">Ethereum (0x…)</option>
-        <option value="tron">TRON (T…)</option>
-      </select>
-      <input type="text" id="mp_wallet_address" placeholder="Wallet address" size="46" autocomplete="off" spellcheck="false">
+      <input type="text" id="mp_wallet_address" placeholder="Wallet address (0x…, T…, bc1…, Solana)" size="50" autocomplete="off" spellcheck="false">
+      <span class="note" id="mp_wallet_detected" style="margin-top:0"></span>
       <input type="text" id="mp_wallet_account" value="Trust" size="10" title="Broker row label in the tables">
       <button class="btn primary" id="mp_wallet_add">Add wallet</button>
       <button class="btn" id="mp_wallet_sync">Sync now</button>
@@ -1626,7 +1624,8 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
 
     if (kind === 'snowball') {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} rows, removed `
-        + `${result.removed} stale rows (${result.skipped} skipped, ${result.total_rows} parsed).`;
+        + `${result.removed} stale rows (${result.skipped} skipped, ${result.skipped_trust ?? 0} Trust Wallet rows left `
+        + `to the blockchain sync, ${result.total_rows} parsed).`;
       mpRenderHoldings();
       mpRenderPortfolioPies();
       mpRenderCashFlows();
@@ -2916,8 +2915,50 @@ async function mpRenderPortfolioPies() {
 // ---- Crypto wallets (non-custodial, synced from the blockchain) ----
 // The address itself is private (RLS on crypto_wallets) and only shown here,
 // shortened; sync-crypto-wallets does all explorer requests server-side.
-const MP_WALLET_ADDRESS_RE = { ethereum: /^0x[0-9a-fA-F]{40}$/, tron: /^T[1-9A-HJ-NP-Za-km-z]{33}$/ };
 const mpShortAddress = a => `${a.slice(0, 6)}…${a.slice(-4)}`;
+// Wallets as last rendered -- used to flag an address that's already added.
+let mpWallets = [];
+const mpFindWallet = (chain, address) => mpWallets.find(w => w.chain === chain
+  && (chain === 'ethereum' ? w.address.toLowerCase() === address.toLowerCase() : w.address === address));
+const MP_CHAIN_LABELS = { ethereum: 'Ethereum', tron: 'TRON', bitcoin: 'Bitcoin', solana: 'Solana' };
+
+// Which network an address belongs to, from its own format -- no picker:
+//   0x + 40 hex                          -> Ethereum
+//   bc1… (bech32)                         -> Bitcoin
+//   base58 decoding to 25 bytes with a valid double-SHA256 checksum:
+//     version 0x41 -> TRON, 0x00 / 0x05 -> Bitcoin (legacy / P2SH)
+//   base58 decoding to 32 bytes           -> Solana (an ed25519 public key)
+// Returns null for anything else.
+async function mpDetectChain(address) {
+  const a = address.trim();
+  if (/^0x[0-9a-fA-F]{40}$/.test(a)) return 'ethereum';
+  if (/^bc1[02-9ac-hj-np-z]{11,71}$/.test(a)) return 'bitcoin';
+  const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  if (!/^[1-9A-HJ-NP-Za-km-z]{25,44}$/.test(a)) return null;
+  let n = 0n;
+  for (const c of a) n = n * 58n + BigInt(B58.indexOf(c));
+  const bytes = [];
+  while (n > 0n) { bytes.unshift(Number(n % 256n)); n /= 256n; }
+  for (const c of a) { if (c === '1') bytes.unshift(0); else break; }
+  if (bytes.length === 32) return 'solana';
+  if (bytes.length !== 25) return null;
+  const body = new Uint8Array(bytes.slice(0, 21));
+  const h1 = new Uint8Array(await crypto.subtle.digest('SHA-256', body));
+  const h2 = new Uint8Array(await crypto.subtle.digest('SHA-256', h1));
+  if (!h2.slice(0, 4).every((b, i) => b === bytes[21 + i])) return null;
+  if (bytes[0] === 0x41) return 'tron';
+  if (bytes[0] === 0x00 || bytes[0] === 0x05) return 'bitcoin';
+  return null;
+}
+
+document.getElementById('mp_wallet_address').addEventListener('input', async e => {
+  const hint = document.getElementById('mp_wallet_detected');
+  const value = e.target.value.trim();
+  if (!value) { hint.textContent = ''; return; }
+  const chain = await mpDetectChain(value);
+  hint.textContent = !chain ? 'not a recognised address'
+    : `→ ${MP_CHAIN_LABELS[chain]}${mpFindWallet(chain, value) ? ' · already added' : ''}`;
+});
 
 function mpFormatQty(q) {
   const n = Number(q);
@@ -2930,6 +2971,7 @@ async function mpRenderWallets() {
   const { data: wallets, error } = await sb.from('crypto_wallets')
     .select('id, chain, address, account, last_synced_at, last_sync_error').order('created_at');
   if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
+  mpWallets = wallets;
   if (!wallets.length) { wrap.innerHTML = '<p class="empty-note">No wallets yet — add an address above.</p>'; return; }
 
   const { data: balances } = await sb.from('wallet_balances')
@@ -2945,12 +2987,12 @@ async function mpRenderWallets() {
     .order('tx_time', { ascending: false }).limit(30);
   const walletLabel = id => {
     const w = wallets.find(x => x.id === id);
-    return w ? `${w.account} · ${w.chain}` : '';
+    return w ? `${w.account} · ${MP_CHAIN_LABELS[w.chain] || w.chain}` : '';
   };
 
   const walletRows = wallets.map(w => `<tr>
     <td class="ticker">${mpEscapeHtml(w.account)}</td>
-    <td>${mpEscapeHtml(w.chain)}</td>
+    <td>${mpEscapeHtml(MP_CHAIN_LABELS[w.chain] || w.chain)}</td>
     <td><code>${mpEscapeHtml(mpShortAddress(w.address))}</code></td>
     <td>${w.last_synced_at ? new Date(w.last_synced_at).toLocaleString() : '<span class="muted">never</span>'}</td>
     <td>${w.last_sync_error ? `<span class="neg">${mpEscapeHtml(w.last_sync_error)}</span>` : '<span class="muted">ok</span>'}</td>
@@ -3012,11 +3054,11 @@ function mpRefreshAfterWalletChange() {
   mpRenderBrokerAssetClass();
 }
 
-async function mpSyncWallets() {
+async function mpSyncWallets(prefix = '') {
   const statusEl = document.getElementById('mp_wallet_status');
   const { data: { session } } = await sb.auth.getSession();
   if (!session) { statusEl.textContent = 'Sign in first.'; return; }
-  statusEl.textContent = 'Syncing with the blockchain… (the first sync of a wallet walks its whole history and can take a minute or two)';
+  statusEl.textContent = `${prefix ? prefix + ' ' : ''}Syncing with the blockchain… (the first sync of a wallet walks its whole history and can take a minute or two)`;
   try {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/sync-crypto-wallets`, {
       method: 'POST',
@@ -3025,7 +3067,7 @@ async function mpSyncWallets() {
     });
     const result = await res.json();
     if (!res.ok) { statusEl.textContent = `Error: ${result.error || res.statusText}`; return; }
-    statusEl.textContent = result.results.map(r => r.error
+    statusEl.textContent = (prefix ? prefix + ' ' : '') + result.results.map(r => r.error
       ? `${r.chain}: error — ${r.error}`
       : `${r.chain}: ${r.assets} assets (${r.priced} counted), ${r.new_transactions} new transactions`
         + (r.warnings && r.warnings.length ? ` — ${r.warnings.join('; ')}` : '')).join(' · ') || 'No wallets to sync.';
@@ -3037,13 +3079,15 @@ async function mpSyncWallets() {
 
 document.getElementById('mp_wallet_add').addEventListener('click', async () => {
   const statusEl = document.getElementById('mp_wallet_status');
-  const chain = document.getElementById('mp_wallet_chain').value;
   const address = document.getElementById('mp_wallet_address').value.trim();
   const account = document.getElementById('mp_wallet_account').value.trim() || 'Trust';
-  if (!MP_WALLET_ADDRESS_RE[chain].test(address)) {
-    statusEl.textContent = chain === 'ethereum'
-      ? 'That doesn\'t look like an Ethereum address (0x followed by 40 hex characters).'
-      : 'That doesn\'t look like a TRON address (starts with T, 34 characters).';
+  const chain = await mpDetectChain(address);
+  if (!chain) {
+    statusEl.textContent = 'Not a recognised Ethereum (0x…), TRON (T…), Bitcoin (bc1…/1…/3…) or Solana address.';
+    return;
+  }
+  if (mpFindWallet(chain, address)) {
+    statusEl.textContent = `This ${MP_CHAIN_LABELS[chain]} wallet (${mpShortAddress(address)}) is already added.`;
     return;
   }
   const { data: { session } } = await sb.auth.getSession();
@@ -3051,9 +3095,13 @@ document.getElementById('mp_wallet_add').addEventListener('click', async () => {
   const { error } = await sb.from('crypto_wallets').insert({ user_id: session.user.id, chain, address, account });
   if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
   document.getElementById('mp_wallet_address').value = '';
-  await mpSyncWallets();
+  document.getElementById('mp_wallet_detected').textContent = '';
+  await mpRenderWallets();  // show it in the list right away, before the sync finishes
+  const added = `Added ${MP_CHAIN_LABELS[chain]} wallet ${mpShortAddress(address)}.`;
+  statusEl.textContent = `${added} Syncing with the blockchain…`;
+  await mpSyncWallets(added);
 });
-document.getElementById('mp_wallet_sync').addEventListener('click', mpSyncWallets);
+document.getElementById('mp_wallet_sync').addEventListener('click', () => mpSyncWallets());
 
 function mpUpdateAuthUi(session) {
   const btn = document.getElementById('btn_login');
