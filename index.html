@@ -1881,8 +1881,12 @@ const MP_CURRENCY_COLUMN_ORDER = [
 // matching the user's own tracking spreadsheet (Акции, Облигации,
 // Вклады, Кэш, Золото, Крипта) rather than alphabetical.
 const MP_ASSET_CLASS_COLUMN_ORDER = ['stock', 'bond', 'deposit', 'liquid', 'cash', 'credit', 'gold', 'crypto'];
-// Column headers that differ from the raw instrument_type value.
-const MP_ASSET_CLASS_LABELS = { liquid: 'liquid assets' };
+// Column headers for the broker x asset-class table (raw instrument_type
+// value -> display label).
+const MP_ASSET_CLASS_LABELS = {
+  stock: '📈 stock', bond: '🏛️ bond', deposit: '🏦 deposit', liquid: '💧 liquid assets',
+  cash: '💵 cash', credit: '💳 credit', gold: '🥇 gold', crypto: '₿ crypto',
+};
 
 // Country flag shown next to each ISO currency's column header in the
 // broker x currency table, matching the user's own tracking spreadsheet.
