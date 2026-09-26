@@ -2675,7 +2675,7 @@ async function mpRenderBondByType() {
   const cashRows = (await mpFetchCashRows(fx)).filter(r => r.instrument_type === 'cash');
   const rows = [...await mpSplitFundsCash(data), ...cashRows].filter(r =>
     MP_RU_ACCOUNTS.has(r.account) || (r.account === '(unspecified)' && r.infra_region === 'ru'));
-  // asset type (rows) x currency (columns, in that currency) + USD total and share.
+  // asset type (rows) x currency (columns, in that currency) + share (of the USD-converted total).
   const ccys = Object.keys(MP_RU_INFRA_CURRENCIES);
   const usd = {};
   for (const r of rows) {
@@ -2693,13 +2693,13 @@ async function mpRenderBondByType() {
   const pct = v => `${(v / total * 100).toFixed(1)}%`;
   wrap.innerHTML = `<table class="data-table" style="width:auto;min-width:0">
     <thead><tr><th class="corner"></th>${cols.map(c => `<th>${c} ${MP_RU_INFRA_CURRENCIES[c]}</th>`).join('')}
-      <th>USD</th><th class="corner">Share</th></tr></thead>
+      <th class="corner">Share</th></tr></thead>
     <tbody>${types.map(t => `<tr><td class="ticker">${MP_RU_INFRA_LABELS[t]}</td>
       ${cols.map(c => `<td>${native(usd[`${t} ${c}`] || 0, c)}</td>`).join('')}
-      <td>${mpFormatUsd(rowUsd(t))}</td><td>${pct(rowUsd(t))}</td></tr>`).join('')}
+      <td>${pct(rowUsd(t))}</td></tr>`).join('')}
     <tr class="total-row"><td class="ticker"><b>Total</b></td>
       ${cols.map(c => `<td><b>${native(colUsd(c), c)}</b></td>`).join('')}
-      <td><b>${mpFormatUsd(total)}</b></td><td></td></tr></tbody></table>`;
+      <td></td></tr></tbody></table>`;
 }
 
 // ---- Portfolio-composition pie charts (embedded in the existing tabs) ----
