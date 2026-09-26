@@ -2227,7 +2227,7 @@ async function mpRenderCashFlows() {
 // currency/ticker not listed here (a new one showing up in the data)
 // falls back after these, alphabetically.
 const MP_CURRENCY_COLUMN_ORDER = [
-  'USD', 'EUR', 'GBP', 'RUB', 'TRY', 'RSD', 'CNY', 'AED', 'HUF', 'ILS',
+  'USD', 'EUR', 'GBP', 'RUB', 'TRY', 'RSD', 'CNY', 'Others',
   'XAU', 'BTC', 'ETH', 'SOL', 'GRAM', 'TAO', 'TRX', 'DOGE', 'Altcoins',
 ];
 
@@ -2330,7 +2330,8 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
   // (fxByCurrency is only passed for the broker x currency table) -- the
   // broker x asset-class table's columns are asset classes, so
   // mpEscapeHtml(c) is used unflagged there.
-  const headerLabel = c => fxByCurrency && c in MP_CURRENCY_FLAGS
+  const headerLabel = c => fxByCurrency && c === 'Others' ? 'others currency 🌍'
+    : fxByCurrency && c in MP_CURRENCY_FLAGS
     ? `${mpEscapeHtml(c)} ${MP_CURRENCY_FLAGS[c]}` : mpEscapeHtml(fxByCurrency ? c : MP_ASSET_CLASS_LABELS[c] || c);
   // Broker flags identify the broker itself, not its columns, so unlike
   // headerLabel above they apply regardless of what the columns represent.
@@ -2550,8 +2551,43 @@ async function mpRenderBrokerCurrency() {
   }
   const cashRows = await mpFetchCashRows(fxByCurrency);
   const realEstateRows = await mpFetchRealEstateRows(fxByCurrency);
-  const rows = [...data, ...cashRows, ...realEstateRows].map(r => ({ ...r, currency: mpBrokerCurrencyUnit(r) }));
+  const split = await mpSplitFundsByCurrency(data);
+  const rows = [...split, ...cashRows, ...realEstateRows].map(r => {
+    const unit = mpBrokerCurrencyUnit(r);
+    // Other European currencies (CHF, DKK, SEK, ...) count as EUR; fiat
+    // outside the main columns (JPY, AED, ...) -> one "others" column, in USD.
+    const fiat = !MP_UNIT_QUOTED_ASSET_CLASSES.has(r.asset_class) && unit !== MP_ALTCOINS_COLUMN;
+    const ccy = fiat && MP_EUROPEAN_AS_EUR.has(unit) ? 'EUR' : unit;
+    return { ...r, currency: fiat && !MP_MAIN_CURRENCIES.has(ccy) ? MP_OTHER_CURRENCIES_COLUMN : ccy };
+  });
   mpRenderBrokerPivot(wrap, rows, 'currency', 'No holdings yet — import trades above.', fxByCurrency);
+}
+
+// Funds whose value is split across currency columns by what they hold
+// (fund_currency_weights: the trading currency of each holding) instead of
+// sitting whole in the fund's own quote currency.
+const MP_SPLIT_BY_CURRENCY_FUNDS = new Set(['VWRA', 'VWCE']);
+const MP_MAIN_CURRENCIES = new Set(['USD', 'EUR', 'GBP', 'RUB', 'TRY', 'RSD', 'CNY']);
+const MP_OTHER_CURRENCIES_COLUMN = 'Others';
+// European currencies other than GBP (and RSD / TRY, which have columns of their own).
+const MP_EUROPEAN_AS_EUR = new Set(['CHF', 'DKK', 'SEK', 'NOK', 'PLN', 'CZK', 'HUF', 'RON', 'BGN', 'ISK', 'HRK']);
+async function mpSplitFundsByCurrency(rows) {
+  if (!rows.some(r => MP_SPLIT_BY_CURRENCY_FUNDS.has(r.ticker))) return rows;
+  const { data: weights, error } = await sb.from('fund_currency_weights').select('*')
+    .in('fund', [...MP_SPLIT_BY_CURRENCY_FUNDS]);
+  if (error || !weights?.length) return rows;
+  const byFund = {};
+  for (const w of weights) (byFund[w.fund] ??= []).push(w);
+  return rows.flatMap(r => {
+    const ws = MP_SPLIT_BY_CURRENCY_FUNDS.has(r.ticker) && r.value_usd !== null ? byFund[r.ticker] : null;
+    if (!ws) return [r];
+    const total = ws.reduce((s, w) => s + Number(w.weight), 0);
+    // The fund's cash / derivatives line ('Various') stays in the fund's own currency.
+    return ws.map(w => {
+      const ccy = w.currency === 'Various' ? (r.underlying_currency || r.currency) : w.currency;
+      return { ...r, underlying_currency: ccy, currency: ccy, value_usd: r.value_usd * Number(w.weight) / total };
+    });
+  });
 }
 
 async function mpRenderBrokerAssetClass() {

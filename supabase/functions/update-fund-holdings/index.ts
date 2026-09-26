@@ -43,7 +43,8 @@
 // via OpenFIGI) and that country's currency.
 // Shares the user holds directly (market_prices rows of instrument_type
 // 'stock' that aren't funds) are linked by ISIN too -- MOEX ISS for MOEX
-// tickers, the issuers' lists for US ones -- via securities.market_ticker.
+// tickers, the issuers' lists for US ones -- via securities.market_ticker;
+// one in no fund's list gets a row of its own ('TICKER:<ticker>', no ISIN).
 //
 // Each fund's rows are replaced as a whole (a fund that fails to load
 // keeps its previous list). Called by pg_cron on the 2nd of each month
@@ -291,7 +292,9 @@ async function openFigi(isins: string[]): Promise<Map<string, { ticker: string; 
 const CODE_BY_NAME = new Map<string, string>();
 for (let a = 65; a <= 90; a++) for (let b = 65; b <= 90; b++) {
   const code = String.fromCharCode(a, b);
-  try { const n = regionName.of(code); if (n && n !== code) CODE_BY_NAME.set(n.toLowerCase(), code); } catch { /* not a region */ }
+  // First code wins: deprecated ones later in the alphabet (FX "France",
+  // UK "United Kingdom") mustn't replace FR / GB.
+  try { const n = regionName.of(code)?.toLowerCase(); if (n && n !== code.toLowerCase() && !CODE_BY_NAME.has(n)) CODE_BY_NAME.set(n, code); } catch { /* not a region */ }
 }
 for (const [n, c] of Object.entries({
   'korea (south)': 'KR', 'south korea': 'KR', 'russian federation': 'RU', 'czech republic': 'CZ', turkey: 'TR',
@@ -411,15 +414,17 @@ Deno.serve(async () => {
     }
 
     // 3. Shares held directly -> their security, by ISIN.
-    const { data: held } = await db.from('market_prices').select('ticker, source').eq('instrument_type', 'stock');
+    const { data: held } = await db.from('market_prices').select('ticker, source, currency').eq('instrument_type', 'stock');
     const byTicker = new Map<string, Security>();
+    // Tickers compared without punctuation: Yahoo's "BRK-B" is iShares' "BRKB".
+    const bare = (t: string) => t.replace(/[^A-Z0-9]/gi, '').toUpperCase();
     for (const s of securities.values()) {
       if (!s.ticker) continue;
-      const prev = byTicker.get(s.ticker);
-      if (!prev || (s.isin!.startsWith('US') && !prev.isin!.startsWith('US'))) byTicker.set(s.ticker, s);
+      const prev = byTicker.get(bare(s.ticker));
+      if (!prev || (s.isin!.startsWith('US') && !prev.isin!.startsWith('US'))) byTicker.set(bare(s.ticker), s);
     }
     const unlinked: string[] = [];
-    for (const { ticker, source } of (held ?? []) as { ticker: string; source: string }[]) {
+    for (const { ticker, source, currency } of (held ?? []) as { ticker: string; source: string; currency: string | null }[]) {
       if (FUNDS.has(ticker) || ticker.includes(':')) continue;
       let s: Security | undefined;
       if (/moex/i.test(source || '')) {
@@ -432,8 +437,18 @@ Deno.serve(async () => {
           securities.set(m.isin, s);
         }
       } else {
-        const hit = byTicker.get(ticker);
+        const hit = byTicker.get(bare(ticker));
         s = hit && !hit.isin!.startsWith('RU') ? hit : undefined;
+        // In none of the funds' lists (SNAP): a row of its own, no ISIN, the
+        // country its trading currency points to.
+        if (!s) {
+          const ccy = currency && /^[A-Z]{3}$/.test(currency) ? currency : 'USD';
+          const code = Object.entries(CCY).find(([c, v]) => v === ccy && !EUR.includes(c))?.[0] ?? (ccy === 'EUR' ? 'EU' : 'XX');
+          s = { ...blank(`TICKER:${ticker}`, ticker), isin: null, ticker, country_code: code,
+            country: code === 'XX' ? 'Unknown' : regionName.of(code) ?? code, currency: ccy, asset_class: 'Equity', _rank: 0 };
+          securities.set(s.id, s);
+          unlinked.push(ticker);
+        }
       }
       if (s) s.market_ticker = ticker; else unlinked.push(ticker);
     }
@@ -476,7 +491,7 @@ Deno.serve(async () => {
     result.TRND = { skipped: 'no fetchable source; the list seeded by migration 027 (as of 2026-02-27) is kept' };
     result.securities = secRows.length;
     result.direct_linked = secRows.filter(s => s.market_ticker).map(s => `${s.market_ticker}=${s.id}`);
-    result.direct_unlinked = unlinked;
+    result.direct_without_isin = unlinked;
     result.resolved_via_openfigi = figi.size;
     result.without_ticker = tickerless;
     return json(result);

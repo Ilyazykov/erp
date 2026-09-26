@@ -21,7 +21,7 @@
 -- replaces a fund's rows with its issuer's latest list.
 
 create table public.securities (
-  id text primary key,             -- ISIN, or 'OTHER'
+  id text primary key,             -- ISIN; 'OTHER'; 'TICKER:<ticker>' for a directly held share in no fund's list
   isin text,
   ticker text not null,            -- exchange ticker (MOEX secid, US ticker, home-exchange ticker; the ISIN only if none is found)
   market_ticker text unique,       -- market_prices.ticker of a directly held security
