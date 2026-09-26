@@ -274,7 +274,7 @@
     <div class="section-title">Equities by index</div>
     <div id="mp_equity_index_wrap"></div>
 
-    <div class="section-title">Bonds by type</div>
+    <div class="section-title">Russian infrastructure 🇷🇺</div>
     <div id="mp_bond_subtype_wrap"></div>
 
     <div class="section-title">Current holdings</div>
@@ -2635,7 +2635,7 @@ async function mpSplitFundsCash(rows) {
 // Builds a single-column-of-buckets breakdown table (category name -> USD
 // value) -- shared by mpRenderEquityByIndex and mpRenderBondByType, which
 // differ only in which rows they keep and how each row maps to a bucket.
-function mpRenderBucketTable(wrap, rows, bucketOf, emptyMessage) {
+function mpRenderBucketTable(wrap, rows, bucketOf, emptyMessage, order = null) {
   if (!rows.length) { wrap.innerHTML = `<p class="empty-note">${emptyMessage}</p>`; return; }
   const priced = rows.filter(r => r.value_usd !== null);
   const totals = {};
@@ -2643,7 +2643,8 @@ function mpRenderBucketTable(wrap, rows, bucketOf, emptyMessage) {
     const bucket = bucketOf(r);
     totals[bucket] = (totals[bucket] || 0) + r.value_usd;
   }
-  const buckets = Object.keys(totals).sort();
+  const rank = b => (order && order.includes(b) ? order.indexOf(b) : Infinity);
+  const buckets = Object.keys(totals).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
   const grandTotal = buckets.reduce((s, b) => s + totals[b], 0);
   const anyMissing = rows.some(r => r.value_usd === null);
   wrap.innerHTML = `<table class="data-table"><thead><tr>
@@ -2703,12 +2704,30 @@ async function mpRenderLookThrough() {
     </div>`;
 }
 
+// What sits in Russian infrastructure -- Russian banks and brokers (and
+// MOEX securities with no account recorded) -- by asset type, in roubles
+// or yuan (CNY-denominated MOEX funds and bonds, yuan accounts). Other
+// currencies there (T-Bank's few dollars / euros) and credit-card debt are
+// left out. TRND's repo counts as liquid assets (mpSplitFundsCash).
+const MP_RU_ACCOUNTS = new Set(['Sber', 'T-Bank', 'Alfa', 'Ozon Bank', 'Yandex Bank', 'Finuslugi']);
+const MP_RU_INFRA_TYPES = ['stock', 'deposit', 'bond', 'liquid', 'cash'];
+const MP_RU_INFRA_LABELS = { stock: 'stock', deposit: 'deposit', bond: 'bonds', liquid: 'liquid assets', cash: 'cash' };
+const MP_RU_INFRA_CURRENCIES = { RUB: '🇷🇺', CNY: '🇨🇳' };
 async function mpRenderBondByType() {
   const wrap = document.getElementById('mp_bond_subtype_wrap');
-  const { data, error } = await sb.from('portfolio_value_usd').select('*');
+  const { data, error } = await sb.from('portfolio_value_usd_by_account').select('*');
   if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
-  const bonds = data.filter(r => ['bond', 'deposit', 'liquid'].includes(r.instrument_type));
-  mpRenderBucketTable(wrap, bonds, mpBondSubtype, 'No bond/deposit holdings yet.');
+  const fx = await mpFetchFxByCurrency(['USD', 'RUB', 'CNY']);
+  const cashRows = (await mpFetchCashRows(fx)).filter(r => r.instrument_type === 'cash');
+  const rows = [...await mpSplitFundsCash(data), ...cashRows].filter(r =>
+    MP_RU_ACCOUNTS.has(r.account) || (r.account === '(unspecified)' && r.infra_region === 'ru'));
+  const bucket = r => {
+    const ccy = r.underlying_currency || r.currency;
+    return MP_RU_INFRA_TYPES.includes(r.instrument_type) && ccy in MP_RU_INFRA_CURRENCIES
+      ? `${MP_RU_INFRA_LABELS[r.instrument_type]} ${MP_RU_INFRA_CURRENCIES[ccy]}` : null;
+  };
+  const order = Object.values(MP_RU_INFRA_CURRENCIES).flatMap(f => MP_RU_INFRA_TYPES.map(t => `${MP_RU_INFRA_LABELS[t]} ${f}`));
+  mpRenderBucketTable(wrap, rows.filter(r => bucket(r)), bucket, 'Nothing in Russian banks or brokers.', order);
 }
 
 // ---- Portfolio-composition pie charts (embedded in the existing tabs) ----
@@ -2742,17 +2761,6 @@ EQUITY_INDEX_BY_TICKER.VUAA = 'S&P500';   // Vanguard S&P 500 UCITS ETF
 EQUITY_INDEX_BY_TICKER.VWCE = 'STOXX600'; // Vanguard FTSE All-World -- closest listed proxy available today
 EQUITY_INDEX_BY_TICKER.VWRA = 'Акции мира';
 
-// Ticker -> bond/fixed-income sub-type, for the "Bonds by type" summary
-// table. Deliberately incomplete -- falls back to a generic bucket derived
-// from infra_region/asset_class for anything not explicitly listed here.
-const BOND_SUBTYPE_BY_TICKER = { SBBY: 'Облигации 🇨🇳', TLCB: 'Облигации 🇨🇳' };
-function mpBondSubtype(row) {
-  if (BOND_SUBTYPE_BY_TICKER[row.ticker]) return BOND_SUBTYPE_BY_TICKER[row.ticker];
-  if (row.asset_class === 'deposit' || row.asset_class === 'savings_account' || row.asset_class === 'money_market_fund') {
-    return row.underlying_currency === 'RUB' ? 'Вклады 🇷🇺' : 'Вклады';
-  }
-  return row.infra_region === 'ru' ? 'Облигации 🇷🇺' : 'Облигации';
-}
 
 // Same "bulge past the dotted circle = overweight, dip short of it =
 // underweight" donut as targetWeights/usTargetWeights/allocTarget above,
