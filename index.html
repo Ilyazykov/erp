@@ -3850,8 +3850,18 @@ function mpUpdateAuthUi(session) {
   if (el) el.addEventListener('change', () => { mpRenderPortfolioPies(); });
 });
 
-sb.auth.getSession().then(({ data: { session } }) => mpUpdateAuthUi(session));
-sb.auth.onAuthStateChange((_event, session) => mpUpdateAuthUi(session));
+// Redraw only when who's signed in actually changes: Supabase re-fires
+// SIGNED_IN / TOKEN_REFRESHED whenever the tab regains focus (switching
+// desktops / windows), which would reload every table and chart each time.
+let mpAuthUserId;
+function mpOnAuth(session) {
+  const id = session?.user?.id ?? null;
+  if (id === mpAuthUserId) return;
+  mpAuthUserId = id;
+  mpUpdateAuthUi(session);
+}
+sb.auth.getSession().then(({ data: { session } }) => mpOnAuth(session));
+sb.auth.onAuthStateChange((_event, session) => mpOnAuth(session));
 </script>
 </body>
 </html>
