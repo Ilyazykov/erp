@@ -222,8 +222,8 @@
     <div class="section-title">Import CSV</div>
     <p class="note">Upload a broker trades CSV (Snowball), a Revolut account statement, a Revolut Flexible
       Cash Funds statement, a Revolut Instant Access Savings statement, a Wise balance statement (CSV, one per
-      currency), a Revolut crypto account statement (CSV), an IBKR Activity Statement (CSV, one per period), a Freedom24 cash-movement report
-      (tradernet_table.xlsx, from the account's opening), a Bank of Cyprus transaction
+      currency), a Revolut brokerage (Invest) statement (CSV), a Revolut crypto account statement (CSV), an IBKR Activity Statement (CSV, one per period), a Freedom24 cash-movement report
+      (tradernet_table.xlsx, from the account's opening) and broker report (JSON), a Bank of Cyprus transaction
       history export, a Ziraat Bank account activity export (.xlsx), or this project's own combined
       Raiffeisen Bank Serbia transaction CSV, its generic bank CSV (Yandex Bank, T-Bank), a Bybit transaction log
       (Data Export → Transaction Log → Account Change Details: upload each Funding and Unified Trading file), or a
@@ -232,7 +232,7 @@
       (built from the Wallet app's history) — the file type is detected automatically from its header
       row or extension.</p>
     <div class="form-row">
-      <input type="file" id="mp_any_csv_file" accept=".csv,.xlsx">
+      <input type="file" id="mp_any_csv_file" accept=".csv,.xlsx,.json">
       <button class="btn primary" id="mp_any_csv_upload">Upload</button>
     </div>
     <p class="empty-note" id="mp_any_csv_status"></p>
@@ -1582,6 +1582,10 @@ document.getElementById('btn_login').addEventListener('click', async () => {
 //     Name,Field Value"
 //   - Wise balance statement (one file per currency balance) starts with
 //     "\"TransferWise ID\",Date,\"Date Time\",Amount,Currency,..."
+//   - Freedom24 broker report downloaded as JSON (Кабинет -> Отчеты
+//     брокера): a JSON object whose companyName is "Freedom24"
+//   - Revolut brokerage (Invest) statement starts with "Date,Ticker,Type,
+//     Quantity,Price per share,Total Amount,Currency,FX Rate"
 //   - Revolut crypto account statement starts with "Symbol,Type,Quantity,
 //     Price,Value,Fees,Date"
 //   - Binance "Export Transaction Records" starts with "User ID,Time,Account,
@@ -1610,6 +1614,8 @@ function mpDetectCsvKind(headerLine, fullText) {
   if (/^\uFEFF?Statement,Header,Field Name,Field Value/i.test(h)) return 'ibkr';
   if (/^\uFEFF?User ID,Time,Account,Operation,Coin,Change,Remark/i.test(h)) return 'binance';
   if (/^\uFEFF?Symbol,Type,Quantity,Price,Value,Fees,Date/i.test(h)) return 'revolut_crypto';
+  if (/^\uFEFF?\{/.test(h) && /"companyName"\s*:\s*"Freedom24"/.test(fullText)) return 'freedom24_json';
+  if (/^\uFEFF?Date,Ticker,Type,Quantity,Price per share,Total Amount,Currency/i.test(h)) return 'revolut_invest';
   if (/^\uFEFF?Time,Coin,Network,Amount,(Fee,)?Address,TXID,Status/i.test(h)) return 'binance_aux';
   return null;
 }
@@ -1666,9 +1672,11 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
       telegram_wallet: { fn: 'import-telegram-wallet', label: 'Telegram Wallet history' },
       binance: { fn: 'import-binance', label: 'Binance transaction export' },
       revolut_crypto: { fn: 'import-revolut-crypto', label: 'Revolut crypto statement' },
+      revolut_invest: { fn: 'import-revolut-invest', label: 'Revolut brokerage (Invest) statement' },
       wise: { fn: 'import-wise-statement', label: 'Wise balance statement' },
       ibkr: { fn: 'import-ibkr-statement', label: 'IBKR Activity Statement' },
       freedom24_xlsx: { fn: 'import-freedom24-statement', label: 'Freedom24 cash-movement report' },
+      freedom24_json: { fn: 'import-freedom24-statement', label: 'Freedom24 broker report (JSON)' },
     };
     const { fn, label } = endpoints[kind];
     // Binance writes times in the zone named in the file name, e.g.
@@ -1731,6 +1739,14 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
         : `Detected: ${label}. Imported ${result.rows} rows (${result.total_rows_stored} stored in total).${skipped} `
           + `Crypto.com balance now: ${bal}.`;
       mpRefreshAfterWalletChange();
+    } else if (kind === 'freedom24_json') {
+      statusEl.textContent = `Detected: ${label}. Shares credited without money: `
+        + `${(result.securities_credited || []).join(', ') || 'none'}`
+        + `${result.removed_snowball_duplicates ? ` (replacing ${result.removed_snowball_duplicates} Snowball rows)` : ''}.`;
+      mpRenderHoldings();
+      mpRenderPortfolioPies();
+      mpRenderBrokerCurrency();
+      mpRenderBrokerAssetClass();
     } else if (kind === 'freedom24_xlsx') {
       const cash = Object.entries(result.cash || {}).map(([c, q]) => `${c} ${Number(q).toFixed(2)}`).join(', ');
       statusEl.textContent = `Detected: ${label}. Imported ${result.trades} trades, ${result.dividends} dividends and `
@@ -1762,6 +1778,19 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
           + `(${result.total_rows} parsed). Wise ${result.currency} balance: ${result.balance}.`;
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
+    } else if (kind === 'revolut_invest') {
+      const h = Object.entries(result.holdings || {}).map(([c, q]) => `${c} ${q}`).join(', ') || 'nothing';
+      const cash = Object.entries(result.cash || {}).map(([c, q]) => `${c} ${Number(q).toFixed(2)}`).join(', ') || 'none';
+      statusEl.textContent = `Detected: ${label}. Imported ${result.trades} trades, ${result.dividends} dividends and `
+        + `${result.cash_rows} cash movements`
+        + `${result.removed_snowball_duplicates ? ` (replacing ${result.removed_snowball_duplicates} Snowball rows)` : ''}. `
+        + `Revolut Invest now: ${h}; cash ${cash}.`;
+      mpRenderHoldings();
+      mpRenderPortfolioPies();
+      mpRenderCashFlows();
+      mpRenderBrokerCurrency();
+      mpRenderBrokerAssetClass();
+      mpRenderEquityByIndex();
     } else if (kind === 'revolut_crypto') {
       const h = Object.entries(result.holdings || {}).map(([c, q]) => `${c} ${q}`).join(', ') || 'nothing';
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} crypto operations`

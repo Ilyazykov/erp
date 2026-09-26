@@ -19,8 +19,13 @@
 //       commission row naming that trade ("(Trade ID ...)"), in EUR;
 //     - "Дивиденды": side 'dividend', quantity = the amount, price = "Per
 //       security" -- Snowball's DIVIDEND shape.
-// Shares the broker gave away (SNAP, WMT at the opening) have no trade here
-// -- they stay as recorded in Snowball. The statement has priority over
+// Shares credited without money (the welcome gift SNAP, WMT) aren't in the
+// cash report at all. They come from the broker report instead (Кабинет ->
+// Отчеты брокера, downloaded as JSON: <client>_<from>_<to>_all.json): its
+// securities_in_outs rows are written as stock_as_dividend at price 0
+// (external_id 'in_out:<id>'); nothing else is taken from it, the cash
+// report already has the trades, money and dividends. The statement has
+// priority over
 // Snowball's rows of the same operations (_shared/statement_priority.ts):
 // those are deleted, and import-trades-csv leaves them out of later uploads.
 
@@ -38,6 +43,30 @@ const fromSerial = (v: unknown) => {
   const n = Number(v);
   return Number.isFinite(n) ? new Date(Math.round((n - 25569) * 86_400_000 / 1000) * 1000).toISOString() : null;
 };
+
+// Broker report JSON -> shares credited / debited without money.
+function parseBrokerReport(text: string) {
+  let d: any;
+  try { d = JSON.parse(text); } catch { return null; }
+  if (!d || !Array.isArray(d.securities_in_outs) || !d.plainAccountInfoData) return null;
+  const trades = [];
+  let skipped = 0;
+  for (const x of d.securities_in_outs) {
+    const qty = Number(x.quantity);
+    const m = String(x.ticker || '').match(/^([A-Z0-9.\-]+?)\.([A-Z]+)$/);
+    const date = String(x.datetime || '').slice(0, 10);
+    if (!m || !qty || !/^\d{4}-\d{2}-\d{2}$/.test(date) || Number(x.reverted)) { skipped++; continue; }
+    if (qty < 0 || !/award|gift|bonus|promo/i.test(`${x.type} ${x.comment}`)) { skipped++; continue; }
+    trades.push({
+      ticker: m[1], side: 'stock_as_dividend', quantity: qty, price: 0, trade_date: date,
+      currency: x.balance_currency || 'USD', fee_tax: null, fee_currency: null,
+      exchange: EXCHANGE_BY_MARKET[m[2]] ?? null,
+      note: `${x.type}:${String(x.comment || '').trim()} (market value ${x.market_value} ${x.balance_currency || ''})`.slice(0, 500),
+      external_id: `in_out:${x.id}`,
+    });
+  }
+  return { trades, skipped };
+}
 
 function parse(bytes: Uint8Array) {
   const wb = XLSX.read(bytes, { type: 'array' });
@@ -112,7 +141,20 @@ Deno.serve(async (req) => {
     const { data: { user }, error: userErr } = await supabase.auth.getUser();
     if (userErr || !user) return json({ error: 'Not authenticated' }, 401);
 
-    const parsed = parse(new Uint8Array(await req.arrayBuffer()));
+    const bytes = new Uint8Array(await req.arrayBuffer());
+    if (bytes[0] === 0x7b) {   // "{" -- the broker report JSON
+      const report = parseBrokerReport(new TextDecoder().decode(bytes));
+      if (!report) return json({ error: 'Not a Freedom24 broker report (JSON)' }, 400);
+      const gifts = report.trades.map(t => ({ ...t, user_id: user.id, account: ACCOUNT, external_source: SOURCE }));
+      if (gifts.length) {
+        const { error } = await supabase.from('trades').upsert(gifts, { onConflict: 'user_id,external_source,external_id' });
+        if (error) return json({ error: error.message }, 500);
+      }
+      const removed = await removeCoveredSnowball(supabase, user.id, gifts);
+      return json({ report: 'broker_json', securities_credited: gifts.map(g => `${g.quantity} ${g.ticker} (${g.trade_date})`),
+        skipped: report.skipped, removed_snowball_duplicates: removed });
+    }
+    const parsed = parse(bytes);
     if (!parsed) return json({ error: 'Not a Freedom24 (Tradernet) cash-movement report' }, 400);
 
     const bank = parsed.bank.map(b => ({

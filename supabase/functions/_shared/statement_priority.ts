@@ -5,7 +5,10 @@
 //   - same side and ticker;
 //   - dates at most a day apart (Snowball's date is the user's own; a
 //     statement dates an evening US trade or a dividend by its own clock --
-//     Freedom24's MU sale 2026-05-26 23:38 is 2026-05-27 in Snowball);
+//     Freedom24's MU sale 2026-05-26 23:38 is 2026-05-27 in Snowball); for
+//     shares credited without money (stock_as_dividend: gifts, bonuses) up
+//     to three days -- Freedom24's welcome SNAP of 2026-05-04 is 2026-05-06
+//     in Snowball;
 //   - same total quantity on that date, summed per side -- a statement may
 //     split what Snowball has as one row (Freedom24's VWCE 12 + 1 on
 //     2026-05-26 is one Snowball buy of 13). Dividends match on ticker and
@@ -37,7 +40,7 @@ export function coveredBySnowball<T extends Operation>(statement: Operation[], s
   const used = new Set<number>();
   for (const s of groups(snowball)) {
     const i = st.findIndex((g, j) => !used.has(j) && g.side === s.side && g.ticker === s.ticker
-      && Math.abs(day(g.date) - day(s.date)) <= 1
+      && Math.abs(day(g.date) - day(s.date)) <= (s.side === 'stock_as_dividend' ? 3 : 1)
       && (s.side === 'dividend' || Math.abs(g.quantity - s.quantity) < 1e-6));
     if (i < 0) continue;
     used.add(i);

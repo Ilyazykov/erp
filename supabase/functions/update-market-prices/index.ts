@@ -156,6 +156,7 @@ const CRYPTO_YAHOO_OVERRIDES: Record<string, string> = {
   TAO: 'TAO22974-USD', // Bittensor; plain "TAO-USD" doesn't exist on Yahoo
   ADI: 'ADI38185-USD', // ADI Chain token (Telegram Wallet); plain "ADI" is Analog Devices
   MON: 'MON30495-USD', // Monad (Revolut crypto); plain "MON-USD" is an unrelated coin
+  MEW: 'MEW30126-USD', // cat in a dogs world (Revolut crypto)
 };
 const KNOWN_CRYPTO_TICKERS = new Set([
   'BTC', 'ETH', 'XAU', 'XAUT', 'SOL', 'USDT', 'USDC', 'BNB', 'XRP', 'DOGE', 'ADA', 'TON',
