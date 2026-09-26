@@ -6,10 +6,13 @@
 //   To Amount,Native Currency,Native Amount,Native Amount (in USD),
 //   Transaction Kind,Transaction Hash
 // Each export may cover any period and be re-uploaded freely: rows are
-// upserted by their own content. The Fiat Wallet export has the same header
-// but repeats the crypto file's EUR <-> crypto conversions from the fiat
-// side (different kinds, opposite signs), so it's refused rather than
-// double-counted; the Card export is only needed if the card is used.
+// upserted by their own content. The Fiat Wallet export (same header) is
+// accepted too, but its EUR <-> crypto conversions ("crypto_viban",
+// "viban_purchase") are the very same events the crypto file already has --
+// same second, same amounts, just written from the fiat side with other
+// kinds / signs -- so those rows are skipped; anything else in it (e.g. EUR
+// topped up from or withdrawn to a bank) is imported. The Card export works
+// the same way (only needed if the card is used).
 //
 // Stored like the other exchange accounts (see _shared/exchange_balances.ts
 // and migrations/20250101000018_crypto_com.sql): a crypto_wallets row
@@ -84,10 +87,14 @@ function parse(text: string) {
   // The Fiat Wallet export: crypto -> EUR shows up as kind "crypto_viban"
   // (the crypto file says "crypto_viban_exchange"), and an EUR -> crypto
   // purchase with a positive EUR amount (the crypto file has it negative).
-  const fiat = body.some(r => r[k] === 'crypto_viban' || (r[k] === 'viban_purchase' && !r[a].startsWith('-')));
+  // Those mirror rows are skipped; the rest is fiat-only and imported.
+  const isMirror = (r: string[]) => r[k] === 'crypto_viban' || (r[k] === 'viban_purchase' && !r[a].startsWith('-'));
+  const fiat = body.some(isMirror);
   const occ = new Map<string, number>();
   const rows = [];
+  let skipped = 0;
   for (const r of body) {
+    if (isMirror(r)) { skipped++; continue; }
     const sig = `cdc|${r[t]}|${r[d]}|${r[c]}|${dec(r[a])}|${r[tc]}|${dec(r[ta] || '')}`;
     const n = occ.get(sig) ?? 0; occ.set(sig, n + 1);
     const kind = kindOf(r[k]);
@@ -95,7 +102,7 @@ function parse(text: string) {
     if (r[c] && r[a]) rows.push({ ...base, seq: n * 2, symbol: r[c], amount: dec(r[a]) });
     if (r[tc] && r[ta]) rows.push({ ...base, seq: n * 2 + 1, symbol: r[tc], amount: dec(r[ta]) });
   }
-  return { fiat, rows };
+  return { fiat, skipped, total: body.length, rows };
 }
 
 Deno.serve(async (req) => {
@@ -130,10 +137,11 @@ Deno.serve(async (req) => {
     if (!user) return json({ error: 'Not authenticated' }, 401);
 
     const parsed = parse(await req.text());
-    if (!parsed || !parsed.rows.length) return json({ error: 'Not a Crypto.com App transaction export' }, 400);
-    if (parsed.fiat) {
-      return json({ error: 'This is the Fiat Wallet export -- its conversions are already in the Crypto Wallet export '
-        + '(crypto_transactions_record_*.csv); upload that one instead.' }, 400);
+    if (!parsed) return json({ error: 'Not a Crypto.com App transaction export' }, 400);
+    if (!parsed.rows.length) {
+      return json({ rows: 0, skipped_mirrored: parsed.skipped, total_in_file: parsed.total,
+        note: parsed.total ? 'Nothing new: every row is a conversion already in the Crypto Wallet export'
+          : 'The file has no transactions for its period (e.g. a Card export with no card spending) -- nothing to import' });
     }
 
     let { data: wallet, error: wErr } = await supabase.from('crypto_wallets')
@@ -157,7 +165,7 @@ Deno.serve(async (req) => {
     }
 
     const r = await recompute(supabase, wallet as ExchangeWallet);
-    return json({ rows: rows.length, total_rows_stored: r.rows, balances: r.balances });
+    return json({ rows: rows.length, skipped_mirrored: parsed.skipped, total_rows_stored: r.rows, balances: r.balances });
   } catch (err) {
     return json({ error: String(err) }, 500);
   }

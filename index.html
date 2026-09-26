@@ -1671,8 +1671,11 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
       mpRenderBrokerAssetClass();
     } else if (kind === 'cryptocom') {
       const bal = Object.entries(result.balances || {}).map(([c, q]) => `${c} ${q}`).join(', ') || 'nothing';
-      statusEl.textContent = `Detected: ${label}. Imported ${result.rows} rows (${result.total_rows_stored} stored in total). `
-        + `Crypto.com balance now: ${bal}.`;
+      const skipped = result.skipped_mirrored ? ` ${result.skipped_mirrored} conversion row(s) skipped — already in the Crypto Wallet export.` : '';
+      statusEl.textContent = result.note
+        ? `Detected: ${label}. ${result.note}.${skipped}`
+        : `Detected: ${label}. Imported ${result.rows} rows (${result.total_rows_stored} stored in total).${skipped} `
+          + `Crypto.com balance now: ${bal}.`;
       mpRefreshAfterWalletChange();
     } else if (kind === 'bybit_log') {
       const bal = Object.entries(result.balances || {}).map(([c, q]) => `${c} ${q}`).join(', ') || 'nothing';
