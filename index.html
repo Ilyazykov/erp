@@ -2271,6 +2271,13 @@ const MP_BROKER_FLAGS = {
   cash: '💵', 'real estate': '🏠',
 };
 
+// Shorter display names for broker rows (the account labels stored in the
+// database stay as the importers write them).
+const MP_BROKER_SHORT_NAMES = {
+  'Bank of Cyprus': 'BoC', Freedom24: 'Freedom', 'Ziraat Bank': 'Ziraat', Raiffeisen: 'Raif',
+  'Ozon Bank': 'Ozon', 'Yandex Bank': 'Yandex',
+};
+
 function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurrency) {
   if (!data.length) { wrap.innerHTML = `<p class="empty-note">${emptyMessage}</p>`; return; }
   // Zero balances (a closed account like UniCredit, a spent-down currency)
@@ -2330,13 +2337,15 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
   // (fxByCurrency is only passed for the broker x currency table) -- the
   // broker x asset-class table's columns are asset classes, so
   // mpEscapeHtml(c) is used unflagged there.
-  const headerLabel = c => fxByCurrency && c === 'Others' ? 'others currency 🌍'
+  const headerLabel = c => fxByCurrency && c === 'Others' ? 'others 🌍'
     : fxByCurrency && c in MP_CURRENCY_FLAGS
     ? `${mpEscapeHtml(c)} ${MP_CURRENCY_FLAGS[c]}` : mpEscapeHtml(fxByCurrency ? c : MP_ASSET_CLASS_LABELS[c] || c);
   // Broker flags identify the broker itself, not its columns, so unlike
   // headerLabel above they apply regardless of what the columns represent.
-  const brokerLabel = a => a in MP_BROKER_FLAGS
-    ? `${mpEscapeHtml(a)} ${MP_BROKER_FLAGS[a]}` : mpEscapeHtml(a);
+  const brokerLabel = a => {
+    const name = mpEscapeHtml(MP_BROKER_SHORT_NAMES[a] || a);
+    return a in MP_BROKER_FLAGS ? `${name} ${MP_BROKER_FLAGS[a]}` : name;
+  };
   wrap.innerHTML = `<table class="data-table"><thead><tr>
     <th class="corner">Broker</th>${categories.map(c => `<th>${headerLabel(c)}</th>`).join('')}<th class="corner">Total</th>
   </tr></thead><tbody>${accounts.map(a => `<tr${dimmed.has(a) ? ' style="opacity:0.45" title="Not included in the totals"' : ''}>
