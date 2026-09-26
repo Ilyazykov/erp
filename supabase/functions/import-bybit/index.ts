@@ -194,7 +194,9 @@ Deno.serve(async (req) => {
     const all: any[] = [];
     for (let from = 0; ; from += 1000) {
       const { data, error } = await supabase.from('wallet_transactions')
-        .select('kind, symbol, amount').eq('wallet_id', wallet!.id).range(from, from + 999);
+        // amount::text -- as JSON numbers, numeric values lose digits and
+        // tiny ones come back in exponent form ("9e-8")
+        .select('kind, symbol, amount::text').eq('wallet_id', wallet!.id).range(from, from + 999);
       if (error) throw new Error(error.message);
       all.push(...data);
       if (data.length < 1000) break;
@@ -203,9 +205,10 @@ Deno.serve(async (req) => {
     const big = new Map<string, bigint>();
     for (const r of all) {
       if (INTERNAL_KINDS.has(r.kind)) continue;
-      const [i, f = ''] = String(r.amount).replace('-', '').split('.');
+      const amount = dec(String(r.amount));  // also normalises any exponent form
+      const [i, f = ''] = amount.replace('-', '').split('.');
       let v = BigInt(i || '0') * BigInt(scale) + BigInt((f + '0'.repeat(18)).slice(0, 18));
-      if (String(r.amount).startsWith('-')) v = -v;
+      if (amount.startsWith('-')) v = -v;
       big.set(r.symbol, (big.get(r.symbol) ?? 0n) + v);
     }
     const balances = [...big.entries()].filter(([, v]) => v !== 0n).map(([coin, v]) => {
