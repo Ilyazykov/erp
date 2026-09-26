@@ -794,8 +794,12 @@ async function toUsd(price: number, currency: string | null, usdRubRate: number 
 
 // deno-lint-ignore no-explicit-any
 async function fetchDistinctTickers(supabase: any): Promise<string[] | null> {
-  // Distinct tickers across ALL users' trades, via the service-role
-  // client (bypasses RLS). Only ever reads the `ticker` column -- no
+  // Distinct tickers currently HELD across all users (the current_holdings
+  // view -- trades net of sales plus wallet balances -- via the service-role
+  // client, bypassing RLS). Tickers sold long ago aren't priced: a broker
+  // report back to 2020 brings ~150 of them, and resolving each against
+  // MOEX / Yahoo pushed the function past its resource limit. Only ever
+  // reads the `ticker` column -- no
   // quantities, prices, or user_id leave this function. Returns null on
   // any failure (caller falls back to SEED_TICKERS), or a possibly-empty
   // list.
@@ -809,7 +813,7 @@ async function fetchDistinctTickers(supabase: any): Promise<string[] | null> {
   const tickers = new Set<string>();
   for (let from = 0; ; from += pageSize) {
     const { data, error } = await supabase
-      .from('trades')
+      .from('current_holdings')
       .select('ticker')
       .range(from, from + pageSize - 1);
     if (error) {
