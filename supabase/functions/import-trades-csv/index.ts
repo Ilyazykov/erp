@@ -20,11 +20,18 @@
 // in Telegram Wallet.
 const SKIPPED_NOTES = new Set(['trust', 'bybit', 'crypto.com', 'telegram', 'telegram -> trust']);
 const SKIPPED_SYMBOLS = new Set(['XAUT']);
-// A real statement has priority over Snowball's hand-entered rows: a ticker
-// that trades from these sources already hold (e.g. XAU from Revolut's own
-// statement, import-revolut-statement) is left out of this import. The
-// statement importer, in turn, removes the Snowball rows of what it writes.
+// A real statement has priority over Snowball's hand-entered rows; each
+// statement importer removes the Snowball rows of what it writes, and this
+// import leaves them out:
+//   - by ticker: a metal Revolut's statement holds (import-revolut-statement
+//     -- Snowball dates its gold purchases a day off);
+//   - by operation: a trade / dividend an IBKR Activity Statement has
+//     (import-ibkr-statement) -- same side, ticker, date and quantity; for a
+//     dividend, same ticker and date (IBKR rounds the amount).
 const STATEMENT_TRADE_SOURCES = ['revolut_metal_csv'];
+const STATEMENT_OPERATION_SOURCES = ['ibkr_csv'];
+const operationKey = (side: string, ticker: string, date: string, quantity: number) =>
+  `${side}:${ticker.toUpperCase()}:${date}${side === 'dividend' ? '' : `:${Number(quantity)}`}`;
 // Telegram Wallet rows that Snowball has without a note: the 2025-11-15 sale
 // of the BTC bought there on 11-03 / 11-06 (in Wallet's own history as
 // "Exchanged BTC to USDT").
@@ -146,6 +153,13 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: stErr.message }), { status: 500, headers: corsHeaders });
     }
     const statementTickers = new Set((fromStatements ?? []).map((t: { ticker: string }) => t.ticker.toUpperCase()));
+    const { data: stOps, error: opErr } = await supabase.from('trades')
+      .select('side, ticker, trade_date, quantity').in('external_source', STATEMENT_OPERATION_SOURCES);
+    if (opErr) {
+      return new Response(JSON.stringify({ error: opErr.message }), { status: 500, headers: corsHeaders });
+    }
+    const statementOperations = new Set((stOps ?? []).map((t: { side: string; ticker: string; trade_date: string; quantity: number }) =>
+      operationKey(t.side, t.ticker, t.trade_date, t.quantity)));
 
     const rows = [];
     let skipped = 0;
@@ -174,6 +188,9 @@ Deno.serve(async (req) => {
       const quantity = parseNumber(cells[idx.quantity]);
       const price = parseNumber(cells[idx.price]);
       if (!trade_date || quantity === null || price === null) { skipped++; continue; }
+      if (statementOperations.has(operationKey(side, (cells[idx.symbol] || '').trim(), trade_date, quantity))) {
+        skippedTrust++; continue;
+      }
       if (!(cells[idx.note] || '').trim()
           && SKIPPED_UNNOTED.has(`${event}:${trade_date}:${(cells[idx.symbol] || '').trim().toUpperCase()}:${quantity}`)) {
         skippedTrust++; continue;
