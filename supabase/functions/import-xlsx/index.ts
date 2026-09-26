@@ -10,7 +10,7 @@
 // The importer's response comes back with `detected` added, so the page
 // knows which status line to show.
 
-import * as XLSX from 'npm:xlsx@0.18.5';
+import { xlsxRows } from '../_shared/xlsx_rows.ts';
 
 const ROUTES: { detected: string; fn: string; test: (text: string) => boolean }[] = [
   { detected: 'tbank_broker_xlsx', fn: 'import-tbank-broker',
@@ -35,11 +35,8 @@ Deno.serve(async (req) => {
     if (!auth) return json({ error: 'Missing Authorization header' }, 401);
     const bytes = new Uint8Array(await req.arrayBuffer());
 
-    // The first rows of the first sheets are enough to tell the sources apart.
-    const wb = XLSX.read(bytes, { type: 'array', sheetRows: 40 });
-    const text = wb.SheetNames.slice(0, 3)
-      .map(n => XLSX.utils.sheet_to_csv(wb.Sheets[n], { blankrows: false }))
-      .join('\n');
+    // The first rows are enough to tell the sources apart.
+    const text = xlsxRows(bytes, 40).map(r => Object.values(r).join(',')).join('\n');
     const route = ROUTES.find(r => r.test(text));
     if (!route) {
       return json({ error: 'Unrecognized .xlsx -- expected a T-Bank broker report, a Freedom24 cash-movement report or a Ziraat Bank account activity export' }, 400);

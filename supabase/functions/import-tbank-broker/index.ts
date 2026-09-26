@@ -37,7 +37,7 @@
 // Everything is upserted by its own content, so a report can be re-uploaded.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
-import * as XLSX from 'npm:xlsx@0.18.5';
+import { xlsxRows } from '../_shared/xlsx_rows.ts';
 import { removeCoveredSnowball } from '../_shared/statement_priority.ts';
 
 const ACCOUNT = 'T-Bank';
@@ -57,25 +57,8 @@ const iso = (s: string | undefined) => {
   return m ? `${m[3]}-${m[2]}-${m[1]}` : null;
 };
 
-function sheetRows(bytes: Uint8Array): Row[] {
-  const wb = XLSX.read(bytes, { type: 'array' });
-  const out: Row[] = [];
-  for (const name of wb.SheetNames) {
-    const rows = XLSX.utils.sheet_to_json<Row>(wb.Sheets[name], { header: 'A', raw: false, defval: undefined });
-    for (const r of rows) {
-      const clean: Row = {};
-      for (const [k, v] of Object.entries(r)) {
-        const s = String(v ?? '').replace(/\s+/g, ' ').trim();
-        if (s) clean[k] = s;
-      }
-      if (Object.keys(clean).length) out.push(clean);
-    }
-  }
-  return out;
-}
-
 function parse(bytes: Uint8Array) {
-  const rows = sheetRows(bytes);
+  const rows: Row[] = xlsxRows(bytes);
   const investor = rows.find(r => /^Инвестор:/.test(r.A || ''))?.A ?? '';
   const agreement = investor.match(/\/\s*(\S+)\s+от\s+(\d{2}\.\d{2}\.\d{4})/);
   const period = rows.find(r => /^Отчет о сделках и операциях за период/.test(r.A || ''))?.A

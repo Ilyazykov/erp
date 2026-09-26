@@ -1698,14 +1698,17 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
       },
       body: isXlsx ? await file.arrayBuffer() : csvText,
     });
-    const result = await res.json();
+    const result = await res.json().catch(() => ({}));
     // import-xlsx says which source the spreadsheet turned out to be.
     if (kind === 'xlsx' && endpoints[result.detected]) {
       kind = result.detected;
       label = endpoints[kind].label;
     }
     if (!res.ok) {
-      statusEl.textContent = `Error: ${result.error || res.statusText}`;
+      // A function that crashed / hit a platform limit answers without an
+      // `error` field (e.g. {code: 'WORKER_LIMIT', message: ...}).
+      statusEl.textContent = `Error (HTTP ${res.status}): ${result.error || result.message || result.msg
+        || result.code || res.statusText || 'no details'}`;
       return;
     }
 
