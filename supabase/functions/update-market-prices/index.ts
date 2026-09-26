@@ -939,9 +939,8 @@ async function runUpdate(): Promise<Record<string, unknown>> {
   //     e.g. a bank statement's EUR/GBP balance_after, which never
   //     appears in `trades` and so has no ticker of its own) without
   //     needing its own copy of FX logic -- it just reads market_prices
-  //     like any other price. CASH_FX_CURRENCIES is the closed set of
-  //     currencies actually seen across bank statements and holdings
-  //     today; extend it if a new currency shows up. ---
+  //     like any other price. CASH_FX_CURRENCIES: the usual currencies
+  //     plus whatever the bank accounts hold. ---
   for (const ticker of tickers) {
     if (classifyTicker(ticker) !== 'stablecoin') continue;
     rowsOut.push({
@@ -952,7 +951,16 @@ async function runUpdate(): Promise<Record<string, unknown>> {
     resolved.add(ticker);
   }
 
-  const CASH_FX_CURRENCIES = ['USD', 'EUR', 'GBP', 'RUB', 'CNY', 'TRY', 'RSD'];
+  // Plus every currency a bank account holds (bank_latest_balances), so a
+  // new one -- Revolut's AED / HUF / ILS pockets -- gets its rate without
+  // editing this list. XAU (Revolut's gold pocket) is gold, priced above.
+  const CASH_FX_CURRENCIES = new Set(['USD', 'EUR', 'GBP', 'RUB', 'CNY', 'TRY', 'RSD']);
+  const { data: bankCcys, error: bankCcyErr } = await supabase.from('bank_latest_balances').select('currency');
+  if (bankCcyErr) log(`  bank_latest_balances: ${bankCcyErr.message}`);
+  for (const r of bankCcys ?? []) {
+    const c = String(r.currency || '').toUpperCase();
+    if (/^[A-Z]{3}$/.test(c) && c !== 'XAU') CASH_FX_CURRENCIES.add(c);
+  }
   for (const currency of CASH_FX_CURRENCIES) {
     const rate = await fxRateToUsd(currency, usdRubRate);
     if (rate === null) { log(`  FX rate ${currency}->USD: unavailable, skipping FX:${currency}`); continue; }

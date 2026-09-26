@@ -1989,7 +1989,7 @@ async function mpRenderCashFlows() {
 // currency/ticker not listed here (a new one showing up in the data)
 // falls back after these, alphabetically.
 const MP_CURRENCY_COLUMN_ORDER = [
-  'USD', 'EUR', 'GBP', 'RUB', 'TRY', 'RSD', 'CNY',
+  'USD', 'EUR', 'GBP', 'RUB', 'TRY', 'RSD', 'CNY', 'AED', 'HUF', 'ILS',
   'XAU', 'BTC', 'ETH', 'SOL', 'GRAM', 'TAO', 'TRX', 'DOGE', 'Altcoins',
 ];
 
@@ -2010,6 +2010,7 @@ const MP_ASSET_CLASS_LABELS = {
 // tickers (BTC, XAU, ...) aren't tied to a country and are left unflagged.
 const MP_CURRENCY_FLAGS = {
   USD: '🇺🇸', EUR: '🇪🇺', GBP: '🇬🇧', RUB: '🇷🇺', TRY: '🇹🇷', RSD: '🇷🇸', CNY: '🇨🇳',
+  AED: '🇦🇪', HUF: '🇭🇺', ILS: '🇮🇱',
 };
 
 // Fixed display order for broker rows, matching the user's own tracking
@@ -2154,6 +2155,10 @@ async function mpFetchCashRows(fxByCurrency) {
   };
   for (const r of data) {
     const bal = Number(r.balance_after);
+    // Revolut's gold pocket (currency XAU) is a holding, not cash: the same
+    // 0.273294 oz is counted from the Snowball trades (ticker XAU), priced
+    // as gold -- counting the pocket too would double it.
+    if (r.currency === 'XAU') continue;
     if (r.product === 'credit_card') {
       add(r.account, r.currency, 'credit', Math.min(bal, 0));
       if (bal > 0) add(r.account, r.currency, 'cash', bal);
