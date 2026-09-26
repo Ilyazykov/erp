@@ -11,12 +11,15 @@
 // CUSTOM_HOLDING_PRICE / CUSTOM_HOLDING_SETTINGS rows are historical price
 // points, not trades, and are skipped.
 //
-// Rows noted "trust", "bybit" or "crypto.com" (Snowball's own Note column)
-// are skipped too: those accounts come from their own sources now -- Trust
-// Wallet from the blockchain (sync-crypto-wallets), Bybit and Crypto.com from
-// their own exports (import-bybit, import-crypto-com) -- so importing them as
-// well would count the same coins twice.
-const SKIPPED_NOTES = new Set(['trust', 'bybit', 'crypto.com']);
+// Rows noted "trust", "bybit", "crypto.com" or "telegram" (Snowball's own
+// Note column) are skipped too: those accounts come from their own sources
+// now -- Trust Wallet from the blockchain (sync-crypto-wallets), Bybit,
+// Crypto.com and Telegram Wallet from their own histories (import-bybit,
+// import-crypto-com, import-telegram-wallet) -- so importing them as well
+// would count the same coins twice. So is every XAUT row: all XAUT is held
+// in Telegram Wallet.
+const SKIPPED_NOTES = new Set(['trust', 'bybit', 'crypto.com', 'telegram', 'telegram -> trust']);
+const SKIPPED_SYMBOLS = new Set(['XAUT']);
 // Hand-entered month-end ETH staking reward: it's Lido's stETH reward in
 // Trust Wallet, already inside the stETH balance read from the chain.
 const isSnowballEthInterest = (event: string, symbol: string) =>
@@ -148,6 +151,7 @@ Deno.serve(async (req) => {
       if (!side) { skipped++; continue; }
       if (SKIPPED_NOTES.has((cells[idx.note] || '').trim().toLowerCase())) { skippedTrust++; continue; }
       if (isSnowballEthInterest(event, cells[idx.symbol] || '')) { skippedTrust++; continue; }
+      if (SKIPPED_SYMBOLS.has((cells[idx.symbol] || '').trim().toUpperCase())) { skippedTrust++; continue; }
 
       const trade_date = parseDate(cells[idx.date] || '');
       const quantity = parseNumber(cells[idx.quantity]);

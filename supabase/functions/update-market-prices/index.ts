@@ -150,6 +150,7 @@ const CRYPTO_YAHOO_OVERRIDES: Record<string, string> = {
   XAU: 'GC=F', // gold spot has no clean Yahoo FX symbol; COMEX gold
                // futures (USD/troy oz) is the closest reliable proxy
   TAO: 'TAO22974-USD', // Bittensor; plain "TAO-USD" doesn't exist on Yahoo
+  ADI: 'ADI38185-USD', // ADI Chain token (Telegram Wallet); plain "ADI" is Analog Devices
 };
 const KNOWN_CRYPTO_TICKERS = new Set([
   'BTC', 'ETH', 'XAU', 'XAUT', 'SOL', 'USDT', 'USDC', 'BNB', 'XRP', 'DOGE', 'ADA', 'TON',
@@ -160,6 +161,10 @@ const KNOWN_CRYPTO_TICKERS = new Set([
   'DAI', 'USDS',
   // Crypto.com (import-crypto-com): Bittensor (staked) and Cronos.
   'TAO', 'CRO',
+  // Telegram Wallet (import-telegram-wallet): Gram (prev. Toncoin, Yahoo
+  // "GRAM-USD"), ADI, and Flare / Stellar that passed through it. Unlisted,
+  // "ADI" and "FLR" would resolve to NYSE stocks.
+  'GRAM', 'ADI', 'FLR', 'XLM',
 ]);
 
 // Only these ISS "group" values represent an instrument actually traded on

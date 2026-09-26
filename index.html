@@ -224,7 +224,8 @@
       history export, a Ziraat Bank account activity export (.xlsx), or this project's own combined
       Raiffeisen Bank Serbia transaction CSV, its generic bank CSV (Yandex Bank, T-Bank), a Bybit transaction log
       (Data Export → Transaction Log → Account Change Details: upload each Funding and Unified Trading file), or a
-      Crypto.com App export (Accounts → History → Export → Crypto Wallet) — the file type is detected automatically from its header
+      Crypto.com App export (Accounts → History → Export → Crypto Wallet), or this project's own Telegram Wallet CSV
+      (built from the Wallet app's history) — the file type is detected automatically from its header
       row or extension.</p>
     <div class="form-row">
       <input type="file" id="mp_any_csv_file" accept=".csv,.xlsx">
@@ -258,10 +259,11 @@
     <div id="mp_wallets_wrap"></div>
 
     <div class="section-title">Exchange accounts</div>
-    <p class="note">Custodial exchange accounts (Bybit, Crypto.com): there's no blockchain address to read, so they're
+    <p class="note">Custodial exchange accounts (Bybit, Crypto.com, Telegram Wallet): there's no blockchain address to read, so they're
       updated by uploading the exchange's own export in <b>Import CSV</b> above (Bybit: Data Export → Transaction Log →
       Account Change Details, each Funding and Unified Trading file; Crypto.com App: Accounts → History → Export →
-      Crypto Wallet). The Sync button above doesn't touch them.</p>
+      Crypto Wallet; Telegram Wallet: this project's own CSV built from the app's history). The Sync button above
+      doesn't touch them.</p>
     <div class="form-row">
       <button class="btn" id="mp_exchange_recalc" title="Recompute balances from the transaction history already stored">Recalculate</button>
     </div>
@@ -1566,6 +1568,9 @@ document.getElementById('btn_login').addEventListener('click', async () => {
 //     line, then "Uid,Date & Time(UTC),Coin,..." or "Uid,Currency,Contract,..."
 //   - Crypto.com App export starts with "Timestamp (UTC),Transaction
 //     Description,Currency,Amount,To Currency,..."
+//   - This project's own Telegram Wallet CSV (built from the Wallet app's
+//     scraped history -- Wallet has no export) starts with
+//     "timestamp_utc,section,title,amount,currency,status"
 //   - This project's own generic bank CSV (built from PDF statements of
 //     banks with no CSV export -- Yandex Bank, T-Bank; the bank's name is
 //     a column) starts with "bank,account_number,product,..."
@@ -1581,6 +1586,7 @@ function mpDetectCsvKind(headerLine, fullText) {
   if (/^UID:\s*\d+,Company Name:/i.test(h)
       && /^Uid,(Date & Time\(UTC\),Coin|Currency,Contract),/m.test(fullText)) return 'bybit_log';
   if (/^\uFEFF?Timestamp \(UTC\),Transaction Description,Currency,Amount,To Currency,/i.test(h)) return 'cryptocom';
+  if (/^timestamp_utc,section,title,amount,currency,status$/i.test(h)) return 'telegram_wallet';
   return null;
 }
 
@@ -1611,7 +1617,7 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
         + 'a Revolut account statement, a Revolut Flexible Cash Funds statement, a Revolut '
         + 'Instant Access Savings statement, a Bank of Cyprus transaction history export, or '
         + 'this project\'s own Raiffeisen Bank Serbia or generic bank transaction CSV, a Bybit transaction log, '
-        + 'or a Crypto.com App export.';
+        + 'a Crypto.com App export, or this project\'s own Telegram Wallet CSV.';
       return;
     }
 
@@ -1626,6 +1632,7 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
       bank_csv: { fn: 'import-bank-csv', label: 'bank transaction history (generic CSV)' },
       bybit_log: { fn: 'import-bybit', label: 'Bybit transaction log' },
       cryptocom: { fn: 'import-crypto-com', label: 'Crypto.com App export' },
+      telegram_wallet: { fn: 'import-telegram-wallet', label: 'Telegram Wallet history' },
     };
     const { fn, label } = endpoints[kind];
     statusEl.textContent = `Detected: ${label}. Uploading and parsing on the server…`;
@@ -1648,8 +1655,8 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
 
     if (kind === 'snowball') {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} rows, removed `
-        + `${result.removed} stale rows (${result.skipped} skipped, ${result.skipped_trust ?? 0} Trust Wallet rows left `
-        + `to the blockchain sync, ${result.total_rows} parsed).`;
+        + `${result.removed} stale rows (${result.skipped} skipped, ${result.skipped_trust ?? 0} rows left `
+        + `to their own sources — Trust, Bybit, Crypto.com, Telegram — ${result.total_rows} parsed).`;
       mpRenderHoldings();
       mpRenderPortfolioPies();
       mpRenderCashFlows();
@@ -1676,6 +1683,13 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
         ? `Detected: ${label}. ${result.note}.${skipped}`
         : `Detected: ${label}. Imported ${result.rows} rows (${result.total_rows_stored} stored in total).${skipped} `
           + `Crypto.com balance now: ${bal}.`;
+      mpRefreshAfterWalletChange();
+    } else if (kind === 'telegram_wallet') {
+      const bal = Object.entries(result.balances || {}).map(([c, q]) => `${c} ${q}`).join(', ') || 'nothing';
+      const unknown = result.unknown_balance?.length
+        ? ` No balance for ${result.unknown_balance.join(', ')}: the history doesn't show how much of it exchanges spent.` : '';
+      statusEl.textContent = `Detected: ${label}. Imported ${result.rows} rows from ${result.total_in_file} operations `
+        + `(${result.total_rows_stored} stored in total). Telegram balance now: ${bal}.${unknown}`;
       mpRefreshAfterWalletChange();
     } else if (kind === 'bybit_log') {
       const bal = Object.entries(result.balances || {}).map(([c, q]) => `${c} ${q}`).join(', ') || 'nothing';
@@ -2970,7 +2984,7 @@ const mpShortAddress = a => `${a.slice(0, 6)}…${a.slice(-4)}`;
 let mpWallets = [];
 const mpFindWallet = (chain, address) => mpWallets.find(w => w.chain === chain
   && (chain === 'ethereum' ? w.address.toLowerCase() === address.toLowerCase() : w.address === address));
-const MP_CHAIN_LABELS = { ethereum: 'Ethereum', tron: 'TRON', bitcoin: 'Bitcoin', solana: 'Solana', bybit: 'Bybit', cryptocom: 'Crypto.com' };
+const MP_CHAIN_LABELS = { ethereum: 'Ethereum', tron: 'TRON', bitcoin: 'Bitcoin', solana: 'Solana', bybit: 'Bybit', cryptocom: 'Crypto.com', telegram: 'Telegram Wallet' };
 
 // Which network an address belongs to, from its own format -- no picker:
 //   0x + 40 hex                          -> Ethereum
@@ -3019,7 +3033,7 @@ function mpFormatQty(q) {
 // Custodial exchange accounts (chain 'bybit', filled by import-bybit) live in
 // the same tables as on-chain wallets but get their own block: they aren't
 // part of the blockchain sync.
-const MP_EXCHANGE_CHAINS = new Set(['bybit', 'cryptocom']);
+const MP_EXCHANGE_CHAINS = new Set(['bybit', 'cryptocom', 'telegram']);
 
 async function mpRenderWallets() {
   const wrap = document.getElementById('mp_wallets_wrap');
@@ -3186,7 +3200,7 @@ document.getElementById('mp_exchange_recalc').addEventListener('click', async ()
   statusEl.textContent = 'Recalculating…';
   try {
     const parts = [];
-    for (const [fn, name] of [['import-bybit', 'Bybit'], ['import-crypto-com', 'Crypto.com']]) {
+    for (const [fn, name] of [['import-bybit', 'Bybit'], ['import-crypto-com', 'Crypto.com'], ['import-telegram-wallet', 'Telegram']]) {
       const res = await fetch(`${SUPABASE_URL}/functions/v1/${fn}?recompute=1`, {
         method: 'POST', headers: { 'Authorization': `Bearer ${session.access_token}` },
       });

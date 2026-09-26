@@ -1,5 +1,5 @@
 // Shared by the custodial-exchange importers (import-bybit,
-// import-crypto-com): an exchange account is a crypto_wallets row whose
+// import-crypto-com, import-telegram-wallet): an exchange account is a crypto_wallets row whose
 // every log line sits in wallet_transactions (tagged with a kind), and whose
 // per-coin balance -- recomputed here from all of them -- goes to
 // wallet_balances, which the holdings views count under the account's name.
@@ -12,6 +12,10 @@
 // USD liquid asset), the rest keeps its own ticker (USDC, USDT, ...), which
 // update-market-prices prices as 1 USD of cash. Other coins keep their own
 // ticker wherever they sit.
+//
+// A coin with a row of one of the caller's `unknownKinds` (a movement whose
+// amount the source doesn't show, stored with amount 0) gets no balance at
+// all: any sum for it would be wrong.
 
 export const STABLECOINS = new Set(['USDT', 'USDC', 'DAI', 'USDS', 'USDE', 'FDUSD', 'PYUSD', 'TUSD', 'BUSD', 'USDP']);
 // Fiat left on an exchange (e.g. EUR between a sale and a purchase): kept
@@ -40,14 +44,18 @@ function toStr(v: bigint): string {
 }
 
 export interface ExchangeWallet { id: string; user_id: string; account: string; chain: string }
-export interface BalanceRules { internalKinds: Set<string>; earnKinds: Set<string>; savingsTicker: string }
+export interface BalanceRules {
+  internalKinds: Set<string>; earnKinds: Set<string>; savingsTicker: string; unknownKinds?: Set<string>;
+}
 
 // Pure part: rows -> wallet_balances rows (and per-coin totals for reporting).
 export function computeBalances(wallet: ExchangeWallet, rows: { kind: string; symbol: string; amount: unknown }[],
                                 rules: BalanceRules) {
   const total = new Map<string, bigint>();
   const inEarn = new Map<string, bigint>();
+  const unknown = new Set(rows.filter(r => rules.unknownKinds?.has(r.kind)).map(r => r.symbol));
   for (const r of rows) {
+    if (unknown.has(r.symbol)) continue;
     if (rules.earnKinds.has(r.kind)) inEarn.set(r.symbol, (inEarn.get(r.symbol) ?? 0n) - toBig(r.amount));
     if (rules.internalKinds.has(r.kind)) continue;
     total.set(r.symbol, (total.get(r.symbol) ?? 0n) + toBig(r.amount));
@@ -67,7 +75,7 @@ export function computeBalances(wallet: ExchangeWallet, rows: { kind: string; sy
     if (earn !== 0n) balances.push({ ...base, contract: `${coin}:earn`, symbol: `${coin} (Earn)`, name: 'Earn', quantity: toStr(earn), ticker: rules.savingsTicker });
     if (v - earn !== 0n) balances.push({ ...base, contract: coin, symbol: coin, quantity: toStr(v - earn), ticker: coin });
   }
-  return { balances, sums };
+  return { balances, sums, unknown: [...unknown] };
 }
 
 // Recompute one account's wallet_balances from all its stored rows.
@@ -83,7 +91,7 @@ export async function recomputeExchange(db: any, wallet: ExchangeWallet, rules: 
     all.push(...data);
     if (data.length < 1000) break;
   }
-  const { balances, sums } = computeBalances(wallet, all, rules);
+  const { balances, sums, unknown } = computeBalances(wallet, all, rules);
   const { error: delErr } = await db.from('wallet_balances').delete().eq('wallet_id', wallet.id);
   if (delErr) throw new Error(delErr.message);
   if (balances.length) {
@@ -91,5 +99,5 @@ export async function recomputeExchange(db: any, wallet: ExchangeWallet, rules: 
     if (error) throw new Error(error.message);
   }
   await db.from('crypto_wallets').update({ last_synced_at: new Date().toISOString(), last_sync_error: null }).eq('id', wallet.id);
-  return { rows: all.length, balances: sums };
+  return { rows: all.length, balances: sums, ...(unknown.length ? { unknown_balance: unknown } : {}) };
 }
