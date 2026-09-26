@@ -273,6 +273,12 @@
     <div class="section-title">Equities by index</div>
     <div id="mp_equity_index_wrap"></div>
 
+    <div class="section-title">Look-through: what the funds hold</div>
+    <p class="note">Shares held directly plus each fund's share of its own holdings (fund value × weight), matched
+      by ISIN across funds — the real exposure to each company. Fund lists come from the issuers (monthly refresh);
+      TRND's is from its February 2026 report.</p>
+    <div id="mp_lookthrough_wrap"></div>
+
     <div class="section-title">Bonds by type</div>
     <div id="mp_bond_subtype_wrap"></div>
 
@@ -2583,6 +2589,45 @@ async function mpRenderEquityByIndex() {
   if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
   const equities = data.filter(r => r.instrument_type === 'stock');
   mpRenderBucketTable(wrap, equities, r => EQUITY_INDEX_BY_TICKER[r.ticker] || 'Other', 'No equity holdings yet.');
+  mpRenderLookThrough();
+}
+
+// Look-through (portfolio_look_through_* views): the top securities by real
+// exposure, and the whole exposure by sector, country and currency.
+async function mpRenderLookThrough() {
+  const wrap = document.getElementById('mp_lookthrough_wrap');
+  const [top, bySector, byCountry, byCurrency] = await Promise.all([
+    sb.from('portfolio_look_through_totals').select('*').order('value_usd', { ascending: false }).limit(100),
+    sb.from('portfolio_look_through_by_sector').select('*').order('value_usd', { ascending: false }),
+    sb.from('portfolio_look_through_by_country').select('*').order('value_usd', { ascending: false }),
+    sb.from('portfolio_look_through_by_currency').select('*').order('value_usd', { ascending: false }),
+  ]);
+  const err = top.error || bySector.error || byCountry.error || byCurrency.error;
+  if (err) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(err.message)}</p>`; return; }
+  if (!top.data.length) { wrap.innerHTML = '<p class="empty-note">No fund holdings loaded yet.</p>'; return; }
+  const total = bySector.data.reduce((s, r) => s + Number(r.value_usd), 0);
+  const pct = v => `${(Number(v) / total * 100).toFixed(2)}%`;
+  const via = r => Object.entries(r.via || {}).filter(([k]) => k !== 'direct')
+    .sort((a, b) => b[1] - a[1]).map(([k, v]) => `${mpEscapeHtml(k)} ${mpFormatUsd(Number(v))}`).join(', ');
+  const small = (title, rows, key) => `<table class="data-table"><thead><tr>
+      <th>${title}</th><th>Value (USD)</th><th>Share</th></tr></thead><tbody>${rows.map(r => `<tr>
+      <td class="ticker">${mpEscapeHtml(r[key])}</td><td>${mpFormatUsd(Number(r.value_usd))}</td><td>${pct(r.value_usd)}</td></tr>`).join('')}
+    <tr class="total-row"><td><b>Total</b></td><td><b>${mpFormatUsd(total)}</b></td><td></td></tr></tbody></table>`;
+  wrap.innerHTML = `<div style="overflow-x:auto"><table class="data-table"><thead><tr>
+      <th>#</th><th>Security</th><th>Sector</th><th>Country</th><th>Currency</th><th>Value (USD)</th><th>Share</th><th>Direct</th><th>Via funds</th>
+    </tr></thead><tbody>${top.data.map((r, i) => `<tr>
+      <td>${i + 1}</td>
+      <td class="ticker">${mpEscapeHtml(r.name)}${r.ticker ? ` <span class="note">${mpEscapeHtml(r.ticker)}</span>` : ''}</td>
+      <td>${mpEscapeHtml(r.sector || '')}</td><td>${mpEscapeHtml(r.country || '')}</td><td>${mpEscapeHtml(r.currency || '')}</td>
+      <td>${mpFormatUsd(Number(r.value_usd))}</td><td>${pct(r.value_usd)}</td>
+      <td>${r.direct_usd ? mpFormatUsd(Number(r.direct_usd)) : ''}</td><td>${via(r)}</td>
+    </tr>`).join('')}</tbody></table></div>
+    <p class="note">Top 100 securities of the look-through total ${mpFormatUsd(total)}.</p>
+    <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start">
+      <div style="flex:1 1 320px;overflow-x:auto">${small('Sector', bySector.data, 'sector')}</div>
+      <div style="flex:1 1 320px;overflow-x:auto">${small('Country', byCountry.data, 'country')}</div>
+      <div style="flex:1 1 240px;overflow-x:auto">${small('Currency', byCurrency.data, 'currency')}</div>
+    </div>`;
 }
 
 async function mpRenderBondByType() {
