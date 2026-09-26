@@ -51,9 +51,10 @@
   .section-title { font-size: 1rem; font-weight: 600; color: #e6edf3; margin: 20px 0 10px; }
   .section-title:first-child { margin-top: 0; }
   .pie-grid { display: flex; flex-wrap: wrap; gap: 16px; }
-  .pie-grid .pie-card { flex: 1 1 420px; max-width: 560px; min-width: 0; background: #13191f; border: 1px solid #1e2830; border-radius: 8px; padding: 12px 12px 4px; }
+  .pie-grid .pie-card { flex: 1 1 420px; max-width: 560px; min-width: 0; overflow: hidden; background: #13191f; border: 1px solid #1e2830; border-radius: 8px; padding: 12px 12px 4px; }
   .pie-grid .pie-card h4 { margin: 0 0 4px; font-size: 0.9rem; font-weight: 600; color: #e6edf3; }
   .pie-grid .pie-plot { height: 380px; }
+  .pie-grid .pie-total { margin: 6px 0 8px; text-align: center; font-size: 0.9rem; color: #c9d1d9; }
   .drop-zone { margin-top: 8px; padding: 14px; border: 1px dashed #2a3540; border-radius: 6px; color: #8b949e;
     text-align: center; font-size: 0.85rem; }
   .drop-zone.over { border-color: #4da8c8; color: #4da8c8; background: #13191f; }
@@ -532,7 +533,10 @@ function showTab(id) {
     el.classList.toggle('active', el.id === id);
   });
   // Charts drawn while their tab was hidden have no width yet: size them now.
-  if (id === 'charts') document.querySelectorAll('#mp_charts_grid .pie-plot').forEach(el => { if (el.data) Plotly.Plots.resize(el); });
+  if (id === 'charts') {
+    if (mpChartsPending && mpIsSignedIn) mpRenderCharts();
+    else document.querySelectorAll('#mp_charts_grid .pie-plot').forEach(el => { if (el.data) Plotly.Plots.resize(el); });
+  }
   if (DATA && !rendered[id]) {
     rendered[id] = true;
     renderChart(id);
@@ -2513,7 +2517,9 @@ async function mpCurrencyRows(base) {
     // outside the main columns (JPY, AED, ...) -> one "others" column, in USD.
     const fiat = !MP_UNIT_QUOTED_ASSET_CLASSES.has(r.asset_class) && unit !== MP_ALTCOINS_COLUMN;
     const ccy = fiat && MP_EUROPEAN_AS_EUR.has(unit) ? 'EUR' : unit;
-    return { ...r, currency: fiat && !MP_MAIN_CURRENCIES.has(ccy) ? MP_OTHER_CURRENCIES_COLUMN : ccy };
+    // own_currency: the currency itself, kept for the Charts tab, which
+    // shows the "others" one by one.
+    return { ...r, own_currency: ccy, currency: fiat && !MP_MAIN_CURRENCIES.has(ccy) ? MP_OTHER_CURRENCIES_COLUMN : ccy };
   });
 }
 
@@ -2577,7 +2583,7 @@ const mpFlagOf = code => (/^[A-Z]{2}$/.test(code || '') && code !== 'XX'
 function mpPie(el, title, buckets, note = '', order = null, groupSmall = true) {
   const card = document.createElement('div');
   card.className = 'pie-card';
-  card.innerHTML = `<h4>${mpEscapeHtml(title)}</h4><div class="pie-plot"></div>${note ? `<p class="note">${mpEscapeHtml(note)}</p>` : ''}`;
+  card.innerHTML = `<h4>${mpEscapeHtml(title)}</h4><div class="pie-plot"></div><p class="pie-total"></p>${note ? `<p class="note">${mpEscapeHtml(note)}</p>` : ''}`;
   el.appendChild(card);
   const rank = k => (/^other\b/.test(k) ? 1e9 : order && order.includes(k) ? order.indexOf(k) : 1e6);
   let entries = Object.entries(buckets).filter(([, v]) => v > 0.005)
@@ -2587,6 +2593,7 @@ function mpPie(el, title, buckets, note = '', order = null, groupSmall = true) {
   // labels sit inside the slices big enough to hold them -- no outside
   // labels shrinking the pie.
   const total = entries.reduce((s, e) => s + e[1], 0);
+  card.querySelector('.pie-total').innerHTML = `Total: <b>${mpFormatUsd(total)}</b>`;
   const small = entries.filter(e => e[1] / total < 0.01);
   if (groupSmall && small.length > 1) {
     entries = entries.filter(e => e[1] / total >= 0.01);
@@ -2633,7 +2640,12 @@ function mpAssetBuckets(rows, keep = null) {
 }
 
 let mpChartsRun = 0;
+let mpChartsPending = false;
 async function mpRenderCharts() {
+  // Drawn only while the tab is open (a hidden plot has no width to size
+  // itself to); otherwise on the next switch to it.
+  if (!document.getElementById('charts').classList.contains('active')) { mpChartsPending = true; return; }
+  mpChartsPending = false;
   const grid = document.getElementById('mp_charts_grid');
   const status = document.getElementById('mp_charts_status');
   // Sign-in can fire this twice in a row: only the latest run draws.
@@ -2652,7 +2664,10 @@ async function mpRenderCharts() {
   // 1. Currencies -- the broker x currency table's total row.
   const currencyLabel = c => (c === MP_OTHER_CURRENCIES_COLUMN ? 'others 🌍' : `${c}${MP_CURRENCY_FLAGS[c] ? ` ${MP_CURRENCY_FLAGS[c]}` : ''}`);
   const byCurrency = {};
-  for (const r of curRows) if (!r.excluded) mpAdd(byCurrency, currencyLabel(r.currency), r.value_usd);
+  // The "others" column split into its currencies (JPY, CAD, TWD, ...).
+  for (const r of curRows) if (!r.excluded) {
+    mpAdd(byCurrency, r.currency === MP_OTHER_CURRENCIES_COLUMN ? r.own_currency : currencyLabel(r.currency), r.value_usd);
+  }
   // 2 / 8 / 9. Banks and brokers -- the table's per-broker totals (credit netted
   // into liquid assets instead), no real estate.
   const byBroker = {};
@@ -2708,9 +2723,20 @@ async function mpRenderCharts() {
     if (!MP_RU_INFRA_TYPES.includes(type) || !(ccy in MP_RU_INFRA_CURRENCIES)) continue;
     mpAdd(ruCells, `${type} ${ccy}`, r.value_usd);
   }
-  const ruBuckets = (skip = []) => Object.fromEntries(Object.entries(ruCells)
-    .filter(([k, v]) => v > 0 && !skip.includes(k.split(' ')[0]))
-    .map(([k, v]) => { const [t, c] = k.split(' '); return [`${MP_RU_INFRA_LABELS[t]} ${MP_RU_INFRA_CURRENCIES[c]}`, v]; }));
+  // Per currency, a sliver of cash (< 1% of the chart) folds into that
+  // currency's liquid assets, and liquid assets still under 1% into its bonds.
+  const ruBuckets = (skip = []) => {
+    const cells = Object.fromEntries(Object.entries(ruCells).filter(([k, v]) => v > 0 && !skip.includes(k.split(' ')[0])));
+    const total = Object.values(cells).reduce((s, v) => s + v, 0);
+    for (const c of Object.keys(MP_RU_INFRA_CURRENCIES)) {
+      for (const [from, into] of [['cash', 'liquid'], ['liquid', 'bond']]) {
+        const v = cells[`${from} ${c}`];
+        if (v && v / total < 0.01) { cells[`${into} ${c}`] = (cells[`${into} ${c}`] || 0) + v; delete cells[`${from} ${c}`]; }
+      }
+    }
+    return Object.fromEntries(Object.entries(cells)
+      .map(([k, v]) => { const [t, c] = k.split(' '); return [`${MP_RU_INFRA_LABELS[t]} ${MP_RU_INFRA_CURRENCIES[c]}`, v]; }));
+  };
   // 9. Russian infrastructure vs the rest (no real estate).
   const ruTotal = curRows.filter(r => !isRealEstate(r) && isRu(r)).reduce((s, r) => s + r.value_usd, 0);
   const allTotal = curRows.filter(r => !isRealEstate(r)).reduce((s, r) => s + r.value_usd, 0);
@@ -2722,7 +2748,7 @@ async function mpRenderCharts() {
   status.textContent = '';
   // Slice order as in the user's own charts (clockwise from 12 o'clock).
   const currencyOrder = ['EUR', 'USD', 'RUB', 'GBP', 'CNY', 'TRY', 'RSD', MP_OTHER_CURRENCIES_COLUMN,
-    'ETH', 'XAU', 'BTC', 'SOL', 'TAO', 'GRAM', MP_ALTCOINS_COLUMN].map(currencyLabel);
+    'XAU', 'BTC', 'ETH', 'SOL', 'TAO', 'GRAM', MP_ALTCOINS_COLUMN].map(currencyLabel);
   const brokerOrder = ['Freedom24', 'Bank of Cyprus', 'Revolut', 'Wise', 'Raiffeisen', 'UniCredit', 'Ziraat Bank', 'IBKR',
     'Sber', 'T-Bank', 'Ozon Bank', 'Alfa', 'Yandex Bank', 'Finuslugi', 'Telegram', 'Binance', 'Bybit', 'Crypto.com', 'Trust', 'cash',
     '(unspecified)'].map(brokerName);
@@ -2748,6 +2774,8 @@ async function mpRenderCharts() {
     '', ['Russia 🇷🇺', 'rest of the world 🌍']);
   mpPie(grid, '11. Russian infrastructure without stocks', ruBuckets(['stock']), '', ruOrder, false);
   mpPie(grid, '12. Asset types with real estate', typesWithRealEstate, '', typeOrder);
+  // Size every plot to its card once the grid has laid out.
+  requestAnimationFrame(() => grid.querySelectorAll('.pie-plot').forEach(el => { if (el.data) Plotly.Plots.resize(el); }));
 }
 
 // Funds whose cash part (fund_holdings' 'OTHER' line: money, reverse repo,
