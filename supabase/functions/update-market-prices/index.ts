@@ -348,9 +348,12 @@ const DEPOSIT_PREFIX_LEGACY_CYRILLIC = 'ВКЛАД:';
 // 20250101000012_savings_and_credit_classes.sql.
 const SAVINGS_PREFIX = 'SAVINGS:';
 // A digital financial asset (ЦФА, e.g. on Atomyze -- import-atomyze) has no
-// market to quote it: "CFA:<ticker>" is priced at its nominal, the price of
-// its latest buy in `trades`, converted from that trade's currency. A debt
-// ЦФА is bond-like (fixed nominal, periodic payouts), so it's a bond.
+// market to quote it: "CFA:<ticker>" is priced at its nominal (the price of
+// its latest buy in `trades`) plus accrued income, like a bond's NKD: the
+// latest payout per unit (its `dividend` trade's price) x days since that
+// payout / days of the last payout period (30 until there are two payouts),
+// never more than one payout. A debt ЦФА is bond-like (fixed nominal,
+// periodic payouts), so it's a bond.
 const CFA_PREFIX = 'CFA:';
 // US-dollar stablecoins count as plain US dollars wherever they're held
 // (exchange, on-chain wallet, Snowball -- user's rule): priced exactly 1 USD,
@@ -543,10 +546,11 @@ async function moexListTradedBoards(secid: string): Promise<string[]> {
 
 async function moexFetchBond(secid: string, board: string): Promise<MoexPriceInfo | null> {
   // Bonds are quoted as a % of face value, not an absolute price, so the
-  // actual RUB value per unit is FACEVALUE * price_pct / 100 (+ accrued
-  // interest, NKD, which is excluded here -- this is a market-value
-  // snapshot of the bond itself, matching how `cash_flows` already tracks
-  // coupon/redemption payments separately).
+  // value per unit is FACEVALUE * price_pct / 100 plus the accrued coupon
+  // (NKD -- ACCRUEDINT, or ACCINT on a history row), the "dirty" price a
+  // sale would actually fetch (user's choice: count NKD for every bond).
+  // Coupons already paid are separate cash flows; NKD is the part not yet
+  // paid, so nothing is counted twice.
   const market = 'bonds';
   const url =
     `${MOEX_ISS_BASE}/engines/stock/markets/${market}/boards/${board}/securities/${encodeURIComponent(secid)}.json` +
@@ -557,6 +561,7 @@ async function moexFetchBond(secid: string, board: string): Promise<MoexPriceInf
   let facevalue: string | number | null = null;
   let currency: string | number | null = 'RUB';
   let asOf: string | number | null = null;
+  let accrued: string | number | null = null;
 
   if (data) {
     const secCols: string[] = data.securities?.columns ?? [];
@@ -569,6 +574,7 @@ async function moexFetchBond(secid: string, board: string): Promise<MoexPriceInf
       currency = sec.FACEUNIT ?? sec.CURRENCYID ?? 'RUB';
       asOf = sec.PREVDATE ?? null;
       pricePct = sec.PREVPRICE;
+      accrued = sec.ACCRUEDINT ?? null;
     }
     if (mdRows.length) {
       const md = rowsToObjects(mdCols, mdRows)[0];
@@ -594,13 +600,14 @@ async function moexFetchBond(secid: string, board: string): Promise<MoexPriceInf
     currency = row.FACEUNIT ?? currency;
     asOf = row.TRADEDATE ?? null;
     pricePct = row.LEGALCLOSEPRICE ?? row.CLOSE ?? row.MARKETPRICE2 ?? row.MARKETPRICE3;
+    accrued = accrued ?? row.ACCINT ?? null;
   }
 
   if (pricePct === null || pricePct === undefined || facevalue === null || facevalue === undefined) {
     return null;
   }
 
-  const priceNative = Number(facevalue) * Number(pricePct) / 100.0;
+  const priceNative = Number(facevalue) * Number(pricePct) / 100.0 + (Number(accrued) || 0);
   return { price_rub: priceNative, currency: currency === null ? null : String(currency), as_of: asOf === null ? null : String(asOf) };
 }
 
@@ -1032,15 +1039,27 @@ async function runUpdate(): Promise<Record<string, unknown>> {
       .select('ticker, price, currency, trade_date').in('ticker', cfaCandidates).eq('side', 'buy')
       .gt('price', 0).order('trade_date', { ascending: false });
     if (cfaErr) log(`  CFA nominal lookup: ${cfaErr.message}`);
+    const { data: payouts } = await supabase.from('trades')
+      .select('ticker, price, trade_date').in('ticker', cfaCandidates).eq('side', 'dividend')
+      .order('trade_date', { ascending: false });
+    const dayMs = 86_400_000;
     for (const ticker of cfaCandidates) {
       const buy = (buys ?? []).find((b: { ticker: string }) => b.ticker === ticker);
+      const pays = (payouts ?? []).filter((p: { ticker: string }) => p.ticker === ticker);
+      let accrued = 0;
+      if (pays.length) {
+        const last = Date.parse(`${pays[0].trade_date}T00:00:00Z`);
+        const period = pays.length > 1 ? (last - Date.parse(`${pays[1].trade_date}T00:00:00Z`)) / dayMs : 30;
+        const since = (Date.now() - last) / dayMs;
+        accrued = Math.min(1, Math.max(0, since / (period || 30))) * Number(pays[0].price);
+      }
       if (!buy) { log(`  CFA ${ticker}: no buy with a price in trades, skipping`); continue; }
       const currency = String(buy.currency || 'RUB').toUpperCase();
       const rate = await fxRateToUsd(currency, usdRubRate);
       if (rate === null) { log(`  CFA ${ticker}: no ${currency}->USD rate, skipping`); continue; }
-      const nominal = Number(buy.price);
+      const nominal = Number(buy.price) + accrued;
       rowsOut.push({
-        ticker, price_usd: Math.round(nominal * rate * 1e6) / 1e6, native_price: nominal, currency,
+        ticker, price_usd: Math.round(nominal * rate * 1e6) / 1e6, native_price: Math.round(nominal * 100) / 100, currency,
         asset_class: 'bond', infra_region: currency === 'RUB' ? 'ru' : 'foreign', instrument_type: 'bond',
         underlying_currency: currency, source: 'cfa_nominal', as_of: new Date().toISOString().slice(0, 10),
       });
