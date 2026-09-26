@@ -1618,6 +1618,9 @@ document.getElementById('btn_login').addEventListener('click', async () => {
 //   - This project's own generic bank CSV (built from PDF statements of
 //     banks with no CSV export -- Yandex Bank, T-Bank; the bank's name is
 //     a column) starts with "bank,account_number,product,..."
+//   - This project's own broker-operations CSV (trades of a broker with no
+//     downloadable report -- Alfa-Investments) starts with
+//     "broker,account_number,date,operation,..."
 function mpDetectCsvKind(headerLine, fullText) {
   const h = headerLine.trim();
   if (/^Event,Date,Symbol/i.test(h)) return 'snowball';
@@ -1627,6 +1630,7 @@ function mpDetectCsvKind(headerLine, fullText) {
   if (/^Date,Description,Transaction type,/im.test(fullText)) return 'boc_account';
   if (/^account_number,currency,date_executed,/i.test(h)) return 'raiffeisen_account';
   if (/^bank,account_number,product,/i.test(h)) return 'bank_csv';
+  if (/^\uFEFF?broker,account_number,date,operation,/i.test(h)) return 'broker_csv';
   if (/^UID:\s*\d+,Company Name:/i.test(h)
       && /^Uid,(Date & Time\(UTC\),Coin|Currency,Contract),/m.test(fullText)) return 'bybit_log';
   if (/^\uFEFF?Timestamp \(UTC\),Transaction Description,Currency,Amount,To Currency,/i.test(h)) return 'cryptocom';
@@ -1712,7 +1716,7 @@ async function mpImportOneFile(file, statusEl, session) {
       statusEl.textContent = 'Unrecognized CSV format — expected a Snowball trades export, '
         + 'a Revolut account statement, a Revolut Flexible Cash Funds statement, a Revolut '
         + 'Instant Access Savings statement, a Wise balance statement, an IBKR Activity Statement, a Bank of Cyprus transaction history export, or '
-        + 'this project\'s own Raiffeisen Bank Serbia or generic bank transaction CSV, a Bybit transaction log, '
+        + 'this project\'s own Raiffeisen Bank Serbia, generic bank transaction or broker operations CSV, a Bybit transaction log, '
         + 'a Crypto.com App export, a Binance transaction export, or this project\'s own Telegram Wallet CSV.';
       return;
     }
@@ -1731,6 +1735,7 @@ async function mpImportOneFile(file, statusEl, session) {
       ziraat_xlsx: { fn: 'import-ziraat-statement', label: 'Ziraat Bank account activity' },
       raiffeisen_account: { fn: 'import-raiffeisen-statement', label: 'Raiffeisen Bank Serbia transaction history' },
       bank_csv: { fn: 'import-bank-csv', label: 'bank transaction history (generic CSV)' },
+      broker_csv: { fn: 'import-broker-csv', label: 'broker operations (generic CSV)' },
       bybit_log: { fn: 'import-bybit', label: 'Bybit transaction log' },
       cryptocom: { fn: 'import-crypto-com', label: 'Crypto.com App export' },
       telegram_wallet: { fn: 'import-telegram-wallet', label: 'Telegram Wallet history' },
@@ -1897,6 +1902,18 @@ async function mpImportOneFile(file, statusEl, session) {
         + `${result.adjustments ? `, ${result.adjustments} movements without a deal` : ''} and ${result.cash_rows} cash rows`
         + `${result.removed_snowball_duplicates ? ` (replacing ${result.removed_snowball_duplicates} Snowball rows)` : ''}. `
         + `Holdings at period end: ${h}. Cash: ${cash}.`;
+      mpRenderHoldings();
+      mpRenderPortfolioPies();
+      mpRenderCashFlows();
+      mpRenderBrokerCurrency();
+      mpRenderBrokerAssetClass();
+      mpRenderEquityByIndex();
+      mpRenderBondByType();
+    } else if (kind === 'broker_csv') {
+      const h = Object.entries(result.holdings || {}).map(([c, q]) => `${c} ${q}`).join(', ') || 'nothing';
+      statusEl.textContent = `Detected: ${label}. Imported ${result.trades} trades and ${result.payouts} payouts`
+        + `${result.removed_snowball_duplicates ? ` (replacing ${result.removed_snowball_duplicates} Snowball rows)` : ''}. `
+        + `Holdings from these operations: ${h}.`;
       mpRenderHoldings();
       mpRenderPortfolioPies();
       mpRenderCashFlows();

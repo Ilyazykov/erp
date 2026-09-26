@@ -27,11 +27,12 @@ const SKIPPED_SYMBOLS = new Set(['XAUT']);
 //     -- Snowball dates its gold purchases a day off);
 //   - by operation: a trade / dividend a broker statement has
 //     (import-ibkr-statement, import-freedom24-statement,
-//     import-revolut-invest, import-revolut-crypto, import-tbank-broker;
+//     import-revolut-invest, import-revolut-crypto, import-tbank-broker,
+//     import-broker-csv;
 //     matching rules in
 //     _shared/statement_priority.ts).
 const STATEMENT_TRADE_SOURCES = ['revolut_metal_csv'];
-const STATEMENT_OPERATION_SOURCES = ['ibkr_csv', 'freedom24_xlsx', 'revolut_invest_csv', 'revolut_crypto_csv', 'tbank_broker_xlsx', 'atomyze_xlsx', 'sber_broker_html'];
+const STATEMENT_OPERATION_SOURCES = ['ibkr_csv', 'freedom24_xlsx', 'revolut_invest_csv', 'revolut_crypto_csv', 'tbank_broker_xlsx', 'atomyze_xlsx', 'sber_broker_html', 'broker_csv'];
 
 // Telegram Wallet rows that Snowball has without a note: the 2025-11-15 sale
 // of the BTC bought there on 11-03 / 11-06 (in Wallet's own history as
