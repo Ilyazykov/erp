@@ -20,6 +20,10 @@
 // in Telegram Wallet.
 const SKIPPED_NOTES = new Set(['trust', 'bybit', 'crypto.com', 'telegram', 'telegram -> trust']);
 const SKIPPED_SYMBOLS = new Set(['XAUT']);
+// Telegram Wallet rows that Snowball has without a note: the 2025-11-15 sale
+// of the BTC bought there on 11-03 / 11-06 (in Wallet's own history as
+// "Exchanged BTC to USDT").
+const SKIPPED_UNNOTED = new Set(['SELL:2025-11-15:BTC:0.00450484']);
 // Hand-entered month-end ETH staking reward: it's Lido's stETH reward in
 // Trust Wallet, already inside the stETH balance read from the chain.
 const isSnowballEthInterest = (event: string, symbol: string) =>
@@ -157,6 +161,10 @@ Deno.serve(async (req) => {
       const quantity = parseNumber(cells[idx.quantity]);
       const price = parseNumber(cells[idx.price]);
       if (!trade_date || quantity === null || price === null) { skipped++; continue; }
+      if (!(cells[idx.note] || '').trim()
+          && SKIPPED_UNNOTED.has(`${event}:${trade_date}:${(cells[idx.symbol] || '').trim().toUpperCase()}:${quantity}`)) {
+        skippedTrust++; continue;
+      }
 
       const signature = `${event}:${cells[idx.date]}:${cells[idx.symbol]}:${cells[idx.quantity]}:${cells[idx.price]}:${cells[idx.feeTax]}`;
       const occurrence = dupSeen.get(signature) ?? 0;
