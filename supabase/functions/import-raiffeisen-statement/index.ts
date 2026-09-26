@@ -40,6 +40,13 @@
 // legitimate same-day duplicates (e.g. the several identical "Yandex Go"
 // rows a single day can carry).
 //
+// Each CSV is an account's whole history (rebuilt from every PDF each
+// time), so an upload replaces what's stored for the currencies it carries
+// -- rows imported earlier under a different date / description (e.g.
+// before the booking date was read from the right column) don't linger as
+// duplicates. The dinar account's CSV is RSD only; the foreign-currency
+// account's carries EUR and USD, so the two never clear each other.
+//
 // Both Raiffeisen accounts share one `account` label ("Raiffeisen") so
 // they collapse into a single row in the broker x currency/asset-class
 // pivot tables, with RSD and EUR as separate columns -- matching how a
@@ -230,6 +237,13 @@ Deno.serve(async (req) => {
         { status: 400, headers: corsHeaders });
     }
 
+    const currencies = [...new Set(rows.map(r => r.currency))];
+    const { error: delErr } = await supabase.from('bank_transactions').delete()
+      .eq('user_id', user.id).eq('external_source', 'raiffeisen_csv').in('currency', currencies);
+    if (delErr) {
+      return new Response(JSON.stringify({ error: delErr.message }), { status: 500, headers: corsHeaders });
+    }
+
     const { error: upsertErr, count } = await supabase
       .from('bank_transactions')
       .upsert(rows, { onConflict: 'user_id,external_source,external_id', count: 'exact' });
@@ -242,6 +256,7 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({
       imported: count ?? rows.length,
       total_rows: csvRows.length,
+      replaced_currencies: currencies,
     }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (err) {
     return new Response(JSON.stringify({ error: String(err) }),
