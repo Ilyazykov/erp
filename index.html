@@ -256,6 +256,12 @@
     <p class="empty-note" id="mp_wallet_status"></p>
     <div id="mp_wallets_wrap"></div>
 
+    <div class="section-title">Exchange accounts</div>
+    <p class="note">Custodial exchange accounts (Bybit): there's no blockchain address to read, so they're updated by
+      uploading the exchange's own transaction logs in <b>Import CSV</b> above (Bybit: Data Export → Transaction Log →
+      Account Change Details, each Funding and Unified Trading file). The button above doesn't touch them.</p>
+    <div id="mp_exchanges_wrap"></div>
+
     <div class="section-title">Portfolio by broker × currency</div>
     <div id="mp_broker_currency_wrap"></div>
 
@@ -2979,13 +2985,18 @@ function mpFormatQty(q) {
   return n.toLocaleString('en-US', { maximumFractionDigits: n >= 1 ? 4 : 8 });
 }
 
+// Custodial exchange accounts (chain 'bybit', filled by import-bybit) live in
+// the same tables as on-chain wallets but get their own block: they aren't
+// part of the blockchain sync.
+const MP_EXCHANGE_CHAINS = new Set(['bybit']);
+
 async function mpRenderWallets() {
   const wrap = document.getElementById('mp_wallets_wrap');
+  const exWrap = document.getElementById('mp_exchanges_wrap');
   const { data: wallets, error } = await sb.from('crypto_wallets')
     .select('id, chain, address, account, last_synced_at, last_sync_error').order('created_at');
-  if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
+  if (error) { wrap.innerHTML = exWrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
   mpWallets = wallets;
-  if (!wallets.length) { wrap.innerHTML = '<p class="empty-note">No wallets yet — add an address above.</p>'; return; }
 
   const { data: balances } = await sb.from('wallet_balances')
     .select('wallet_id, chain, contract, symbol, name, quantity, price_usd, ticker');
@@ -2995,9 +3006,28 @@ async function mpRenderWallets() {
     const { data: mp } = await sb.from('market_prices').select('ticker, price_usd').in('ticker', tickers);
     for (const r of mp || []) prices[r.ticker] = r.price_usd;
   }
+  const onchain = wallets.filter(w => !MP_EXCHANGE_CHAINS.has(w.chain));
+  const exchanges = wallets.filter(w => MP_EXCHANGE_CHAINS.has(w.chain));
+  await mpRenderWalletGroup(wrap, onchain, balances || [], prices, {
+    empty: 'No wallets yet — add an address above.', noBalances: 'No balances yet — press Sync now.',
+    head: ['Wallet', 'Chain', 'Address', 'Last sync', 'Status'],
+    cells: w => [MP_CHAIN_LABELS[w.chain] || w.chain, `<code>${mpEscapeHtml(mpShortAddress(w.address))}</code>`],
+  });
+  await mpRenderWalletGroup(exWrap, exchanges, balances || [], prices, {
+    empty: 'No exchange accounts yet — upload a Bybit transaction log in Import CSV.',
+    noBalances: 'No balances yet — upload both the Funding and the Unified Trading logs.',
+    head: ['Account', 'Exchange', 'Account ID', 'Last import', 'Status'],
+    cells: w => [MP_CHAIN_LABELS[w.chain] || w.chain, mpEscapeHtml(w.address.replace(/^UID\s*/, ''))],
+  });
+}
+
+async function mpRenderWalletGroup(wrap, wallets, allBalances, prices, opts) {
+  if (!wallets.length) { wrap.innerHTML = `<p class="empty-note">${opts.empty}</p>`; return; }
+  const ids = new Set(wallets.map(w => w.id));
+  const balances = allBalances.filter(b => ids.has(b.wallet_id));
   const { data: txs } = await sb.from('wallet_transactions')
     .select('wallet_id, tx_time, kind, symbol, amount, counterparty, status')
-    .order('tx_time', { ascending: false }).limit(30);
+    .in('wallet_id', [...ids]).order('tx_time', { ascending: false }).limit(30);
   const walletLabel = id => {
     const w = wallets.find(x => x.id === id);
     return w ? `${w.account} · ${MP_CHAIN_LABELS[w.chain] || w.chain}` : '';
@@ -3005,14 +3035,13 @@ async function mpRenderWallets() {
 
   const walletRows = wallets.map(w => `<tr>
     <td class="ticker">${mpEscapeHtml(w.account)}</td>
-    <td>${mpEscapeHtml(MP_CHAIN_LABELS[w.chain] || w.chain)}</td>
-    <td><code>${mpEscapeHtml(mpShortAddress(w.address))}</code></td>
+    ${opts.cells(w).map(c => `<td>${c}</td>`).join('')}
     <td>${w.last_synced_at ? new Date(w.last_synced_at).toLocaleString() : '<span class="muted">never</span>'}</td>
     <td>${w.last_sync_error ? `<span class="neg">${mpEscapeHtml(w.last_sync_error)}</span>` : '<span class="muted">ok</span>'}</td>
-    <td><button class="icon-btn" data-wallet-delete="${w.id}" title="Remove wallet">✕</button></td>
+    <td><button class="icon-btn" data-wallet-delete="${w.id}" title="Remove">✕</button></td>
   </tr>`).join('');
 
-  const rows = (balances || []).map(b => {
+  const rows = balances.map(b => {
     const price = b.ticker ? (prices[b.ticker] ?? b.price_usd) : null;
     const value = price !== null && price !== undefined ? Number(b.quantity) * price : null;
     return { ...b, price, value };
@@ -3029,32 +3058,33 @@ async function mpRenderWallets() {
   </tr>`;
 
   wrap.innerHTML = `<table class="data-table"><thead><tr>
-      <th>Wallet</th><th>Chain</th><th>Address</th><th>Last sync</th><th>Status</th><th></th>
+      ${opts.head.map(h => `<th>${h}</th>`).join('')}<th></th>
     </tr></thead><tbody>${walletRows}</tbody></table>
     <table class="data-table"><thead><tr>
-      <th>Asset</th><th>Wallet</th><th>Quantity</th><th>Price (USD)</th><th>Value (USD)</th>
-    </tr></thead><tbody>${counted.map(tokenRow).join('') || '<tr><td colspan="5" class="muted">No balances yet — press Sync now.</td></tr>'}
+      <th>Asset</th><th>${opts.head[0]}</th><th>Quantity</th><th>Price (USD)</th><th>Value (USD)</th>
+    </tr></thead><tbody>${counted.map(tokenRow).join('') || `<tr><td colspan="5" class="muted">${opts.noBalances}</td></tr>`}
     <tr class="total-row"><td colspan="4"><b>Total</b></td><td><b>${mpFormatUsd(total)}</b></td></tr>
     </tbody></table>
     ${uncounted.length ? `<details class="note"><summary>${uncounted.length} token(s) without a market price — not counted</summary>
-      <table class="data-table"><thead><tr><th>Asset</th><th>Wallet</th><th>Quantity</th><th>Contract</th></tr></thead>
+      <table class="data-table"><thead><tr><th>Asset</th><th>${opts.head[0]}</th><th>Quantity</th><th>Contract</th></tr></thead>
       <tbody>${uncounted.map(r => `<tr><td class="ticker">${mpEscapeHtml(r.symbol || '?')}</td>
         <td>${mpEscapeHtml(walletLabel(r.wallet_id))}</td><td>${mpFormatQty(r.quantity)}</td>
         <td><code>${mpEscapeHtml(mpShortAddress(r.contract || ''))}</code></td></tr>`).join('')}</tbody></table>
     </details>` : ''}
-    ${(txs || []).length ? `<details class="note"><summary>Latest ${txs.length} wallet transactions</summary>
-      <table class="data-table"><thead><tr><th>Date</th><th>Wallet</th><th>Type</th><th>Asset</th><th>Amount</th><th>Counterparty</th></tr></thead>
+    ${(txs || []).length ? `<details class="note"><summary>Latest ${txs.length} transactions</summary>
+      <table class="data-table"><thead><tr><th>Date</th><th>${opts.head[0]}</th><th>Type</th><th>Asset</th><th>Amount</th><th>Counterparty / details</th></tr></thead>
       <tbody>${txs.map(t => `<tr><td>${new Date(t.tx_time).toLocaleString()}</td>
         <td>${mpEscapeHtml(walletLabel(t.wallet_id))}</td><td>${mpEscapeHtml(t.kind)}</td>
         <td>${mpEscapeHtml(t.symbol || '?')}</td>
         <td class="${Number(t.amount) < 0 ? 'neg' : 'pos'}">${mpFormatQty(t.amount)}</td>
-        <td>${t.counterparty ? `<code>${mpEscapeHtml(mpShortAddress(t.counterparty))}</code>` : '<span class="muted">—</span>'}</td></tr>`).join('')}
+        <td>${t.counterparty ? `<code>${mpEscapeHtml(mpShortAddress(t.counterparty))}</code>`
+          : t.status ? `<span class="muted">${mpEscapeHtml(t.status)}</span>` : '<span class="muted">—</span>'}</td></tr>`).join('')}
       </tbody></table></details>` : ''}`;
 
   wrap.querySelectorAll('[data-wallet-delete]').forEach(btn => btn.addEventListener('click', async () => {
-    if (!confirm('Remove this wallet together with its synced balances and history?')) return;
+    if (!confirm('Remove this account together with its balances and history?')) return;
     const { error: delErr } = await sb.from('crypto_wallets').delete().eq('id', btn.dataset.walletDelete);
-    document.getElementById('mp_wallet_status').textContent = delErr ? `Error: ${delErr.message}` : 'Wallet removed.';
+    document.getElementById('mp_wallet_status').textContent = delErr ? `Error: ${delErr.message}` : 'Removed.';
     mpRefreshAfterWalletChange();
   }));
 }

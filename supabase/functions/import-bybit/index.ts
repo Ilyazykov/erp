@@ -28,6 +28,14 @@
 //     still owned
 //   - the Bybit Card's USD bookkeeping rows (coin USD): what the card
 //     actually spends is the crypto "Sale" row next to them
+// Stablecoins count as plain US dollars (user's rule, applied everywhere by
+// update-market-prices): the part sitting in Earn, earning interest, is a
+// liquid asset ("SAVINGS:Bybit USD"); the rest keeps its own ticker (USDC,
+// USDT, ...), which update-market-prices prices as 1 USD of cash.
+// The Earn part is what went into Earn minus what came back (the
+// earn_internal rows). Other coins (BTC, SOL, ...) stay crypto wherever
+// they sit.
+//
 // With complete logs from the account's first deposit this reproduces
 // Bybit's own Account Statement to the last digit (checked against the
 // 24.09.2026 statement: BTC 0.01729905, SOL 1.46851659, USDC 35.9875).
@@ -43,6 +51,7 @@ interface Row {
 }
 
 const INTERNAL_KINDS = new Set(['transfer_internal', 'earn_internal', 'card_usd']);
+const STABLECOINS = new Set(['USDT', 'USDC', 'DAI', 'USDS', 'USDE', 'FDUSD', 'PYUSD']);
 
 function parseCsvLine(line: string): string[] {
   const cells: string[] = [];
@@ -202,25 +211,37 @@ Deno.serve(async (req) => {
       if (data.length < 1000) break;
     }
     // BigInt fixed-point (18 decimals) so ~1600 tiny interest rows sum exactly.
-    const big = new Map<string, bigint>();
-    for (const r of all) {
-      if (INTERNAL_KINDS.has(r.kind)) continue;
-      const amount = dec(String(r.amount));  // also normalises any exponent form
+    const toBig = (x: unknown) => {
+      const amount = dec(String(x));  // also normalises any exponent form
       const [i, f = ''] = amount.replace('-', '').split('.');
-      let v = BigInt(i || '0') * BigInt(scale) + BigInt((f + '0'.repeat(18)).slice(0, 18));
-      if (amount.startsWith('-')) v = -v;
-      big.set(r.symbol, (big.get(r.symbol) ?? 0n) + v);
-    }
-    const balances = [...big.entries()].filter(([, v]) => v !== 0n).map(([coin, v]) => {
+      const v = BigInt(i || '0') * BigInt(scale) + BigInt((f + '0'.repeat(18)).slice(0, 18));
+      return amount.startsWith('-') ? -v : v;
+    };
+    const toStr = (v: bigint) => {
       const neg = v < 0n; const a = neg ? -v : v;
-      const s = `${neg ? '-' : ''}${a / BigInt(scale)}.${(a % BigInt(scale)).toString().padStart(18, '0')}`.replace(/\.?0+$/, '');
-      sums.set(coin, Number(s));
-      return {
-        wallet_id: wallet!.id, user_id: user.id, account: wallet!.account, chain: 'bybit',
-        contract: coin, symbol: coin, name: null, decimals: null, quantity: s, price_usd: null,
-        ticker: coin, as_of: new Date().toISOString(),
-      };
-    });
+      return `${neg ? '-' : ''}${a / BigInt(scale)}.${(a % BigInt(scale)).toString().padStart(18, '0')}`.replace(/\.?0+$/, '');
+    };
+    const big = new Map<string, bigint>();   // total owned per coin
+    const inEarn = new Map<string, bigint>(); // of which sitting in Earn
+    for (const r of all) {
+      if (r.kind === 'earn_internal') inEarn.set(r.symbol, (inEarn.get(r.symbol) ?? 0n) - toBig(r.amount));
+      if (INTERNAL_KINDS.has(r.kind)) continue;
+      big.set(r.symbol, (big.get(r.symbol) ?? 0n) + toBig(r.amount));
+    }
+    const base = { wallet_id: wallet!.id, user_id: user.id, account: wallet!.account, chain: 'bybit',
+                   name: null, decimals: null, price_usd: null, as_of: new Date().toISOString() };
+    const balances: any[] = [];
+    for (const [coin, v] of big) {
+      if (v === 0n) continue;
+      sums.set(coin, Number(toStr(v)));
+      if (!STABLECOINS.has(coin)) {
+        balances.push({ ...base, contract: coin, symbol: coin, quantity: toStr(v), ticker: coin });
+        continue;
+      }
+      const earn = inEarn.get(coin) ?? 0n;
+      if (earn !== 0n) balances.push({ ...base, contract: `${coin}:earn`, symbol: `${coin} (Earn)`, name: 'Earn', quantity: toStr(earn), ticker: 'SAVINGS:Bybit USD' });
+      if (v - earn !== 0n) balances.push({ ...base, contract: coin, symbol: coin, quantity: toStr(v - earn), ticker: coin });
+    }
     const { error: delErr } = await supabase.from('wallet_balances').delete().eq('wallet_id', wallet!.id);
     if (delErr) throw new Error(delErr.message);
     if (balances.length) {

@@ -62,7 +62,8 @@ const MAX_PAGES = 200;
 // Token contracts counted as a plain ticker update-market-prices already
 // prices. Keyed by contract, never by symbol: scam tokens copy the "USDT"
 // symbol all the time.
-//   - canonical stablecoins -> USDT / USDC
+//   - canonical US-dollar stablecoins -> their own ticker (USDT, USDC, DAI,
+//     ...), which update-market-prices prices as 1 USD of cash
 //   - Lido stETH -> ETH: staked ETH redeemable 1:1, and the user counts it
 //     as ETH (wstETH is NOT 1:1 -- it's worth more than 1 ETH -- so it isn't
 //     mapped).
@@ -70,6 +71,11 @@ const KNOWN_TOKEN_TICKERS: Record<string, Record<string, string>> = {
   ethereum: {
     '0xdac17f958d2ee523a2206206994597c13d831ec7': 'USDT',
     '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48': 'USDC',
+    '0x6b175474e89094c44da98b954eedeac495271d0f': 'DAI',
+    '0xdc035d45d973e3ec169d2276ddab16f1e407384f': 'USDS',
+    '0x4c9edd5852cd905f086c759e8383e09bff1e68b3': 'USDE',
+    '0xc5f0f7b66764f6ec8c8dff7ba683102295e16409': 'FDUSD',
+    '0x6c3ea9036406852006290770bedfcaba0e23a0e8': 'PYUSD',
     '0xae7ab96520de3a18e5e111b5eaab095312d7fe84': 'ETH',  // Lido stETH
   },
   tron: {

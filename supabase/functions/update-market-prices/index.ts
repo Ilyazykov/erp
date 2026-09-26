@@ -299,7 +299,7 @@ async function latestUsdRubRate(): Promise<number | null> {
 // Ticker classification
 // ---------------------------------------------------------------------------
 
-type TickerClass = 'moex_ofz' | 'moex_bond' | 'moex_share_or_etf_or_other' | 'crypto' | 'deposit' | 'savings' | 'money_market_fund';
+type TickerClass = 'moex_ofz' | 'moex_bond' | 'moex_share_or_etf_or_other' | 'crypto' | 'deposit' | 'savings' | 'stablecoin' | 'money_market_fund';
 
 // A bank deposit/savings account is represented as a synthetic ticker,
 // not an ISIN or a real listed instrument -- e.g. "DEPOSIT:Revolut" for
@@ -327,6 +327,13 @@ const DEPOSIT_PREFIX_LEGACY_CYRILLIC = 'ВКЛАД:';
 // whose early withdrawal loses interest). See
 // 20250101000012_savings_and_credit_classes.sql.
 const SAVINGS_PREFIX = 'SAVINGS:';
+// US-dollar stablecoins count as plain US dollars wherever they're held
+// (exchange, on-chain wallet, Snowball -- user's rule): priced exactly 1 USD,
+// instrument_type 'cash', underlying currency USD, so they land in the USD
+// column and the cash column rather than under crypto. Stablecoins earning
+// interest are recorded under a SAVINGS:<account> USD ticker instead (see
+// import-bybit), which makes them liquid assets.
+const STABLECOIN_TICKERS = new Set(['USDT', 'USDC', 'DAI', 'USDS', 'USDE', 'FDUSD', 'PYUSD', 'TUSD', 'BUSD', 'USDP']);
 
 // Revolut's Flexible Cash Funds are money-market funds (Fidelity
 // Institutional Liquidity Fund plc share classes) whose ticker is the
@@ -379,6 +386,7 @@ const UNDERLYING_CURRENCY_BY_TICKER: Record<string, string> = { SBBY: 'CNY', TLC
 function classifyTicker(ticker: string): TickerClass {
   const t = ticker.toUpperCase();
   if (t.startsWith(SAVINGS_PREFIX)) return 'savings';
+  if (STABLECOIN_TICKERS.has(t)) return 'stablecoin';
   if (t.startsWith(DEPOSIT_PREFIX) || t.startsWith(DEPOSIT_PREFIX_LEGACY_CYRILLIC)) return 'deposit';
   if (MONEY_MARKET_FUND_ISINS.has(t)) return 'money_market_fund';
   if (KNOWN_CRYPTO_TICKERS.has(t)) return 'crypto';
@@ -825,7 +833,7 @@ async function fetchTickerCurrencies(supabase: any, tickers: string[]): Promise<
 }
 
 type InfraRegion = 'ru' | 'foreign';
-type InstrumentType = 'stock' | 'bond' | 'deposit' | 'liquid' | 'gold' | 'crypto' | 'fx_rate';
+type InstrumentType = 'stock' | 'bond' | 'deposit' | 'liquid' | 'cash' | 'gold' | 'crypto' | 'fx_rate';
 
 interface PriceRow {
   ticker: string;
@@ -919,6 +927,16 @@ async function runUpdate(): Promise<Record<string, unknown>> {
   //     like any other price. CASH_FX_CURRENCIES is the closed set of
   //     currencies actually seen across bank statements and holdings
   //     today; extend it if a new currency shows up. ---
+  for (const ticker of tickers) {
+    if (classifyTicker(ticker) !== 'stablecoin') continue;
+    rowsOut.push({
+      ticker, price_usd: 1, native_price: 1, currency: 'USD',
+      asset_class: 'stablecoin', infra_region: 'foreign', instrument_type: 'cash',
+      underlying_currency: 'USD', source: 'usd_peg', as_of: new Date().toISOString().slice(0, 10),
+    });
+    resolved.add(ticker);
+  }
+
   const CASH_FX_CURRENCIES = ['USD', 'EUR', 'GBP', 'RUB', 'CNY', 'TRY', 'RSD'];
   for (const currency of CASH_FX_CURRENCIES) {
     const rate = await fxRateToUsd(currency, usdRubRate);
@@ -948,7 +966,9 @@ async function runUpdate(): Promise<Record<string, unknown>> {
     const depositCurrencies = await fetchTickerCurrencies(supabase, depositCandidates);
     for (const ticker of depositCandidates) {
       const isSavings = classifyTicker(ticker) === 'savings';
-      const currency = depositCurrencies[ticker];
+      // Currency from the trades that use the ticker, else from the ticker
+      // itself ("SAVINGS:Bybit USD" comes from wallet balances, not trades).
+      const currency = depositCurrencies[ticker] ?? ticker.match(/ ([A-Z]{3})$/)?.[1];
       if (!currency) { log(`  deposit ticker ${ticker}: no currency found in trades, skipping`); continue; }
       const rate = await fxRateToUsd(currency, usdRubRate);
       if (rate === null) { log(`  deposit ticker ${ticker}: no ${currency}->USD rate available, skipping`); continue; }
