@@ -224,7 +224,7 @@
       Cash Funds statement, a Revolut Instant Access Savings statement, a Wise balance statement (CSV, one per
       currency), a Revolut brokerage (Invest) statement (CSV), a Revolut crypto account statement (CSV), an IBKR Activity Statement (CSV, one per period), a Freedom24 cash-movement report
       (tradernet_table.xlsx, from the account's opening) and broker report (JSON), a T-Bank broker report
-      (broker_report.xlsx, one per agreement), a Bank of Cyprus transaction
+      (broker_report.xlsx, one per agreement), an Atomyze (ЦФА) platform report (.xlsx), a Bank of Cyprus transaction
       history export, a Ziraat Bank account activity export (.xlsx), or this project's own combined
       Raiffeisen Bank Serbia transaction CSV, its generic bank CSV (Yandex Bank, T-Bank), a Bybit transaction log
       (Data Export → Transaction Log → Account Change Details: upload each Funding and Unified Trading file), or a
@@ -1679,6 +1679,7 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
       freedom24_xlsx: { fn: 'import-freedom24-statement', label: 'Freedom24 cash-movement report' },
       freedom24_json: { fn: 'import-freedom24-statement', label: 'Freedom24 broker report (JSON)' },
       tbank_broker_xlsx: { fn: 'import-tbank-broker', label: 'T-Bank broker report' },
+      atomyze_xlsx: { fn: 'import-atomyze', label: 'Atomyze (ЦФА) platform report' },
       xlsx: { fn: 'import-xlsx', label: 'spreadsheet (.xlsx)' },
     };
     const { fn } = endpoints[kind];
@@ -1751,6 +1752,18 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
         : `Detected: ${label}. Imported ${result.rows} rows (${result.total_rows_stored} stored in total).${skipped} `
           + `Crypto.com balance now: ${bal}.`;
       mpRefreshAfterWalletChange();
+    } else if (kind === 'atomyze_xlsx') {
+      const h = Object.entries(result.holdings || {}).map(([c, q]) => `${c} ${q}`).join(', ') || 'none';
+      statusEl.textContent = `Detected: ${label}. Imported ${result.deals} deals, ${result.payouts} payouts`
+        + `${result.adjustments ? `, ${result.adjustments} movements without a deal` : ''} and ${result.cash_rows} wallet operations`
+        + `${result.removed_snowball_duplicates ? ` (replacing ${result.removed_snowball_duplicates} Snowball rows)` : ''}. `
+        + `ЦФА held: ${h}. Wallet: RUB ${result.cash?.last ?? 0}.`;
+      mpRenderHoldings();
+      mpRenderPortfolioPies();
+      mpRenderCashFlows();
+      mpRenderBrokerCurrency();
+      mpRenderBrokerAssetClass();
+      mpRenderBondByType();
     } else if (kind === 'tbank_broker_xlsx') {
       const h = Object.entries(result.holdings || {}).map(([c, q]) => `${c} ${q}`).join(', ') || 'none';
       // `computed` is what the listed operations add up to; where it differs

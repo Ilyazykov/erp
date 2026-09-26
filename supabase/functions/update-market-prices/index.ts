@@ -319,7 +319,7 @@ async function latestUsdRubRate(): Promise<number | null> {
 // Ticker classification
 // ---------------------------------------------------------------------------
 
-type TickerClass = 'moex_ofz' | 'moex_bond' | 'moex_share_or_etf_or_other' | 'crypto' | 'deposit' | 'savings' | 'stablecoin' | 'money_market_fund';
+type TickerClass = 'moex_ofz' | 'moex_bond' | 'moex_share_or_etf_or_other' | 'crypto' | 'deposit' | 'savings' | 'stablecoin' | 'money_market_fund' | 'cfa';
 
 // A bank deposit/savings account is represented as a synthetic ticker,
 // not an ISIN or a real listed instrument -- e.g. "DEPOSIT:Revolut" for
@@ -347,6 +347,11 @@ const DEPOSIT_PREFIX_LEGACY_CYRILLIC = 'ВКЛАД:';
 // whose early withdrawal loses interest). See
 // 20250101000012_savings_and_credit_classes.sql.
 const SAVINGS_PREFIX = 'SAVINGS:';
+// A digital financial asset (ЦФА, e.g. on Atomyze -- import-atomyze) has no
+// market to quote it: "CFA:<ticker>" is priced at its nominal, the price of
+// its latest buy in `trades`, converted from that trade's currency. A debt
+// ЦФА is bond-like (fixed nominal, periodic payouts), so it's a bond.
+const CFA_PREFIX = 'CFA:';
 // US-dollar stablecoins count as plain US dollars wherever they're held
 // (exchange, on-chain wallet, Snowball -- user's rule): priced exactly 1 USD,
 // instrument_type 'cash', underlying currency USD, so they land in the USD
@@ -406,6 +411,7 @@ const UNDERLYING_CURRENCY_BY_TICKER: Record<string, string> = { SBBY: 'CNY', TLC
 function classifyTicker(ticker: string): TickerClass {
   const t = ticker.toUpperCase();
   if (t.startsWith(SAVINGS_PREFIX)) return 'savings';
+  if (t.startsWith(CFA_PREFIX)) return 'cfa';
   if (STABLECOIN_TICKERS.has(t)) return 'stablecoin';
   if (t.startsWith(DEPOSIT_PREFIX) || t.startsWith(DEPOSIT_PREFIX_LEGACY_CYRILLIC)) return 'deposit';
   if (MONEY_MARKET_FUND_ISINS.has(t)) return 'money_market_fund';
@@ -919,6 +925,7 @@ async function runUpdate(): Promise<Record<string, unknown>> {
   const cryptoCandidates: string[] = [];
   const depositCandidates: string[] = [];
   const moneyMarketCandidates: string[] = [];
+  const cfaCandidates: string[] = [];
   for (const t of tickers) {
     const cls = classifyTicker(t);
     if (cls === 'moex_ofz' || cls === 'moex_bond' || cls === 'moex_share_or_etf_or_other') {
@@ -932,6 +939,9 @@ async function runUpdate(): Promise<Record<string, unknown>> {
     }
     if (cls === 'money_market_fund') {
       moneyMarketCandidates.push(t);
+    }
+    if (cls === 'cfa') {
+      cfaCandidates.push(t);
     }
   }
 
@@ -1011,6 +1021,28 @@ async function runUpdate(): Promise<Record<string, unknown>> {
         underlying_currency: currency,
         source: currency === 'RUB' ? 'cbr_fx' : 'yahoo_fx',
         as_of: new Date().toISOString().slice(0, 10),
+      });
+      resolved.add(ticker);
+    }
+  }
+
+  // --- Digital financial assets (see CFA_PREFIX): nominal = latest buy price. ---
+  if (cfaCandidates.length) {
+    const { data: buys, error: cfaErr } = await supabase.from('trades')
+      .select('ticker, price, currency, trade_date').in('ticker', cfaCandidates).eq('side', 'buy')
+      .gt('price', 0).order('trade_date', { ascending: false });
+    if (cfaErr) log(`  CFA nominal lookup: ${cfaErr.message}`);
+    for (const ticker of cfaCandidates) {
+      const buy = (buys ?? []).find((b: { ticker: string }) => b.ticker === ticker);
+      if (!buy) { log(`  CFA ${ticker}: no buy with a price in trades, skipping`); continue; }
+      const currency = String(buy.currency || 'RUB').toUpperCase();
+      const rate = await fxRateToUsd(currency, usdRubRate);
+      if (rate === null) { log(`  CFA ${ticker}: no ${currency}->USD rate, skipping`); continue; }
+      const nominal = Number(buy.price);
+      rowsOut.push({
+        ticker, price_usd: Math.round(nominal * rate * 1e6) / 1e6, native_price: nominal, currency,
+        asset_class: 'bond', infra_region: currency === 'RUB' ? 'ru' : 'foreign', instrument_type: 'bond',
+        underlying_currency: currency, source: 'cfa_nominal', as_of: new Date().toISOString().slice(0, 10),
       });
       resolved.add(ticker);
     }

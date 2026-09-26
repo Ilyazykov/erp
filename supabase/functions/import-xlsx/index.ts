@@ -7,6 +7,7 @@
 //   - header "Операция №" ... "Комментарий"         -> import-freedom24-statement
 //     (Freedom24 / Tradernet cash-movement report)
 //   - "Account Number" / "IBAN" / "Account Activities" -> import-ziraat-statement
+//   - "Отчет платформы" by ООО «Атомайз» (ЦФА)       -> import-atomyze
 // The importer's response comes back with `detected` added, so the page
 // knows which status line to show.
 
@@ -17,6 +18,8 @@ const ROUTES: { detected: string; fn: string; test: (text: string) => boolean }[
     test: t => /Отчет о сделках и операциях/.test(t) && /ТБАНК|ТБанк/.test(t) },
   { detected: 'freedom24_xlsx', fn: 'import-freedom24-statement',
     test: t => /Операция №/.test(t) && /Комментарий/.test(t) },
+  { detected: 'atomyze_xlsx', fn: 'import-atomyze',
+    test: t => /Атомайз/.test(t) && /Отчет платформы/.test(t) },
   { detected: 'ziraat_xlsx', fn: 'import-ziraat-statement',
     test: t => /Account Number/.test(t) && /IBAN/.test(t) && /Account Activities/.test(t) },
 ];
@@ -39,7 +42,7 @@ Deno.serve(async (req) => {
     const text = xlsxRows(bytes, 40).map(r => Object.values(r).join(',')).join('\n');
     const route = ROUTES.find(r => r.test(text));
     if (!route) {
-      return json({ error: 'Unrecognized .xlsx -- expected a T-Bank broker report, a Freedom24 cash-movement report or a Ziraat Bank account activity export' }, 400);
+      return json({ error: 'Unrecognized .xlsx -- expected a T-Bank broker report, an Atomyze (ЦФА) platform report, a Freedom24 cash-movement report or a Ziraat Bank account activity export' }, 400);
     }
 
     const res = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/${route.fn}`, {

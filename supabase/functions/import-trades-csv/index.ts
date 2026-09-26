@@ -31,7 +31,7 @@ const SKIPPED_SYMBOLS = new Set(['XAUT']);
 //     matching rules in
 //     _shared/statement_priority.ts).
 const STATEMENT_TRADE_SOURCES = ['revolut_metal_csv'];
-const STATEMENT_OPERATION_SOURCES = ['ibkr_csv', 'freedom24_xlsx', 'revolut_invest_csv', 'revolut_crypto_csv', 'tbank_broker_xlsx'];
+const STATEMENT_OPERATION_SOURCES = ['ibkr_csv', 'freedom24_xlsx', 'revolut_invest_csv', 'revolut_crypto_csv', 'tbank_broker_xlsx', 'atomyze_xlsx'];
 // Telegram Wallet rows that Snowball has without a note: the 2025-11-15 sale
 // of the BTC bought there on 11-03 / 11-06 (in Wallet's own history as
 // "Exchanged BTC to USDT").
