@@ -1637,11 +1637,9 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
     const isXlsx = /\.xlsx$/i.test(file.name);
     let kind, csvText;
     if (isXlsx) {
-      // Freedom24 (Tradernet) names its export "tradernet_table*.xlsx",
-      // T-Bank its broker report "broker_report*.xlsx"; any other .xlsx is
-      // taken as Ziraat's.
-      kind = /tradernet/i.test(file.name) ? 'freedom24_xlsx'
-        : /broker_report/i.test(file.name) ? 'tbank_broker_xlsx' : 'ziraat_xlsx';
+      // Any .xlsx goes to import-xlsx, which tells T-Bank / Freedom24 /
+      // Ziraat apart by the file's content and returns which it was.
+      kind = 'xlsx';
     } else {
       csvText = await file.text();
       const headerLine = csvText.split(/\r\n|\r|\n/)[0] || '';
@@ -1681,8 +1679,10 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
       freedom24_xlsx: { fn: 'import-freedom24-statement', label: 'Freedom24 cash-movement report' },
       freedom24_json: { fn: 'import-freedom24-statement', label: 'Freedom24 broker report (JSON)' },
       tbank_broker_xlsx: { fn: 'import-tbank-broker', label: 'T-Bank broker report' },
+      xlsx: { fn: 'import-xlsx', label: 'spreadsheet (.xlsx)' },
     };
-    const { fn, label } = endpoints[kind];
+    const { fn } = endpoints[kind];
+    let { label } = endpoints[kind];
     // Binance writes times in the zone named in the file name, e.g.
     // "Binance-Transaction-History-202609261140(UTC+3)-part1-of1.csv".
     const query = kind === 'binance' ? `?tz=${encodeURIComponent(file.name.match(/\(UTC([+-]\d+(?:\.\d+)?)\)/)?.[1] ?? '0')}` : '';
@@ -1699,6 +1699,11 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
       body: isXlsx ? await file.arrayBuffer() : csvText,
     });
     const result = await res.json();
+    // import-xlsx says which source the spreadsheet turned out to be.
+    if (kind === 'xlsx' && endpoints[result.detected]) {
+      kind = result.detected;
+      label = endpoints[kind].label;
+    }
     if (!res.ok) {
       statusEl.textContent = `Error: ${result.error || res.statusText}`;
       return;
