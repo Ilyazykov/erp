@@ -17,6 +17,10 @@
 // their own exports (import-bybit, import-crypto-com) -- so importing them as
 // well would count the same coins twice.
 const SKIPPED_NOTES = new Set(['trust', 'bybit', 'crypto.com']);
+// Hand-entered month-end ETH staking reward: it's Lido's stETH reward in
+// Trust Wallet, already inside the stETH balance read from the chain.
+const isSnowballEthInterest = (event: string, symbol: string) =>
+  event === 'STOCK_AS_DIVIDEND' && symbol.trim().toUpperCase() === 'ETH';
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
@@ -143,6 +147,7 @@ Deno.serve(async (req) => {
       const side = EVENT_TO_SIDE[event];
       if (!side) { skipped++; continue; }
       if (SKIPPED_NOTES.has((cells[idx.note] || '').trim().toLowerCase())) { skippedTrust++; continue; }
+      if (isSnowballEthInterest(event, cells[idx.symbol] || '')) { skippedTrust++; continue; }
 
       const trade_date = parseDate(cells[idx.date] || '');
       const quantity = parseNumber(cells[idx.quantity]);
