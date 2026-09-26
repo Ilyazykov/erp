@@ -154,6 +154,13 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: stErr.message }), { status: 500, headers: corsHeaders });
     }
     const statementTickers = new Set((fromStatements ?? []).map((t: { ticker: string }) => t.ticker.toUpperCase()));
+    // Deposits a bank statement now covers: its trades name the Snowball
+    // ticker they replace ("[replaces Snowball DEPOSIT:Т16%13]", import-bank-csv).
+    const { data: replacing } = await supabase.from('trades').select('note').like('note', '%[replaces Snowball %');
+    for (const t of replacing ?? []) {
+      const m = String(t.note).match(/\[replaces Snowball ([^\]]+)\]/);
+      if (m) statementTickers.add(m[1].trim().toUpperCase());
+    }
     const { data: stOps, error: opErr } = await supabase.from('trades')
       .select('side, ticker, trade_date, quantity, note').in('external_source', STATEMENT_OPERATION_SOURCES);
     if (opErr) {
@@ -182,7 +189,8 @@ Deno.serve(async (req) => {
       if (SKIPPED_NOTES.has((cells[idx.note] || '').trim().toLowerCase())) { skippedTrust++; continue; }
       if (isSnowballEthInterest(event, cells[idx.symbol] || '')) { skippedTrust++; continue; }
       if (SKIPPED_SYMBOLS.has((cells[idx.symbol] || '').trim().toUpperCase())) { skippedTrust++; continue; }
-      if (statementTickers.has((cells[idx.symbol] || '').trim().toUpperCase())) { skippedTrust++; continue; }
+      // Compared as stored: Snowball's "ВКЛАД:..." becomes "DEPOSIT:...".
+      if (statementTickers.has(normalizeDepositTicker((cells[idx.symbol] || '').trim()).toUpperCase())) { skippedTrust++; continue; }
 
       const trade_date = parseDate(cells[idx.date] || '');
       const quantity = parseNumber(cells[idx.quantity]);
