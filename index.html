@@ -2569,12 +2569,17 @@ const MP_PIE_COLORS = ['#4a9ff5', '#7fd351', '#8e8e8e', '#f0c040', '#e8452c', '#
 const mpFlagOf = code => (/^[A-Z]{2}$/.test(code || '') && code !== 'XX'
   ? String.fromCodePoint(...[...code].map(c => 127397 + c.charCodeAt(0))) : '🌍');
 
-function mpPie(el, title, buckets, note = '') {
+// `order`: slice labels in the order they go round from 12 o'clock
+// clockwise (the user's own charts); anything not listed follows, largest
+// first, and the small-slices "other" goes last.
+function mpPie(el, title, buckets, note = '', order = null) {
   const card = document.createElement('div');
   card.className = 'pie-card';
   card.innerHTML = `<h4>${mpEscapeHtml(title)}</h4><div class="pie-plot"></div>${note ? `<p class="note">${mpEscapeHtml(note)}</p>` : ''}`;
   el.appendChild(card);
-  let entries = Object.entries(buckets).filter(([, v]) => v > 0.005).sort((a, b) => b[1] - a[1]);
+  const rank = k => (order && order.includes(k) ? order.indexOf(k) : Infinity);
+  let entries = Object.entries(buckets).filter(([, v]) => v > 0.005)
+    .sort((a, b) => (rank(a[0]) - rank(b[0])) || (b[1] - a[1]));
   if (!entries.length) { card.querySelector('.pie-plot').innerHTML = '<p class="empty-note">No data.</p>'; return; }
   // Slices under 1% go into one "other" slice (what's in it shows on hover);
   // labels sit inside the slices big enough to hold them -- no outside
@@ -2643,11 +2648,9 @@ async function mpRenderCharts() {
   const isRu = mpIsRuInfra;
 
   // 1. Currencies -- the broker x currency table's total row.
+  const currencyLabel = c => (c === MP_OTHER_CURRENCIES_COLUMN ? 'others 🌍' : `${c}${MP_CURRENCY_FLAGS[c] ? ` ${MP_CURRENCY_FLAGS[c]}` : ''}`);
   const byCurrency = {};
-  for (const r of curRows) if (!r.excluded) {
-    const c = r.currency;
-    mpAdd(byCurrency, c === MP_OTHER_CURRENCIES_COLUMN ? 'others 🌍' : `${c}${MP_CURRENCY_FLAGS[c] ? ` ${MP_CURRENCY_FLAGS[c]}` : ''}`, r.value_usd);
-  }
+  for (const r of curRows) if (!r.excluded) mpAdd(byCurrency, currencyLabel(r.currency), r.value_usd);
   // 2 / 8 / 9. Banks and brokers -- the table's per-broker totals (credit netted
   // into liquid assets instead), no real estate.
   const byBroker = {};
@@ -2706,18 +2709,31 @@ async function mpRenderCharts() {
   if (run !== mpChartsRun) return;
   grid.innerHTML = '';
   status.textContent = '';
-  mpPie(grid, '1. Currencies', byCurrency);
-  mpPie(grid, '2. Banks & brokers', brokerBuckets);
-  mpPie(grid, '3. Asset types', types);
+  // Slice order as in the user's own charts (clockwise from 12 o'clock).
+  const currencyOrder = ['EUR', 'USD', 'RUB', 'GBP', 'CNY', 'TRY', 'RSD', MP_OTHER_CURRENCIES_COLUMN,
+    'ETH', 'XAU', 'BTC', 'SOL', 'TAO', 'GRAM', MP_ALTCOINS_COLUMN].map(currencyLabel);
+  const brokerOrder = ['Freedom24', 'Bank of Cyprus', 'Revolut', 'Wise', 'Raiffeisen', 'UniCredit', 'Ziraat Bank', 'IBKR',
+    'Sber', 'T-Bank', 'Ozon Bank', 'Alfa', 'Yandex Bank', 'Finuslugi', 'Telegram', 'Binance', 'Bybit', 'Crypto.com', 'Trust', 'cash',
+    '(unspecified)'].map(brokerName);
+  const typeOrder = ['bond', 'cash', 'deposit', 'liquid', 'gold', 'crypto', 'stock', 'real_estate'].map(t => MP_ASSET_CLASS_LABELS[t]);
+  const cryptoOrder = ['TON', 'GRAM', 'TAO', 'ETH', 'BTC', 'SOL'];
+  const ruOrder = [['stock', 'RUB'], ['bond', 'RUB'], ['deposit', 'RUB'], ['liquid', 'RUB'], ['cash', 'RUB'],
+    ['bond', 'CNY'], ['deposit', 'CNY'], ['liquid', 'CNY'], ['cash', 'CNY'], ['stock', 'CNY']]
+    .map(([t, c]) => `${MP_RU_INFRA_LABELS[t]} ${MP_RU_INFRA_CURRENCIES[c]}`);
+  mpPie(grid, '1. Currencies', byCurrency, '', currencyOrder);
+  mpPie(grid, '2. Banks & brokers', brokerBuckets, '', brokerOrder);
+  mpPie(grid, '3. Asset types', types, '', typeOrder);
   mpPie(grid, '4. Stocks by country', countries, 'Funds split by the countries of what they hold.');
-  mpPie(grid, '5. Crypto', crypto);
-  mpPie(grid, '6. Russian infrastructure', ruBuckets());
+  mpPie(grid, '5. Crypto', crypto, '', cryptoOrder);
+  mpPie(grid, '6. Russian infrastructure', ruBuckets(), '', ruOrder);
   mpPie(grid, '7. Stocks, bonds, deposits, liquid assets',
-    mpAssetBuckets(assetRows.filter(r => !isRealEstate(r)), ['stock', 'bond', 'deposit', 'liquid']));
-  mpPie(grid, '8. IBKR vs Freedom', { [brokerName('IBKR')]: byBroker.IBKR || 0, [brokerName('Freedom24')]: byBroker.Freedom24 || 0 });
-  mpPie(grid, '9. Russian infrastructure vs the rest', { 'Russia 🇷🇺': ruTotal, 'rest of the world 🌍': allTotal - ruTotal });
-  mpPie(grid, '10. Russian infrastructure without stocks', ruBuckets(['stock']));
-  mpPie(grid, '11. Asset types with real estate', typesWithRealEstate);
+    mpAssetBuckets(assetRows.filter(r => !isRealEstate(r)), ['stock', 'bond', 'deposit', 'liquid']), '', typeOrder);
+  mpPie(grid, '8. IBKR vs Freedom', { [brokerName('Freedom24')]: byBroker.Freedom24 || 0, [brokerName('IBKR')]: byBroker.IBKR || 0 },
+    '', brokerOrder);
+  mpPie(grid, '9. Russian infrastructure vs the rest', { 'Russia 🇷🇺': ruTotal, 'rest of the world 🌍': allTotal - ruTotal },
+    '', ['Russia 🇷🇺', 'rest of the world 🌍']);
+  mpPie(grid, '10. Russian infrastructure without stocks', ruBuckets(['stock']), '', ruOrder);
+  mpPie(grid, '11. Asset types with real estate', typesWithRealEstate, '', typeOrder);
 }
 
 // Funds whose cash part (fund_holdings' 'OTHER' line: money, reverse repo,
