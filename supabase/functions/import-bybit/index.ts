@@ -52,6 +52,7 @@
 // user.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { dec, recomputeExchange, type ExchangeWallet } from '../_shared/exchange_balances.ts';
 
 interface Row {
   tx_hash: string; seq: number; kind: string; tx_time: string; symbol: string;
@@ -59,7 +60,6 @@ interface Row {
 }
 
 const INTERNAL_KINDS = new Set(['transfer_internal', 'earn_internal', 'card_usd']);
-const STABLECOINS = new Set(['USDT', 'USDC', 'DAI', 'USDS', 'USDE', 'FDUSD', 'PYUSD']);
 
 function parseCsvLine(line: string): string[] {
   const cells: string[] = [];
@@ -81,15 +81,6 @@ function parseCsvLine(line: string): string[] {
   }
   cells.push(cur);
   return cells;
-}
-
-// "0.004800000000000000" / "1.2E-7" -> canonical decimal string, exact
-// enough for amounts with at most 18 decimals.
-function dec(s: string): string {
-  const t = (s || '').trim();
-  if (!/e/i.test(t)) return t.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '') || '0';
-  const n = Number(t);
-  return n.toFixed(18).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
 }
 
 function fundKind(desc: string, type: string, coin: string): string {
@@ -158,63 +149,12 @@ function parse(text: string): { uid: string; source: 'fund' | 'uta'; rows: Row[]
   return null;
 }
 
-interface Wallet { id: string; user_id: string; account: string }
-
-// Recompute one account's wallet_balances from all its stored rows.
-async function recompute(db: any, wallet: Wallet): Promise<{ rows: number; balances: Record<string, number> }> {
-  const scale = 1e18;
-  const all: any[] = [];
-  for (let from = 0; ; from += 1000) {
-    const { data, error } = await db.from('wallet_transactions')
-      // amount::text -- as JSON numbers, numeric values lose digits and
-      // tiny ones come back in exponent form ("9e-8")
-      .select('kind, symbol, amount::text').eq('wallet_id', wallet.id).range(from, from + 999);
-    if (error) throw new Error(error.message);
-    all.push(...data);
-    if (data.length < 1000) break;
-  }
-  // BigInt fixed-point (18 decimals) so ~1600 tiny interest rows sum exactly.
-  const toBig = (x: unknown) => {
-    const amount = dec(String(x));  // also normalises any exponent form
-    const [i, f = ''] = amount.replace('-', '').split('.');
-    const v = BigInt(i || '0') * BigInt(scale) + BigInt((f + '0'.repeat(18)).slice(0, 18));
-    return amount.startsWith('-') ? -v : v;
-  };
-  const toStr = (v: bigint) => {
-    const neg = v < 0n; const a = neg ? -v : v;
-    return `${neg ? '-' : ''}${a / BigInt(scale)}.${(a % BigInt(scale)).toString().padStart(18, '0')}`.replace(/\.?0+$/, '');
-  };
-  const big = new Map<string, bigint>();   // total owned per coin
-  const inEarn = new Map<string, bigint>(); // of which sitting in Earn
-  for (const r of all) {
-    if (r.kind === 'earn_internal') inEarn.set(r.symbol, (inEarn.get(r.symbol) ?? 0n) - toBig(r.amount));
-    if (INTERNAL_KINDS.has(r.kind)) continue;
-    big.set(r.symbol, (big.get(r.symbol) ?? 0n) + toBig(r.amount));
-  }
-  const base = { wallet_id: wallet.id, user_id: wallet.user_id, account: wallet.account, chain: 'bybit',
-                 name: null, decimals: null, price_usd: null, as_of: new Date().toISOString() };
-  const balances: any[] = [];
-  const sums: Record<string, number> = {};
-  for (const [coin, v] of big) {
-    if (v === 0n) continue;
-    sums[coin] = Number(toStr(v));
-    if (!STABLECOINS.has(coin)) {
-      balances.push({ ...base, contract: coin, symbol: coin, quantity: toStr(v), ticker: coin });
-      continue;
-    }
-    const earn = inEarn.get(coin) ?? 0n;
-    if (earn !== 0n) balances.push({ ...base, contract: `${coin}:earn`, symbol: `${coin} (Earn)`, name: 'Earn', quantity: toStr(earn), ticker: 'SAVINGS:Bybit USD' });
-    if (v - earn !== 0n) balances.push({ ...base, contract: coin, symbol: coin, quantity: toStr(v - earn), ticker: coin });
-  }
-  const { error: delErr } = await db.from('wallet_balances').delete().eq('wallet_id', wallet.id);
-  if (delErr) throw new Error(delErr.message);
-  if (balances.length) {
-    const { error } = await db.from('wallet_balances').insert(balances);
-    if (error) throw new Error(error.message);
-  }
-  await db.from('crypto_wallets').update({ last_synced_at: new Date().toISOString(), last_sync_error: null }).eq('id', wallet.id);
-  return { rows: all.length, balances: sums };
-}
+const RULES = {
+  internalKinds: INTERNAL_KINDS,
+  earnKinds: new Set(['earn_internal']),
+  savingsTicker: 'SAVINGS:Bybit USD',
+};
+const recompute = (db: any, w: ExchangeWallet) => recomputeExchange(db, w, RULES);
 
 Deno.serve(async (req) => {
   const corsHeaders = {
@@ -239,10 +179,10 @@ Deno.serve(async (req) => {
     if (new URL(req.url).searchParams.get('recompute')) {
       // The signed-in user's accounts (RLS), or -- no user -- every account.
       const db = user ? supabase : createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
-      const { data: wallets, error } = await db.from('crypto_wallets').select('id, user_id, account').eq('chain', 'bybit');
+      const { data: wallets, error } = await db.from('crypto_wallets').select('id, user_id, account, chain').eq('chain', 'bybit');
       if (error) throw new Error(error.message);
       const results = [];
-      for (const w of wallets as Wallet[]) results.push(await recompute(db, w));
+      for (const w of wallets as ExchangeWallet[]) results.push(await recompute(db, w));
       return json(user ? { accounts: results.length, results } : { accounts: results.length });
     }
 
@@ -258,11 +198,11 @@ Deno.serve(async (req) => {
     // The account's crypto_wallets row, created on first import.
     const address = `UID ${parsed.uid}`;
     let { data: wallet, error: wErr } = await supabase.from('crypto_wallets')
-      .select('id, user_id, account').eq('chain', 'bybit').eq('address', address).maybeSingle();
+      .select('id, user_id, account, chain').eq('chain', 'bybit').eq('address', address).maybeSingle();
     if (wErr) throw new Error(wErr.message);
     if (!wallet) {
       const ins = await supabase.from('crypto_wallets')
-        .insert({ user_id: user.id, chain: 'bybit', address, account: 'Bybit' }).select('id, user_id, account').single();
+        .insert({ user_id: user.id, chain: 'bybit', address, account: 'Bybit' }).select('id, user_id, account, chain').single();
       if (ins.error) throw new Error(ins.error.message);
       wallet = ins.data;
     }
@@ -276,7 +216,7 @@ Deno.serve(async (req) => {
       if (error) throw new Error(error.message);
     }
 
-    const r = await recompute(supabase, wallet as Wallet);
+    const r = await recompute(supabase, wallet as ExchangeWallet);
     return json({ source: parsed.source, uid: parsed.uid, rows: rows.length, total_rows_stored: r.rows, balances: r.balances });
   } catch (err) {
     return json({ error: String(err) }, 500);

@@ -35,6 +35,7 @@ jobs:
           supabase functions deploy update-market-prices --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
           supabase functions deploy sync-crypto-wallets --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
           supabase functions deploy import-bybit --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+          supabase functions deploy import-crypto-com --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}

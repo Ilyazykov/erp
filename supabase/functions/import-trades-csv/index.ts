@@ -11,12 +11,12 @@
 // CUSTOM_HOLDING_PRICE / CUSTOM_HOLDING_SETTINGS rows are historical price
 // points, not trades, and are skipped.
 //
-// Rows noted "trust" or "bybit" (Snowball's own Note column) are skipped
-// too: those accounts come from their own sources now -- Trust Wallet from
-// the blockchain (sync-crypto-wallets), Bybit from its Data Export logs
-// (import-bybit) -- so importing them as well would count the same coins
-// twice.
-const SKIPPED_NOTES = new Set(['trust', 'bybit']);
+// Rows noted "trust", "bybit" or "crypto.com" (Snowball's own Note column)
+// are skipped too: those accounts come from their own sources now -- Trust
+// Wallet from the blockchain (sync-crypto-wallets), Bybit and Crypto.com from
+// their own exports (import-bybit, import-crypto-com) -- so importing them as
+// well would count the same coins twice.
+const SKIPPED_NOTES = new Set(['trust', 'bybit', 'crypto.com']);
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 

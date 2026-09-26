@@ -222,8 +222,9 @@
     <p class="note">Upload a broker trades CSV (Snowball), a Revolut account statement, a Revolut Flexible
       Cash Funds statement, a Revolut Instant Access Savings statement, a Bank of Cyprus transaction
       history export, a Ziraat Bank account activity export (.xlsx), or this project's own combined
-      Raiffeisen Bank Serbia transaction CSV, its generic bank CSV (Yandex Bank, T-Bank), or a Bybit transaction log
-      (Data Export → Transaction Log → Account Change Details: upload each Funding and Unified Trading file) — the file type is detected automatically from its header
+      Raiffeisen Bank Serbia transaction CSV, its generic bank CSV (Yandex Bank, T-Bank), a Bybit transaction log
+      (Data Export → Transaction Log → Account Change Details: upload each Funding and Unified Trading file), or a
+      Crypto.com App export (Accounts → History → Export → Crypto Wallet) — the file type is detected automatically from its header
       row or extension.</p>
     <div class="form-row">
       <input type="file" id="mp_any_csv_file" accept=".csv,.xlsx">
@@ -257,9 +258,10 @@
     <div id="mp_wallets_wrap"></div>
 
     <div class="section-title">Exchange accounts</div>
-    <p class="note">Custodial exchange accounts (Bybit): there's no blockchain address to read, so they're updated by
-      uploading the exchange's own transaction logs in <b>Import CSV</b> above (Bybit: Data Export → Transaction Log →
-      Account Change Details, each Funding and Unified Trading file). The button above doesn't touch them.</p>
+    <p class="note">Custodial exchange accounts (Bybit, Crypto.com): there's no blockchain address to read, so they're
+      updated by uploading the exchange's own export in <b>Import CSV</b> above (Bybit: Data Export → Transaction Log →
+      Account Change Details, each Funding and Unified Trading file; Crypto.com App: Accounts → History → Export →
+      Crypto Wallet). The Sync button above doesn't touch them.</p>
     <div class="form-row">
       <button class="btn" id="mp_exchange_recalc" title="Recompute balances from the transaction history already stored">Recalculate</button>
     </div>
@@ -1562,6 +1564,8 @@ document.getElementById('btn_login').addEventListener('click', async () => {
 //   - Bybit Data Export transaction logs (Funding / Unified Trading
 //     "Account Change Details") start with a "UID: <uid>,Company Name:"
 //     line, then "Uid,Date & Time(UTC),Coin,..." or "Uid,Currency,Contract,..."
+//   - Crypto.com App export starts with "Timestamp (UTC),Transaction
+//     Description,Currency,Amount,To Currency,..."
 //   - This project's own generic bank CSV (built from PDF statements of
 //     banks with no CSV export -- Yandex Bank, T-Bank; the bank's name is
 //     a column) starts with "bank,account_number,product,..."
@@ -1576,6 +1580,7 @@ function mpDetectCsvKind(headerLine, fullText) {
   if (/^bank,account_number,product,/i.test(h)) return 'bank_csv';
   if (/^UID:\s*\d+,Company Name:/i.test(h)
       && /^Uid,(Date & Time\(UTC\),Coin|Currency,Contract),/m.test(fullText)) return 'bybit_log';
+  if (/^\uFEFF?Timestamp \(UTC\),Transaction Description,Currency,Amount,To Currency,/i.test(h)) return 'cryptocom';
   return null;
 }
 
@@ -1605,7 +1610,8 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
       statusEl.textContent = 'Unrecognized CSV format — expected a Snowball trades export, '
         + 'a Revolut account statement, a Revolut Flexible Cash Funds statement, a Revolut '
         + 'Instant Access Savings statement, a Bank of Cyprus transaction history export, or '
-        + 'this project\'s own Raiffeisen Bank Serbia or generic bank transaction CSV, or a Bybit transaction log.';
+        + 'this project\'s own Raiffeisen Bank Serbia or generic bank transaction CSV, a Bybit transaction log, '
+        + 'or a Crypto.com App export.';
       return;
     }
 
@@ -1619,6 +1625,7 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
       raiffeisen_account: { fn: 'import-raiffeisen-statement', label: 'Raiffeisen Bank Serbia transaction history' },
       bank_csv: { fn: 'import-bank-csv', label: 'bank transaction history (generic CSV)' },
       bybit_log: { fn: 'import-bybit', label: 'Bybit transaction log' },
+      cryptocom: { fn: 'import-crypto-com', label: 'Crypto.com App export' },
     };
     const { fn, label } = endpoints[kind];
     statusEl.textContent = `Detected: ${label}. Uploading and parsing on the server…`;
@@ -1662,6 +1669,11 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
         + `(${result.total_rows} parsed).`;
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
+    } else if (kind === 'cryptocom') {
+      const bal = Object.entries(result.balances || {}).map(([c, q]) => `${c} ${q}`).join(', ') || 'nothing';
+      statusEl.textContent = `Detected: ${label}. Imported ${result.rows} rows (${result.total_rows_stored} stored in total). `
+        + `Crypto.com balance now: ${bal}.`;
+      mpRefreshAfterWalletChange();
     } else if (kind === 'bybit_log') {
       const bal = Object.entries(result.balances || {}).map(([c, q]) => `${c} ${q}`).join(', ') || 'nothing';
       statusEl.textContent = `Detected: ${label} (${result.source === 'fund' ? 'Funding' : 'Unified Trading'}). `
@@ -1943,7 +1955,7 @@ const MP_CURRENCY_FLAGS = {
 // Any account not listed here falls back after these, alphabetically.
 const MP_BROKER_ROW_ORDER = [
   '(unspecified)', 'Revolut', 'Wise', 'Bank of Cyprus', 'IBKR', 'Freedom24',
-  'Ziraat Bank', 'Raiffeisen', 'Sber', 'T-Bank', 'Alfa', 'Ozon Bank', 'Yandex Bank', 'Bybit', 'Telegram', 'Trust',
+  'Ziraat Bank', 'Raiffeisen', 'Sber', 'T-Bank', 'Alfa', 'Ozon Bank', 'Yandex Bank', 'Bybit', 'Crypto.com', 'Telegram', 'Trust',
 ];
 
 // Flag/emoji shown next to each broker's row label, matching the user's
@@ -2943,7 +2955,7 @@ const mpShortAddress = a => `${a.slice(0, 6)}…${a.slice(-4)}`;
 let mpWallets = [];
 const mpFindWallet = (chain, address) => mpWallets.find(w => w.chain === chain
   && (chain === 'ethereum' ? w.address.toLowerCase() === address.toLowerCase() : w.address === address));
-const MP_CHAIN_LABELS = { ethereum: 'Ethereum', tron: 'TRON', bitcoin: 'Bitcoin', solana: 'Solana', bybit: 'Bybit' };
+const MP_CHAIN_LABELS = { ethereum: 'Ethereum', tron: 'TRON', bitcoin: 'Bitcoin', solana: 'Solana', bybit: 'Bybit', cryptocom: 'Crypto.com' };
 
 // Which network an address belongs to, from its own format -- no picker:
 //   0x + 40 hex                          -> Ethereum
@@ -2992,7 +3004,7 @@ function mpFormatQty(q) {
 // Custodial exchange accounts (chain 'bybit', filled by import-bybit) live in
 // the same tables as on-chain wallets but get their own block: they aren't
 // part of the blockchain sync.
-const MP_EXCHANGE_CHAINS = new Set(['bybit']);
+const MP_EXCHANGE_CHAINS = new Set(['bybit', 'cryptocom']);
 
 async function mpRenderWallets() {
   const wrap = document.getElementById('mp_wallets_wrap');
@@ -3021,7 +3033,7 @@ async function mpRenderWallets() {
     empty: 'No exchange accounts yet — upload a Bybit transaction log in Import CSV.',
     noBalances: 'No balances yet — upload both the Funding and the Unified Trading logs.',
     head: ['Account', 'Exchange', 'Account ID', 'Last import', 'Status'],
-    cells: w => [MP_CHAIN_LABELS[w.chain] || w.chain, mpEscapeHtml(w.address.replace(/^UID\s*/, ''))],
+    cells: w => [MP_CHAIN_LABELS[w.chain] || w.chain, mpEscapeHtml(w.chain === 'bybit' ? w.address.replace(/^UID\s*/, '') : '—')],
   });
 }
 
@@ -3158,13 +3170,17 @@ document.getElementById('mp_exchange_recalc').addEventListener('click', async ()
   if (!session) { statusEl.textContent = 'Sign in first.'; return; }
   statusEl.textContent = 'Recalculating…';
   try {
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/import-bybit?recompute=1`, {
-      method: 'POST', headers: { 'Authorization': `Bearer ${session.access_token}` },
-    });
-    const result = await res.json();
-    if (!res.ok) { statusEl.textContent = `Error: ${result.error || res.statusText}`; return; }
-    statusEl.textContent = result.results.map(r => `Bybit: ${Object.entries(r.balances).map(([c, q]) => `${c} ${q}`).join(', ') || 'nothing'} `
-      + `(from ${r.rows} stored rows)`).join(' · ') || 'No exchange accounts.';
+    const parts = [];
+    for (const [fn, name] of [['import-bybit', 'Bybit'], ['import-crypto-com', 'Crypto.com']]) {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/${fn}?recompute=1`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${session.access_token}` },
+      });
+      const result = await res.json();
+      if (!res.ok) { parts.push(`${name}: error — ${result.error || res.statusText}`); continue; }
+      for (const r of result.results) parts.push(`${name}: ${Object.entries(r.balances).map(([c, q]) => `${c} ${q}`).join(', ') || 'nothing'} `
+        + `(from ${r.rows} stored rows)`);
+    }
+    statusEl.textContent = parts.join(' · ') || 'No exchange accounts.';
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}`;
   }

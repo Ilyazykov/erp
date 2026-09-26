@@ -149,6 +149,7 @@ const WESTERN_ETF_EXCHANGE_OVERRIDE: Record<string, string> = { XSX6: '.DE' };
 const CRYPTO_YAHOO_OVERRIDES: Record<string, string> = {
   XAU: 'GC=F', // gold spot has no clean Yahoo FX symbol; COMEX gold
                // futures (USD/troy oz) is the closest reliable proxy
+  TAO: 'TAO22974-USD', // Bittensor; plain "TAO-USD" doesn't exist on Yahoo
 };
 const KNOWN_CRYPTO_TICKERS = new Set([
   'BTC', 'ETH', 'XAU', 'XAUT', 'SOL', 'USDT', 'USDC', 'BNB', 'XRP', 'DOGE', 'ADA', 'TON',
@@ -157,6 +158,8 @@ const KNOWN_CRYPTO_TICKERS = new Set([
   'TRX',
   // Stablecoins that pass through Bybit (import-bybit).
   'DAI', 'USDS',
+  // Crypto.com (import-crypto-com): Bittensor (staked) and Cronos.
+  'TAO', 'CRO',
 ]);
 
 // Only these ISS "group" values represent an instrument actually traded on
