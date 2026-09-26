@@ -2114,8 +2114,8 @@ function mpFormatUsd(n) {
   if (n === null || n === undefined) return '<span class="muted">—</span>';
   return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', ...mpFractionDigits(n) });
 }
-// Amounts from 100 000 up are shown without cents (₽7,595,290, not ₽7,595,289.84).
-const mpFractionDigits = n => (Math.abs(n) >= 100000 ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : { maximumFractionDigits: 2 });
+// Amounts from a million up are shown without cents (₽7,595,290, not ₽7,595,289.84).
+const mpFractionDigits = n => (Math.abs(n) >= 1000000 ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : { maximumFractionDigits: 2 });
 
 // Single-glyph symbols for currencies that don't already get the exact
 // glyph we want from Intl.NumberFormat -- it gives USD/EUR/GBP their
