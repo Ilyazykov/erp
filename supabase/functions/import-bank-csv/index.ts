@@ -25,9 +25,12 @@
 // the description, and optional `synthetic_kind` / `data_gap_until` / `note`
 // for bookkeeping rows that aren't real transactions: synthetic_kind
 // 'data_gap' (statements run out -- the row zeroes the balance, nothing is
-// known until data_gap_until) or 'account_closed' (closure mark, amount 0).
-// Stored as bank_transactions.synthetic / synthetic_kind / data_gap_until
-// (see migrations ...010 and ...011), explanation in `note`.
+// known until data_gap_until), 'account_closed' (closure mark, amount 0) or
+// 'balance_snapshot' (a counted balance with no statement behind it -- cash
+// on hand, bank 'Cash': balance = the count, amount = change since the
+// previous count). Stored as bank_transactions.synthetic / synthetic_kind /
+// data_gap_until (see migrations ...010, ...011 and ...023), explanation in
+// `note`.
 //
 // `bank` becomes the `account` label, so every account at one bank
 // collapses into a single row in the broker pivot tables (same idea as
