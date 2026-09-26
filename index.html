@@ -271,8 +271,6 @@
     <div class="section-title">Portfolio by broker × asset class</div>
     <div id="mp_broker_assetclass_wrap"></div>
 
-    <div class="section-title">Equities by index</div>
-    <div id="mp_equity_index_wrap"></div>
 
     <div class="section-title">Russian infrastructure 🇷🇺</div>
     <div id="mp_bond_subtype_wrap"></div>
@@ -1803,7 +1801,6 @@ async function mpImportOneFile(file, statusEl, session) {
       mpRenderCashFlows();
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
-      mpRenderEquityByIndex();
       mpRenderBondByType();
     } else if (kind === 'revolut_account') {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} transactions `
@@ -1864,7 +1861,6 @@ async function mpImportOneFile(file, statusEl, session) {
       mpRenderCashFlows();
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
-      mpRenderEquityByIndex();
       mpRenderBondByType();
     } else if (kind === 'freedom24_json') {
       statusEl.textContent = `Detected: ${label}. Shares credited without money: `
@@ -1885,7 +1881,6 @@ async function mpImportOneFile(file, statusEl, session) {
       mpRenderCashFlows();
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
-      mpRenderEquityByIndex();
     } else if (kind === 'ibkr') {
       const cash = Object.entries(result.cash || {}).map(([c, q]) => `${c} ${Number(q).toFixed(2)}`).join(', ');
       statusEl.textContent = `Detected: ${label}. Imported ${result.trades} trades, ${result.dividends} dividends and `
@@ -1897,7 +1892,6 @@ async function mpImportOneFile(file, statusEl, session) {
       mpRenderCashFlows();
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
-      mpRenderEquityByIndex();
     } else if (kind === 'wise') {
       statusEl.textContent = result.note
         ? `Detected: ${label}. ${result.note}.`
@@ -1919,7 +1913,6 @@ async function mpImportOneFile(file, statusEl, session) {
       mpRenderCashFlows();
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
-      mpRenderEquityByIndex();
       mpRenderBondByType();
     } else if (kind === 'broker_csv') {
       const h = Object.entries(result.holdings || {}).map(([c, q]) => `${c} ${q}`).join(', ') || 'nothing';
@@ -1931,7 +1924,6 @@ async function mpImportOneFile(file, statusEl, session) {
       mpRenderCashFlows();
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
-      mpRenderEquityByIndex();
       mpRenderBondByType();
     } else if (kind === 'revolut_invest') {
       const h = Object.entries(result.holdings || {}).map(([c, q]) => `${c} ${q}`).join(', ') || 'nothing';
@@ -1945,7 +1937,6 @@ async function mpImportOneFile(file, statusEl, session) {
       mpRenderCashFlows();
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
-      mpRenderEquityByIndex();
     } else if (kind === 'revolut_crypto') {
       const h = Object.entries(result.holdings || {}).map(([c, q]) => `${c} ${q}`).join(', ') || 'nothing';
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} crypto operations`
@@ -1982,7 +1973,6 @@ async function mpImportOneFile(file, statusEl, session) {
       if (result.imported_deposit) {
         mpRenderHoldings();
         mpRenderPortfolioPies();
-        mpRenderEquityByIndex();
         mpRenderBondByType();
       }
       mpRenderBrokerCurrency();
@@ -1999,7 +1989,6 @@ async function mpImportOneFile(file, statusEl, session) {
       mpRenderCashFlows();
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
-      mpRenderEquityByIndex();
       mpRenderBondByType();
     } else {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} deposit trades `
@@ -2008,7 +1997,6 @@ async function mpImportOneFile(file, statusEl, session) {
       mpRenderPortfolioPies();
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
-      mpRenderEquityByIndex();
       mpRenderBondByType();
     }
   } catch (err) {
@@ -2632,39 +2620,6 @@ async function mpSplitFundsCash(rows) {
   });
 }
 
-// Builds a single-column-of-buckets breakdown table (category name -> USD
-// value) -- shared by mpRenderEquityByIndex and mpRenderBondByType, which
-// differ only in which rows they keep and how each row maps to a bucket.
-function mpRenderBucketTable(wrap, rows, bucketOf, emptyMessage) {
-  if (!rows.length) { wrap.innerHTML = `<p class="empty-note">${emptyMessage}</p>`; return; }
-  const priced = rows.filter(r => r.value_usd !== null);
-  const totals = {};
-  for (const r of priced) {
-    const bucket = bucketOf(r);
-    totals[bucket] = (totals[bucket] || 0) + r.value_usd;
-  }
-  const buckets = Object.keys(totals).sort();
-  const grandTotal = buckets.reduce((s, b) => s + totals[b], 0);
-  const anyMissing = rows.some(r => r.value_usd === null);
-  wrap.innerHTML = `<table class="data-table"><thead><tr>
-    <th>Category</th><th>Value (USD)</th>
-  </tr></thead><tbody>${buckets.map(b => `<tr>
-    <td class="ticker">${mpEscapeHtml(b)}</td>
-    <td>${mpFormatUsd(totals[b])}</td>
-  </tr>`).join('')}
-  <tr class="total-row"><td><b>Total</b></td><td><b>${mpFormatUsd(grandTotal)}</b></td></tr>
-  </tbody></table>
-  ${anyMissing ? '<p class="empty-note">Some tickers have no price yet — total is a partial sum.</p>' : ''}`;
-}
-
-async function mpRenderEquityByIndex() {
-  const wrap = document.getElementById('mp_equity_index_wrap');
-  const { data, error } = await sb.from('portfolio_value_usd').select('*');
-  if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
-  const equities = data.filter(r => r.instrument_type === 'stock');
-  mpRenderBucketTable(wrap, equities, r => EQUITY_INDEX_BY_TICKER[r.ticker] || 'Other', 'No equity holdings yet.');
-}
-
 // Look-through (portfolio_look_through_* views): the top securities by real
 // exposure, and the whole exposure by sector, country and currency.
 async function mpRenderLookThrough() {
@@ -2766,17 +2721,6 @@ const US_STOCK_TICKERS = [
   'INTC', 'SPCX', 'FCX', 'SO', 'EQIX',
 ];
 
-// Ticker -> equity index name, for the "Equities by index" summary table.
-// Deliberately incomplete -- an unmapped ticker falls into an "Other"
-// bucket in mpRenderEquityByIndex rather than blocking the table. Extend
-// as more index membership is confirmed.
-const EQUITY_INDEX_BY_TICKER = {};
-for (const t of US_STOCK_TICKERS) EQUITY_INDEX_BY_TICKER[t] = 'S&P500';
-for (const t of RU_STOCK_TICKERS) EQUITY_INDEX_BY_TICKER[t] = 'MOEX';
-EQUITY_INDEX_BY_TICKER.CSPX = 'S&P500';   // iShares Core S&P 500 UCITS ETF
-EQUITY_INDEX_BY_TICKER.VUAA = 'S&P500';   // Vanguard S&P 500 UCITS ETF
-EQUITY_INDEX_BY_TICKER.VWCE = 'STOXX600'; // Vanguard FTSE All-World -- closest listed proxy available today
-EQUITY_INDEX_BY_TICKER.VWRA = 'Акции мира';
 
 
 // Same "bulge past the dotted circle = overweight, dip short of it =
@@ -3736,7 +3680,6 @@ function mpUpdateAuthUi(session) {
     mpRenderCashFlows();
     mpRenderBrokerCurrency();
     mpRenderBrokerAssetClass();
-    mpRenderEquityByIndex();
     mpRenderBondByType();
     mpRenderWallets();
     mpRenderRealEstate();
@@ -3756,7 +3699,7 @@ function mpUpdateAuthUi(session) {
      'mp_pie_us_stocks_title', 'mp_pie_ru_stocks_title', 'mp_pie_stocksbonds_title', 'mp_pie_deposits_title']
       .forEach(id => { document.getElementById(id).style.display = 'none'; });
     ['mp_pie_us_stocks_table_wrap', 'mp_pie_ru_stocks_table_wrap', 'mp_pie_stocksbonds_table_wrap', 'mp_pie_deposits_table_wrap',
-     'mp_broker_currency_wrap', 'mp_broker_assetclass_wrap', 'mp_equity_index_wrap', 'mp_bond_subtype_wrap']
+     'mp_broker_currency_wrap', 'mp_broker_assetclass_wrap', 'mp_bond_subtype_wrap']
       .forEach(id => { document.getElementById(id).innerHTML = ''; });
     document.getElementById('mp_ru_stocks_invest_row').style.display = 'none';
     document.getElementById('mp_us_stocks_invest_row').style.display = 'none';
