@@ -64,6 +64,11 @@
 // class 'savings' / 'deposit' (priced via FX by update-market-prices)
 // instead of in the cash column.
 //
+// An optional `deposit_name` column (e.g. "16% 31.10.2025" -- rate and
+// opening date) is appended to that ticker, so each deposit is a holding of
+// its own ("DEPOSIT:T-Bank RUB 16% 31.10.2025") and deposits at one bank
+// don't merge into one line -- their rates stay comparable.
+//
 // A deposit Snowball used to track by hand under its own ticker (e.g.
 // "DEPOSIT:Т16%13") names that ticker in the optional `replaces_snowball`
 // column: the statement has priority (first-hand source), so those Snowball
@@ -85,6 +90,7 @@ interface BankRow {
   dataGapUntil: string | null;
   note: string;
   replacesSnowball: string;
+  depositName: string;
   date: string;
   time: string;
   description: string;
@@ -127,7 +133,7 @@ function parseRows(text: string): BankRow[] {
 
   let idx: {
     bank: number; accountNumber: number; product: number; categoryBank: number;
-    syntheticKind: number; dataGapUntil: number; note: number; replacesSnowball: number; date: number; time: number; description: number;
+    syntheticKind: number; dataGapUntil: number; note: number; replacesSnowball: number; depositName: number; date: number; time: number; description: number;
     amount: number; currency: number; balance: number;
   } | null = null;
   const rows: BankRow[] = [];
@@ -140,7 +146,7 @@ function parseRows(text: string): BankRow[] {
         idx = {
           bank: col('bank'), accountNumber: col('account_number'), product: col('product'),
           categoryBank: col('category_bank'), syntheticKind: col('synthetic_kind'),
-          dataGapUntil: col('data_gap_until'), note: col('note'), replacesSnowball: col('replaces_snowball'),
+          dataGapUntil: col('data_gap_until'), note: col('note'), replacesSnowball: col('replaces_snowball'), depositName: col('deposit_name'),
           date: col('date'), time: col('time'),
           description: col('description'), amount: col('amount'), currency: col('currency'),
           balance: col('balance'),
@@ -164,6 +170,7 @@ function parseRows(text: string): BankRow[] {
       dataGapUntil: idx.dataGapUntil >= 0 ? (cells[idx.dataGapUntil] || '').trim() || null : null,
       note: idx.note >= 0 ? (cells[idx.note] || '').trim() : '',
       replacesSnowball: idx.replacesSnowball >= 0 ? (cells[idx.replacesSnowball] || '').trim() : '',
+      depositName: idx.depositName >= 0 ? (cells[idx.depositName] || '').trim() : '',
       accountNumber: (cells[idx.accountNumber] || '').trim(),
       date,
       time: /^\d{2}:\d{2}(:\d{2})?$/.test(time) ? time : '',
@@ -257,7 +264,7 @@ Deno.serve(async (req) => {
         if (r.amount === 0) continue;
         depositRows.push({
           user_id: user.id,
-          ticker: `${r.product === 'savings_account' ? 'SAVINGS' : 'DEPOSIT'}:${r.bank} ${r.currency}`,
+          ticker: `${r.product === 'savings_account' ? 'SAVINGS' : 'DEPOSIT'}:${r.bank} ${r.currency}${r.depositName ? ` ${r.depositName}` : ''}`,
           side: r.amount < 0 ? 'sell' : 'buy',
           quantity: Math.abs(r.amount),
           price: 1,
