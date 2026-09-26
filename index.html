@@ -2566,18 +2566,20 @@ async function mpRenderBrokerAssetClass() {
 // ---- Charts tab: pies built from the same rows as the My Portfolio tables ----
 const MP_PIE_COLORS = ['#4a9ff5', '#7fd351', '#8e8e8e', '#f0c040', '#e8452c', '#c2307a', '#6fc0f8', '#a86ee8',
   '#3dd6b5', '#f08a3c', '#9aa5b1', '#e05287', '#5b6ee1', '#b8d44a'];
+const MP_EU_MEMBERS = new Set(['AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT',
+  'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE']);
 const mpFlagOf = code => (/^[A-Z]{2}$/.test(code || '') && code !== 'XX'
   ? String.fromCodePoint(...[...code].map(c => 127397 + c.charCodeAt(0))) : '🌍');
 
 // `order`: slice labels in the order they go round from 12 o'clock
 // clockwise (the user's own charts); anything not listed follows, largest
 // first, and the small-slices "other" goes last.
-function mpPie(el, title, buckets, note = '', order = null) {
+function mpPie(el, title, buckets, note = '', order = null, groupSmall = true) {
   const card = document.createElement('div');
   card.className = 'pie-card';
   card.innerHTML = `<h4>${mpEscapeHtml(title)}</h4><div class="pie-plot"></div>${note ? `<p class="note">${mpEscapeHtml(note)}</p>` : ''}`;
   el.appendChild(card);
-  const rank = k => (order && order.includes(k) ? order.indexOf(k) : Infinity);
+  const rank = k => (/^other\b/.test(k) ? 1e9 : order && order.includes(k) ? order.indexOf(k) : 1e6);
   let entries = Object.entries(buckets).filter(([, v]) => v > 0.005)
     .sort((a, b) => (rank(a[0]) - rank(b[0])) || (b[1] - a[1]));
   if (!entries.length) { card.querySelector('.pie-plot').innerHTML = '<p class="empty-note">No data.</p>'; return; }
@@ -2586,7 +2588,7 @@ function mpPie(el, title, buckets, note = '', order = null) {
   // labels shrinking the pie.
   const total = entries.reduce((s, e) => s + e[1], 0);
   const small = entries.filter(e => e[1] / total < 0.01);
-  if (small.length > 1) {
+  if (groupSmall && small.length > 1) {
     entries = entries.filter(e => e[1] / total >= 0.01);
     entries.push(['other', small.reduce((s, e) => s + e[1], 0), small.map(e => `${e[0]} ${(e[1] / total * 100).toFixed(2)}%`).join('<br>')]);
   }
@@ -2669,7 +2671,8 @@ async function mpRenderCharts() {
   for (const w of fundCountries || []) (fundW[w.fund] ??= []).push(w);
   const directC = Object.fromEntries((direct || []).map(d => [d.market_ticker, d]));
   const byCountry = {};
-  const countryLabel = (name, code) => `${name} ${mpFlagOf(code)}`;
+  const codeOfLabel = {};
+  const countryLabel = (name, code) => { const l = `${name} ${mpFlagOf(code)}`; codeOfLabel[l] = code; return l; };
   for (const r of stockRows) {
     const ws = fundW[r.ticker];
     if (ws) {
@@ -2681,10 +2684,18 @@ async function mpRenderCharts() {
       mpAdd(byCountry, r.infra_region === 'ru' ? countryLabel('Russia', 'RU') : countryLabel('United States', 'US'), r.value_usd);
     }
   }
-  // Countries under 1% of the stocks -> one slice.
+  // Countries under 1% of the stocks -> one "other" slice.
   const stockTotal = Object.values(byCountry).reduce((s, v) => s + v, 0);
-  const countries = {};
-  for (const [k, v] of Object.entries(byCountry)) mpAdd(countries, v / stockTotal < 0.01 ? 'other countries 🌍' : k, v);
+  const groupSmall = src => {
+    const out = {};
+    for (const [k, v] of Object.entries(src)) mpAdd(out, v / stockTotal < 0.01 ? 'other 🌍' : k, v);
+    return out;
+  };
+  const countries = groupSmall(byCountry);
+  // The same with the European Union's members as one slice.
+  const withEu = {};
+  for (const [k, v] of Object.entries(byCountry)) mpAdd(withEu, MP_EU_MEMBERS.has(codeOfLabel[k]) ? 'European Union 🇪🇺' : k, v);
+  const countriesEu = groupSmall(withEu);
   // 5. Crypto by coin.
   const crypto = {};
   for (const r of base.data) if (r.asset_class === 'crypto' && r.value_usd > 0) mpAdd(crypto, r.ticker, r.value_usd);
@@ -2724,16 +2735,19 @@ async function mpRenderCharts() {
   mpPie(grid, '2. Banks & brokers', brokerBuckets, '', brokerOrder);
   mpPie(grid, '3. Asset types', types, '', typeOrder);
   mpPie(grid, '4. Stocks by country', countries, 'Funds split by the countries of what they hold.');
-  mpPie(grid, '5. Crypto', crypto, '', cryptoOrder);
-  mpPie(grid, '6. Russian infrastructure', ruBuckets(), '', ruOrder);
-  mpPie(grid, '7. Stocks, bonds, deposits, liquid assets',
+  mpPie(grid, '5. Stocks by country, EU as one', countriesEu, 'The same, with the EU member states together.');
+  mpPie(grid, '6. Crypto', crypto, '', cryptoOrder);
+  // Russian infrastructure: every cell a slice of its own, however small
+  // (roubles and yuan must stay apart).
+  mpPie(grid, '7. Russian infrastructure', ruBuckets(), '', ruOrder, false);
+  mpPie(grid, '8. Stocks, bonds, deposits, liquid assets',
     mpAssetBuckets(assetRows.filter(r => !isRealEstate(r)), ['stock', 'bond', 'deposit', 'liquid']), '', typeOrder);
-  mpPie(grid, '8. IBKR vs Freedom', { [brokerName('Freedom24')]: byBroker.Freedom24 || 0, [brokerName('IBKR')]: byBroker.IBKR || 0 },
+  mpPie(grid, '9. IBKR vs Freedom', { [brokerName('Freedom24')]: byBroker.Freedom24 || 0, [brokerName('IBKR')]: byBroker.IBKR || 0 },
     '', brokerOrder);
-  mpPie(grid, '9. Russian infrastructure vs the rest', { 'Russia 🇷🇺': ruTotal, 'rest of the world 🌍': allTotal - ruTotal },
+  mpPie(grid, '10. Russian infrastructure vs the rest', { 'Russia 🇷🇺': ruTotal, 'rest of the world 🌍': allTotal - ruTotal },
     '', ['Russia 🇷🇺', 'rest of the world 🌍']);
-  mpPie(grid, '10. Russian infrastructure without stocks', ruBuckets(['stock']), '', ruOrder);
-  mpPie(grid, '11. Asset types with real estate', typesWithRealEstate, '', typeOrder);
+  mpPie(grid, '11. Russian infrastructure without stocks', ruBuckets(['stock']), '', ruOrder, false);
+  mpPie(grid, '12. Asset types with real estate', typesWithRealEstate, '', typeOrder);
 }
 
 // Funds whose cash part (fund_holdings' 'OTHER' line: money, reverse repo,
