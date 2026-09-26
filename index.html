@@ -50,6 +50,10 @@
   .form-row input:focus, .form-row select:focus { outline: none; border-color: #4da8c8; }
   .section-title { font-size: 1rem; font-weight: 600; color: #e6edf3; margin: 20px 0 10px; }
   .section-title:first-child { margin-top: 0; }
+  .pie-grid { display: flex; flex-wrap: wrap; gap: 16px; }
+  .pie-grid .pie-card { flex: 1 1 420px; max-width: 560px; min-width: 0; background: #13191f; border: 1px solid #1e2830; border-radius: 8px; padding: 12px 12px 4px; }
+  .pie-grid .pie-card h4 { margin: 0 0 4px; font-size: 0.9rem; font-weight: 600; color: #e6edf3; }
+  .pie-grid .pie-plot { height: 380px; }
   .drop-zone { margin-top: 8px; padding: 14px; border: 1px dashed #2a3540; border-radius: 6px; color: #8b949e;
     text-align: center; font-size: 0.85rem; }
   .drop-zone.over { border-color: #4da8c8; color: #4da8c8; background: #13191f; }
@@ -71,6 +75,7 @@
   <div class="tab active" data-tab="myportfolio">My Portfolio</div>
   <div class="tab" data-tab="crypto">Crypto</div>
   <div class="tab" data-tab="lookthrough">Look-through</div>
+  <div class="tab" data-tab="charts">Charts</div>
   <div class="tab" data-tab="sigmoid">USD/RUB → CNY Weight (current + 5Y)</div>
   <div class="tab" data-tab="layer2a">ERP &amp; Stocks/Bonds Allocation</div>
   <div class="tab" data-tab="layer2r">Yield per Stock &amp; Rebalancing</div>
@@ -312,6 +317,15 @@
   </div>
 </div>
 
+<div id="charts" class="chart-wrap">
+  <div id="charts_signed_out" class="empty-note">Sign in with Google (top of page) to see your portfolio charts.</div>
+  <div id="charts_signed_in" style="display:none">
+    <p class="note">Built from the My Portfolio tables. Credit-card debt is netted against liquid assets.</p>
+    <p class="empty-note" id="mp_charts_status"></p>
+    <div id="mp_charts_grid" class="pie-grid"></div>
+  </div>
+</div>
+
 <div id="lookthrough" class="chart-wrap">
   <div id="lookthrough_signed_out" class="empty-note">Sign in with Google (top of page) to see what your funds hold.</div>
   <div id="lookthrough_signed_in" style="display:none">
@@ -517,6 +531,8 @@ function showTab(id) {
   document.querySelectorAll('.chart-wrap').forEach(el => {
     el.classList.toggle('active', el.id === id);
   });
+  // Charts drawn while their tab was hidden have no width yet: size them now.
+  if (id === 'charts') document.querySelectorAll('#mp_charts_grid .pie-plot').forEach(el => { if (el.data) Plotly.Plots.resize(el); });
   if (DATA && !rendered[id]) {
     rendered[id] = true;
     renderChart(id);
@@ -2461,10 +2477,12 @@ function mpBrokerCurrencyUnit(r) {
   return MP_UNIT_QUOTED_ASSET_CLASSES.has(r.asset_class) ? r.ticker : (r.underlying_currency || r.currency);
 }
 
-async function mpRenderBrokerCurrency() {
-  const wrap = document.getElementById('mp_broker_currency_wrap');
+// The rows behind the broker x currency / asset-class tables (and the
+// Charts tab): holdings with prices, bank balances, real estate, and the
+// USD rate of every currency / crypto unit they're shown in.
+async function mpLoadPortfolioBase() {
   const { data, error } = await sb.from('portfolio_value_usd_by_account').select('*');
-  if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
+  if (error) throw error;
   const currencies = [...new Set(data.map(r => r.underlying_currency || r.currency)), 'USD', 'EUR', 'GBP', 'RUB', 'CNY', 'TRY', 'RSD'];
   const fxByCurrency = await mpFetchFxByCurrency(currencies);
   // Fold in a USD-per-unit rate for each crypto/metal ticker too, straight
@@ -2481,8 +2499,15 @@ async function mpRenderBrokerCurrency() {
   }
   const cashRows = await mpFetchCashRows(fxByCurrency);
   const realEstateRows = await mpFetchRealEstateRows(fxByCurrency);
-  const split = await mpSplitFundsByCurrency(data);
-  const rows = [...split, ...cashRows, ...realEstateRows].map(r => {
+  return { data, fxByCurrency, cashRows, realEstateRows };
+}
+
+// The broker x currency table's rows: funds split by what they hold, each
+// row's currency column (European currencies as EUR, the rest of the fiat
+// outside the main columns as "others").
+async function mpCurrencyRows(base) {
+  const split = await mpSplitFundsByCurrency(base.data);
+  return [...split, ...base.cashRows, ...base.realEstateRows].map(r => {
     const unit = mpBrokerCurrencyUnit(r);
     // Other European currencies (CHF, DKK, SEK, ...) count as EUR; fiat
     // outside the main columns (JPY, AED, ...) -> one "others" column, in USD.
@@ -2490,7 +2515,14 @@ async function mpRenderBrokerCurrency() {
     const ccy = fiat && MP_EUROPEAN_AS_EUR.has(unit) ? 'EUR' : unit;
     return { ...r, currency: fiat && !MP_MAIN_CURRENCIES.has(ccy) ? MP_OTHER_CURRENCIES_COLUMN : ccy };
   });
-  mpRenderBrokerPivot(wrap, rows, 'currency', 'No holdings yet — import trades above.', fxByCurrency);
+}
+
+async function mpRenderBrokerCurrency() {
+  const wrap = document.getElementById('mp_broker_currency_wrap');
+  let base;
+  try { base = await mpLoadPortfolioBase(); }
+  catch (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
+  mpRenderBrokerPivot(wrap, await mpCurrencyRows(base), 'currency', 'No holdings yet — import trades above.', base.fxByCurrency);
 }
 
 // Funds whose value is split across currency columns by what they hold
@@ -2529,6 +2561,129 @@ async function mpRenderBrokerAssetClass() {
   const realEstateRows = await mpFetchRealEstateRows(fxByCurrency);
   const split = await mpSplitFundsCash(data);
   mpRenderBrokerPivot(wrap, [...split, ...cashRows, ...realEstateRows], 'instrument_type', 'No holdings yet — import trades above.');
+}
+
+// ---- Charts tab: pies built from the same rows as the My Portfolio tables ----
+const MP_PIE_COLORS = ['#4a9ff5', '#7fd351', '#8e8e8e', '#f0c040', '#e8452c', '#c2307a', '#6fc0f8', '#a86ee8',
+  '#3dd6b5', '#f08a3c', '#9aa5b1', '#e05287', '#5b6ee1', '#b8d44a'];
+const mpFlagOf = code => (/^[A-Z]{2}$/.test(code || '') && code !== 'XX'
+  ? String.fromCodePoint(...[...code].map(c => 127397 + c.charCodeAt(0))) : '🌍');
+
+function mpPie(el, title, buckets, note = '') {
+  const card = document.createElement('div');
+  card.className = 'pie-card';
+  card.innerHTML = `<h4>${mpEscapeHtml(title)}</h4><div class="pie-plot"></div>${note ? `<p class="note">${mpEscapeHtml(note)}</p>` : ''}`;
+  el.appendChild(card);
+  const entries = Object.entries(buckets).filter(([, v]) => v > 0.005).sort((a, b) => b[1] - a[1]);
+  if (!entries.length) { card.querySelector('.pie-plot').innerHTML = '<p class="empty-note">No data.</p>'; return; }
+  Plotly.newPlot(card.querySelector('.pie-plot'), [{
+    type: 'pie', labels: entries.map(e => e[0]), values: entries.map(e => e[1]), sort: false, direction: 'clockwise',
+    textinfo: 'label+percent', textposition: 'auto', insidetextorientation: 'horizontal', automargin: true,
+    marker: { colors: entries.map((_, i) => MP_PIE_COLORS[i % MP_PIE_COLORS.length]), line: { color: '#0d1117', width: 1 } },
+    hovertemplate: '%{label}<br>$%{value:,.0f}<br>%{percent}<extra></extra>',
+  }], {
+    paper_bgcolor: '#13191f', plot_bgcolor: '#13191f', font: { color: '#c9d1d9', size: 11 },
+    showlegend: false, margin: { t: 30, b: 30, l: 30, r: 30 },
+  }, { responsive: true, displayModeBar: false });
+}
+
+const mpAdd = (acc, key, v) => { if (v) acc[key] = (acc[key] || 0) + v; return acc; };
+// Asset-type buckets with credit-card debt netted against liquid assets.
+function mpAssetBuckets(rows, keep = null) {
+  const b = {};
+  for (const r of rows) if (r.value_usd) mpAdd(b, r.instrument_type === 'credit' ? 'liquid' : r.instrument_type, r.value_usd);
+  if ((b.liquid || 0) < 0) b.liquid = 0;
+  return Object.fromEntries(Object.entries(b).filter(([k]) => !keep || keep.includes(k))
+    .map(([k, v]) => [MP_ASSET_CLASS_LABELS[k] || k, v]));
+}
+
+async function mpRenderCharts() {
+  const grid = document.getElementById('mp_charts_grid');
+  const status = document.getElementById('mp_charts_status');
+  grid.innerHTML = '';
+  status.textContent = 'Loading…';
+  let base;
+  try { base = await mpLoadPortfolioBase(); }
+  catch (error) { status.textContent = error.message; return; }
+  const curRows = (await mpCurrencyRows(base)).filter(r => r.value_usd !== null);
+  const assetRows = [...await mpSplitFundsCash(base.data), ...base.cashRows, ...base.realEstateRows].filter(r => r.value_usd !== null);
+  const isRealEstate = r => r.account === 'real estate';
+  const brokerName = a => `${MP_BROKER_SHORT_NAMES[a] || a}${MP_BROKER_FLAGS[a] ? ` ${MP_BROKER_FLAGS[a]}` : ''}`;
+  const isRu = r => MP_RU_ACCOUNTS.has(r.account) || (r.account === '(unspecified)' && r.infra_region === 'ru');
+
+  // 1. Currencies -- the broker x currency table's total row.
+  const byCurrency = {};
+  for (const r of curRows) if (!r.excluded) {
+    const c = r.currency;
+    mpAdd(byCurrency, c === MP_OTHER_CURRENCIES_COLUMN ? 'others 🌍' : `${c}${MP_CURRENCY_FLAGS[c] ? ` ${MP_CURRENCY_FLAGS[c]}` : ''}`, r.value_usd);
+  }
+  // 2 / 8 / 9. Banks and brokers -- the table's per-broker totals, no real estate.
+  const byBroker = {};
+  for (const r of curRows) if (!isRealEstate(r)) mpAdd(byBroker, r.account, r.value_usd);
+  const brokerBuckets = Object.fromEntries(Object.entries(byBroker).map(([a, v]) => [brokerName(a), v]));
+  // 3 / 7 / 11. Asset types -- the broker x asset-class table's total row.
+  const types = mpAssetBuckets(assetRows.filter(r => !isRealEstate(r)));
+  // 4. Stocks by country: shares by their own country, funds split by what they hold.
+  const stockRows = assetRows.filter(r => r.instrument_type === 'stock' && r.value_usd > 0);
+  const tickers = [...new Set(stockRows.map(r => r.ticker).filter(Boolean))];
+  const [{ data: fundCountries }, { data: direct }] = await Promise.all([
+    sb.from('fund_country_weights').select('*').in('fund', tickers),
+    sb.from('securities').select('market_ticker, country, country_code').in('market_ticker', tickers),
+  ]);
+  const fundW = {};
+  for (const w of fundCountries || []) (fundW[w.fund] ??= []).push(w);
+  const directC = Object.fromEntries((direct || []).map(d => [d.market_ticker, d]));
+  const byCountry = {};
+  const countryLabel = (name, code) => `${name} ${mpFlagOf(code)}`;
+  for (const r of stockRows) {
+    const ws = fundW[r.ticker];
+    if (ws) {
+      const total = ws.reduce((s, w) => s + Number(w.weight), 0);
+      for (const w of ws) mpAdd(byCountry, countryLabel(w.country, w.country_code), r.value_usd * Number(w.weight) / total);
+    } else if (directC[r.ticker]) {
+      mpAdd(byCountry, countryLabel(directC[r.ticker].country, directC[r.ticker].country_code), r.value_usd);
+    } else {
+      mpAdd(byCountry, r.infra_region === 'ru' ? countryLabel('Russia', 'RU') : countryLabel('United States', 'US'), r.value_usd);
+    }
+  }
+  // Countries under 1% of the stocks -> one slice.
+  const stockTotal = Object.values(byCountry).reduce((s, v) => s + v, 0);
+  const countries = {};
+  for (const [k, v] of Object.entries(byCountry)) mpAdd(countries, v / stockTotal < 0.01 ? 'other countries 🌍' : k, v);
+  // 5. Crypto by coin.
+  const crypto = {};
+  for (const r of base.data) if (r.asset_class === 'crypto' && r.value_usd > 0) mpAdd(crypto, r.ticker, r.value_usd);
+  // 6 / 10. Russian infrastructure -- the Russian table's cells (credit netted into liquid).
+  const ruCells = {};
+  for (const r of assetRows) {
+    if (!isRu(r)) continue;
+    const ccy = r.underlying_currency || r.currency;
+    const type = r.instrument_type === 'credit' ? 'liquid' : r.instrument_type;
+    if (!MP_RU_INFRA_TYPES.includes(type) || !(ccy in MP_RU_INFRA_CURRENCIES)) continue;
+    mpAdd(ruCells, `${type} ${ccy}`, r.value_usd);
+  }
+  const ruBuckets = (skip = []) => Object.fromEntries(Object.entries(ruCells)
+    .filter(([k, v]) => v > 0 && !skip.includes(k.split(' ')[0]))
+    .map(([k, v]) => { const [t, c] = k.split(' '); return [`${MP_RU_INFRA_LABELS[t]} ${MP_RU_INFRA_CURRENCIES[c]}`, v]; }));
+  // 9. Russian infrastructure vs the rest (no real estate).
+  const ruTotal = curRows.filter(r => !isRealEstate(r) && isRu(r)).reduce((s, r) => s + r.value_usd, 0);
+  const allTotal = curRows.filter(r => !isRealEstate(r)).reduce((s, r) => s + r.value_usd, 0);
+  // 11. Asset types with real estate (every property, checked or not).
+  const typesWithRealEstate = mpAssetBuckets(assetRows);
+
+  status.textContent = '';
+  mpPie(grid, '1. Currencies', byCurrency);
+  mpPie(grid, '2. Banks & brokers', brokerBuckets);
+  mpPie(grid, '3. Asset types', types);
+  mpPie(grid, '4. Stocks by country', countries, 'Funds split by the countries of what they hold.');
+  mpPie(grid, '5. Crypto', crypto);
+  mpPie(grid, '6. Russian infrastructure', ruBuckets());
+  mpPie(grid, '7. Stocks, bonds, deposits, liquid assets',
+    mpAssetBuckets(assetRows.filter(r => !isRealEstate(r)), ['stock', 'bond', 'deposit', 'liquid']));
+  mpPie(grid, '8. IBKR vs Freedom', { [brokerName('IBKR')]: byBroker.IBKR || 0, [brokerName('Freedom24')]: byBroker.Freedom24 || 0 });
+  mpPie(grid, '9. Russian infrastructure vs the rest', { 'Russia 🇷🇺': ruTotal, 'rest of the world 🌍': allTotal - ruTotal });
+  mpPie(grid, '10. Russian infrastructure without stocks', ruBuckets(['stock']));
+  mpPie(grid, '11. Asset types with real estate', typesWithRealEstate);
 }
 
 // Funds whose cash part (fund_holdings' 'OTHER' line: money, reverse repo,
@@ -3608,6 +3763,8 @@ function mpUpdateAuthUi(session) {
     document.getElementById('crypto_signed_in').style.display = '';
     document.getElementById('lookthrough_signed_out').style.display = 'none';
     document.getElementById('lookthrough_signed_in').style.display = '';
+    document.getElementById('charts_signed_out').style.display = 'none';
+    document.getElementById('charts_signed_in').style.display = '';
     mpRenderPortfolioPies();
     mpRenderBrokerCurrency();
     mpRenderBrokerAssetClass();
@@ -3615,6 +3772,7 @@ function mpUpdateAuthUi(session) {
     mpRenderWallets();
     mpRenderRealEstate();
     mpRenderLookThrough();
+    mpRenderCharts();
   } else {
     btn.textContent = 'Sign in with Google';
     document.getElementById('mp_signed_out').style.display = '';
@@ -3623,6 +3781,9 @@ function mpUpdateAuthUi(session) {
     document.getElementById('crypto_signed_in').style.display = 'none';
     document.getElementById('lookthrough_signed_out').style.display = '';
     document.getElementById('lookthrough_signed_in').style.display = 'none';
+    document.getElementById('charts_signed_out').style.display = '';
+    document.getElementById('charts_signed_in').style.display = 'none';
+    document.getElementById('mp_charts_grid').innerHTML = '';
     document.getElementById('mp_lookthrough_wrap').innerHTML = '';
     ['plot_mp_pie_us_stocks', 'plot_mp_pie_ru_stocks', 'plot_mp_pie_stocksbonds', 'plot_mp_pie_deposits']
       .forEach(id => { document.getElementById(id).style.display = 'none'; });
