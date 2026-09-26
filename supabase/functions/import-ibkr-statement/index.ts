@@ -2,7 +2,7 @@
 //
 // Imports an Interactive Brokers Activity Statement, CSV (Performance &
 // Reports -> Statements -> Activity Statement -> Format CSV; one file per
-// period, e.g. U21558468_2025_2025.csv, U21558468_20260101_20260925.csv).
+// period, e.g. U<account>_2025_2025.csv, U<account>_20260101_20260925.csv).
 // The file is a stack of sections, each "Section,Header,..." row naming the
 // columns of the "Section,Data,..." rows after it (a section can restart
 // with a new header -- Trades has one for Stocks and one for Forex).

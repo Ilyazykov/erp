@@ -2,7 +2,7 @@
 //
 // Parses a Wise balance statement CSV (open a balance -> Statement ->
 // Balance statement, CSV; one file per currency balance, e.g.
-// statement_131774402_EUR_2025-08-29_2026-09-26.csv) and upserts its rows
+// statement_<balance id>_EUR_<from>_<to>.csv) and upserts its rows
 // into `bank_transactions` -- same destination and shape as
 // import-boc-statement / import-revolut-statement, account 'Wise'.
 //

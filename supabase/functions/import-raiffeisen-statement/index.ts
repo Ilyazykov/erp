@@ -12,8 +12,8 @@
 // alone does NOT uniquely identify a statement) plus a few phone
 // screenshots for months where the PDF was never generated. That PDF+
 // screenshot extraction happened once, out of band, producing this
-// project's own flat CSV shape (see statements/raif_<account>.csv) -- this
-// importer only has to parse that intermediate CSV, not a PDF.
+// project's own flat CSV shape -- this importer only has to parse that
+// intermediate CSV, not a PDF.
 //
 // CSV shape (this project's own, not a bank export):
 //   account_number,currency,date_executed,date_received,card_number,

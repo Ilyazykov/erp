@@ -2,8 +2,8 @@
 //
 // Imports Telegram Wallet (@wallet, custodial). Wallet has no export, so its
 // history is scraped from the web app (Transaction history of the wallet,
-// and of each Earn product) and turned into this project's own CSV
-// (statements/telegram/telegram_wallet.csv), oldest first:
+// and of each Earn product) and turned into this project's own CSV,
+// oldest first:
 //   timestamp_utc,section,title,amount,currency,status
 //   2025-09-23 09:11,wallet,Exchanged USDT to XAUT,0.09,XAUT,Received
 //   2025-09-23 09:11,wallet,Transfer to Earn,-0.09,XAUT,Sent
