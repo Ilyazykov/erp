@@ -2167,6 +2167,11 @@ async function mpFetchCashRows(fxByCurrency) {
   const { data, error } = await sb.from('bank_latest_balances')
     .select('account, currency, balance_after, tx_date, external_source, product');
   if (error || !data) return [];
+  // Rates for currencies the caller didn't ask for (Revolut's AED / HUF / ILS
+  // pockets): fetched here and added to the caller's map, so its native-unit
+  // display has them too.
+  const missing = [...new Set(data.map(r => r.currency))].filter(c => !(c in fxByCurrency));
+  if (missing.length) Object.assign(fxByCurrency, await mpFetchFxByCurrency(missing));
   // A credit card's balance goes to its own 'credit' column, which only
   // ever holds zero or negative amounts (debt); an overpaid card's positive
   // balance is just cash. Everything else is 'cash'.
