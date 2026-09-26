@@ -2018,8 +2018,8 @@ const MP_CURRENCY_FLAGS = {
 // Any account not listed here falls back after these, alphabetically.
 const MP_BROKER_ROW_ORDER = [
   '(unspecified)', 'Revolut', 'Wise', 'Bank of Cyprus', 'IBKR', 'Freedom24',
-  'Ziraat Bank', 'Raiffeisen', 'Sber', 'T-Bank', 'Alfa', 'Ozon Bank', 'Yandex Bank', 'Binance', 'Bybit', 'Crypto.com', 'Telegram', 'Trust',
-  'Cash',
+  'Ziraat Bank', 'Raiffeisen', 'UniCredit', 'Sber', 'T-Bank', 'Alfa', 'Ozon Bank', 'Yandex Bank', 'Binance', 'Bybit', 'Crypto.com', 'Telegram', 'Trust',
+  'cash',
 ];
 
 // Flag/emoji shown next to each broker's row label, matching the user's
@@ -2027,14 +2027,16 @@ const MP_BROKER_ROW_ORDER = [
 // '(unspecified)', no flag since it names no actual broker).
 const MP_BROKER_FLAGS = {
   Revolut: '🇪🇺', Wise: '🇪🇺', 'Bank of Cyprus': '🇨🇾', IBKR: '🇺🇸',
-  Freedom24: '🇰🇿', 'Ziraat Bank': '🇹🇷', Raiffeisen: '🇷🇸',
+  Freedom24: '🇰🇿', 'Ziraat Bank': '🇹🇷', Raiffeisen: '🇷🇸', UniCredit: '🇷🇸',
   Sber: '🇷🇺', 'T-Bank': '🇷🇺', Alfa: '🇷🇺', 'Ozon Bank': '🇷🇺', 'Yandex Bank': '🇷🇺',
-  Cash: '💵',
+  cash: '💵',
 };
 
 function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurrency) {
   if (!data.length) { wrap.innerHTML = `<p class="empty-note">${emptyMessage}</p>`; return; }
-  const priced = data.filter(r => r.value_usd !== null);
+  // Zero balances (a closed account like UniCredit, a spent-down currency)
+  // are left out, so an account whose every balance is zero gets no row.
+  const priced = data.filter(r => r.value_usd !== null && r.value_usd !== 0);
   const accounts = [...new Set(priced.map(r => r.account))].sort((a, b) => {
     const ia = MP_BROKER_ROW_ORDER.indexOf(a), ib = MP_BROKER_ROW_ORDER.indexOf(b);
     if (ia === -1 && ib === -1) return a.localeCompare(b);

@@ -43,6 +43,7 @@
 // ticker+quantity+price asset transactions; a Wolt payment has neither).
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { orderWithinGroups } from '../_shared/day_order.ts';
 
 interface CsvRow {
   type: string;
@@ -216,6 +217,9 @@ Deno.serve(async (req) => {
         user_id: user.id,
         account,
         tx_date: isoDate,
+        // The running Balance follows Completed Date, not Started Date --
+        // see migrations/20250101000025_bank_booked_at.sql.
+        booked_at: toIsoTimestamp(r.completedDate),
         description: r.description || r.type,
         counterparty: null,
         amount: r.amount,
@@ -233,6 +237,14 @@ Deno.serve(async (req) => {
         external_id: occurrence === 0 ? signature : `${signature}:dup${occurrence}`,
       });
     }
+
+    // Rows completed in the same second: order them by the running balance
+    // (_shared/day_order.ts) and spread them a millisecond apart, so the
+    // latest balance is unambiguous.
+    const pos = orderWithinGroups(rows, r => `${r.currency} ${r.booked_at}`, r => r.amount, r => r.balance_after, false);
+    rows.forEach((r, i) => {
+      if (r.booked_at && pos[i]) r.booked_at = new Date(Date.parse(r.booked_at) + pos[i]).toISOString();
+    });
 
     if (!rows.length) {
       return new Response(JSON.stringify({

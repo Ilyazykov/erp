@@ -39,6 +39,7 @@
 // legitimate same-day duplicates (e.g. two identical Wolt orders).
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { clockFor, orderWithinGroups } from '../_shared/day_order.ts';
 
 interface BocRow {
   date: string;
@@ -212,6 +213,15 @@ Deno.serve(async (req) => {
         external_id: occurrence === 0 ? signature : `${signature}:dup${occurrence}`,
       });
     }
+
+
+    // Same-day rows (the statement has dates only) get 00:00:SS by the order
+    // the bank applied them, so the day's last row -- the account's balance --
+    // really is the latest by tx_date (see _shared/day_order.ts).
+    const dates = rows.map(r => r.tx_date);
+    const pos = orderWithinGroups(rows, r => `${r.currency} ${r.tx_date}`, r => r.amount, r => r.balance_after,
+      dates.length > 1 && dates[0] > dates[dates.length - 1]);
+    rows.forEach((r, i) => { r.tx_date = r.tx_date.replace('T00:00:00Z', `T${clockFor(pos[i])}Z`); });
 
     if (!rows.length) {
       return new Response(JSON.stringify({

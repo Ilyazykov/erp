@@ -27,7 +27,7 @@
 // 'data_gap' (statements run out -- the row zeroes the balance, nothing is
 // known until data_gap_until), 'account_closed' (closure mark, amount 0) or
 // 'balance_snapshot' (a counted balance with no statement behind it -- cash
-// on hand, bank 'Cash': balance = the count, amount = change since the
+// on hand, bank 'cash': balance = the count, amount = change since the
 // previous count). Stored as bank_transactions.synthetic / synthetic_kind /
 // data_gap_until (see migrations ...010, ...011 and ...023), explanation in
 // `note`.
