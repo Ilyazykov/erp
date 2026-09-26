@@ -26,13 +26,13 @@
 //     that share a timestamp are spread a millisecond apart in file order;
 //     date-only rows (deposits, dividends) sit at the start of their day.
 //
-// The statement has priority over Snowball's hand-entered rows: Snowball
-// trades matching one written here (same side, ticker, date and quantity;
-// for a dividend, same ticker and date -- IBKR rounds the amount) are
+// The statement has priority over Snowball's hand-entered rows of the same
+// operations (matching rules: _shared/statement_priority.ts): those are
 // deleted, and import-trades-csv leaves them out of later uploads.
 // Everything is upserted by content, so re-uploading a period is harmless.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { removeCoveredSnowball } from '../_shared/statement_priority.ts';
 
 const ACCOUNT = 'IBKR';
 const SOURCE = 'ibkr_csv';
@@ -203,16 +203,7 @@ Deno.serve(async (req) => {
     }
 
     // Statement over Snowball: drop the Snowball rows of these same operations.
-    let removedSnowball = 0;
-    for (const t of trades) {
-      let q = supabase.from('trades').delete({ count: 'exact' })
-        .eq('user_id', user.id).eq('external_source', 'snowball_csv')
-        .eq('ticker', t.ticker).eq('side', t.side).eq('trade_date', t.trade_date);
-      if (t.side !== 'dividend') q = q.eq('quantity', t.quantity);
-      const { error, count } = await q;
-      if (error) return json({ error: error.message }, 500);
-      removedSnowball += count ?? 0;
-    }
+    const removedSnowball = await removeCoveredSnowball(supabase, user.id, trades);
 
     return json({
       trades: trades.filter(t => t.side !== 'dividend').length,

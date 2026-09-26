@@ -25,13 +25,11 @@ const SKIPPED_SYMBOLS = new Set(['XAUT']);
 // import leaves them out:
 //   - by ticker: a metal Revolut's statement holds (import-revolut-statement
 //     -- Snowball dates its gold purchases a day off);
-//   - by operation: a trade / dividend an IBKR Activity Statement has
-//     (import-ibkr-statement) -- same side, ticker, date and quantity; for a
-//     dividend, same ticker and date (IBKR rounds the amount).
+//   - by operation: a trade / dividend a broker statement has
+//     (import-ibkr-statement, import-freedom24-statement; matching rules in
+//     _shared/statement_priority.ts).
 const STATEMENT_TRADE_SOURCES = ['revolut_metal_csv'];
-const STATEMENT_OPERATION_SOURCES = ['ibkr_csv'];
-const operationKey = (side: string, ticker: string, date: string, quantity: number) =>
-  `${side}:${ticker.toUpperCase()}:${date}${side === 'dividend' ? '' : `:${Number(quantity)}`}`;
+const STATEMENT_OPERATION_SOURCES = ['ibkr_csv', 'freedom24_xlsx'];
 // Telegram Wallet rows that Snowball has without a note: the 2025-11-15 sale
 // of the BTC bought there on 11-03 / 11-06 (in Wallet's own history as
 // "Exchanged BTC to USDT").
@@ -42,6 +40,7 @@ const isSnowballEthInterest = (event: string, symbol: string) =>
   event === 'STOCK_AS_DIVIDEND' && symbol.trim().toUpperCase() === 'ETH';
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { coveredBySnowball } from '../_shared/statement_priority.ts';
 
 const EVENT_TO_SIDE: Record<string, string> = {
   BUY: 'buy',
@@ -158,8 +157,7 @@ Deno.serve(async (req) => {
     if (opErr) {
       return new Response(JSON.stringify({ error: opErr.message }), { status: 500, headers: corsHeaders });
     }
-    const statementOperations = new Set((stOps ?? []).map((t: { side: string; ticker: string; trade_date: string; quantity: number }) =>
-      operationKey(t.side, t.ticker, t.trade_date, t.quantity)));
+    const statementOperations = (stOps ?? []) as { side: string; ticker: string; trade_date: string; quantity: number }[];
 
     const rows = [];
     let skipped = 0;
@@ -188,9 +186,6 @@ Deno.serve(async (req) => {
       const quantity = parseNumber(cells[idx.quantity]);
       const price = parseNumber(cells[idx.price]);
       if (!trade_date || quantity === null || price === null) { skipped++; continue; }
-      if (statementOperations.has(operationKey(side, (cells[idx.symbol] || '').trim(), trade_date, quantity))) {
-        skippedTrust++; continue;
-      }
       if (!(cells[idx.note] || '').trim()
           && SKIPPED_UNNOTED.has(`${event}:${trade_date}:${(cells[idx.symbol] || '').trim().toUpperCase()}:${quantity}`)) {
         skippedTrust++; continue;
@@ -217,6 +212,13 @@ Deno.serve(async (req) => {
         external_id: occurrence === 0 ? signature : `${signature}:dup${occurrence}`,
       });
     }
+
+    // Rows a broker statement already has (see STATEMENT_OPERATION_SOURCES).
+    const covered = coveredBySnowball(statementOperations, rows);
+    skippedTrust += covered.size;
+    const kept = rows.filter(r => !covered.has(r));
+    rows.length = 0;
+    rows.push(...kept);
 
     if (!rows.length) {
       return new Response(JSON.stringify({ imported: 0, skipped, error: 'No importable rows found' }),

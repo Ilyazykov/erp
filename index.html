@@ -222,7 +222,8 @@
     <div class="section-title">Import CSV</div>
     <p class="note">Upload a broker trades CSV (Snowball), a Revolut account statement, a Revolut Flexible
       Cash Funds statement, a Revolut Instant Access Savings statement, a Wise balance statement (CSV, one per
-      currency), an IBKR Activity Statement (CSV, one per period), a Bank of Cyprus transaction
+      currency), an IBKR Activity Statement (CSV, one per period), a Freedom24 cash-movement report
+      (tradernet_table.xlsx, from the account's opening), a Bank of Cyprus transaction
       history export, a Ziraat Bank account activity export (.xlsx), or this project's own combined
       Raiffeisen Bank Serbia transaction CSV, its generic bank CSV (Yandex Bank, T-Bank), a Bybit transaction log
       (Data Export → Transaction Log → Account Change Details: upload each Funding and Unified Trading file), or a
@@ -1626,7 +1627,9 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
     const isXlsx = /\.xlsx$/i.test(file.name);
     let kind, csvText;
     if (isXlsx) {
-      kind = 'ziraat_xlsx';
+      // Freedom24 (Tradernet) names its export "tradernet_table*.xlsx";
+      // any other .xlsx is taken as Ziraat's.
+      kind = /tradernet/i.test(file.name) ? 'freedom24_xlsx' : 'ziraat_xlsx';
     } else {
       csvText = await file.text();
       const headerLine = csvText.split(/\r\n|\r|\n/)[0] || '';
@@ -1661,6 +1664,7 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
       binance: { fn: 'import-binance', label: 'Binance transaction export' },
       wise: { fn: 'import-wise-statement', label: 'Wise balance statement' },
       ibkr: { fn: 'import-ibkr-statement', label: 'IBKR Activity Statement' },
+      freedom24_xlsx: { fn: 'import-freedom24-statement', label: 'Freedom24 cash-movement report' },
     };
     const { fn, label } = endpoints[kind];
     // Binance writes times in the zone named in the file name, e.g.
@@ -1723,6 +1727,18 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
         : `Detected: ${label}. Imported ${result.rows} rows (${result.total_rows_stored} stored in total).${skipped} `
           + `Crypto.com balance now: ${bal}.`;
       mpRefreshAfterWalletChange();
+    } else if (kind === 'freedom24_xlsx') {
+      const cash = Object.entries(result.cash || {}).map(([c, q]) => `${c} ${Number(q).toFixed(2)}`).join(', ');
+      statusEl.textContent = `Detected: ${label}. Imported ${result.trades} trades, ${result.dividends} dividends and `
+        + `${result.cash_rows} cash movements`
+        + `${result.removed_snowball_duplicates ? ` (replacing ${result.removed_snowball_duplicates} Snowball rows)` : ''}. `
+        + `Freedom24 cash: ${cash || 'none'}.`;
+      mpRenderHoldings();
+      mpRenderPortfolioPies();
+      mpRenderCashFlows();
+      mpRenderBrokerCurrency();
+      mpRenderBrokerAssetClass();
+      mpRenderEquityByIndex();
     } else if (kind === 'ibkr') {
       const cash = Object.entries(result.cash || {}).map(([c, q]) => `${c} ${Number(q).toFixed(2)}`).join(', ');
       statusEl.textContent = `Detected: ${label}. Imported ${result.trades} trades, ${result.dividends} dividends and `
