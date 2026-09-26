@@ -2580,10 +2580,13 @@ const mpFlagOf = code => (/^[A-Z]{2}$/.test(code || '') && code !== 'XX'
 // `order`: slice labels in the order they go round from 12 o'clock
 // clockwise (the user's own charts); anything not listed follows, largest
 // first, and the small-slices "other" goes last.
-function mpPie(el, title, buckets, note = '', order = null, groupSmall = true) {
+// smallGroupOf (optional): label -> group number, to list the "other"
+// slice's contents group by group (currencies before crypto), each largest first.
+function mpPie(el, title, buckets, note = '', order = null, groupSmall = true, smallGroupOf = () => 0) {
   const card = document.createElement('div');
   card.className = 'pie-card';
-  card.innerHTML = `<h4>${mpEscapeHtml(title)}</h4><div class="pie-plot"></div><p class="pie-total"></p>${note ? `<p class="note">${mpEscapeHtml(note)}</p>` : ''}`;
+  card.innerHTML = `<h4>${mpEscapeHtml(title)}</h4><div class="pie-plot"></div><p class="pie-total"></p>`
+    + `<p class="note pie-other" hidden></p>${note ? `<p class="note">${mpEscapeHtml(note)}</p>` : ''}`;
   el.appendChild(card);
   const rank = k => (/^other\b/.test(k) ? 1e9 : order && order.includes(k) ? order.indexOf(k) : 1e6);
   let entries = Object.entries(buckets).filter(([, v]) => v > 0.005)
@@ -2597,7 +2600,16 @@ function mpPie(el, title, buckets, note = '', order = null, groupSmall = true) {
   const small = entries.filter(e => e[1] / total < 0.01);
   if (groupSmall && small.length > 1) {
     entries = entries.filter(e => e[1] / total >= 0.01);
-    entries.push(['other', small.reduce((s, e) => s + e[1], 0), small.map(e => `${e[0]} ${(e[1] / total * 100).toFixed(2)}%`).join('<br>')]);
+    const listed = [...small].sort((a, b) => (smallGroupOf(a[0]) - smallGroupOf(b[0])) || (b[1] - a[1]))
+      .map(e => `${e[0]} ${(e[1] / total * 100).toFixed(2)}%`);
+    // The hover box is clipped to the plot, so it lists the first dozen;
+    // the full list goes under the chart.
+    const HOVER_LINES = 12;
+    entries.push(['other', small.reduce((s, e) => s + e[1], 0),
+      [...listed.slice(0, HOVER_LINES), ...(listed.length > HOVER_LINES ? [`… +${listed.length - HOVER_LINES} more below`] : [])].join('<br>')]);
+    const otherEl = card.querySelector('.pie-other');
+    otherEl.textContent = `other: ${listed.join(', ')}`;
+    otherEl.hidden = false;
   }
   Plotly.newPlot(card.querySelector('.pie-plot'), [{
     type: 'pie', labels: entries.map(e => e[0]), values: entries.map(e => e[1]), sort: false, direction: 'clockwise',
@@ -2605,7 +2617,7 @@ function mpPie(el, title, buckets, note = '', order = null, groupSmall = true) {
     textinfo: 'text', textposition: 'inside', insidetextorientation: 'horizontal',
     customdata: entries.map(e => e[2] || ''),
     marker: { colors: entries.map((_, i) => MP_PIE_COLORS[i % MP_PIE_COLORS.length]), line: { color: '#0d1117', width: 1 } },
-    hovertemplate: '%{label}<br>$%{value:,.0f}<br>%{percent}<br>%{customdata}<extra></extra>',
+    hovertemplate: '%{label}<br>$%{value:,.0f} - %{percent}<br>%{customdata}<extra></extra>',
   }], {
     paper_bgcolor: '#13191f', plot_bgcolor: '#13191f', font: { size: 12 },   // inside labels: Plotly picks black / white per slice
     uniformtext: { minsize: 9, mode: 'hide' },
@@ -2762,7 +2774,9 @@ async function mpRenderCharts() {
   const ruOrder = [['stock', 'RUB'], ['bond', 'RUB'], ['deposit', 'RUB'], ['liquid', 'RUB'], ['cash', 'RUB'],
     ['bond', 'CNY'], ['deposit', 'CNY'], ['liquid', 'CNY'], ['cash', 'CNY'], ['stock', 'CNY']]
     .map(([t, c]) => `${MP_RU_INFRA_LABELS[t]} ${MP_RU_INFRA_CURRENCIES[c]}`);
-  mpPie(grid, '1. Currencies', byCurrency, '', currencyOrder);
+  // Currencies carry a flag; crypto tickers don't.
+  const isFiatLabel = l => /[\u{1F1E6}-\u{1F1FF}]|🌍/u.test(l);
+  mpPie(grid, '1. Currencies', byCurrency, '', currencyOrder, true, l => (isFiatLabel(l) ? 0 : 1));
   mpPie(grid, '2. Banks & brokers', brokerBuckets, '', brokerOrder);
   mpPie(grid, '3. Asset types', types, '', typeOrder);
   mpPie(grid, '4. Stocks by country', countries, 'Funds split by the countries of what they hold.');
