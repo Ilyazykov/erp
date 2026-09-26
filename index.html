@@ -221,7 +221,8 @@
   <div id="mp_signed_in" style="display:none">
     <div class="section-title">Import CSV</div>
     <p class="note">Upload a broker trades CSV (Snowball), a Revolut account statement, a Revolut Flexible
-      Cash Funds statement, a Revolut Instant Access Savings statement, a Bank of Cyprus transaction
+      Cash Funds statement, a Revolut Instant Access Savings statement, a Wise balance statement (CSV, one per
+      currency), a Bank of Cyprus transaction
       history export, a Ziraat Bank account activity export (.xlsx), or this project's own combined
       Raiffeisen Bank Serbia transaction CSV, its generic bank CSV (Yandex Bank, T-Bank), a Bybit transaction log
       (Data Export → Transaction Log → Account Change Details: upload each Funding and Unified Trading file), or a
@@ -1576,6 +1577,8 @@ document.getElementById('btn_login').addEventListener('click', async () => {
 //     line, then "Uid,Date & Time(UTC),Coin,..." or "Uid,Currency,Contract,..."
 //   - Crypto.com App export starts with "Timestamp (UTC),Transaction
 //     Description,Currency,Amount,To Currency,..."
+//   - Wise balance statement (one file per currency balance) starts with
+//     "\"TransferWise ID\",Date,\"Date Time\",Amount,Currency,..."
 //   - Binance "Export Transaction Records" starts with "User ID,Time,Account,
 //     Operation,Coin,Change,Remark"; its deposit / withdrawal history
 //     exports ("Time,Coin,Network,Amount,...") only repeat rows of it
@@ -1598,6 +1601,7 @@ function mpDetectCsvKind(headerLine, fullText) {
       && /^Uid,(Date & Time\(UTC\),Coin|Currency,Contract),/m.test(fullText)) return 'bybit_log';
   if (/^\uFEFF?Timestamp \(UTC\),Transaction Description,Currency,Amount,To Currency,/i.test(h)) return 'cryptocom';
   if (/^timestamp_utc,section,title,amount,currency,status$/i.test(h)) return 'telegram_wallet';
+  if (/^\uFEFF?"?TransferWise ID"?,Date,"?Date Time"?,Amount,Currency,/i.test(h)) return 'wise';
   if (/^\uFEFF?User ID,Time,Account,Operation,Coin,Change,Remark/i.test(h)) return 'binance';
   if (/^\uFEFF?Time,Coin,Network,Amount,(Fee,)?Address,TXID,Status/i.test(h)) return 'binance_aux';
   return null;
@@ -1628,7 +1632,7 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
     if (!kind) {
       statusEl.textContent = 'Unrecognized CSV format — expected a Snowball trades export, '
         + 'a Revolut account statement, a Revolut Flexible Cash Funds statement, a Revolut '
-        + 'Instant Access Savings statement, a Bank of Cyprus transaction history export, or '
+        + 'Instant Access Savings statement, a Wise balance statement, a Bank of Cyprus transaction history export, or '
         + 'this project\'s own Raiffeisen Bank Serbia or generic bank transaction CSV, a Bybit transaction log, '
         + 'a Crypto.com App export, a Binance transaction export, or this project\'s own Telegram Wallet CSV.';
       return;
@@ -1652,6 +1656,7 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
       cryptocom: { fn: 'import-crypto-com', label: 'Crypto.com App export' },
       telegram_wallet: { fn: 'import-telegram-wallet', label: 'Telegram Wallet history' },
       binance: { fn: 'import-binance', label: 'Binance transaction export' },
+      wise: { fn: 'import-wise-statement', label: 'Wise balance statement' },
     };
     const { fn, label } = endpoints[kind];
     // Binance writes times in the zone named in the file name, e.g.
@@ -1706,6 +1711,13 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
         : `Detected: ${label}. Imported ${result.rows} rows (${result.total_rows_stored} stored in total).${skipped} `
           + `Crypto.com balance now: ${bal}.`;
       mpRefreshAfterWalletChange();
+    } else if (kind === 'wise') {
+      statusEl.textContent = result.note
+        ? `Detected: ${label}. ${result.note}.`
+        : `Detected: ${label} (${result.currency}). Imported ${result.imported} transactions `
+          + `(${result.total_rows} parsed). Wise ${result.currency} balance: ${result.balance}.`;
+      mpRenderBrokerCurrency();
+      mpRenderBrokerAssetClass();
     } else if (kind === 'binance') {
       const bal = Object.entries(result.balances || {}).map(([c, q]) => `${c} ${q}`).join(', ') || 'nothing';
       statusEl.textContent = result.note
@@ -2013,7 +2025,7 @@ const MP_BROKER_ROW_ORDER = [
 // own tracking spreadsheet -- one per broker's home country (or, for
 // '(unspecified)', no flag since it names no actual broker).
 const MP_BROKER_FLAGS = {
-  Revolut: '🇪🇺', Wise: '🇬🇧', 'Bank of Cyprus': '🇨🇾', IBKR: '🇺🇸',
+  Revolut: '🇪🇺', Wise: '🇪🇺', 'Bank of Cyprus': '🇨🇾', IBKR: '🇺🇸',
   Freedom24: '🇰🇿', 'Ziraat Bank': '🇹🇷', Raiffeisen: '🇷🇸',
   Sber: '🇷🇺', 'T-Bank': '🇷🇺', Alfa: '🇷🇺', 'Ozon Bank': '🇷🇺', 'Yandex Bank': '🇷🇺',
 };
