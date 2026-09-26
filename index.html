@@ -1868,7 +1868,8 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
       mpRefreshAfterWalletChange();
     } else if (kind === 'bank_csv') {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} transactions and `
-        + `${result.imported_deposit} savings-account deposit trades (${result.total_rows} parsed).`;
+        + `${result.imported_deposit} savings-account / deposit trades (${result.total_rows} parsed)`
+        + `${result.removed_snowball_duplicates ? `, replacing ${result.removed_snowball_duplicates} Snowball rows` : ''}.`;
       if (result.imported_deposit) {
         mpRenderHoldings();
         mpRenderPortfolioPies();

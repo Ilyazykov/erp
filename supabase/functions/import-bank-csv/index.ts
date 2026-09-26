@@ -64,6 +64,13 @@
 // class 'savings' / 'deposit' (priced via FX by update-market-prices)
 // instead of in the cash column.
 //
+// A deposit Snowball used to track by hand under its own ticker (e.g.
+// "DEPOSIT:Т16%13") names that ticker in the optional `replaces_snowball`
+// column: the statement has priority (first-hand source), so those Snowball
+// rows are deleted, and the deposit trades carry "[replaces Snowball
+// <ticker>]" in their note, which import-trades-csv reads to leave that
+// ticker out of later Snowball uploads.
+//
 // Every other row keeps its CSV `product` in bank_transactions.product, so
 // the cash view can put a credit card's balance in its own 'credit' column.
 
@@ -77,6 +84,7 @@ interface BankRow {
   syntheticKind: string | null;
   dataGapUntil: string | null;
   note: string;
+  replacesSnowball: string;
   date: string;
   time: string;
   description: string;
@@ -119,7 +127,7 @@ function parseRows(text: string): BankRow[] {
 
   let idx: {
     bank: number; accountNumber: number; product: number; categoryBank: number;
-    syntheticKind: number; dataGapUntil: number; note: number; date: number; time: number; description: number;
+    syntheticKind: number; dataGapUntil: number; note: number; replacesSnowball: number; date: number; time: number; description: number;
     amount: number; currency: number; balance: number;
   } | null = null;
   const rows: BankRow[] = [];
@@ -132,7 +140,8 @@ function parseRows(text: string): BankRow[] {
         idx = {
           bank: col('bank'), accountNumber: col('account_number'), product: col('product'),
           categoryBank: col('category_bank'), syntheticKind: col('synthetic_kind'),
-          dataGapUntil: col('data_gap_until'), note: col('note'), date: col('date'), time: col('time'),
+          dataGapUntil: col('data_gap_until'), note: col('note'), replacesSnowball: col('replaces_snowball'),
+          date: col('date'), time: col('time'),
           description: col('description'), amount: col('amount'), currency: col('currency'),
           balance: col('balance'),
         };
@@ -154,6 +163,7 @@ function parseRows(text: string): BankRow[] {
       syntheticKind: idx.syntheticKind >= 0 ? (cells[idx.syntheticKind] || '').trim() || null : null,
       dataGapUntil: idx.dataGapUntil >= 0 ? (cells[idx.dataGapUntil] || '').trim() || null : null,
       note: idx.note >= 0 ? (cells[idx.note] || '').trim() : '',
+      replacesSnowball: idx.replacesSnowball >= 0 ? (cells[idx.replacesSnowball] || '').trim() : '',
       accountNumber: (cells[idx.accountNumber] || '').trim(),
       date,
       time: /^\d{2}:\d{2}(:\d{2})?$/.test(time) ? time : '',
@@ -254,7 +264,7 @@ Deno.serve(async (req) => {
           trade_date: r.date,
           currency: r.currency,
           account: r.bank,
-          note: r.description,
+          note: r.replacesSnowball ? `${r.description} [replaces Snowball ${r.replacesSnowball}]` : r.description,
           external_source: `${bankSlug}_deposit_csv:${r.accountNumber}`,
           external_id: externalId,
         });
@@ -308,9 +318,22 @@ Deno.serve(async (req) => {
       importedDeposit = count ?? depositRows.length;
     }
 
+    // Snowball rows of deposits this statement now covers (see header).
+    let removedSnowball = 0;
+    const replaced = [...new Set(csvRows.map(r => r.replacesSnowball).filter(Boolean))];
+    if (replaced.length) {
+      const { error: delErr, count } = await supabase.from('trades').delete({ count: 'exact' })
+        .eq('user_id', user.id).eq('external_source', 'snowball_csv').in('ticker', replaced);
+      if (delErr) {
+        return new Response(JSON.stringify({ error: delErr.message }), { status: 500, headers: corsHeaders });
+      }
+      removedSnowball = count ?? 0;
+    }
+
     return new Response(JSON.stringify({
       imported,
       imported_deposit: importedDeposit,
+      removed_snowball_duplicates: removedSnowball,
       total_rows: csvRows.length,
     }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (err) {
