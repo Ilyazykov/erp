@@ -122,8 +122,12 @@ function parseRows(text: string): RaifRow[] {
     }
 
     const date = (cells[idx.date] || '').trim();
-    const description = (cells[idx.description] || '').trim();
-    if (!date || !description) continue;
+    // A few statement rows carry no description at all (e.g. 2025-02-26's
+    // -15,000.00 reversal of a cash withdrawal) -- still real money; skipping
+    // one breaks the running balance. bank_transactions.description is
+    // required, so it gets a placeholder.
+    const description = (cells[idx.description] || '').trim() || '(no description in statement)';
+    if (!date) continue;
 
     const debit = parseNumber(cells[idx.debit] || '');
     const credit = parseNumber(cells[idx.credit] || '');
