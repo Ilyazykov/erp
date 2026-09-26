@@ -19,15 +19,21 @@
 //       1 бумагу"), "Частичное погашение" -> 'amortisation', "Погашение в
 //       уст. срок" -> 'repayment' -- matched to the security by the ISIN in
 //       the comment;
-//     - 3.1 "Движение по ценным бумагам": a security whose net deals differ
-//       from its reported in - out (a transfer between agreements, a code
-//       change, a redemption) gets one adjusting row for the difference
-//       (price 0, dated the period end -- the report doesn't date it), so the
-//       holding equals the report's closing balance.
+//     - 3.1 "Движение по ценным бумагам": a security whose opening + net
+//       deals differ from its reported closing balance (a transfer between
+//       agreements, a code change, a redemption) gets one adjusting row for
+//       the difference (price 0, dated the period end -- the report doesn't
+//       date it), so the holding equals the report's closing balance. The
+//       closing balance is trusted over the in / out columns, which a report
+//       can get wrong (a closed 2020 agreement shows GAZP "in 0, out 10"
+//       after a buy and a sell of 10).
 //   bank_transactions (external_source 'tbank_broker_xlsx:<agreement>' --
 //   one cash balance per agreement and currency): every section 2 operation,
-//   running balance from the period's opening ("Входящий остаток"); the
-//   response compares the result with the reported closing balance.
+//   running balance from the period's opening ("Входящий остаток"). Where the
+//   operations don't add up to the reported closing balance (a closed
+//   agreement's report leaves out the final transfer of what was left), one
+//   balance_snapshot row after the currency's last operation sets the
+//   balance to the reported one -- amount = the unlisted difference.
 // Securities are keyed by ISIN; the ticker is the exchange code without
 // T-Bank's "@..." suffix (TLCB@ -> TLCB), or the ISIN where there's no code
 // (bonds -- as Snowball has them).
@@ -155,16 +161,16 @@ function parse(bytes: Uint8Array) {
   }
 
   // Security movements without a deal (3.1 in - out vs net deals).
-  const reported = new Map<string, number>();
+  const opening = new Map<string, number>();
   const closing = new Map<string, number>();
   for (const m of moves) {
     const isin = m['ISIN'];
-    reported.set(isin, (reported.get(isin) ?? 0) + num(m['Зачисление']) - num(m['Списание']));
+    opening.set(isin, (opening.get(isin) ?? 0) + num(m['Входящий остаток']));
     closing.set(isin, (closing.get(isin) ?? 0) + num(m['Исходящий остаток']));
   }
   const adjustments = [];
-  for (const [isin, net] of reported) {
-    const diff = round(net - (netDeals.get(isin) ?? 0));
+  for (const [isin, close] of closing) {
+    const diff = round(close - (opening.get(isin) ?? 0) - (netDeals.get(isin) ?? 0));
     if (Math.abs(diff) < 1e-9) continue;
     adjustments.push({
       ticker: tickerOf(isin), side: diff > 0 ? 'buy' : 'sell', quantity: Math.abs(diff), price: 0, trade_date: periodEnd,
@@ -190,7 +196,24 @@ function parse(bytes: Uint8Array) {
       balance_after: balance[op.ccy], external_id: uniq(`${agr}:cash:${op.ccy}:${k}:${op['Операция']}:${amount}`),
     };
   }).filter(b => b.tx_date && b.currency);
-  const cashCheck = Object.fromEntries(Object.entries(cashSummary).map(([c, s]) => [c, { computed: balance[c] ?? s.open, reported: s.close }]));
+  // Operations the report doesn't list (see header): close the gap.
+  const snapshots: ((typeof bank)[number] & { synthetic: boolean; synthetic_kind: string; note: string })[] = [];
+  for (const [ccy, s] of Object.entries(cashSummary)) {
+    const computed = balance[ccy] ?? s.open;
+    const gap = round(s.close - computed, 2);
+    if (Math.abs(gap) < 0.005) continue;
+    const last = bank.filter(b => b.currency === ccy).map(b => b.tx_date).sort().pop() ?? `${periodEnd}T00:00:00.000Z`;
+    snapshots.push({
+      tx_date: new Date(Date.parse(last) + 1000).toISOString(), currency: ccy, amount: gap,
+      description: 'Balance per the report (operation not listed in it)', balance_after: s.close,
+      synthetic: true, synthetic_kind: 'balance_snapshot',
+      note: `The report's operations add up to ${computed} ${ccy}, its closing balance is ${s.close} ${ccy}; the difference (${gap}) was moved without a listed operation -- typically the transfer of what was left when an agreement was closed`,
+      external_id: `${agr}:cash:${ccy}:closing-gap`,
+    });
+  }
+  bank.push(...snapshots);
+  const cashCheck = Object.fromEntries(Object.entries(cashSummary).map(([c, s]) =>
+    [c, { computed: balance[c] ?? s.open, reported: s.close, unlisted: snapshots.find(x => x.currency === c)?.amount ?? 0 }]));
   const holdings = Object.fromEntries([...closing].filter(([, q]) => q).map(([isin, q]) => [tickerOf(isin), q]));
   return { agreement: agr, periodEnd, trades, adjustments, bank, cashCheck, holdings };
 }
