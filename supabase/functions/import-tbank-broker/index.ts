@@ -244,7 +244,11 @@ Deno.serve(async (req) => {
       const { error } = await supabase.from('trades').upsert(all.slice(i, i + 500), { onConflict: 'user_id,external_source,external_id' });
       if (error) return json({ error: error.message }, 500);
     }
+    // Every row carries every column: a bulk upsert takes the union of the
+    // rows' keys, and a missing one would be sent as null (synthetic is NOT
+    // NULL -- only the closing-gap rows set it).
     const bank = parsed.bank.map(b => ({
+      synthetic: false, synthetic_kind: null, note: null,
       ...b, user_id: user.id, account: ACCOUNT, counterparty: null, category: null,
       external_source: `${SOURCE}:${parsed.agreement}`,
     }));
