@@ -223,7 +223,8 @@
     <p class="note">Upload a broker trades CSV (Snowball), a Revolut account statement, a Revolut Flexible
       Cash Funds statement, a Revolut Instant Access Savings statement, a Wise balance statement (CSV, one per
       currency), a Revolut brokerage (Invest) statement (CSV), a Revolut crypto account statement (CSV), an IBKR Activity Statement (CSV, one per period), a Freedom24 cash-movement report
-      (tradernet_table.xlsx, from the account's opening) and broker report (JSON), a Bank of Cyprus transaction
+      (tradernet_table.xlsx, from the account's opening) and broker report (JSON), a T-Bank broker report
+      (broker_report.xlsx, one per agreement), a Bank of Cyprus transaction
       history export, a Ziraat Bank account activity export (.xlsx), or this project's own combined
       Raiffeisen Bank Serbia transaction CSV, its generic bank CSV (Yandex Bank, T-Bank), a Bybit transaction log
       (Data Export → Transaction Log → Account Change Details: upload each Funding and Unified Trading file), or a
@@ -1636,9 +1637,11 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
     const isXlsx = /\.xlsx$/i.test(file.name);
     let kind, csvText;
     if (isXlsx) {
-      // Freedom24 (Tradernet) names its export "tradernet_table*.xlsx";
-      // any other .xlsx is taken as Ziraat's.
-      kind = /tradernet/i.test(file.name) ? 'freedom24_xlsx' : 'ziraat_xlsx';
+      // Freedom24 (Tradernet) names its export "tradernet_table*.xlsx",
+      // T-Bank its broker report "broker_report*.xlsx"; any other .xlsx is
+      // taken as Ziraat's.
+      kind = /tradernet/i.test(file.name) ? 'freedom24_xlsx'
+        : /broker_report/i.test(file.name) ? 'tbank_broker_xlsx' : 'ziraat_xlsx';
     } else {
       csvText = await file.text();
       const headerLine = csvText.split(/\r\n|\r|\n/)[0] || '';
@@ -1677,6 +1680,7 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
       ibkr: { fn: 'import-ibkr-statement', label: 'IBKR Activity Statement' },
       freedom24_xlsx: { fn: 'import-freedom24-statement', label: 'Freedom24 cash-movement report' },
       freedom24_json: { fn: 'import-freedom24-statement', label: 'Freedom24 broker report (JSON)' },
+      tbank_broker_xlsx: { fn: 'import-tbank-broker', label: 'T-Bank broker report' },
     };
     const { fn, label } = endpoints[kind];
     // Binance writes times in the zone named in the file name, e.g.
@@ -1739,6 +1743,21 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
         : `Detected: ${label}. Imported ${result.rows} rows (${result.total_rows_stored} stored in total).${skipped} `
           + `Crypto.com balance now: ${bal}.`;
       mpRefreshAfterWalletChange();
+    } else if (kind === 'tbank_broker_xlsx') {
+      const h = Object.entries(result.holdings || {}).map(([c, q]) => `${c} ${q}`).join(', ') || 'none';
+      const cash = Object.entries(result.cash || {}).filter(([, v]) => v.reported || v.computed)
+        .map(([c, v]) => `${c} ${v.computed}${Math.abs(v.computed - v.reported) > 0.005 ? ` (report says ${v.reported}!)` : ''}`).join(', ') || '0';
+      statusEl.textContent = `Detected: ${label} (agreement ${result.agreement}). Imported ${result.deals} deals, `
+        + `${result.payouts} payouts, ${result.adjustments} movements without a deal and ${result.cash_rows} cash operations`
+        + `${result.removed_snowball_duplicates ? ` (replacing ${result.removed_snowball_duplicates} Snowball rows)` : ''}. `
+        + `Holdings: ${h}. Cash: ${cash}.`;
+      mpRenderHoldings();
+      mpRenderPortfolioPies();
+      mpRenderCashFlows();
+      mpRenderBrokerCurrency();
+      mpRenderBrokerAssetClass();
+      mpRenderEquityByIndex();
+      mpRenderBondByType();
     } else if (kind === 'freedom24_json') {
       statusEl.textContent = `Detected: ${label}. Shares credited without money: `
         + `${(result.securities_credited || []).join(', ') || 'none'}`

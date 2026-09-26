@@ -27,10 +27,11 @@ const SKIPPED_SYMBOLS = new Set(['XAUT']);
 //     -- Snowball dates its gold purchases a day off);
 //   - by operation: a trade / dividend a broker statement has
 //     (import-ibkr-statement, import-freedom24-statement,
-//     import-revolut-invest, import-revolut-crypto; matching rules in
+//     import-revolut-invest, import-revolut-crypto, import-tbank-broker;
+//     matching rules in
 //     _shared/statement_priority.ts).
 const STATEMENT_TRADE_SOURCES = ['revolut_metal_csv'];
-const STATEMENT_OPERATION_SOURCES = ['ibkr_csv', 'freedom24_xlsx', 'revolut_invest_csv', 'revolut_crypto_csv'];
+const STATEMENT_OPERATION_SOURCES = ['ibkr_csv', 'freedom24_xlsx', 'revolut_invest_csv', 'revolut_crypto_csv', 'tbank_broker_xlsx'];
 // Telegram Wallet rows that Snowball has without a note: the 2025-11-15 sale
 // of the BTC bought there on 11-03 / 11-06 (in Wallet's own history as
 // "Exchanged BTC to USDT").
@@ -154,11 +155,11 @@ Deno.serve(async (req) => {
     }
     const statementTickers = new Set((fromStatements ?? []).map((t: { ticker: string }) => t.ticker.toUpperCase()));
     const { data: stOps, error: opErr } = await supabase.from('trades')
-      .select('side, ticker, trade_date, quantity').in('external_source', STATEMENT_OPERATION_SOURCES);
+      .select('side, ticker, trade_date, quantity, note').in('external_source', STATEMENT_OPERATION_SOURCES);
     if (opErr) {
       return new Response(JSON.stringify({ error: opErr.message }), { status: 500, headers: corsHeaders });
     }
-    const statementOperations = (stOps ?? []) as { side: string; ticker: string; trade_date: string; quantity: number }[];
+    const statementOperations = (stOps ?? []) as { side: string; ticker: string; trade_date: string; quantity: number; note: string | null }[];
 
     const rows = [];
     let skipped = 0;
