@@ -1949,7 +1949,7 @@ async function mpRenderCashFlows() {
 // falls back after these, alphabetically.
 const MP_CURRENCY_COLUMN_ORDER = [
   'USD', 'EUR', 'GBP', 'RUB', 'TRY', 'RSD', 'CNY',
-  'XAU', 'BTC', 'ETH', 'SOL', 'TON', 'TAO', 'TRX', 'DOGE', 'Altcoins',
+  'XAU', 'BTC', 'ETH', 'SOL', 'GRAM', 'TAO', 'TRX', 'DOGE', 'Altcoins',
 ];
 
 // Fixed display order for the broker x asset-class table's columns,
@@ -2146,9 +2146,10 @@ async function mpFetchCashRows(fxByCurrency) {
 // USD value folds into the XAU column instead of getting its own.
 const MP_UNIT_QUOTED_ASSET_CLASSES = new Set(['crypto', 'gold']);
 // Display only: in the broker x currency table every crypto other than these
-// shares one "Altcoins" column (TAO, CRO, TRX, TON, on-chain tokens, ...),
-// shown in USD since the coins have no common unit.
-const MP_MAJOR_CRYPTO_COLUMNS = new Set(['BTC', 'ETH', 'SOL']);
+// shares one "Altcoins" column (TAO, CRO, TRX, ADI, FLR, on-chain tokens, ...),
+// shown in USD since the coins have no common unit. GRAM (Telegram's coin,
+// prev. Toncoin) gets its own column (user's choice).
+const MP_MAJOR_CRYPTO_COLUMNS = new Set(['BTC', 'ETH', 'SOL', 'GRAM']);
 const MP_ALTCOINS_COLUMN = 'Altcoins';
 function mpBrokerCurrencyUnit(r) {
   if (r.ticker === 'XAUT') return 'XAU';
