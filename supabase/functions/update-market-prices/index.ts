@@ -147,8 +147,12 @@ const WESTERN_ETF_EXCHANGE_OVERRIDE: Record<string, string> = { XSX6: '.DE' };
 // Yahoo symbol overrides for crypto/metal tickers that don't follow the
 // plain <TICKER>-USD convention.
 const CRYPTO_YAHOO_OVERRIDES: Record<string, string> = {
-  XAU: 'GC=F', // gold spot has no clean Yahoo FX symbol; COMEX gold
-               // futures (USD/troy oz) is the closest reliable proxy
+  // Gold spot has no Yahoo FX symbol ("XAUUSD=X" returns nothing). COMEX
+  // futures (GC=F) were used before, but that's the next delivery month --
+  // ~1% above today's price (carry to e.g. December). PAX Gold is a token
+  // backed 1:1 by a troy ounce, so it trades at spot (26.09.2026: PAXG
+  // 4279.28, XAUT 4280.21, GC=F 4321.20).
+  XAU: 'PAXG-USD',
   TAO: 'TAO22974-USD', // Bittensor; plain "TAO-USD" doesn't exist on Yahoo
   ADI: 'ADI38185-USD', // ADI Chain token (Telegram Wallet); plain "ADI" is Analog Devices
 };
