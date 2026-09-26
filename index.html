@@ -1930,7 +1930,7 @@ async function mpRenderCashFlows() {
 // falls back after these, alphabetically.
 const MP_CURRENCY_COLUMN_ORDER = [
   'USD', 'EUR', 'GBP', 'RUB', 'TRY', 'RSD', 'CNY',
-  'XAU', 'BTC', 'ETH', 'SOL', 'TON', 'TAO', 'TRX', 'DOGE',
+  'XAU', 'BTC', 'ETH', 'SOL', 'TON', 'TAO', 'TRX', 'DOGE', 'Altcoins',
 ];
 
 // Fixed display order for the broker x asset-class table's columns,
@@ -2124,12 +2124,14 @@ async function mpFetchCashRows(fxByCurrency) {
 // about "how much gold exposure", not which wrapper holds it, so XAUT's
 // USD value folds into the XAU column instead of getting its own.
 const MP_UNIT_QUOTED_ASSET_CLASSES = new Set(['crypto', 'gold']);
+// Display only: in the broker x currency table every crypto other than these
+// shares one "Altcoins" column (TAO, CRO, TRX, TON, on-chain tokens, ...),
+// shown in USD since the coins have no common unit.
+const MP_MAJOR_CRYPTO_COLUMNS = new Set(['BTC', 'ETH', 'SOL']);
+const MP_ALTCOINS_COLUMN = 'Altcoins';
 function mpBrokerCurrencyUnit(r) {
   if (r.ticker === 'XAUT') return 'XAU';
-  // On-chain tokens are keyed 'TOKEN:<chain>:<contract>' (see
-  // sync-crypto-wallets); their column is the token's symbol, which the
-  // sync function stores in underlying_currency.
-  if (r.ticker && r.ticker.startsWith('TOKEN:')) return r.underlying_currency || r.ticker;
+  if (r.asset_class === 'crypto' && !MP_MAJOR_CRYPTO_COLUMNS.has(r.ticker)) return MP_ALTCOINS_COLUMN;
   // underlying_currency (not currency) so CNY-denominated MOEX funds like
   // SBBY/TLCB/AMNY land in the CNY column instead of RUB, which is only
   // the exchange's quote currency, not what the fund's holdings are in.
@@ -2149,7 +2151,10 @@ async function mpRenderBrokerCurrency() {
   // lands under the merged 'XAU' key too -- needed for the native-unit
   // display to still work when there's no separate real XAU holding.
   for (const r of data) {
-    if (MP_UNIT_QUOTED_ASSET_CLASSES.has(r.asset_class) && r.price_usd !== null) fxByCurrency[mpBrokerCurrencyUnit(r)] = r.price_usd;
+    // no per-unit rate for the mixed Altcoins column -- it's shown in USD
+    if (MP_UNIT_QUOTED_ASSET_CLASSES.has(r.asset_class) && r.price_usd !== null && mpBrokerCurrencyUnit(r) !== MP_ALTCOINS_COLUMN) {
+      fxByCurrency[mpBrokerCurrencyUnit(r)] = r.price_usd;
+    }
   }
   const cashRows = await mpFetchCashRows(fxByCurrency);
   const rows = [...data, ...cashRows].map(r => ({ ...r, currency: mpBrokerCurrencyUnit(r) }));
