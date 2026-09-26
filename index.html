@@ -50,6 +50,9 @@
   .form-row input:focus, .form-row select:focus { outline: none; border-color: #4da8c8; }
   .section-title { font-size: 1rem; font-weight: 600; color: #e6edf3; margin: 20px 0 10px; }
   .section-title:first-child { margin-top: 0; }
+  .drop-zone { margin-top: 8px; padding: 14px; border: 1px dashed #2a3540; border-radius: 6px; color: #8b949e;
+    text-align: center; font-size: 0.85rem; }
+  .drop-zone.over { border-color: #4da8c8; color: #4da8c8; background: #13191f; }
   .empty-note { color: #6a7381; font-size: 0.85rem; padding: 8px 0; }
   .icon-btn { background: none; border: none; color: #6a7381; cursor: pointer; font-size: 0.9rem; padding: 2px 6px; }
   .icon-btn:hover { color: #e05252; }
@@ -233,10 +236,11 @@
       (built from the Wallet app's history) — the file type is detected automatically from its header
       row or extension.</p>
     <div class="form-row">
-      <input type="file" id="mp_any_csv_file" accept=".csv,.xlsx,.json,.html,.htm">
+      <input type="file" id="mp_any_csv_file" accept=".csv,.xlsx,.json,.html,.htm" multiple>
       <button class="btn primary" id="mp_any_csv_upload">Upload</button>
     </div>
-    <p class="empty-note" id="mp_any_csv_status"></p>
+    <div id="mp_any_csv_drop" class="drop-zone">…or drop any number of files here — they're queued and imported one by one</div>
+    <div class="empty-note" id="mp_any_csv_status"></div>
 
     <div class="section-title">Export Revolut fund trades to Snowball</div>
     <p class="note">Generates a Snowball-importable CSV from the trades already stored here for the
@@ -1624,15 +1628,57 @@ function mpDetectCsvKind(headerLine, fullText) {
   return null;
 }
 
-document.getElementById('mp_any_csv_upload').addEventListener('click', async () => {
-  const fileInput = document.getElementById('mp_any_csv_file');
-  const statusEl = document.getElementById('mp_any_csv_status');
-  const file = fileInput.files[0];
-  if (!file) { statusEl.textContent = 'Choose a CSV file first.'; return; }
-
+// Any number of files (multi-select or drag & drop) go into a queue and are
+// imported one by one, one status line per file; files added while a queue
+// is running join its end.
+const mpImportQueue = [];
+let mpImportRunning = false;
+async function mpImportFiles(files) {
+  const listEl = document.getElementById('mp_any_csv_status');
+  files = [...files];
+  if (!files.length) { if (!mpImportRunning) listEl.textContent = 'Choose or drop a file first.'; return; }
   const { data: { session } } = await sb.auth.getSession();
-  if (!session) { statusEl.textContent = 'Sign in first.'; return; }
+  if (!session) { listEl.textContent = 'Sign in first.'; return; }
+  if (!mpImportRunning) listEl.textContent = '';
+  for (const file of files) {
+    const line = document.createElement('div');
+    const name = document.createElement('b');
+    name.textContent = `${file.name}: `;
+    const msg = document.createElement('span');
+    msg.textContent = 'queued';
+    line.append(name, msg);
+    listEl.appendChild(line);
+    mpImportQueue.push({ file, msg });
+  }
+  if (mpImportRunning) return;
+  mpImportRunning = true;
+  try {
+    while (mpImportQueue.length) {
+      const { file, msg } = mpImportQueue.shift();
+      msg.textContent = 'uploading…';
+      await mpImportOneFile(file, msg, session);
+    }
+  } finally {
+    mpImportRunning = false;
+  }
+}
+document.getElementById('mp_any_csv_upload').addEventListener('click', () => {
+  const input = document.getElementById('mp_any_csv_file');
+  mpImportFiles(input.files);
+  input.value = '';
+});
+{
+  const drop = document.getElementById('mp_any_csv_drop');
+  drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', e => {
+    e.preventDefault();
+    drop.classList.remove('over');
+    mpImportFiles(e.dataTransfer.files);
+  });
+}
 
+async function mpImportOneFile(file, statusEl, session) {
   try {
     // Ziraat Bank's own export is a real .xlsx, not CSV -- detected by
     // extension alone (reading it as text would be meaningless) and sent
@@ -1925,7 +1971,7 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}`;
   }
-});
+}
 
 // Maps this app's `trades.side` values to Snowball's `Event` column, and
 // builds a Snowball-format CSV row per trade -- see Snowball's "custom
