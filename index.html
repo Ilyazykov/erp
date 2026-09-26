@@ -265,6 +265,8 @@
     <div id="mp_re_wrap"></div>
 
     <div class="section-title">Portfolio by broker × currency</div>
+    <label class="note" style="display:block"><input type="checkbox" id="mp_include_real_estate">
+      Include real estate in totals</label>
     <div id="mp_broker_currency_wrap"></div>
 
     <div class="section-title">Portfolio by broker × asset class</div>
@@ -2242,6 +2244,22 @@ const MP_BROKER_FLAGS = {
   cash: '💵', 'real estate': '🏠',
 };
 
+// "Include real estate in totals" toggle -- off by default, the choice
+// remembered in this browser.
+function mpTotalsExcluded() {
+  const box = document.getElementById('mp_include_real_estate');
+  return new Set(box && !box.checked ? ['real estate'] : []);
+}
+{
+  const box = document.getElementById('mp_include_real_estate');
+  try { box.checked = localStorage.getItem('mp_include_real_estate') === '1'; } catch (_) { /* no storage */ }
+  box.addEventListener('change', () => {
+    try { localStorage.setItem('mp_include_real_estate', box.checked ? '1' : '0'); } catch (_) { /* no storage */ }
+    mpRenderBrokerCurrency();
+    mpRenderBrokerAssetClass();
+  });
+}
+
 function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurrency) {
   if (!data.length) { wrap.innerHTML = `<p class="empty-note">${emptyMessage}</p>`; return; }
   // Zero balances (a closed account like UniCredit, a spent-down currency)
@@ -2275,8 +2293,12 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
     cell[key] = (cell[key] || 0) + r.value_usd;
   }
   const rowTotal = a => categories.reduce((s, c) => s + (cell[`${a} ${c}`] || 0), 0);
-  const colTotal = c => accounts.reduce((s, a) => s + (cell[`${a} ${c}`] || 0), 0);
-  const grandTotal = accounts.reduce((s, a) => s + rowTotal(a), 0);
+  // Rows switched out of the totals ("Include real estate in totals" off)
+  // are still shown, dimmed, but not summed.
+  const excluded = mpTotalsExcluded();
+  const counted = accounts.filter(a => !excluded.has(a));
+  const colTotal = c => counted.reduce((s, a) => s + (cell[`${a} ${c}`] || 0), 0);
+  const grandTotal = counted.reduce((s, a) => s + rowTotal(a), 0);
   const anyMissing = data.some(r => r.value_usd === null);
   const cellDisplay = (usd, category) => {
     if (fxByCurrency && category in fxByCurrency) {
@@ -2303,8 +2325,8 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
     ? `${mpEscapeHtml(a)} ${MP_BROKER_FLAGS[a]}` : mpEscapeHtml(a);
   wrap.innerHTML = `<table class="data-table"><thead><tr>
     <th class="corner">Broker</th>${categories.map(c => `<th>${headerLabel(c)}</th>`).join('')}<th class="corner">Total</th>
-  </tr></thead><tbody>${accounts.map(a => `<tr>
-    <td class="ticker">${brokerLabel(a)}</td>
+  </tr></thead><tbody>${accounts.map(a => `<tr${excluded.has(a) ? ' style="opacity:0.45" title="Not included in the totals"' : ''}>
+    <td class="ticker">${brokerLabel(a)}${excluded.has(a) ? ' <span class="zero">(not in total)</span>' : ''}</td>
     ${categories.map(c => `<td>${cellDisplay(cell[`${a} ${c}`] || 0, c)}</td>`).join('')}
     <td><b>${mpFormatUsd(rowTotal(a))}</b></td>
   </tr>`).join('')}
