@@ -54,12 +54,13 @@ left join lateral (
   where i.city = r.city order by month desc limit 1
 ) l on true;
 
--- Monthly refresh on the 1st: by then gipernn has the month just ended
--- (on September 1st the August figure is there).
+-- Monthly refresh on the 1st, at the end of the day in Moscow (20:00 UTC =
+-- 23:00 MSK): by then gipernn has the month just ended (on September 1st
+-- the August figure is there).
 select cron.unschedule(jobid) from cron.job where jobname = 'update-real-estate-index';
 select cron.schedule(
   'update-real-estate-index',
-  '0 6 1 * *',
+  '0 20 1 * *',
   $$
   select net.http_post(
     url := 'https://xdltomehejjtgzdxbiyx.supabase.co/functions/v1/update-real-estate-index',
