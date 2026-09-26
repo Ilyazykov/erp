@@ -1693,8 +1693,16 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
       mpRenderBondByType();
     } else if (kind === 'revolut_account') {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} transactions `
+        + `and ${result.imported_metal_trades ?? 0} gold/metal trades`
+        + `${result.removed_snowball_duplicates ? ` (replacing ${result.removed_snowball_duplicates} Snowball rows)` : ''} `
         + `(${result.total_rows} parsed, ${result.skipped_not_completed} not-completed, `
         + `${result.skipped_deposit} deposit rows skipped).`;
+      if (result.imported_metal_trades) {
+        mpRenderHoldings();
+        mpRenderPortfolioPies();
+      }
+      mpRenderBrokerCurrency();
+      mpRenderBrokerAssetClass();
     } else if (kind === 'boc_account') {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} transactions `
         + `(${result.total_rows} parsed, ${result.skipped_bad_date} skipped as bad date).`;
@@ -2155,10 +2163,10 @@ async function mpFetchCashRows(fxByCurrency) {
   };
   for (const r of data) {
     const bal = Number(r.balance_after);
-    // Revolut's gold pocket (currency XAU) is a holding, not cash: the same
-    // 0.273294 oz is counted from the Snowball trades (ticker XAU), priced
-    // as gold -- counting the pocket too would double it.
-    if (r.currency === 'XAU') continue;
+    // Revolut's precious-metal pockets (currency XAU, ...) are holdings, not
+    // cash: import-revolut-statement writes them to trades too (ticker XAU),
+    // priced as gold -- counting the pocket here as well would double it.
+    if (['XAU', 'XAG', 'XPT', 'XPD'].includes(r.currency)) continue;
     if (r.product === 'credit_card') {
       add(r.account, r.currency, 'credit', Math.min(bal, 0));
       if (bal > 0) add(r.account, r.currency, 'cash', bal);

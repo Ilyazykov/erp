@@ -20,6 +20,11 @@
 // in Telegram Wallet.
 const SKIPPED_NOTES = new Set(['trust', 'bybit', 'crypto.com', 'telegram', 'telegram -> trust']);
 const SKIPPED_SYMBOLS = new Set(['XAUT']);
+// A real statement has priority over Snowball's hand-entered rows: a ticker
+// that trades from these sources already hold (e.g. XAU from Revolut's own
+// statement, import-revolut-statement) is left out of this import. The
+// statement importer, in turn, removes the Snowball rows of what it writes.
+const STATEMENT_TRADE_SOURCES = ['revolut_metal_csv'];
 // Telegram Wallet rows that Snowball has without a note: the 2025-11-15 sale
 // of the BTC bought there on 11-03 / 11-06 (in Wallet's own history as
 // "Exchanged BTC to USDT").
@@ -135,6 +140,13 @@ Deno.serve(async (req) => {
         { status: 400, headers: corsHeaders });
     }
 
+    const { data: fromStatements, error: stErr } = await supabase.from('trades')
+      .select('ticker').in('external_source', STATEMENT_TRADE_SOURCES);
+    if (stErr) {
+      return new Response(JSON.stringify({ error: stErr.message }), { status: 500, headers: corsHeaders });
+    }
+    const statementTickers = new Set((fromStatements ?? []).map((t: { ticker: string }) => t.ticker.toUpperCase()));
+
     const rows = [];
     let skipped = 0;
     let skippedTrust = 0;
@@ -156,6 +168,7 @@ Deno.serve(async (req) => {
       if (SKIPPED_NOTES.has((cells[idx.note] || '').trim().toLowerCase())) { skippedTrust++; continue; }
       if (isSnowballEthInterest(event, cells[idx.symbol] || '')) { skippedTrust++; continue; }
       if (SKIPPED_SYMBOLS.has((cells[idx.symbol] || '').trim().toUpperCase())) { skippedTrust++; continue; }
+      if (statementTickers.has((cells[idx.symbol] || '').trim().toUpperCase())) { skippedTrust++; continue; }
 
       const trade_date = parseDate(cells[idx.date] || '');
       const quantity = parseNumber(cells[idx.quantity]);

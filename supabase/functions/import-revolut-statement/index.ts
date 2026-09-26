@@ -38,12 +38,27 @@
 // yet -- both would double-count or later conflict with the eventual
 // completed row for the same purchase.
 //
-// Every row lands in `bank_transactions`, never in `trades` -- see
-// 20250101000008_bank_transactions.sql for why (trades is shaped around
-// ticker+quantity+price asset transactions; a Wolt payment has neither).
+// Every row lands in `bank_transactions` (trades is shaped around
+// ticker+quantity+price asset transactions; a Wolt payment has neither --
+// see 20250101000008_bank_transactions.sql). Precious-metal pockets
+// (currency XAU / XAG / XPT / XPD, e.g. "Exchanged to XAU") are holdings, not
+// cash, so each of their rows ALSO goes to `trades` as a buy / sell of that
+// metal (ticker = the metal code, account 'Revolut'): quantity = the pocket's
+// net change (Amount - Fee, so the holding equals the pocket's Balance), price
+// = the paired fiat row of the same exchange (same Started Date) / the gross
+// metal amount, fee_tax = the metal fee at that price, in that fiat. Revolut
+// exports the metal pocket as a statement of its own, so the fiat row is
+// usually not in the same file: it's then looked up among the Revolut rows
+// already stored (upload the main account statement first). The
+// cash view skips metal pockets (index.html, mpFetchCashRows). The statement
+// has priority over Snowball's hand-entered rows of the same purchases: the
+// Snowball rows of each metal written here are deleted, and import-trades-csv
+// leaves that metal out of later Snowball uploads.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { orderWithinGroups } from '../_shared/day_order.ts';
+
+const METALS = new Set(['XAU', 'XAG', 'XPT', 'XPD']);
 
 interface CsvRow {
   type: string;
@@ -264,8 +279,61 @@ Deno.serve(async (req) => {
         { status: 500, headers: corsHeaders });
     }
 
+    // Metal pockets -> trades (see module docstring).
+    const byStarted = new Map<string, CsvRow[]>();
+    for (const r of csvRows) byStarted.set(r.startedDate, [...(byStarted.get(r.startedDate) ?? []), r]);
+    const metalTrades = [];
+    const metalSeen = new Map<string, number>();
+    let metalWithoutPrice = 0;
+    for (const r of csvRows) {
+      if (r.state !== 'COMPLETED' || !METALS.has(r.currency)) continue;
+      if (!r.amount) continue;
+      let fiat: { amount: number; currency: string } | undefined = (byStarted.get(r.startedDate) ?? [])
+        .find(p => p !== r && p.state === 'COMPLETED' && !METALS.has(p.currency) && Math.sign(p.amount) === -Math.sign(r.amount));
+      if (!fiat) {
+        const { data: stored } = await supabase.from('bank_transactions').select('amount, currency')
+          .eq('external_source', 'revolut_csv').eq('tx_date', toIsoTimestamp(r.startedDate));
+        fiat = (stored ?? []).map((p: { amount: unknown; currency: string }) => ({ amount: Number(p.amount), currency: p.currency }))
+          .find((p: { amount: number; currency: string }) => !METALS.has(p.currency) && Math.sign(p.amount) === -Math.sign(r.amount));
+      }
+      if (!fiat) { metalWithoutPrice++; continue; }
+      const price = Math.abs(fiat.amount) / Math.abs(r.amount);
+      const net = r.amount - r.fee;
+      const signature = `${r.startedDate}:${r.currency}:${r.amount}:${r.fee}`;
+      const occurrence = metalSeen.get(signature) ?? 0;
+      metalSeen.set(signature, occurrence + 1);
+      metalTrades.push({
+        user_id: user.id,
+        ticker: r.currency,
+        side: net >= 0 ? 'buy' : 'sell',
+        quantity: Math.round(Math.abs(net) * 1e8) / 1e8,
+        price: Math.round(price * 10000) / 10000,
+        fee_tax: Math.round(r.fee * price * 100) / 100,
+        trade_date: r.startedDate.slice(0, 10),
+        currency: fiat.currency,
+        account,
+        note: `${r.description} (${fiat.amount} ${fiat.currency})`,
+        external_source: 'revolut_metal_csv',
+        external_id: occurrence === 0 ? signature : `${signature}:dup${occurrence}`,
+      });
+    }
+    let removedSnowball = 0;
+    if (metalTrades.length) {
+      const { error } = await supabase.from('trades')
+        .upsert(metalTrades, { onConflict: 'user_id,external_source,external_id' });
+      if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: corsHeaders });
+      const { error: delErr, count } = await supabase.from('trades').delete({ count: 'exact' })
+        .eq('user_id', user.id).eq('external_source', 'snowball_csv')
+        .in('ticker', [...new Set(metalTrades.map(t => t.ticker))]);
+      if (delErr) return new Response(JSON.stringify({ error: delErr.message }), { status: 500, headers: corsHeaders });
+      removedSnowball = count ?? 0;
+    }
+
     return new Response(JSON.stringify({
       imported: count ?? rows.length,
+      imported_metal_trades: metalTrades.length,
+      metal_rows_without_price: metalWithoutPrice,
+      removed_snowball_duplicates: removedSnowball,
       total_rows: csvRows.length,
       skipped_not_completed: skippedNotCompleted,
       skipped_deposit: skippedDeposit,
