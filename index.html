@@ -3493,9 +3493,18 @@ async function mpRenderPortfolioPies() {
   //    'bond' on Russian infrastructure -- plain bonds/OFZ, bond/money-
   //    market ETFs (TBRU/SAFE/SBMM/AKMB/AKMM/TLCB/SBBY), and RUB deposits
   //    -- see instrument_type assignment in update-market-prices/index.ts.
+  // Credit cards of Russian banks are netted against Russian liquid assets
+  // (same rule as the Charts tab -- mpNetCreditIntoLiquid).
+  const ruCredit = (await mpFetchCashRows(await mpFetchFxByCurrency(['USD', 'RUB', 'CNY'])))
+    .filter(r => r.instrument_type === 'credit' && MP_RU_ACCOUNTS.has(r.account) && r.value_usd !== null)
+    .reduce((s, r) => s + r.value_usd, 0);
+  const ruLiquid = priced.filter(r => r.infra_region === 'ru' && r.instrument_type === 'liquid' && r.value_usd > 0)
+    .reduce((s, r) => s + r.value_usd, 0);
+  const ruLiquidFactor = ruLiquid > 0 ? Math.max(0, (ruLiquid + ruCredit) / ruLiquid) : 1;
+  const ruValue = r => (r.instrument_type === 'liquid' && r.value_usd > 0 ? r.value_usd * ruLiquidFactor : r.value_usd);
   const ruBondsCurrent = priced
     .filter(r => r.infra_region === 'ru' && ['bond', 'deposit', 'liquid'].includes(r.instrument_type))
-    .reduce((s, r) => s + r.value_usd, 0);
+    .reduce((s, r) => s + ruValue(r), 0);
   const allocRaw = DATA.ruAllocTargetRaw;
   if (allocRaw) {
     const stocksBondsTotal = ruStockTotal + ruBondsCurrent;
@@ -3518,8 +3527,8 @@ async function mpRenderPortfolioPies() {
   // deposits) would inflate "non-RUB" with holdings this chart was never
   // meant to cover.
   const bondDepositRows = priced.filter(r => ['bond', 'deposit', 'liquid'].includes(r.instrument_type) && r.infra_region === 'ru');
-  const rubCurrent = bondDepositRows.filter(r => r.underlying_currency === 'RUB').reduce((s, r) => s + r.value_usd, 0);
-  const nonRubCurrent = bondDepositRows.filter(r => r.underlying_currency !== 'RUB').reduce((s, r) => s + r.value_usd, 0);
+  const rubCurrent = bondDepositRows.filter(r => r.underlying_currency === 'RUB').reduce((s, r) => s + ruValue(r), 0);
+  const nonRubCurrent = bondDepositRows.filter(r => r.underlying_currency !== 'RUB').reduce((s, r) => s + ruValue(r), 0);
   if (DATA.currentWCny !== undefined && DATA.currentWCny !== null) {
     const bdTotal = rubCurrent + nonRubCurrent;
     const targetNonRubPct = DATA.currentWCny * 100;
