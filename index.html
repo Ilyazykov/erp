@@ -2112,8 +2112,10 @@ function mpEscapeHtml(s) {
 
 function mpFormatUsd(n) {
   if (n === null || n === undefined) return '<span class="muted">—</span>';
-  return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
+  return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', ...mpFractionDigits(n) });
 }
+// Amounts from 100 000 up are shown without cents (₽7,595,290, not ₽7,595,289.84).
+const mpFractionDigits = n => (Math.abs(n) >= 100000 ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : { maximumFractionDigits: 2 });
 
 // Single-glyph symbols for currencies that don't already get the exact
 // glyph we want from Intl.NumberFormat -- it gives USD/EUR/GBP their
@@ -2154,7 +2156,7 @@ function mpFormatCurrency(n, currency, withCode = false, unitPriceUsd = null) {
     return withCode ? `${currency} ${amount}` : amount;
   }
   try {
-    const formatted = n.toLocaleString('en-US', { style: 'currency', currency, maximumFractionDigits: 2 });
+    const formatted = n.toLocaleString('en-US', { style: 'currency', currency, ...mpFractionDigits(n) });
     if (currency in MP_CURRENCY_SYMBOLS === false) return formatted;
     // Intl already spells RUB/TRY out as the bare code, but gives CNY its
     // own native "CN¥" prefix -- both get swapped for our preferred glyph,
@@ -2575,7 +2577,7 @@ async function mpRenderBrokerCurrency() {
 // Funds whose value is split across currency columns by what they hold
 // (fund_currency_weights: the trading currency of each holding) instead of
 // sitting whole in the fund's own quote currency.
-const MP_SPLIT_BY_CURRENCY_FUNDS = new Set(['VWRA', 'VWCE']);
+const MP_SPLIT_BY_CURRENCY_FUNDS = new Set(['VWRA', 'VWCE', 'XSX6']);
 const MP_MAIN_CURRENCIES = new Set(['USD', 'EUR', 'GBP', 'RUB', 'TRY', 'RSD', 'CNY']);
 const MP_OTHER_CURRENCIES_COLUMN = 'Others';
 // European currencies other than GBP (and RSD / TRY, which have columns of their own).
@@ -2606,7 +2608,28 @@ async function mpRenderBrokerAssetClass() {
   const fxByCurrency = await mpFetchFxByCurrency(['USD', 'EUR', 'GBP', 'RUB', 'CNY', 'TRY', 'RSD']);
   const cashRows = await mpFetchCashRows(fxByCurrency);
   const realEstateRows = await mpFetchRealEstateRows(fxByCurrency);
-  mpRenderBrokerPivot(wrap, [...data, ...cashRows, ...realEstateRows], 'instrument_type', 'No holdings yet — import trades above.');
+  const split = await mpSplitFundsCash(data);
+  mpRenderBrokerPivot(wrap, [...split, ...cashRows, ...realEstateRows], 'instrument_type', 'No holdings yet — import trades above.');
+}
+
+// Funds whose cash part (fund_holdings' 'OTHER' line: money, reverse repo,
+// liabilities) counts as liquid assets in the broker x asset-class table,
+// the rest as the fund's own class -- TRND keeps ~11% in repo.
+const MP_SPLIT_CASH_FUNDS = new Set(['TRND']);
+async function mpSplitFundsCash(rows) {
+  if (!rows.some(r => MP_SPLIT_CASH_FUNDS.has(r.ticker))) return rows;
+  const { data, error } = await sb.from('fund_holdings').select('fund, weight')
+    .in('fund', [...MP_SPLIT_CASH_FUNDS]).eq('security_id', 'OTHER');
+  if (error || !data?.length) return rows;
+  const cashPct = Object.fromEntries(data.map(d => [d.fund, Number(d.weight)]));
+  return rows.flatMap(r => {
+    const pct = MP_SPLIT_CASH_FUNDS.has(r.ticker) && r.value_usd !== null ? cashPct[r.ticker] : undefined;
+    if (!pct) return [r];
+    return [
+      { ...r, value_usd: r.value_usd * (100 - pct) / 100 },
+      { ...r, instrument_type: 'liquid', value_usd: r.value_usd * pct / 100 },
+    ];
+  });
 }
 
 // Builds a single-column-of-buckets breakdown table (category name -> USD
