@@ -2574,16 +2574,28 @@ function mpPie(el, title, buckets, note = '') {
   card.className = 'pie-card';
   card.innerHTML = `<h4>${mpEscapeHtml(title)}</h4><div class="pie-plot"></div>${note ? `<p class="note">${mpEscapeHtml(note)}</p>` : ''}`;
   el.appendChild(card);
-  const entries = Object.entries(buckets).filter(([, v]) => v > 0.005).sort((a, b) => b[1] - a[1]);
+  let entries = Object.entries(buckets).filter(([, v]) => v > 0.005).sort((a, b) => b[1] - a[1]);
   if (!entries.length) { card.querySelector('.pie-plot').innerHTML = '<p class="empty-note">No data.</p>'; return; }
+  // Slices under 1% go into one "other" slice (what's in it shows on hover);
+  // labels sit inside the slices big enough to hold them -- no outside
+  // labels shrinking the pie.
+  const total = entries.reduce((s, e) => s + e[1], 0);
+  const small = entries.filter(e => e[1] / total < 0.01);
+  if (small.length > 1) {
+    entries = entries.filter(e => e[1] / total >= 0.01);
+    entries.push(['other', small.reduce((s, e) => s + e[1], 0), small.map(e => `${e[0]} ${(e[1] / total * 100).toFixed(2)}%`).join('<br>')]);
+  }
   Plotly.newPlot(card.querySelector('.pie-plot'), [{
     type: 'pie', labels: entries.map(e => e[0]), values: entries.map(e => e[1]), sort: false, direction: 'clockwise',
-    textinfo: 'label+percent', textposition: 'auto', insidetextorientation: 'horizontal', automargin: true,
+    text: entries.map(e => (e[1] / total >= 0.035 ? `${e[0]}<br>${(e[1] / total * 100).toFixed(1)}%` : '')),
+    textinfo: 'text', textposition: 'inside', insidetextorientation: 'horizontal',
+    customdata: entries.map(e => e[2] || ''),
     marker: { colors: entries.map((_, i) => MP_PIE_COLORS[i % MP_PIE_COLORS.length]), line: { color: '#0d1117', width: 1 } },
-    hovertemplate: '%{label}<br>$%{value:,.0f}<br>%{percent}<extra></extra>',
+    hovertemplate: '%{label}<br>$%{value:,.0f}<br>%{percent}<br>%{customdata}<extra></extra>',
   }], {
-    paper_bgcolor: '#13191f', plot_bgcolor: '#13191f', font: { color: '#c9d1d9', size: 11 },
-    showlegend: false, margin: { t: 30, b: 30, l: 30, r: 30 },
+    paper_bgcolor: '#13191f', plot_bgcolor: '#13191f', font: { size: 12 },   // inside labels: Plotly picks black / white per slice
+    uniformtext: { minsize: 9, mode: 'hide' },
+    showlegend: false, margin: { t: 10, b: 10, l: 10, r: 10 },
   }, { responsive: true, displayModeBar: false });
 }
 
@@ -2613,10 +2625,12 @@ function mpAssetBuckets(rows, keep = null) {
     .map(([k, v]) => [MP_ASSET_CLASS_LABELS[k] || k, v]));
 }
 
+let mpChartsRun = 0;
 async function mpRenderCharts() {
   const grid = document.getElementById('mp_charts_grid');
   const status = document.getElementById('mp_charts_status');
-  grid.innerHTML = '';
+  // Sign-in can fire this twice in a row: only the latest run draws.
+  const run = ++mpChartsRun;
   status.textContent = 'Loading…';
   let base;
   try { base = await mpLoadPortfolioBase(); }
@@ -2689,6 +2703,8 @@ async function mpRenderCharts() {
   // 11. Asset types with real estate (every property, checked or not).
   const typesWithRealEstate = mpAssetBuckets(assetRows);
 
+  if (run !== mpChartsRun) return;
+  grid.innerHTML = '';
   status.textContent = '';
   mpPie(grid, '1. Currencies', byCurrency);
   mpPie(grid, '2. Banks & brokers', brokerBuckets);
