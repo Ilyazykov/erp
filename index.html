@@ -224,7 +224,7 @@
       Cash Funds statement, a Revolut Instant Access Savings statement, a Wise balance statement (CSV, one per
       currency), a Revolut brokerage (Invest) statement (CSV), a Revolut crypto account statement (CSV), an IBKR Activity Statement (CSV, one per period), a Freedom24 cash-movement report
       (tradernet_table.xlsx, from the account's opening) and broker report (JSON), a T-Bank broker report
-      (broker_report.xlsx, one per agreement), an Atomyze (ЦФА) platform report (.xlsx), a Bank of Cyprus transaction
+      (broker_report.xlsx, one per agreement), an Atomyze (ЦФА) platform report (.xlsx), a Sber broker report (.html, one per month), a Bank of Cyprus transaction
       history export, a Ziraat Bank account activity export (.xlsx), or this project's own combined
       Raiffeisen Bank Serbia transaction CSV, its generic bank CSV (Yandex Bank, T-Bank), a Bybit transaction log
       (Data Export → Transaction Log → Account Change Details: upload each Funding and Unified Trading file), or a
@@ -233,7 +233,7 @@
       (built from the Wallet app's history) — the file type is detected automatically from its header
       row or extension.</p>
     <div class="form-row">
-      <input type="file" id="mp_any_csv_file" accept=".csv,.xlsx,.json">
+      <input type="file" id="mp_any_csv_file" accept=".csv,.xlsx,.json,.html,.htm">
       <button class="btn primary" id="mp_any_csv_upload">Upload</button>
     </div>
     <p class="empty-note" id="mp_any_csv_status"></p>
@@ -1585,6 +1585,8 @@ document.getElementById('btn_login').addEventListener('click', async () => {
 //     "\"TransferWise ID\",Date,\"Date Time\",Amount,Currency,..."
 //   - Freedom24 broker report downloaded as JSON (Кабинет -> Отчеты
 //     брокера): a JSON object whose companyName is "Freedom24"
+//   - Sber broker report (HTML, one per month): "Отчет брокера" with a
+//     "Портфель Ценных Бумаг" table
 //   - Revolut brokerage (Invest) statement starts with "Date,Ticker,Type,
 //     Quantity,Price per share,Total Amount,Currency,FX Rate"
 //   - Revolut crypto account statement starts with "Symbol,Type,Quantity,
@@ -1617,6 +1619,7 @@ function mpDetectCsvKind(headerLine, fullText) {
   if (/^\uFEFF?Symbol,Type,Quantity,Price,Value,Fees,Date/i.test(h)) return 'revolut_crypto';
   if (/^\uFEFF?\{/.test(h) && /"companyName"\s*:\s*"Freedom24"/.test(fullText)) return 'freedom24_json';
   if (/^\uFEFF?Date,Ticker,Type,Quantity,Price per share,Total Amount,Currency/i.test(h)) return 'revolut_invest';
+  if (/<html/i.test(fullText.slice(0, 2000)) && /Отчет брокера/.test(fullText) && /Сделки купли\/продажи ценных бумаг|Портфель Ценных Бумаг/.test(fullText)) return 'sber_broker';
   if (/^\uFEFF?Time,Coin,Network,Amount,(Fee,)?Address,TXID,Status/i.test(h)) return 'binance_aux';
   return null;
 }
@@ -1674,6 +1677,7 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
       binance: { fn: 'import-binance', label: 'Binance transaction export' },
       revolut_crypto: { fn: 'import-revolut-crypto', label: 'Revolut crypto statement' },
       revolut_invest: { fn: 'import-revolut-invest', label: 'Revolut brokerage (Invest) statement' },
+      sber_broker: { fn: 'import-sber-broker', label: 'Sber broker report' },
       wise: { fn: 'import-wise-statement', label: 'Wise balance statement' },
       ibkr: { fn: 'import-ibkr-statement', label: 'IBKR Activity Statement' },
       freedom24_xlsx: { fn: 'import-freedom24-statement', label: 'Freedom24 cash-movement report' },
@@ -1824,6 +1828,22 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
           + `(${result.total_rows} parsed). Wise ${result.currency} balance: ${result.balance}.`;
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
+    } else if (kind === 'sber_broker') {
+      const h = Object.entries(result.holdings || {}).map(([c, q]) => `${c} ${q}`).join(', ') || 'none';
+      const cash = Object.entries(result.cash || {}).filter(([, v]) => v.reported || v.computed)
+        .map(([c, v]) => `${c} ${v.reported}${Math.abs(v.computed - v.reported) > 0.005 ? ` (operations add up to ${v.computed}!)` : ''}`).join(', ') || '0';
+      statusEl.textContent = `Detected: ${label} (agreement ${result.agreement}, ${result.period_start}..${result.period_end}). `
+        + `Imported ${result.deals} deals, ${result.payouts} payouts`
+        + `${result.adjustments ? `, ${result.adjustments} movements without a deal` : ''} and ${result.cash_rows} cash rows`
+        + `${result.removed_snowball_duplicates ? ` (replacing ${result.removed_snowball_duplicates} Snowball rows)` : ''}. `
+        + `Holdings at period end: ${h}. Cash: ${cash}.`;
+      mpRenderHoldings();
+      mpRenderPortfolioPies();
+      mpRenderCashFlows();
+      mpRenderBrokerCurrency();
+      mpRenderBrokerAssetClass();
+      mpRenderEquityByIndex();
+      mpRenderBondByType();
     } else if (kind === 'revolut_invest') {
       const h = Object.entries(result.holdings || {}).map(([c, q]) => `${c} ${q}`).join(', ') || 'nothing';
       const cash = Object.entries(result.cash || {}).map(([c, q]) => `${c} ${Number(q).toFixed(2)}`).join(', ') || 'none';

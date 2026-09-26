@@ -65,6 +65,20 @@ export function coveredBySnowball<T extends Operation>(statement: Operation[], s
   return covered;
 }
 
+// A statement that covers an account for a whole period (a monthly broker
+// report): every Snowball row of that account dated within the period, for a
+// security the statement knows, goes -- operation-by-operation matching
+// would leave Snowball's mis-dated / mis-sized rows behind as duplicates.
+// deno-lint-ignore no-explicit-any
+export async function removeSnowballInPeriod(db: any, userId: string, account: string, tickers: string[], from: string, to: string): Promise<number> {
+  if (!tickers.length) return 0;
+  const { error, count } = await db.from('trades').delete({ count: 'exact' })
+    .eq('user_id', userId).eq('external_source', 'snowball_csv').eq('account', account)
+    .in('ticker', tickers).gte('trade_date', from).lte('trade_date', to);
+  if (error) throw new Error(error.message);
+  return count ?? 0;
+}
+
 // Statement importers: delete the Snowball rows the just-written statement
 // operations cover. Returns how many were removed.
 // deno-lint-ignore no-explicit-any
