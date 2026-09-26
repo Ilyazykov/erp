@@ -222,7 +222,7 @@
     <div class="section-title">Import CSV</div>
     <p class="note">Upload a broker trades CSV (Snowball), a Revolut account statement, a Revolut Flexible
       Cash Funds statement, a Revolut Instant Access Savings statement, a Wise balance statement (CSV, one per
-      currency), an IBKR Activity Statement (CSV, one per period), a Freedom24 cash-movement report
+      currency), a Revolut crypto account statement (CSV), an IBKR Activity Statement (CSV, one per period), a Freedom24 cash-movement report
       (tradernet_table.xlsx, from the account's opening), a Bank of Cyprus transaction
       history export, a Ziraat Bank account activity export (.xlsx), or this project's own combined
       Raiffeisen Bank Serbia transaction CSV, its generic bank CSV (Yandex Bank, T-Bank), a Bybit transaction log
@@ -1582,6 +1582,8 @@ document.getElementById('btn_login').addEventListener('click', async () => {
 //     Name,Field Value"
 //   - Wise balance statement (one file per currency balance) starts with
 //     "\"TransferWise ID\",Date,\"Date Time\",Amount,Currency,..."
+//   - Revolut crypto account statement starts with "Symbol,Type,Quantity,
+//     Price,Value,Fees,Date"
 //   - Binance "Export Transaction Records" starts with "User ID,Time,Account,
 //     Operation,Coin,Change,Remark"; its deposit / withdrawal history
 //     exports ("Time,Coin,Network,Amount,...") only repeat rows of it
@@ -1607,6 +1609,7 @@ function mpDetectCsvKind(headerLine, fullText) {
   if (/^\uFEFF?"?TransferWise ID"?,Date,"?Date Time"?,Amount,Currency,/i.test(h)) return 'wise';
   if (/^\uFEFF?Statement,Header,Field Name,Field Value/i.test(h)) return 'ibkr';
   if (/^\uFEFF?User ID,Time,Account,Operation,Coin,Change,Remark/i.test(h)) return 'binance';
+  if (/^\uFEFF?Symbol,Type,Quantity,Price,Value,Fees,Date/i.test(h)) return 'revolut_crypto';
   if (/^\uFEFF?Time,Coin,Network,Amount,(Fee,)?Address,TXID,Status/i.test(h)) return 'binance_aux';
   return null;
 }
@@ -1662,6 +1665,7 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
       cryptocom: { fn: 'import-crypto-com', label: 'Crypto.com App export' },
       telegram_wallet: { fn: 'import-telegram-wallet', label: 'Telegram Wallet history' },
       binance: { fn: 'import-binance', label: 'Binance transaction export' },
+      revolut_crypto: { fn: 'import-revolut-crypto', label: 'Revolut crypto statement' },
       wise: { fn: 'import-wise-statement', label: 'Wise balance statement' },
       ibkr: { fn: 'import-ibkr-statement', label: 'IBKR Activity Statement' },
       freedom24_xlsx: { fn: 'import-freedom24-statement', label: 'Freedom24 cash-movement report' },
@@ -1756,6 +1760,15 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
         ? `Detected: ${label}. ${result.note}.`
         : `Detected: ${label} (${result.currency}). Imported ${result.imported} transactions `
           + `(${result.total_rows} parsed). Wise ${result.currency} balance: ${result.balance}.`;
+      mpRenderBrokerCurrency();
+      mpRenderBrokerAssetClass();
+    } else if (kind === 'revolut_crypto') {
+      const h = Object.entries(result.holdings || {}).map(([c, q]) => `${c} ${q}`).join(', ') || 'nothing';
+      statusEl.textContent = `Detected: ${label}. Imported ${result.imported} crypto operations`
+        + `${result.removed_snowball_duplicates ? ` (replacing ${result.removed_snowball_duplicates} Snowball rows)` : ''}. `
+        + `Revolut crypto now: ${h}.`;
+      mpRenderHoldings();
+      mpRenderPortfolioPies();
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
     } else if (kind === 'binance') {

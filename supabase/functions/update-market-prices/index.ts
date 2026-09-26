@@ -155,6 +155,7 @@ const CRYPTO_YAHOO_OVERRIDES: Record<string, string> = {
   XAU: 'PAXG-USD',
   TAO: 'TAO22974-USD', // Bittensor; plain "TAO-USD" doesn't exist on Yahoo
   ADI: 'ADI38185-USD', // ADI Chain token (Telegram Wallet); plain "ADI" is Analog Devices
+  MON: 'MON30495-USD', // Monad (Revolut crypto); plain "MON-USD" is an unrelated coin
 };
 const KNOWN_CRYPTO_TICKERS = new Set([
   'BTC', 'ETH', 'XAU', 'XAUT', 'SOL', 'USDT', 'USDC', 'BNB', 'XRP', 'DOGE', 'ADA', 'TON',
@@ -172,6 +173,9 @@ const KNOWN_CRYPTO_TICKERS = new Set([
   // Binance (import-binance): EthereumPoW, airdropped in 2022. Unlisted,
   // "ETHW" would resolve to the Bitwise Ethereum ETF.
   'ETHW',
+  // Revolut crypto (import-revolut-crypto): Learn rewards. Unlisted, "MON"
+  // would resolve to a US stock.
+  'MON', 'ZKJ', 'MEW', 'VET',
 ]);
 
 // Only these ISS "group" values represent an instrument actually traded on
