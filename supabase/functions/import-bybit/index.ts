@@ -42,6 +42,14 @@
 // Balances are recomputed from *all* stored rows after every upload, so
 // they're only complete once every period's Funding and Unified Trading
 // logs are in.
+//
+// POST ?recompute=1 (no body) just recomputes balances from what's stored --
+// e.g. after this function's balance rules change. With a user JWT: that
+// user's Bybit accounts, and the new balances come back. Without one (like
+// the update-market-prices cron call; deployed with --no-verify-jwt): every
+// account, via the service-role client, and only counts come back -- anyone
+// holding the publishable key can call it. Uploads still require a signed-in
+// user.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
@@ -150,46 +158,117 @@ function parse(text: string): { uid: string; source: 'fund' | 'uta'; rows: Row[]
   return null;
 }
 
+interface Wallet { id: string; user_id: string; account: string }
+
+// Recompute one account's wallet_balances from all its stored rows.
+async function recompute(db: any, wallet: Wallet): Promise<{ rows: number; balances: Record<string, number> }> {
+  const scale = 1e18;
+  const all: any[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await db.from('wallet_transactions')
+      // amount::text -- as JSON numbers, numeric values lose digits and
+      // tiny ones come back in exponent form ("9e-8")
+      .select('kind, symbol, amount::text').eq('wallet_id', wallet.id).range(from, from + 999);
+    if (error) throw new Error(error.message);
+    all.push(...data);
+    if (data.length < 1000) break;
+  }
+  // BigInt fixed-point (18 decimals) so ~1600 tiny interest rows sum exactly.
+  const toBig = (x: unknown) => {
+    const amount = dec(String(x));  // also normalises any exponent form
+    const [i, f = ''] = amount.replace('-', '').split('.');
+    const v = BigInt(i || '0') * BigInt(scale) + BigInt((f + '0'.repeat(18)).slice(0, 18));
+    return amount.startsWith('-') ? -v : v;
+  };
+  const toStr = (v: bigint) => {
+    const neg = v < 0n; const a = neg ? -v : v;
+    return `${neg ? '-' : ''}${a / BigInt(scale)}.${(a % BigInt(scale)).toString().padStart(18, '0')}`.replace(/\.?0+$/, '');
+  };
+  const big = new Map<string, bigint>();   // total owned per coin
+  const inEarn = new Map<string, bigint>(); // of which sitting in Earn
+  for (const r of all) {
+    if (r.kind === 'earn_internal') inEarn.set(r.symbol, (inEarn.get(r.symbol) ?? 0n) - toBig(r.amount));
+    if (INTERNAL_KINDS.has(r.kind)) continue;
+    big.set(r.symbol, (big.get(r.symbol) ?? 0n) + toBig(r.amount));
+  }
+  const base = { wallet_id: wallet.id, user_id: wallet.user_id, account: wallet.account, chain: 'bybit',
+                 name: null, decimals: null, price_usd: null, as_of: new Date().toISOString() };
+  const balances: any[] = [];
+  const sums: Record<string, number> = {};
+  for (const [coin, v] of big) {
+    if (v === 0n) continue;
+    sums[coin] = Number(toStr(v));
+    if (!STABLECOINS.has(coin)) {
+      balances.push({ ...base, contract: coin, symbol: coin, quantity: toStr(v), ticker: coin });
+      continue;
+    }
+    const earn = inEarn.get(coin) ?? 0n;
+    if (earn !== 0n) balances.push({ ...base, contract: `${coin}:earn`, symbol: `${coin} (Earn)`, name: 'Earn', quantity: toStr(earn), ticker: 'SAVINGS:Bybit USD' });
+    if (v - earn !== 0n) balances.push({ ...base, contract: coin, symbol: coin, quantity: toStr(v - earn), ticker: coin });
+  }
+  const { error: delErr } = await db.from('wallet_balances').delete().eq('wallet_id', wallet.id);
+  if (delErr) throw new Error(delErr.message);
+  if (balances.length) {
+    const { error } = await db.from('wallet_balances').insert(balances);
+    if (error) throw new Error(error.message);
+  }
+  await db.from('crypto_wallets').update({ last_synced_at: new Date().toISOString(), last_sync_error: null }).eq('id', wallet.id);
+  return { rows: all.length, balances: sums };
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   };
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   try {
+    const url = Deno.env.get('SUPABASE_URL')!;
     const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
-      return new Response(JSON.stringify({ error: 'Missing Authorization header' }), { status: 401, headers: corsHeaders });
+    let user: { id: string } | null = null;
+    let supabase: any = null;
+    if (authHeader) {
+      supabase = createClient(url, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: authHeader } } });
+      const { data } = await supabase.auth.getUser();
+      user = data.user;
     }
-    const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!,
-      { global: { headers: { Authorization: authHeader } } });
-    const { data: { user }, error: userErr } = await supabase.auth.getUser();
-    if (userErr || !user) {
-      return new Response(JSON.stringify({ error: 'Not authenticated' }), { status: 401, headers: corsHeaders });
+
+    if (new URL(req.url).searchParams.get('recompute')) {
+      // The signed-in user's accounts (RLS), or -- no user -- every account.
+      const db = user ? supabase : createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+      const { data: wallets, error } = await db.from('crypto_wallets').select('id, user_id, account').eq('chain', 'bybit');
+      if (error) throw new Error(error.message);
+      const results = [];
+      for (const w of wallets as Wallet[]) results.push(await recompute(db, w));
+      return json(user ? { accounts: results.length, results } : { accounts: results.length });
     }
+
+    if (!user) return json({ error: 'Not authenticated' }, 401);
 
     const parsed = parse(await req.text());
     if (!parsed || !parsed.rows.length) {
-      return new Response(JSON.stringify({
+      return json({
         error: 'Not a Bybit Funding / Unified Trading transaction log (Data Export -> Transaction Log -> Account Change Details)',
-      }), { status: 400, headers: corsHeaders });
+      }, 400);
     }
 
     // The account's crypto_wallets row, created on first import.
     const address = `UID ${parsed.uid}`;
     let { data: wallet, error: wErr } = await supabase.from('crypto_wallets')
-      .select('id, account').eq('chain', 'bybit').eq('address', address).maybeSingle();
+      .select('id, user_id, account').eq('chain', 'bybit').eq('address', address).maybeSingle();
     if (wErr) throw new Error(wErr.message);
     if (!wallet) {
       const ins = await supabase.from('crypto_wallets')
-        .insert({ user_id: user.id, chain: 'bybit', address, account: 'Bybit' }).select('id, account').single();
+        .insert({ user_id: user.id, chain: 'bybit', address, account: 'Bybit' }).select('id, user_id, account').single();
       if (ins.error) throw new Error(ins.error.message);
       wallet = ins.data;
     }
 
     const rows = parsed.rows.map(r => ({
-      ...r, wallet_id: wallet!.id, user_id: user.id, chain: 'bybit', contract: '', decimals: null, counterparty: null,
+      ...r, wallet_id: wallet!.id, user_id: user!.id, chain: 'bybit', contract: '', decimals: null, counterparty: null,
     }));
     for (let i = 0; i < rows.length; i += 500) {
       const { error } = await supabase.from('wallet_transactions')
@@ -197,64 +276,9 @@ Deno.serve(async (req) => {
       if (error) throw new Error(error.message);
     }
 
-    // Recompute balances from every stored row of this account.
-    const sums = new Map<string, number>();
-    const scale = 1e18;
-    const all: any[] = [];
-    for (let from = 0; ; from += 1000) {
-      const { data, error } = await supabase.from('wallet_transactions')
-        // amount::text -- as JSON numbers, numeric values lose digits and
-        // tiny ones come back in exponent form ("9e-8")
-        .select('kind, symbol, amount::text').eq('wallet_id', wallet!.id).range(from, from + 999);
-      if (error) throw new Error(error.message);
-      all.push(...data);
-      if (data.length < 1000) break;
-    }
-    // BigInt fixed-point (18 decimals) so ~1600 tiny interest rows sum exactly.
-    const toBig = (x: unknown) => {
-      const amount = dec(String(x));  // also normalises any exponent form
-      const [i, f = ''] = amount.replace('-', '').split('.');
-      const v = BigInt(i || '0') * BigInt(scale) + BigInt((f + '0'.repeat(18)).slice(0, 18));
-      return amount.startsWith('-') ? -v : v;
-    };
-    const toStr = (v: bigint) => {
-      const neg = v < 0n; const a = neg ? -v : v;
-      return `${neg ? '-' : ''}${a / BigInt(scale)}.${(a % BigInt(scale)).toString().padStart(18, '0')}`.replace(/\.?0+$/, '');
-    };
-    const big = new Map<string, bigint>();   // total owned per coin
-    const inEarn = new Map<string, bigint>(); // of which sitting in Earn
-    for (const r of all) {
-      if (r.kind === 'earn_internal') inEarn.set(r.symbol, (inEarn.get(r.symbol) ?? 0n) - toBig(r.amount));
-      if (INTERNAL_KINDS.has(r.kind)) continue;
-      big.set(r.symbol, (big.get(r.symbol) ?? 0n) + toBig(r.amount));
-    }
-    const base = { wallet_id: wallet!.id, user_id: user.id, account: wallet!.account, chain: 'bybit',
-                   name: null, decimals: null, price_usd: null, as_of: new Date().toISOString() };
-    const balances: any[] = [];
-    for (const [coin, v] of big) {
-      if (v === 0n) continue;
-      sums.set(coin, Number(toStr(v)));
-      if (!STABLECOINS.has(coin)) {
-        balances.push({ ...base, contract: coin, symbol: coin, quantity: toStr(v), ticker: coin });
-        continue;
-      }
-      const earn = inEarn.get(coin) ?? 0n;
-      if (earn !== 0n) balances.push({ ...base, contract: `${coin}:earn`, symbol: `${coin} (Earn)`, name: 'Earn', quantity: toStr(earn), ticker: 'SAVINGS:Bybit USD' });
-      if (v - earn !== 0n) balances.push({ ...base, contract: coin, symbol: coin, quantity: toStr(v - earn), ticker: coin });
-    }
-    const { error: delErr } = await supabase.from('wallet_balances').delete().eq('wallet_id', wallet!.id);
-    if (delErr) throw new Error(delErr.message);
-    if (balances.length) {
-      const { error } = await supabase.from('wallet_balances').insert(balances);
-      if (error) throw new Error(error.message);
-    }
-    await supabase.from('crypto_wallets').update({ last_synced_at: new Date().toISOString(), last_sync_error: null }).eq('id', wallet!.id);
-
-    return new Response(JSON.stringify({
-      source: parsed.source, uid: parsed.uid, rows: rows.length, total_rows_stored: all.length,
-      balances: Object.fromEntries(sums),
-    }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    const r = await recompute(supabase, wallet as Wallet);
+    return json({ source: parsed.source, uid: parsed.uid, rows: rows.length, total_rows_stored: r.rows, balances: r.balances });
   } catch (err) {
-    return new Response(JSON.stringify({ error: String(err) }), { status: 500, headers: corsHeaders });
+    return json({ error: String(err) }, 500);
   }
 });

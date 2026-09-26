@@ -260,6 +260,10 @@
     <p class="note">Custodial exchange accounts (Bybit): there's no blockchain address to read, so they're updated by
       uploading the exchange's own transaction logs in <b>Import CSV</b> above (Bybit: Data Export → Transaction Log →
       Account Change Details, each Funding and Unified Trading file). The button above doesn't touch them.</p>
+    <div class="form-row">
+      <button class="btn" id="mp_exchange_recalc" title="Recompute balances from the transaction history already stored">Recalculate</button>
+    </div>
+    <p class="empty-note" id="mp_exchange_status"></p>
     <div id="mp_exchanges_wrap"></div>
 
     <div class="section-title">Portfolio by broker × currency</div>
@@ -3145,6 +3149,27 @@ document.getElementById('mp_wallet_add').addEventListener('click', async () => {
   await mpSyncWallets(added);
 });
 document.getElementById('mp_wallet_sync').addEventListener('click', () => mpSyncWallets());
+
+// Recompute exchange balances from the history already stored (no upload) --
+// e.g. after the import's balance rules change.
+document.getElementById('mp_exchange_recalc').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_exchange_status');
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) { statusEl.textContent = 'Sign in first.'; return; }
+  statusEl.textContent = 'Recalculating…';
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/import-bybit?recompute=1`, {
+      method: 'POST', headers: { 'Authorization': `Bearer ${session.access_token}` },
+    });
+    const result = await res.json();
+    if (!res.ok) { statusEl.textContent = `Error: ${result.error || res.statusText}`; return; }
+    statusEl.textContent = result.results.map(r => `Bybit: ${Object.entries(r.balances).map(([c, q]) => `${c} ${q}`).join(', ') || 'nothing'} `
+      + `(from ${r.rows} stored rows)`).join(' · ') || 'No exchange accounts.';
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`;
+  }
+  mpRefreshAfterWalletChange();
+});
 
 function mpUpdateAuthUi(session) {
   const btn = document.getElementById('btn_login');
