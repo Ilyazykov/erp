@@ -40,6 +40,11 @@
 //   booked_at carries that order -- strictly increasing per currency, never
 //   before the row's own date -- and the latest balance is read by it
 //   (migrations/20250101000025_bank_booked_at.sql).
+// Blocked assets (user's rule: they count at zero): T-Bank keeps securities
+// it can't trade (foreign shares, sanctioned funds) on a separate agreement
+// that only ever received them by transfer -- every security it holds at the
+// period end has no deal on it. Such an agreement's holdings are written as
+// "BLOCKED:<ticker>", which update-market-prices prices at 0.
 // Securities are keyed by ISIN; the ticker is the exchange code without
 // T-Bank's "@..." suffix (TLCB@ -> TLCB), or the ISIN where there's no code
 // (bonds -- as Snowball has them).
@@ -174,12 +179,15 @@ function parse(bytes: Uint8Array) {
     opening.set(isin, (opening.get(isin) ?? 0) + num(m['Входящий остаток']));
     closing.set(isin, (closing.get(isin) ?? 0) + num(m['Исходящий остаток']));
   }
+  const held = [...closing].filter(([, q]) => Math.abs(q) > 1e-9).map(([isin]) => isin);
+  const blockedAgreement = held.length > 0 && held.every(isin => Math.abs(netDeals.get(isin) ?? 0) < 1e-9);
+  const heldTicker = (isin: string) => blockedAgreement && held.includes(isin) ? `BLOCKED:${tickerOf(isin)}` : tickerOf(isin);
   const adjustments = [];
   for (const [isin, close] of closing) {
     const diff = round(close - (opening.get(isin) ?? 0) - (netDeals.get(isin) ?? 0));
     if (Math.abs(diff) < 1e-9) continue;
     adjustments.push({
-      ticker: tickerOf(isin), side: diff > 0 ? 'buy' : 'sell', quantity: Math.abs(diff), price: 0, trade_date: periodEnd,
+      ticker: heldTicker(isin), side: diff > 0 ? 'buy' : 'sell', quantity: Math.abs(diff), price: 0, trade_date: periodEnd,
       currency: 'RUB', fee_tax: null, fee_currency: null, nkd: null, exchange: null,
       note: 'Movement without a deal per report section 3.1 (transfer between agreements / code change / redemption); the report gives no date',
       external_id: `${agr}:adjust:${isin}`,
@@ -227,8 +235,8 @@ function parse(bytes: Uint8Array) {
   }
   const cashCheck = Object.fromEntries(Object.entries(cashSummary).map(([c, s]) =>
     [c, { computed: balance[c] ?? s.open, reported: s.close, unlisted: snapshots.find(x => x.currency === c)?.amount ?? 0 }]));
-  const holdings = Object.fromEntries([...closing].filter(([, q]) => q).map(([isin, q]) => [tickerOf(isin), q]));
-  return { agreement: agr, periodEnd, trades, adjustments, bank, cashCheck, holdings };
+  const holdings = Object.fromEntries([...closing].filter(([, q]) => q).map(([isin, q]) => [heldTicker(isin), q]));
+  return { blocked: blockedAgreement, agreement: agr, periodEnd, trades, adjustments, bank, cashCheck, holdings };
 }
 
 Deno.serve(async (req) => {
