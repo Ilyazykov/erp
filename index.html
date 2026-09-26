@@ -222,7 +222,8 @@
     <p class="note">Upload a broker trades CSV (Snowball), a Revolut account statement, a Revolut Flexible
       Cash Funds statement, a Revolut Instant Access Savings statement, a Bank of Cyprus transaction
       history export, a Ziraat Bank account activity export (.xlsx), or this project's own combined
-      Raiffeisen Bank Serbia transaction CSV, or its generic bank CSV (Yandex Bank, T-Bank) — the file type is detected automatically from its header
+      Raiffeisen Bank Serbia transaction CSV, its generic bank CSV (Yandex Bank, T-Bank), or a Bybit transaction log
+      (Data Export → Transaction Log → Account Change Details: upload each Funding and Unified Trading file) — the file type is detected automatically from its header
       row or extension.</p>
     <div class="form-row">
       <input type="file" id="mp_any_csv_file" accept=".csv,.xlsx">
@@ -1548,6 +1549,9 @@ document.getElementById('btn_login').addEventListener('click', async () => {
 //   - This project's own combined Raiffeisen Bank Serbia CSV (built by
 //     hand from PDF statements -- Raiffeisen has no CSV export) starts
 //     with "account_number,currency,date_executed,..."
+//   - Bybit Data Export transaction logs (Funding / Unified Trading
+//     "Account Change Details") start with a "UID: <uid>,Company Name:"
+//     line, then "Uid,Date & Time(UTC),Coin,..." or "Uid,Currency,Contract,..."
 //   - This project's own generic bank CSV (built from PDF statements of
 //     banks with no CSV export -- Yandex Bank, T-Bank; the bank's name is
 //     a column) starts with "bank,account_number,product,..."
@@ -1560,6 +1564,8 @@ function mpDetectCsvKind(headerLine, fullText) {
   if (/^Date,Description,Transaction type,/im.test(fullText)) return 'boc_account';
   if (/^account_number,currency,date_executed,/i.test(h)) return 'raiffeisen_account';
   if (/^bank,account_number,product,/i.test(h)) return 'bank_csv';
+  if (/^UID:\s*\d+,Company Name:/i.test(h)
+      && /^Uid,(Date & Time\(UTC\),Coin|Currency,Contract),/m.test(fullText)) return 'bybit_log';
   return null;
 }
 
@@ -1589,7 +1595,7 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
       statusEl.textContent = 'Unrecognized CSV format — expected a Snowball trades export, '
         + 'a Revolut account statement, a Revolut Flexible Cash Funds statement, a Revolut '
         + 'Instant Access Savings statement, a Bank of Cyprus transaction history export, or '
-        + 'this project\'s own Raiffeisen Bank Serbia or generic bank transaction CSV.';
+        + 'this project\'s own Raiffeisen Bank Serbia or generic bank transaction CSV, or a Bybit transaction log.';
       return;
     }
 
@@ -1602,6 +1608,7 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
       ziraat_xlsx: { fn: 'import-ziraat-statement', label: 'Ziraat Bank account activity' },
       raiffeisen_account: { fn: 'import-raiffeisen-statement', label: 'Raiffeisen Bank Serbia transaction history' },
       bank_csv: { fn: 'import-bank-csv', label: 'bank transaction history (generic CSV)' },
+      bybit_log: { fn: 'import-bybit', label: 'Bybit transaction log' },
     };
     const { fn, label } = endpoints[kind];
     statusEl.textContent = `Detected: ${label}. Uploading and parsing on the server…`;
@@ -1645,6 +1652,12 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
         + `(${result.total_rows} parsed).`;
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
+    } else if (kind === 'bybit_log') {
+      const bal = Object.entries(result.balances || {}).map(([c, q]) => `${c} ${q}`).join(', ') || 'nothing';
+      statusEl.textContent = `Detected: ${label} (${result.source === 'fund' ? 'Funding' : 'Unified Trading'}). `
+        + `Imported ${result.rows} rows (${result.total_rows_stored} stored for this account in total). `
+        + `Bybit balance now: ${bal}.`;
+      mpRefreshAfterWalletChange();
     } else if (kind === 'bank_csv') {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} transactions and `
         + `${result.imported_deposit} savings-account deposit trades (${result.total_rows} parsed).`;
@@ -1920,7 +1933,7 @@ const MP_CURRENCY_FLAGS = {
 // Any account not listed here falls back after these, alphabetically.
 const MP_BROKER_ROW_ORDER = [
   '(unspecified)', 'Revolut', 'Wise', 'Bank of Cyprus', 'IBKR', 'Freedom24',
-  'Ziraat Bank', 'Raiffeisen', 'Sber', 'T-Bank', 'Alfa', 'Ozon Bank', 'Yandex Bank', 'Telegram', 'Trust',
+  'Ziraat Bank', 'Raiffeisen', 'Sber', 'T-Bank', 'Alfa', 'Ozon Bank', 'Yandex Bank', 'Bybit', 'Telegram', 'Trust',
 ];
 
 // Flag/emoji shown next to each broker's row label, matching the user's
@@ -2920,7 +2933,7 @@ const mpShortAddress = a => `${a.slice(0, 6)}…${a.slice(-4)}`;
 let mpWallets = [];
 const mpFindWallet = (chain, address) => mpWallets.find(w => w.chain === chain
   && (chain === 'ethereum' ? w.address.toLowerCase() === address.toLowerCase() : w.address === address));
-const MP_CHAIN_LABELS = { ethereum: 'Ethereum', tron: 'TRON', bitcoin: 'Bitcoin', solana: 'Solana' };
+const MP_CHAIN_LABELS = { ethereum: 'Ethereum', tron: 'TRON', bitcoin: 'Bitcoin', solana: 'Solana', bybit: 'Bybit' };
 
 // Which network an address belongs to, from its own format -- no picker:
 //   0x + 40 hex                          -> Ethereum

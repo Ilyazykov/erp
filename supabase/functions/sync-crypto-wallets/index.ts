@@ -588,7 +588,10 @@ Deno.serve(async (req) => {
       if (user) userId = user.id;
     }
 
-    let q = db.from('crypto_wallets').select('id, user_id, chain, address, account');
+    // On-chain wallets only -- a custodial account like Bybit (chain 'bybit')
+    // comes from its own CSV import, there's no blockchain to read.
+    let q = db.from('crypto_wallets').select('id, user_id, chain, address, account')
+      .in('chain', ['ethereum', 'tron', 'bitcoin', 'solana']);
     if (userId) q = q.eq('user_id', userId);
     const { data: wallets, error } = await q;
     if (error) throw new Error(error.message);

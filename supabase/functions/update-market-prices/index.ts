@@ -155,6 +155,8 @@ const KNOWN_CRYPTO_TICKERS = new Set([
   // TRON (Trust Wallet, synced by sync-crypto-wallets). Must be listed here:
   // unlisted, "TRX" would resolve to TRX Gold Corp on NYSE American.
   'TRX',
+  // Stablecoins that pass through Bybit (import-bybit).
+  'DAI', 'USDS',
 ]);
 
 // Only these ISS "group" values represent an instrument actually traded on
