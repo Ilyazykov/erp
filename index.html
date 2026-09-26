@@ -2589,15 +2589,21 @@ function mpPie(el, title, buckets, note = '') {
 
 const mpAdd = (acc, key, v) => { if (v) acc[key] = (acc[key] || 0) + v; return acc; };
 // Credit-card debt isn't shown on its own: it's netted against liquid
-// assets, spread over every liquid holding in proportion to its size (a
-// broker / currency / Russian-or-not split then carries its share of the
-// debt, and no broker goes negative because of a card).
+// assets of the same infrastructure -- a Russian bank's card against the
+// liquid assets held in Russian banks / brokers only, any other card
+// against the rest -- spread over those holdings in proportion to their
+// size (so no broker goes negative because of a card).
+const mpIsRuInfra = r => MP_RU_ACCOUNTS.has(r.account) || (r.account === '(unspecified)' && r.infra_region === 'ru');
 function mpNetCreditIntoLiquid(rows) {
-  const credit = rows.filter(r => r.instrument_type === 'credit').reduce((s, r) => s + r.value_usd, 0);
-  const liquid = rows.filter(r => r.instrument_type === 'liquid' && r.value_usd > 0).reduce((s, r) => s + r.value_usd, 0);
-  const factor = liquid > 0 ? Math.max(0, (liquid + credit) / liquid) : 1;
+  const factor = {};
+  for (const ru of [true, false]) {
+    const group = rows.filter(r => mpIsRuInfra(r) === ru);
+    const credit = group.filter(r => r.instrument_type === 'credit').reduce((s, r) => s + r.value_usd, 0);
+    const liquid = group.filter(r => r.instrument_type === 'liquid' && r.value_usd > 0).reduce((s, r) => s + r.value_usd, 0);
+    factor[ru] = liquid > 0 ? Math.max(0, (liquid + credit) / liquid) : 1;
+  }
   return rows.filter(r => r.instrument_type !== 'credit')
-    .map(r => (r.instrument_type === 'liquid' && r.value_usd > 0 ? { ...r, value_usd: r.value_usd * factor } : r));
+    .map(r => (r.instrument_type === 'liquid' && r.value_usd > 0 ? { ...r, value_usd: r.value_usd * factor[mpIsRuInfra(r)] } : r));
 }
 // Asset-type buckets (rows already credit-netted -- mpNetCreditIntoLiquid).
 function mpAssetBuckets(rows, keep = null) {
@@ -2620,7 +2626,7 @@ async function mpRenderCharts() {
     [...await mpSplitFundsCash(base.data), ...base.cashRows, ...base.realEstateRows].filter(r => r.value_usd !== null));
   const isRealEstate = r => r.account === 'real estate';
   const brokerName = a => `${MP_BROKER_SHORT_NAMES[a] || a}${MP_BROKER_FLAGS[a] ? ` ${MP_BROKER_FLAGS[a]}` : ''}`;
-  const isRu = r => MP_RU_ACCOUNTS.has(r.account) || (r.account === '(unspecified)' && r.infra_region === 'ru');
+  const isRu = mpIsRuInfra;
 
   // 1. Currencies -- the broker x currency table's total row.
   const byCurrency = {};
