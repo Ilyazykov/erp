@@ -319,7 +319,7 @@ async function latestUsdRubRate(): Promise<number | null> {
 // Ticker classification
 // ---------------------------------------------------------------------------
 
-type TickerClass = 'moex_ofz' | 'moex_bond' | 'moex_share_or_etf_or_other' | 'crypto' | 'deposit' | 'savings' | 'stablecoin' | 'money_market_fund' | 'cfa';
+type TickerClass = 'moex_ofz' | 'moex_bond' | 'moex_share_or_etf_or_other' | 'crypto' | 'deposit' | 'savings' | 'stablecoin' | 'money_market_fund' | 'cfa' | 'blocked';
 
 // A bank deposit/savings account is represented as a synthetic ticker,
 // not an ISIN or a real listed instrument -- e.g. "DEPOSIT:Revolut" for
@@ -355,6 +355,10 @@ const SAVINGS_PREFIX = 'SAVINGS:';
 // never more than one payout. A debt ЦФА is bond-like (fixed nominal,
 // periodic payouts), so it's a bond.
 const CFA_PREFIX = 'CFA:';
+// Blocked securities (T-Bank's blocked-assets agreement -- import-tbank-broker
+// writes them as "BLOCKED:<ticker>") count at zero (user's rule): price 0,
+// so they're valued, just at nothing.
+const BLOCKED_PREFIX = 'BLOCKED:';
 // US-dollar stablecoins count as plain US dollars wherever they're held
 // (exchange, on-chain wallet, Snowball -- user's rule): priced exactly 1 USD,
 // instrument_type 'cash', underlying currency USD, so they land in the USD
@@ -415,6 +419,7 @@ function classifyTicker(ticker: string): TickerClass {
   const t = ticker.toUpperCase();
   if (t.startsWith(SAVINGS_PREFIX)) return 'savings';
   if (t.startsWith(CFA_PREFIX)) return 'cfa';
+  if (t.startsWith(BLOCKED_PREFIX)) return 'blocked';
   if (STABLECOIN_TICKERS.has(t)) return 'stablecoin';
   if (t.startsWith(DEPOSIT_PREFIX) || t.startsWith(DEPOSIT_PREFIX_LEGACY_CYRILLIC)) return 'deposit';
   if (MONEY_MARKET_FUND_ISINS.has(t)) return 'money_market_fund';
@@ -1031,6 +1036,16 @@ async function runUpdate(): Promise<Record<string, unknown>> {
       });
       resolved.add(ticker);
     }
+  }
+
+  // --- Blocked securities (see BLOCKED_PREFIX): price 0. ---
+  for (const ticker of tickers) {
+    if (classifyTicker(ticker) !== 'blocked') continue;
+    rowsOut.push({
+      ticker, price_usd: 0, native_price: 0, currency: 'RUB', asset_class: 'blocked', infra_region: 'ru',
+      instrument_type: 'stock', underlying_currency: 'RUB', source: 'blocked_zero', as_of: new Date().toISOString().slice(0, 10),
+    });
+    resolved.add(ticker);
   }
 
   // --- Digital financial assets (see CFA_PREFIX): nominal = latest buy price. ---
