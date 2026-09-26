@@ -2635,7 +2635,7 @@ async function mpSplitFundsCash(rows) {
 // Builds a single-column-of-buckets breakdown table (category name -> USD
 // value) -- shared by mpRenderEquityByIndex and mpRenderBondByType, which
 // differ only in which rows they keep and how each row maps to a bucket.
-function mpRenderBucketTable(wrap, rows, bucketOf, emptyMessage, order = null) {
+function mpRenderBucketTable(wrap, rows, bucketOf, emptyMessage) {
   if (!rows.length) { wrap.innerHTML = `<p class="empty-note">${emptyMessage}</p>`; return; }
   const priced = rows.filter(r => r.value_usd !== null);
   const totals = {};
@@ -2643,8 +2643,7 @@ function mpRenderBucketTable(wrap, rows, bucketOf, emptyMessage, order = null) {
     const bucket = bucketOf(r);
     totals[bucket] = (totals[bucket] || 0) + r.value_usd;
   }
-  const rank = b => (order && order.includes(b) ? order.indexOf(b) : Infinity);
-  const buckets = Object.keys(totals).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+  const buckets = Object.keys(totals).sort();
   const grandTotal = buckets.reduce((s, b) => s + totals[b], 0);
   const anyMissing = rows.some(r => r.value_usd === null);
   wrap.innerHTML = `<table class="data-table"><thead><tr>
@@ -2711,7 +2710,7 @@ async function mpRenderLookThrough() {
 // left out. TRND's repo counts as liquid assets (mpSplitFundsCash).
 const MP_RU_ACCOUNTS = new Set(['Sber', 'T-Bank', 'Alfa', 'Ozon Bank', 'Yandex Bank', 'Finuslugi']);
 const MP_RU_INFRA_TYPES = ['stock', 'deposit', 'bond', 'liquid', 'cash'];
-const MP_RU_INFRA_LABELS = { stock: 'stock', deposit: 'deposit', bond: 'bonds', liquid: 'liquid assets', cash: 'cash' };
+const MP_RU_INFRA_LABELS = { stock: 'stock 📈', deposit: 'deposit 🏦', bond: 'bonds 🏛️', liquid: 'liquid assets 💧', cash: 'cash 💵' };
 const MP_RU_INFRA_CURRENCIES = { RUB: '🇷🇺', CNY: '🇨🇳' };
 async function mpRenderBondByType() {
   const wrap = document.getElementById('mp_bond_subtype_wrap');
@@ -2721,13 +2720,31 @@ async function mpRenderBondByType() {
   const cashRows = (await mpFetchCashRows(fx)).filter(r => r.instrument_type === 'cash');
   const rows = [...await mpSplitFundsCash(data), ...cashRows].filter(r =>
     MP_RU_ACCOUNTS.has(r.account) || (r.account === '(unspecified)' && r.infra_region === 'ru'));
-  const bucket = r => {
+  // asset type (rows) x currency (columns, in that currency) + USD total and share.
+  const ccys = Object.keys(MP_RU_INFRA_CURRENCIES);
+  const usd = {};
+  for (const r of rows) {
     const ccy = r.underlying_currency || r.currency;
-    return MP_RU_INFRA_TYPES.includes(r.instrument_type) && ccy in MP_RU_INFRA_CURRENCIES
-      ? `${MP_RU_INFRA_LABELS[r.instrument_type]} ${MP_RU_INFRA_CURRENCIES[ccy]}` : null;
-  };
-  const order = Object.values(MP_RU_INFRA_CURRENCIES).flatMap(f => MP_RU_INFRA_TYPES.map(t => `${MP_RU_INFRA_LABELS[t]} ${f}`));
-  mpRenderBucketTable(wrap, rows.filter(r => bucket(r)), bucket, 'Nothing in Russian banks or brokers.', order);
+    if (!MP_RU_INFRA_TYPES.includes(r.instrument_type) || !ccys.includes(ccy) || !r.value_usd) continue;
+    usd[`${r.instrument_type} ${ccy}`] = (usd[`${r.instrument_type} ${ccy}`] || 0) + r.value_usd;
+  }
+  const types = MP_RU_INFRA_TYPES.filter(t => ccys.some(c => usd[`${t} ${c}`]));
+  if (!types.length) { wrap.innerHTML = '<p class="empty-note">Nothing in Russian banks or brokers.</p>'; return; }
+  const cols = ccys.filter(c => types.some(t => usd[`${t} ${c}`]));
+  const rowUsd = t => cols.reduce((sum, c) => sum + (usd[`${t} ${c}`] || 0), 0);
+  const colUsd = c => types.reduce((sum, t) => sum + (usd[`${t} ${c}`] || 0), 0);
+  const total = types.reduce((sum, t) => sum + rowUsd(t), 0);
+  const native = (v, c) => mpFormatCurrency(v / fx[c], c);
+  const pct = v => `${(v / total * 100).toFixed(1)}%`;
+  wrap.innerHTML = `<table class="data-table" style="width:auto;min-width:0">
+    <thead><tr><th class="corner"></th>${cols.map(c => `<th>${c} ${MP_RU_INFRA_CURRENCIES[c]}</th>`).join('')}
+      <th>USD</th><th class="corner">Share</th></tr></thead>
+    <tbody>${types.map(t => `<tr><td class="ticker">${MP_RU_INFRA_LABELS[t]}</td>
+      ${cols.map(c => `<td>${native(usd[`${t} ${c}`] || 0, c)}</td>`).join('')}
+      <td>${mpFormatUsd(rowUsd(t))}</td><td>${pct(rowUsd(t))}</td></tr>`).join('')}
+    <tr class="total-row"><td class="ticker"><b>Total</b></td>
+      ${cols.map(c => `<td><b>${native(colUsd(c), c)}</b></td>`).join('')}
+      <td><b>${mpFormatUsd(total)}</b></td><td></td></tr></tbody></table>`;
 }
 
 // ---- Portfolio-composition pie charts (embedded in the existing tabs) ----
