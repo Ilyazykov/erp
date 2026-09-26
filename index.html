@@ -2572,6 +2572,55 @@ async function mpRenderBrokerAssetClass() {
 // ---- Charts tab: pies built from the same rows as the My Portfolio tables ----
 const MP_PIE_COLORS = ['#4a9ff5', '#7fd351', '#8e8e8e', '#f0c040', '#e8452c', '#c2307a', '#6fc0f8', '#a86ee8',
   '#3dd6b5', '#f08a3c', '#9aa5b1', '#e05287', '#5b6ee1', '#b8d44a'];
+// ---- Slice colours: brand / association colours, the same thing the same
+// colour on every chart. ----
+const MP_OTHER_COLOR = '#3d4652';
+const MP_COLORS = {
+  // currencies & coins
+  currency: {
+    USD: '#3fae5a', EUR: '#2f6fd6', RUB: '#8a8f98', GBP: '#d6453d', CNY: '#8c1c2c', JPY: '#f29bb0', TRY: '#e8703a',
+    RSD: '#5b7fbf', CHF: '#c0392b', CAD: '#f08c8c', TWD: '#4f6fa8', KRW: '#7fa3d9', HKD: '#e07b7b', AUD: '#f2c14e',
+    INR: '#ff9933', BRL: '#2e9e5b', ZAR: '#6aa84f', SGD: '#e57373', SAR: '#1e7b4a', ILS: '#5c8fd6', MXN: '#4c9a6a',
+    AED: '#8d6e63', MYR: '#6d7fc9',
+    XAU: '#d4af37', BTC: '#f7931a', ETH: '#7a6ff0', SOL: '#2cc49a', GRAM: '#2aabee', TON: '#2aabee', TAO: '#b0b7c0',
+  },
+  broker: {
+    Freedom24: '#1abc9c', 'Bank of Cyprus': '#6cc4ee', Revolut: '#8a8f98', Wise: '#9fe870', Raiffeisen: '#f5c400',
+    UniCredit: '#e2001a', 'Ziraat Bank': '#e30613', IBKR: '#8e44ad', Sber: '#21a038', 'T-Bank': '#ffdd2d',
+    'Ozon Bank': '#005bff', Alfa: '#c8102e', 'Yandex Bank': '#fc5a3c', Finuslugi: '#00a0dc', Telegram: '#2aabee',
+    Binance: '#f3ba2f', Bybit: '#ff8a00', 'Crypto.com': '#0b2d5b', Trust: '#3375bb', cash: '#85bb65',
+    '(unspecified)': '#6b7280',
+  },
+  // asset types (liquid assets the same grey as deposits, as asked)
+  type: {
+    bond: '#4a90d9', cash: '#85bb65', deposit: '#8a8f98', liquid: '#8a8f98', gold: '#d4af37', crypto: '#f7931a',
+    stock: '#c2307a', real_estate: '#b5835a',
+  },
+  // countries: those whose currency is on chart 1 in that colour; EU states in blues
+  country: {
+    US: '#3fae5a', GB: '#d6453d', CN: '#8c1c2c', JP: '#f29bb0', RU: '#8a8f98', TR: '#e8703a', RS: '#5b7fbf',
+    CH: '#c0392b', CA: '#f08c8c', TW: '#4f6fa8', KR: '#7fa3d9', HK: '#e07b7b', AU: '#f2c14e', IN: '#ff9933',
+    BR: '#2e9e5b', ZA: '#6aa84f', SG: '#e57373', SA: '#1e7b4a', IL: '#5c8fd6', MX: '#4c9a6a', AE: '#8d6e63',
+    NO: '#a33b3b', EU: '#2f6fd6',
+    FR: '#2f6fd6', DE: '#1f4fa3', NL: '#5b8def', ES: '#3d62b8', IT: '#7aa5f0', SE: '#4a7fd9', DK: '#2a5cc7',
+    FI: '#8fb5f5', BE: '#3558a8', IE: '#6b95e6', AT: '#4668c4', PT: '#9cbcf2', PL: '#2c4f96', LU: '#5f7fcf',
+  },
+};
+// A colour blended toward another (t = 0 keeps a, 1 gives b).
+function mpMix(a, b, t) {
+  const p = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+  const [x, y] = [p(a), p(b)];
+  return `#${x.map((v, i) => Math.round(v + (y[i] - v) * t).toString(16).padStart(2, '0')).join('')}`;
+}
+function mpSliceColor(label, colorOf) {
+  if (/^other\b/.test(label)) return MP_OTHER_COLOR;
+  const c = colorOf(label);
+  if (c) return c;
+  let h = 0;
+  for (const ch of label) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+  return MP_PIE_COLORS[h % MP_PIE_COLORS.length];
+}
+
 const MP_EU_MEMBERS = new Set(['AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT',
   'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE']);
 const mpFlagOf = code => (/^[A-Z]{2}$/.test(code || '') && code !== 'XX'
@@ -2582,7 +2631,10 @@ const mpFlagOf = code => (/^[A-Z]{2}$/.test(code || '') && code !== 'XX'
 // first, and the small-slices "other" goes last.
 // smallGroupOf (optional): label -> group number, to list the "other"
 // slice's contents group by group (currencies before crypto), each largest first.
-function mpPie(el, title, buckets, note = '', order = null, groupSmall = true, smallGroupOf = () => 0) {
+// colorOf (optional): label -> colour (MP_COLORS); anything it doesn't
+// know gets a stable colour from the fallback palette; "other" is always
+// the same neutral grey.
+function mpPie(el, title, buckets, note = '', order = null, groupSmall = true, smallGroupOf = () => 0, colorOf = () => null) {
   const card = document.createElement('div');
   card.className = 'pie-card';
   card.innerHTML = `<h4>${mpEscapeHtml(title)}</h4><div class="pie-plot"></div><p class="pie-total"></p>`
@@ -2616,7 +2668,7 @@ function mpPie(el, title, buckets, note = '', order = null, groupSmall = true, s
     text: entries.map(e => (e[1] / total >= 0.035 ? `${e[0]}<br>${(e[1] / total * 100).toFixed(1)}%` : '')),
     textinfo: 'text', textposition: 'inside', insidetextorientation: 'horizontal',
     customdata: entries.map(e => e[2] || ''),
-    marker: { colors: entries.map((_, i) => MP_PIE_COLORS[i % MP_PIE_COLORS.length]), line: { color: '#0d1117', width: 1 } },
+    marker: { colors: entries.map(e => mpSliceColor(e[0], colorOf)), line: { color: '#0d1117', width: 1 } },
     hovertemplate: '%{label}<br>$%{value:,.0f} - %{percent}<br>%{customdata}<extra></extra>',
   }], {
     paper_bgcolor: '#13191f', plot_bgcolor: '#13191f', font: { size: 12 },   // inside labels: Plotly picks black / white per slice
@@ -2776,23 +2828,42 @@ async function mpRenderCharts() {
     .map(([t, c]) => `${MP_RU_INFRA_LABELS[t]} ${MP_RU_INFRA_CURRENCIES[c]}`);
   // Currencies carry a flag; crypto tickers don't.
   const isFiatLabel = l => /[\u{1F1E6}-\u{1F1FF}]|🌍/u.test(l);
-  mpPie(grid, '1. Currencies', byCurrency, '', currencyOrder, true, l => (isFiatLabel(l) ? 0 : 1));
-  mpPie(grid, '2. Banks & brokers', brokerBuckets, '', brokerOrder);
-  mpPie(grid, '3. Asset types', types, '', typeOrder);
-  mpPie(grid, '4. Stocks by country', countries, 'Funds split by the countries of what they hold.');
-  mpPie(grid, '5. Stocks by country, EU as one', countriesEu, 'The same, with the EU member states together.');
-  mpPie(grid, '6. Crypto', crypto, '', cryptoOrder);
+  // Colours by what a label names (labels carry flags / emoji, so look the
+  // key up from its first word, or from the maps the labels were built from).
+  const key = l => l.split(' ')[0];
+  const currencyColor = l => MP_COLORS.currency[key(l)] || null;
+  const brokerByLabel = Object.fromEntries(Object.keys(MP_COLORS.broker).map(a => [brokerName(a), a]));
+  const brokerColor = l => MP_COLORS.broker[brokerByLabel[l]] || null;
+  const typeByLabel = Object.fromEntries(Object.keys(MP_COLORS.type).map(t => [MP_ASSET_CLASS_LABELS[t], t]));
+  const typeColor = l => MP_COLORS.type[typeByLabel[l]] || null;
+  const countryColor = l => (l === 'European Union 🇪🇺' ? MP_COLORS.country.EU : MP_COLORS.country[codeOfLabel[l]] || null);
+  // Russian infrastructure: the currency's colour (chart 1) leaning toward the asset type's (chart 3).
+  const ruColorByLabel = {};
+  for (const t of MP_RU_INFRA_TYPES) for (const c of Object.keys(MP_RU_INFRA_CURRENCIES)) {
+    // (liquid sits next to deposit, both grey-ish: a lighter shade keeps them apart)
+    const mixed = mpMix(MP_COLORS.currency[c], MP_COLORS.type[t], t === 'deposit' ? 0.15 : t === 'liquid' ? 0.3 : 0.45);
+    ruColorByLabel[`${MP_RU_INFRA_LABELS[t]} ${MP_RU_INFRA_CURRENCIES[c]}`] = t === 'liquid' ? mpMix(mixed, '#ffffff', 0.3) : mixed;
+  }
+  const ruColor = l => ruColorByLabel[l] || null;
+
+  mpPie(grid, '1. Currencies', byCurrency, '', currencyOrder, true, l => (isFiatLabel(l) ? 0 : 1), currencyColor);
+  mpPie(grid, '2. Banks & brokers', brokerBuckets, '', brokerOrder, true, () => 0, brokerColor);
+  mpPie(grid, '3. Asset types', types, '', typeOrder, true, () => 0, typeColor);
+  mpPie(grid, '4. Stocks by country', countries, 'Funds split by the countries of what they hold.', null, true, () => 0, countryColor);
+  mpPie(grid, '5. Stocks by country, EU as one', countriesEu, 'The same, with the EU member states together.', null, true, () => 0, countryColor);
+  mpPie(grid, '6. Crypto', crypto, '', cryptoOrder, true, () => 0, currencyColor);
   // Russian infrastructure: every cell a slice of its own, however small
   // (roubles and yuan must stay apart).
-  mpPie(grid, '7. Russian infrastructure', ruBuckets(), '', ruOrder, false);
+  mpPie(grid, '7. Russian infrastructure', ruBuckets(), '', ruOrder, false, () => 0, ruColor);
   mpPie(grid, '8. Stocks, bonds, deposits, liquid assets',
-    mpAssetBuckets(assetRows.filter(r => !isRealEstate(r)), ['stock', 'bond', 'deposit', 'liquid']), '', typeOrder);
+    mpAssetBuckets(assetRows.filter(r => !isRealEstate(r)), ['stock', 'bond', 'deposit', 'liquid']), '', typeOrder, true, () => 0, typeColor);
   mpPie(grid, '9. IBKR vs Freedom', { [brokerName('Freedom24')]: byBroker.Freedom24 || 0, [brokerName('IBKR')]: byBroker.IBKR || 0 },
-    '', brokerOrder);
+    '', brokerOrder, true, () => 0, brokerColor);
   mpPie(grid, '10. Russian infrastructure vs the rest', { 'Russia 🇷🇺': ruTotal, 'rest of the world 🌍': allTotal - ruTotal },
-    '', ['Russia 🇷🇺', 'rest of the world 🌍']);
-  mpPie(grid, '11. Russian infrastructure without stocks', ruBuckets(['stock']), '', ruOrder, false);
-  mpPie(grid, '12. Asset types with real estate', typesWithRealEstate, '', typeOrder);
+    '', ['Russia 🇷🇺', 'rest of the world 🌍'], true, () => 0,
+    l => (l === 'Russia 🇷🇺' ? MP_COLORS.country.RU : '#4a9ff5'));
+  mpPie(grid, '11. Russian infrastructure without stocks', ruBuckets(['stock']), '', ruOrder, false, () => 0, ruColor);
+  mpPie(grid, '12. Asset types with real estate', typesWithRealEstate, '', typeOrder, true, () => 0, typeColor);
   // Size every plot to its card once the grid has laid out.
   requestAnimationFrame(() => grid.querySelectorAll('.pie-plot').forEach(el => { if (el.data) Plotly.Plots.resize(el); }));
 }
