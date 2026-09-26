@@ -274,14 +274,6 @@
 
     <div class="section-title">Russian infrastructure 🇷🇺</div>
     <div id="mp_bond_subtype_wrap"></div>
-
-    <div class="section-title">Current holdings</div>
-    <p class="note">USD values use the previous day's close, converted from RUB/EUR/native currency where needed —
-      updated once a day, not real-time. A blank value means today's price fetch didn't resolve that ticker yet.</p>
-    <div id="mp_holdings_wrap"></div>
-
-    <div class="section-title">Cash flows (dividends, coupons, redemptions)</div>
-    <div id="mp_cashflows_wrap"></div>
   </div>
 </div>
 
@@ -1796,9 +1788,7 @@ async function mpImportOneFile(file, statusEl, session) {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} rows, removed `
         + `${result.removed} stale rows (${result.skipped} skipped, ${result.skipped_trust ?? 0} rows left `
         + `to their own sources — Trust, Bybit, Crypto.com, Telegram — ${result.total_rows} parsed).`;
-      mpRenderHoldings();
       mpRenderPortfolioPies();
-      mpRenderCashFlows();
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
       mpRenderBondByType();
@@ -1809,7 +1799,6 @@ async function mpImportOneFile(file, statusEl, session) {
         + `(${result.total_rows} parsed, ${result.skipped_not_completed} not-completed, `
         + `${result.skipped_deposit} deposit rows skipped).`;
       if (result.imported_metal_trades) {
-        mpRenderHoldings();
         mpRenderPortfolioPies();
       }
       mpRenderBrokerCurrency();
@@ -1836,9 +1825,7 @@ async function mpImportOneFile(file, statusEl, session) {
         + `${result.adjustments ? `, ${result.adjustments} movements without a deal` : ''} and ${result.cash_rows} wallet operations`
         + `${result.removed_snowball_duplicates ? ` (replacing ${result.removed_snowball_duplicates} Snowball rows)` : ''}. `
         + `ЦФА held: ${h}. Wallet: RUB ${result.cash?.last ?? 0}.`;
-      mpRenderHoldings();
       mpRenderPortfolioPies();
-      mpRenderCashFlows();
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
       mpRenderBondByType();
@@ -1856,9 +1843,7 @@ async function mpImportOneFile(file, statusEl, session) {
         + `${result.payouts} payouts, ${result.adjustments} movements without a deal and ${result.cash_rows} cash operations`
         + `${result.removed_snowball_duplicates ? ` (replacing ${result.removed_snowball_duplicates} Snowball rows)` : ''}. `
         + `Holdings: ${h}. Cash: ${cash}.`;
-      mpRenderHoldings();
       mpRenderPortfolioPies();
-      mpRenderCashFlows();
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
       mpRenderBondByType();
@@ -1866,7 +1851,6 @@ async function mpImportOneFile(file, statusEl, session) {
       statusEl.textContent = `Detected: ${label}. Shares credited without money: `
         + `${(result.securities_credited || []).join(', ') || 'none'}`
         + `${result.removed_snowball_duplicates ? ` (replacing ${result.removed_snowball_duplicates} Snowball rows)` : ''}.`;
-      mpRenderHoldings();
       mpRenderPortfolioPies();
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
@@ -1876,9 +1860,7 @@ async function mpImportOneFile(file, statusEl, session) {
         + `${result.cash_rows} cash movements`
         + `${result.removed_snowball_duplicates ? ` (replacing ${result.removed_snowball_duplicates} Snowball rows)` : ''}. `
         + `Freedom24 cash: ${cash || 'none'}.`;
-      mpRenderHoldings();
       mpRenderPortfolioPies();
-      mpRenderCashFlows();
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
     } else if (kind === 'ibkr') {
@@ -1887,9 +1869,7 @@ async function mpImportOneFile(file, statusEl, session) {
         + `${result.cash_rows} cash movements`
         + `${result.removed_snowball_duplicates ? ` (replacing ${result.removed_snowball_duplicates} Snowball rows)` : ''}. `
         + `IBKR cash at the end of this statement: ${cash || 'none'}.`;
-      mpRenderHoldings();
       mpRenderPortfolioPies();
-      mpRenderCashFlows();
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
     } else if (kind === 'wise') {
@@ -1908,9 +1888,7 @@ async function mpImportOneFile(file, statusEl, session) {
         + `${result.adjustments ? `, ${result.adjustments} movements without a deal` : ''} and ${result.cash_rows} cash rows`
         + `${result.removed_snowball_duplicates ? ` (replacing ${result.removed_snowball_duplicates} Snowball rows)` : ''}. `
         + `Holdings at period end: ${h}. Cash: ${cash}.`;
-      mpRenderHoldings();
       mpRenderPortfolioPies();
-      mpRenderCashFlows();
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
       mpRenderBondByType();
@@ -1919,9 +1897,7 @@ async function mpImportOneFile(file, statusEl, session) {
       statusEl.textContent = `Detected: ${label}. Imported ${result.trades} trades and ${result.payouts} payouts`
         + `${result.removed_snowball_duplicates ? ` (replacing ${result.removed_snowball_duplicates} Snowball rows)` : ''}. `
         + `Holdings from these operations: ${h}.`;
-      mpRenderHoldings();
       mpRenderPortfolioPies();
-      mpRenderCashFlows();
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
       mpRenderBondByType();
@@ -1932,9 +1908,7 @@ async function mpImportOneFile(file, statusEl, session) {
         + `${result.cash_rows} cash movements`
         + `${result.removed_snowball_duplicates ? ` (replacing ${result.removed_snowball_duplicates} Snowball rows)` : ''}. `
         + `Revolut Invest now: ${h}; cash ${cash}.`;
-      mpRenderHoldings();
       mpRenderPortfolioPies();
-      mpRenderCashFlows();
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
     } else if (kind === 'revolut_crypto') {
@@ -1942,7 +1916,6 @@ async function mpImportOneFile(file, statusEl, session) {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} crypto operations`
         + `${result.removed_snowball_duplicates ? ` (replacing ${result.removed_snowball_duplicates} Snowball rows)` : ''}. `
         + `Revolut crypto now: ${h}.`;
-      mpRenderHoldings();
       mpRenderPortfolioPies();
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
@@ -1971,7 +1944,6 @@ async function mpImportOneFile(file, statusEl, session) {
         + `${result.imported_deposit} savings-account / deposit trades (${result.total_rows} parsed)`
         + `${result.removed_snowball_duplicates ? `, replacing ${result.removed_snowball_duplicates} Snowball rows` : ''}.`;
       if (result.imported_deposit) {
-        mpRenderHoldings();
         mpRenderPortfolioPies();
         mpRenderBondByType();
       }
@@ -1984,16 +1956,13 @@ async function mpImportOneFile(file, statusEl, session) {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} rows `
         + `(${result.total_rows} parsed, ${result.interest_rows} interest/fee rows, `
         + `${result.skipped_no_quantity_no_value} skipped as zero-value bookkeeping).`;
-      mpRenderHoldings();
       mpRenderPortfolioPies();
-      mpRenderCashFlows();
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
       mpRenderBondByType();
     } else {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} deposit trades `
         + `(${result.total_rows} parsed).`;
-      mpRenderHoldings();
       mpRenderPortfolioPies();
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
@@ -2160,44 +2129,6 @@ function mpFormatCurrency(n, currency, withCode = false, unitPriceUsd = null) {
   }
 }
 const MP_ISO_CURRENCIES = new Set(['USD', 'EUR', 'GBP', 'RUB', 'TRY', 'RSD', 'CNY']);
-
-async function mpRenderHoldings() {
-  const wrap = document.getElementById('mp_holdings_wrap');
-  // portfolio_value_usd (supabase/migrations/20250101000004_market_prices.sql) left-joins
-  // current_holdings with the daily market_prices snapshot, so a ticker with no resolved
-  // price still shows its quantity with a blank value instead of disappearing/erroring.
-  const { data, error } = await sb.from('portfolio_value_usd').select('*').order('ticker');
-  if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
-  if (!data.length) { wrap.innerHTML = '<p class="empty-note">No holdings yet — import trades above.</p>'; return; }
-  const total = data.reduce((sum, r) => sum + (r.value_usd || 0), 0);
-  const anyMissing = data.some(r => r.value_usd === null);
-  wrap.innerHTML = `<table class="data-table"><thead><tr>
-    <th>Ticker</th><th>Quantity</th><th>Price (USD)</th><th>Value (USD)</th>
-  </tr></thead><tbody>${data.map(r => `<tr>
-    <td class="ticker">${mpEscapeHtml(r.ticker.startsWith('TOKEN:') ? `${r.underlying_currency || '?'} (${r.ticker.split(':')[1]} token)` : r.ticker)}</td>
-    <td>${r.quantity}</td>
-    <td>${mpFormatUsd(r.price_usd)}</td>
-    <td>${mpFormatUsd(r.value_usd)}</td>
-  </tr>`).join('')}
-  <tr class="total-row"><td colspan="3"><b>Total</b></td><td><b>${mpFormatUsd(total)}</b></td></tr>
-  </tbody></table>
-  ${anyMissing ? '<p class="empty-note">Some tickers have no price yet (unrecognized or not yet covered by the daily fetch) — total is a partial sum.</p>' : ''}`;
-}
-
-async function mpRenderCashFlows() {
-  const wrap = document.getElementById('mp_cashflows_wrap');
-  const { data, error } = await sb.from('cash_flows').select('*').order('ticker').order('side');
-  if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
-  if (!data.length) { wrap.innerHTML = '<p class="empty-note">No cash flows yet.</p>'; return; }
-  wrap.innerHTML = `<table class="data-table"><thead><tr>
-    <th>Ticker</th><th>Type</th><th>Currency</th><th>Total</th>
-  </tr></thead><tbody>${data.map(r => `<tr>
-    <td class="ticker">${mpEscapeHtml(r.ticker)}</td>
-    <td class="muted">${mpEscapeHtml(r.side)}</td>
-    <td class="muted">${mpEscapeHtml(r.currency || '')}</td>
-    <td>${r.total_amount}</td>
-  </tr>`).join('')}</tbody></table>`;
-}
 
 // Builds a broker(row) x category(column) pivot table from an array of
 // {account, [categoryField], value_usd} rows -- shared by
@@ -3584,7 +3515,6 @@ async function mpRenderWalletGroup(wrap, wallets, allBalances, prices, opts) {
 
 function mpRefreshAfterWalletChange() {
   mpRenderWallets();
-  mpRenderHoldings();
   mpRenderPortfolioPies();
   mpRenderBrokerCurrency();
   mpRenderBrokerAssetClass();
@@ -3675,9 +3605,7 @@ function mpUpdateAuthUi(session) {
     document.getElementById('crypto_signed_in').style.display = '';
     document.getElementById('lookthrough_signed_out').style.display = 'none';
     document.getElementById('lookthrough_signed_in').style.display = '';
-    mpRenderHoldings();
     mpRenderPortfolioPies();
-    mpRenderCashFlows();
     mpRenderBrokerCurrency();
     mpRenderBrokerAssetClass();
     mpRenderBondByType();
