@@ -2664,9 +2664,13 @@ async function mpRenderCharts() {
   // 1. Currencies -- the broker x currency table's total row.
   const currencyLabel = c => (c === MP_OTHER_CURRENCIES_COLUMN ? 'others 🌍' : `${c}${MP_CURRENCY_FLAGS[c] ? ` ${MP_CURRENCY_FLAGS[c]}` : ''}`);
   const byCurrency = {};
-  // The "others" column split into its currencies (JPY, CAD, TWD, ...).
+  // The "others" column split into its currencies (JPY, CAD, TWD, ... --
+  // flagged by the country an ISO code starts with), Altcoins into coins.
   for (const r of curRows) if (!r.excluded) {
-    mpAdd(byCurrency, r.currency === MP_OTHER_CURRENCIES_COLUMN ? r.own_currency : currencyLabel(r.currency), r.value_usd);
+    const label = r.currency === MP_OTHER_CURRENCIES_COLUMN ? `${r.own_currency} ${mpFlagOf(r.own_currency.slice(0, 2))}`
+      : r.currency === MP_ALTCOINS_COLUMN ? r.ticker
+      : currencyLabel(r.currency);
+    mpAdd(byCurrency, label, r.value_usd);
   }
   // 2 / 8 / 9. Banks and brokers -- the table's per-broker totals (credit netted
   // into liquid assets instead), no real estate.
@@ -2747,8 +2751,9 @@ async function mpRenderCharts() {
   grid.innerHTML = '';
   status.textContent = '';
   // Slice order as in the user's own charts (clockwise from 12 o'clock).
-  const currencyOrder = ['EUR', 'USD', 'RUB', 'GBP', 'CNY', 'TRY', 'RSD', MP_OTHER_CURRENCIES_COLUMN,
-    'XAU', 'BTC', 'ETH', 'SOL', 'TAO', 'GRAM', MP_ALTCOINS_COLUMN].map(currencyLabel);
+  const currencyOrder = ['EUR', 'USD', 'RUB', 'GBP', 'CNY', 'JPY', 'TRY', 'RSD', MP_OTHER_CURRENCIES_COLUMN,
+    'XAU', 'BTC', 'ETH', 'SOL', 'TAO', 'GRAM', MP_ALTCOINS_COLUMN]
+    .map(c => (c === 'JPY' ? `JPY ${mpFlagOf('JP')}` : currencyLabel(c)));
   const brokerOrder = ['Freedom24', 'Bank of Cyprus', 'Revolut', 'Wise', 'Raiffeisen', 'UniCredit', 'Ziraat Bank', 'IBKR',
     'Sber', 'T-Bank', 'Ozon Bank', 'Alfa', 'Yandex Bank', 'Finuslugi', 'Telegram', 'Binance', 'Bybit', 'Crypto.com', 'Trust', 'cash',
     '(unspecified)'].map(brokerName);
