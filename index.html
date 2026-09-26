@@ -2134,19 +2134,12 @@ async function mpFetchFxByCurrency(currencies) {
 // -- both RUB, both labelled "T-Bank" -- each contribute their balance
 // instead of the most recently active one hiding the other.
 async function mpFetchCashRows(fxByCurrency) {
-  const { data, error } = await sb.from('bank_transactions')
-    .select('account, currency, balance_after, tx_date, external_source, product')
-    .not('balance_after', 'is', null)
-    .order('tx_date', { ascending: false });
+  // One row per (account, currency, external_source): its latest balance
+  // (the bank_latest_balances view picks it -- reading every
+  // bank_transactions row here instead would hit the API's 1000-row cap).
+  const { data, error } = await sb.from('bank_latest_balances')
+    .select('account, currency, balance_after, tx_date, external_source, product');
   if (error || !data) return [];
-
-  // First row seen per (account, currency, external_source) is the latest,
-  // since the query is already sorted newest-first.
-  const latest = new Map();
-  for (const r of data) {
-    const key = `${r.account} ${r.currency} ${r.external_source}`;
-    if (!latest.has(key)) latest.set(key, r);
-  }
   // A credit card's balance goes to its own 'credit' column, which only
   // ever holds zero or negative amounts (debt); an overpaid card's positive
   // balance is just cash. Everything else is 'cash'.
@@ -2157,7 +2150,7 @@ async function mpFetchCashRows(fxByCurrency) {
     t.balance += amount;
     totals.set(key, t);
   };
-  for (const r of latest.values()) {
+  for (const r of data) {
     const bal = Number(r.balance_after);
     if (r.product === 'credit_card') {
       add(r.account, r.currency, 'credit', Math.min(bal, 0));
