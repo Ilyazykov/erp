@@ -165,6 +165,9 @@ const KNOWN_CRYPTO_TICKERS = new Set([
   // "GRAM-USD"), ADI, and Flare / Stellar that passed through it. Unlisted,
   // "ADI" and "FLR" would resolve to NYSE stocks.
   'GRAM', 'ADI', 'FLR', 'XLM',
+  // Binance (import-binance): EthereumPoW, airdropped in 2022. Unlisted,
+  // "ETHW" would resolve to the Bitwise Ethereum ETF.
+  'ETHW',
 ]);
 
 // Only these ISS "group" values represent an instrument actually traded on

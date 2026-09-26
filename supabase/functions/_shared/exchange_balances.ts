@@ -1,5 +1,5 @@
 // Shared by the custodial-exchange importers (import-bybit,
-// import-crypto-com, import-telegram-wallet): an exchange account is a crypto_wallets row whose
+// import-crypto-com, import-telegram-wallet, import-binance): an exchange account is a crypto_wallets row whose
 // every log line sits in wallet_transactions (tagged with a kind), and whose
 // per-coin balance -- recomputed here from all of them -- goes to
 // wallet_balances, which the holdings views count under the account's name.
