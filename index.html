@@ -66,6 +66,7 @@
 
 <div class="tabs">
   <div class="tab active" data-tab="myportfolio">My Portfolio</div>
+  <div class="tab" data-tab="crypto">Crypto</div>
   <div class="tab" data-tab="sigmoid">USD/RUB → CNY Weight (current + 5Y)</div>
   <div class="tab" data-tab="layer2a">ERP &amp; Stocks/Bonds Allocation</div>
   <div class="tab" data-tab="layer2r">Yield per Stock &amp; Rebalancing</div>
@@ -241,35 +242,6 @@
     </div>
     <p class="empty-note" id="mp_fund_snowball_status"></p>
 
-    <div class="section-title">Crypto wallets</div>
-    <p class="note">Non-custodial wallets (Trust Wallet, …): balances and full transaction history come straight
-      from the blockchain — Ethereum (ETH and every token), TRON (TRX incl. staked, TRC-20 tokens), Bitcoin and
-      Solana (SOL, SPL tokens). Paste any address — the network is recognised from the address itself. The address
-      is stored privately (only you can read it) and is only ever sent to the explorers from the server. Synced
-      daily and with the button below. Tokens without a market price (usually airdropped spam) are kept but not
-      counted in the portfolio.</p>
-    <div class="form-row">
-      <input type="text" id="mp_wallet_address" placeholder="Wallet address (0x…, T…, bc1…, Solana)" size="50" autocomplete="off" spellcheck="false">
-      <span class="note" id="mp_wallet_detected" style="margin-top:0"></span>
-      <input type="text" id="mp_wallet_account" value="Trust" size="10" title="Broker row label in the tables">
-      <button class="btn primary" id="mp_wallet_add">Add wallet</button>
-      <button class="btn" id="mp_wallet_sync">Sync now</button>
-    </div>
-    <p class="empty-note" id="mp_wallet_status"></p>
-    <div id="mp_wallets_wrap"></div>
-
-    <div class="section-title">Exchange accounts</div>
-    <p class="note">Custodial exchange accounts (Bybit, Crypto.com, Telegram Wallet): there's no blockchain address to read, so they're
-      updated by uploading the exchange's own export in <b>Import CSV</b> above (Bybit: Data Export → Transaction Log →
-      Account Change Details, each Funding and Unified Trading file; Crypto.com App: Accounts → History → Export →
-      Crypto Wallet; Telegram Wallet: this project's own CSV built from the app's history). The Sync button above
-      doesn't touch them.</p>
-    <div class="form-row">
-      <button class="btn" id="mp_exchange_recalc" title="Recompute balances from the transaction history already stored">Recalculate</button>
-    </div>
-    <p class="empty-note" id="mp_exchange_status"></p>
-    <div id="mp_exchanges_wrap"></div>
-
     <div class="section-title">Portfolio by broker × currency</div>
     <div id="mp_broker_currency_wrap"></div>
 
@@ -289,6 +261,40 @@
 
     <div class="section-title">Cash flows (dividends, coupons, redemptions)</div>
     <div id="mp_cashflows_wrap"></div>
+  </div>
+</div>
+
+<div id="crypto" class="chart-wrap">
+  <div id="crypto_signed_out" class="empty-note">Sign in with Google (top of page) to see your crypto wallets and exchange accounts.</div>
+  <div id="crypto_signed_in" style="display:none">
+    <div class="section-title">Crypto wallets</div>
+    <p class="note">Non-custodial wallets (Trust Wallet, …): balances and full transaction history come straight
+      from the blockchain — Ethereum (ETH and every token), TRON (TRX incl. staked, TRC-20 tokens), Bitcoin and
+      Solana (SOL, SPL tokens). Paste any address — the network is recognised from the address itself. The address
+      is stored privately (only you can read it) and is only ever sent to the explorers from the server. Synced
+      daily and with the button below. Tokens without a market price (usually airdropped spam) are kept but not
+      counted in the portfolio.</p>
+    <div class="form-row">
+      <input type="text" id="mp_wallet_address" placeholder="Wallet address (0x…, T…, bc1…, Solana)" size="50" autocomplete="off" spellcheck="false">
+      <span class="note" id="mp_wallet_detected" style="margin-top:0"></span>
+      <input type="text" id="mp_wallet_account" value="Trust" size="10" title="Broker row label in the tables">
+      <button class="btn primary" id="mp_wallet_add">Add wallet</button>
+      <button class="btn" id="mp_wallet_sync">Sync now</button>
+    </div>
+    <p class="empty-note" id="mp_wallet_status"></p>
+    <div id="mp_wallets_wrap"></div>
+
+    <div class="section-title">Exchange accounts</div>
+    <p class="note">Custodial exchange accounts (Bybit, Crypto.com, Telegram Wallet): there's no blockchain address to read, so they're
+      updated by uploading the exchange's own export in <b>Import CSV</b> on the My Portfolio tab (Bybit: Data Export → Transaction Log →
+      Account Change Details, each Funding and Unified Trading file; Crypto.com App: Accounts → History → Export →
+      Crypto Wallet; Telegram Wallet: this project's own CSV built from the app's history). The Sync button above
+      doesn't touch them.</p>
+    <div class="form-row">
+      <button class="btn" id="mp_exchange_recalc" title="Recompute balances from the transaction history already stored">Recalculate</button>
+    </div>
+    <p class="empty-note" id="mp_exchange_status"></p>
+    <div id="mp_exchanges_wrap"></div>
   </div>
 </div>
 
@@ -3224,6 +3230,8 @@ function mpUpdateAuthUi(session) {
     btn.textContent = `Sign out (${session.user.email})`;
     document.getElementById('mp_signed_out').style.display = 'none';
     document.getElementById('mp_signed_in').style.display = '';
+    document.getElementById('crypto_signed_out').style.display = 'none';
+    document.getElementById('crypto_signed_in').style.display = '';
     mpRenderHoldings();
     mpRenderPortfolioPies();
     mpRenderCashFlows();
@@ -3236,6 +3244,8 @@ function mpUpdateAuthUi(session) {
     btn.textContent = 'Sign in with Google';
     document.getElementById('mp_signed_out').style.display = '';
     document.getElementById('mp_signed_in').style.display = 'none';
+    document.getElementById('crypto_signed_out').style.display = '';
+    document.getElementById('crypto_signed_in').style.display = 'none';
     ['plot_mp_pie_us_stocks', 'plot_mp_pie_ru_stocks', 'plot_mp_pie_stocksbonds', 'plot_mp_pie_deposits']
       .forEach(id => { document.getElementById(id).style.display = 'none'; });
     ['mp_pie_us_stocks_note', 'mp_pie_ru_stocks_note', 'mp_pie_stocksbonds_note', 'mp_pie_deposits_note',
