@@ -34,6 +34,12 @@
 //   agreement's report leaves out the final transfer of what was left), one
 //   balance_snapshot row after the currency's last operation sets the
 //   balance to the reported one -- amount = the unlisted difference.
+//   The running balance follows the report's own row order, which isn't
+//   always the order of the rows' dates (a time on one row, a bare date on
+//   the settlement row after it; a later-dated row listed first), so
+//   booked_at carries that order -- strictly increasing per currency, never
+//   before the row's own date -- and the latest balance is read by it
+//   (migrations/20250101000025_bank_booked_at.sql).
 // Securities are keyed by ISIN; the ticker is the exchange code without
 // T-Bank's "@..." suffix (TLCB@ -> TLCB), or the ISIN where there's no code
 // (bonds -- as Snowball has them).
@@ -212,6 +218,13 @@ function parse(bytes: Uint8Array) {
     });
   }
   bank.push(...snapshots);
+  // booked_at: the report's row order, per currency (see header).
+  const lastBooked: Record<string, number> = {};
+  for (const b of bank as ((typeof bank)[number] & { booked_at?: string })[]) {
+    const t = Math.max(Date.parse(b.tx_date), (lastBooked[b.currency] ?? -Infinity) + 1);
+    lastBooked[b.currency] = t;
+    b.booked_at = new Date(t).toISOString();
+  }
   const cashCheck = Object.fromEntries(Object.entries(cashSummary).map(([c, s]) =>
     [c, { computed: balance[c] ?? s.open, reported: s.close, unlisted: snapshots.find(x => x.currency === c)?.amount ?? 0 }]));
   const holdings = Object.fromEntries([...closing].filter(([, q]) => q).map(([isin, q]) => [tickerOf(isin), q]));

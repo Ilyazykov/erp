@@ -1753,8 +1753,14 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', async () 
       mpRefreshAfterWalletChange();
     } else if (kind === 'tbank_broker_xlsx') {
       const h = Object.entries(result.holdings || {}).map(([c, q]) => `${c} ${q}`).join(', ') || 'none';
-      const cash = Object.entries(result.cash || {}).filter(([, v]) => v.reported || v.computed)
-        .map(([c, v]) => `${c} ${v.computed}${Math.abs(v.computed - v.reported) > 0.005 ? ` (report says ${v.reported}!)` : ''}`).join(', ') || '0';
+      // `computed` is what the listed operations add up to; where it differs
+      // from the report's closing balance the importer has already recorded
+      // the unlisted difference (`unlisted`), so the stored balance is the
+      // reported one.
+      const cash = Object.entries(result.cash || {}).filter(([, v]) => v.reported || v.computed || v.unlisted)
+        .map(([c, v]) => `${c} ${v.reported}${v.unlisted
+          ? ` (the report's operations add up to ${v.computed}; the unlisted ${v.unlisted} — e.g. the transfer of what was left when the agreement closed — is recorded as a balance snapshot)`
+          : Math.abs(v.computed - v.reported) > 0.005 ? ` (operations add up to ${v.computed}!)` : ''}`).join(', ') || '0';
       statusEl.textContent = `Detected: ${label} (agreement ${result.agreement}). Imported ${result.deals} deals, `
         + `${result.payouts} payouts, ${result.adjustments} movements without a deal and ${result.cash_rows} cash operations`
         + `${result.removed_snowball_duplicates ? ` (replacing ${result.removed_snowball_duplicates} Snowball rows)` : ''}. `
