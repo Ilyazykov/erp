@@ -265,8 +265,6 @@
     <div id="mp_re_wrap"></div>
 
     <div class="section-title">Portfolio by broker × currency</div>
-    <label class="note" style="display:block"><input type="checkbox" id="mp_include_real_estate">
-      Include real estate in totals</label>
     <div id="mp_broker_currency_wrap"></div>
 
     <div class="section-title">Portfolio by broker × asset class</div>
@@ -2244,22 +2242,6 @@ const MP_BROKER_FLAGS = {
   cash: '💵', 'real estate': '🏠',
 };
 
-// "Include real estate in totals" toggle -- off by default, the choice
-// remembered in this browser.
-function mpTotalsExcluded() {
-  const box = document.getElementById('mp_include_real_estate');
-  return new Set(box && !box.checked ? ['real estate'] : []);
-}
-{
-  const box = document.getElementById('mp_include_real_estate');
-  try { box.checked = localStorage.getItem('mp_include_real_estate') === '1'; } catch (_) { /* no storage */ }
-  box.addEventListener('change', () => {
-    try { localStorage.setItem('mp_include_real_estate', box.checked ? '1' : '0'); } catch (_) { /* no storage */ }
-    mpRenderBrokerCurrency();
-    mpRenderBrokerAssetClass();
-  });
-}
-
 function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurrency) {
   if (!data.length) { wrap.innerHTML = `<p class="empty-note">${emptyMessage}</p>`; return; }
   // Zero balances (a closed account like UniCredit, a spent-down currency)
@@ -2287,18 +2269,20 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
         if (ib === -1) return -1;
         return ia - ib;
       });
+  // A row flagged `excluded` (a property switched out of the totals) is shown
+  // in its cell but not summed into the totals; an account whose every row
+  // is excluded is dimmed.
   const cell = {};
+  const counted = {};
   for (const r of priced) {
     const key = `${r.account} ${r[categoryField]}`;
     cell[key] = (cell[key] || 0) + r.value_usd;
+    if (!r.excluded) counted[key] = (counted[key] || 0) + r.value_usd;
   }
+  const dimmed = new Set(accounts.filter(a => priced.filter(r => r.account === a).every(r => r.excluded)));
   const rowTotal = a => categories.reduce((s, c) => s + (cell[`${a} ${c}`] || 0), 0);
-  // Rows switched out of the totals ("Include real estate in totals" off)
-  // are still shown, dimmed, but not summed.
-  const excluded = mpTotalsExcluded();
-  const counted = accounts.filter(a => !excluded.has(a));
-  const colTotal = c => counted.reduce((s, a) => s + (cell[`${a} ${c}`] || 0), 0);
-  const grandTotal = counted.reduce((s, a) => s + rowTotal(a), 0);
+  const colTotal = c => accounts.reduce((s, a) => s + (counted[`${a} ${c}`] || 0), 0);
+  const grandTotal = categories.reduce((s, c) => s + colTotal(c), 0);
   const anyMissing = data.some(r => r.value_usd === null);
   const cellDisplay = (usd, category) => {
     if (fxByCurrency && category in fxByCurrency) {
@@ -2325,8 +2309,8 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
     ? `${mpEscapeHtml(a)} ${MP_BROKER_FLAGS[a]}` : mpEscapeHtml(a);
   wrap.innerHTML = `<table class="data-table"><thead><tr>
     <th class="corner">Broker</th>${categories.map(c => `<th>${headerLabel(c)}</th>`).join('')}<th class="corner">Total</th>
-  </tr></thead><tbody>${accounts.map(a => `<tr${excluded.has(a) ? ' style="opacity:0.45" title="Not included in the totals"' : ''}>
-    <td class="ticker">${brokerLabel(a)}${excluded.has(a) ? ' <span class="zero">(not in total)</span>' : ''}</td>
+  </tr></thead><tbody>${accounts.map(a => `<tr${dimmed.has(a) ? ' style="opacity:0.45" title="Not included in the totals"' : ''}>
+    <td class="ticker">${brokerLabel(a)}</td>
     ${categories.map(c => `<td>${cellDisplay(cell[`${a} ${c}`] || 0, c)}</td>`).join('')}
     <td><b>${mpFormatUsd(rowTotal(a))}</b></td>
   </tr>`).join('')}
@@ -2367,16 +2351,30 @@ async function mpFetchFxByCurrency(currencies) {
 // ('t_bank_csv:<account_number>'), so e.g. T-Bank's debit and credit card
 // -- both RUB, both labelled "T-Bank" -- each contribute their balance
 // instead of the most recently active one hiding the other.
+// Which properties count in the totals: a display choice only, kept in this
+// browser (localStorage), off by default.
+function mpRealEstateIncluded(id) {
+  try { return JSON.parse(localStorage.getItem('mp_re_in_total') || '[]').includes(id); } catch (_) { return false; }
+}
+function mpSetRealEstateIncluded(id, on) {
+  try {
+    const ids = new Set(JSON.parse(localStorage.getItem('mp_re_in_total') || '[]'));
+    if (on) ids.add(id); else ids.delete(id);
+    localStorage.setItem('mp_re_in_total', JSON.stringify([...ids]));
+  } catch (_) { /* no storage: stays off */ }
+}
+
 // Real estate (real_estate_value view): one row per property, account 'real
 // estate', asset class 'real_estate', valued in its currency (RUB) and
 // converted with the same FX map.
 async function mpFetchRealEstateRows(fxByCurrency) {
-  const { data, error } = await sb.from('real_estate_value').select('name, currency, current_value');
+  const { data, error } = await sb.from('real_estate_value').select('id, name, currency, current_value');
   if (error || !data?.length) return [];
   const missing = [...new Set(data.map(r => r.currency))].filter(c => !(c in fxByCurrency));
   if (missing.length) Object.assign(fxByCurrency, await mpFetchFxByCurrency(missing));
   return data.map(r => ({
     account: 'real estate', currency: r.currency, underlying_currency: r.currency, instrument_type: 'real_estate',
+    excluded: !mpRealEstateIncluded(r.id),
     value_usd: r.current_value !== null && r.currency in fxByCurrency ? Number(r.current_value) * fxByCurrency[r.currency] : null,
   }));
 }
@@ -2389,8 +2387,10 @@ async function mpRenderRealEstate() {
   const fmt = n => n === null || n === undefined ? '—' : Number(n).toLocaleString('ru-RU', { maximumFractionDigits: 2 });
   const month = d => d ? d.slice(0, 7) : '—';
   wrap.innerHTML = `<table class="data-table"><thead><tr>
-    <th>Property</th><th>City</th><th>Bought</th><th>Price paid</th><th>₽/m² then</th><th>₽/m² now</th><th>Value now</th><th></th>
+    <th>In total</th><th>Property</th><th>City</th><th>Bought</th><th>Price paid</th><th>₽/m² then</th><th>₽/m² now</th><th>Value now</th><th></th>
   </tr></thead><tbody>${data.map(r => `<tr>
+    <td style="text-align:center"><input type="checkbox" data-re-include="${r.id}" ${mpRealEstateIncluded(r.id) ? 'checked' : ''}
+      title="Count this property in the portfolio totals"></td>
     <td class="ticker">${mpEscapeHtml(r.name)}</td>
     <td>${mpEscapeHtml(r.city === 'nizhny_novgorod' ? 'Nizhny Novgorod' : r.city)}</td>
     <td>${month(r.purchase_month)}</td>
@@ -2400,6 +2400,10 @@ async function mpRenderRealEstate() {
     <td><b>${fmt(r.current_value)} ${mpEscapeHtml(r.currency)}</b></td>
     <td><button class="btn" data-re-delete="${r.id}" title="Remove">✕</button></td>
   </tr>`).join('')}</tbody></table>`;
+  wrap.querySelectorAll('[data-re-include]').forEach(box => box.addEventListener('change', () => {
+    mpSetRealEstateIncluded(box.dataset.reInclude, box.checked);
+    mpRenderBrokerCurrency(); mpRenderBrokerAssetClass();
+  }));
   wrap.querySelectorAll('[data-re-delete]').forEach(btn => btn.addEventListener('click', async () => {
     const { error: delErr } = await sb.from('real_estate').delete().eq('id', btn.dataset.reDelete);
     document.getElementById('mp_re_status').textContent = delErr ? `Error: ${delErr.message}` : 'Removed.';
