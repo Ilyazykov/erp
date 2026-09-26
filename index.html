@@ -1843,7 +1843,11 @@ const MP_CURRENCY_SYMBOLS = { RUB: '₽', TRY: '₺', CNY: '¥' };
 // (anything Intl.NumberFormat's style:'currency' doesn't reject, like
 // BTC/ETH, plus ones it does reject, like XAUT) get up to 8 -- a holding
 // of 0.04 BTC or 0.35 ETH is meaningless rounded to cents.
-function mpFormatCurrency(n, currency, withCode = false) {
+// unitPriceUsd (optional, crypto/metal columns): show only the decimals
+// that still move the USD value by at least a tenth of a cent -- the last
+// shown digit is worth >= $0.001 (SOL at ~$120 -> 5 decimals, BTC at ~$84k
+// -> 7).
+function mpFormatCurrency(n, currency, withCode = false, unitPriceUsd = null) {
   if (n === null || n === undefined) return '<span class="muted">—</span>';
   // A zero balance carries no unit-specific information ("$0.00" and
   // "£0.00" say the same thing), so every column collapses to a single
@@ -1852,7 +1856,8 @@ function mpFormatCurrency(n, currency, withCode = false) {
   if (n === 0) return '<span class="zero">0</span>';
   const isCrypto = MP_CURRENCY_COLUMN_ORDER.slice(7).includes(currency) || !MP_ISO_CURRENCIES.has(currency);
   if (isCrypto) {
-    const amount = n.toLocaleString('en-US', { maximumFractionDigits: 8 });
+    const digits = unitPriceUsd > 0 ? Math.min(8, Math.max(0, Math.floor(Math.log10(unitPriceUsd * 1000)))) : 8;
+    const amount = n.toLocaleString('en-US', { maximumFractionDigits: digits });
     return withCode ? `${currency} ${amount}` : amount;
   }
   try {
@@ -2005,7 +2010,9 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
   const grandTotal = accounts.reduce((s, a) => s + rowTotal(a), 0);
   const anyMissing = data.some(r => r.value_usd === null);
   const cellDisplay = (usd, category) => {
-    if (fxByCurrency && category in fxByCurrency) return mpFormatCurrency(usd / fxByCurrency[category], category);
+    if (fxByCurrency && category in fxByCurrency) {
+      return mpFormatCurrency(usd / fxByCurrency[category], category, false, fxByCurrency[category]);
+    }
     if (usd === 0) return '<span class="zero">0</span>';
     return mpFormatUsd(usd);
   };
