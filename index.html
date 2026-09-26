@@ -70,6 +70,7 @@
 <div class="tabs">
   <div class="tab active" data-tab="myportfolio">My Portfolio</div>
   <div class="tab" data-tab="crypto">Crypto</div>
+  <div class="tab" data-tab="lookthrough">Look-through</div>
   <div class="tab" data-tab="sigmoid">USD/RUB → CNY Weight (current + 5Y)</div>
   <div class="tab" data-tab="layer2a">ERP &amp; Stocks/Bonds Allocation</div>
   <div class="tab" data-tab="layer2r">Yield per Stock &amp; Rebalancing</div>
@@ -273,12 +274,6 @@
     <div class="section-title">Equities by index</div>
     <div id="mp_equity_index_wrap"></div>
 
-    <div class="section-title">Look-through: what the funds hold</div>
-    <p class="note">Shares held directly plus each fund's share of its own holdings (fund value × weight), matched
-      by ISIN across funds — the real exposure to each company. Fund lists come from the issuers (monthly refresh);
-      TRND's is from its February 2026 report.</p>
-    <div id="mp_lookthrough_wrap"></div>
-
     <div class="section-title">Bonds by type</div>
     <div id="mp_bond_subtype_wrap"></div>
 
@@ -324,6 +319,17 @@
     </div>
     <p class="empty-note" id="mp_exchange_status"></p>
     <div id="mp_exchanges_wrap"></div>
+  </div>
+</div>
+
+<div id="lookthrough" class="chart-wrap">
+  <div id="lookthrough_signed_out" class="empty-note">Sign in with Google (top of page) to see what your funds hold.</div>
+  <div id="lookthrough_signed_in" style="display:none">
+    <div class="section-title">What the funds hold</div>
+    <p class="note">Shares held directly plus each fund's share of its own holdings (fund value × weight), matched
+      by ISIN across funds — the real exposure to each company. Fund lists come from the issuers (monthly refresh);
+      TRND's is from its February 2026 report.</p>
+    <div id="mp_lookthrough_wrap"></div>
   </div>
 </div>
 
@@ -2589,7 +2595,6 @@ async function mpRenderEquityByIndex() {
   if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
   const equities = data.filter(r => r.instrument_type === 'stock');
   mpRenderBucketTable(wrap, equities, r => EQUITY_INDEX_BY_TICKER[r.ticker] || 'Other', 'No equity holdings yet.');
-  mpRenderLookThrough();
 }
 
 // Look-through (portfolio_look_through_* views): the top securities by real
@@ -3631,6 +3636,8 @@ function mpUpdateAuthUi(session) {
     document.getElementById('mp_signed_in').style.display = '';
     document.getElementById('crypto_signed_out').style.display = 'none';
     document.getElementById('crypto_signed_in').style.display = '';
+    document.getElementById('lookthrough_signed_out').style.display = 'none';
+    document.getElementById('lookthrough_signed_in').style.display = '';
     mpRenderHoldings();
     mpRenderPortfolioPies();
     mpRenderCashFlows();
@@ -3640,12 +3647,16 @@ function mpUpdateAuthUi(session) {
     mpRenderBondByType();
     mpRenderWallets();
     mpRenderRealEstate();
+    mpRenderLookThrough();
   } else {
     btn.textContent = 'Sign in with Google';
     document.getElementById('mp_signed_out').style.display = '';
     document.getElementById('mp_signed_in').style.display = 'none';
     document.getElementById('crypto_signed_out').style.display = '';
     document.getElementById('crypto_signed_in').style.display = 'none';
+    document.getElementById('lookthrough_signed_out').style.display = '';
+    document.getElementById('lookthrough_signed_in').style.display = 'none';
+    document.getElementById('mp_lookthrough_wrap').innerHTML = '';
     ['plot_mp_pie_us_stocks', 'plot_mp_pie_ru_stocks', 'plot_mp_pie_stocksbonds', 'plot_mp_pie_deposits']
       .forEach(id => { document.getElementById(id).style.display = 'none'; });
     ['mp_pie_us_stocks_note', 'mp_pie_ru_stocks_note', 'mp_pie_stocksbonds_note', 'mp_pie_deposits_note',
