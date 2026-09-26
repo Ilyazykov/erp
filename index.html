@@ -3014,7 +3014,7 @@ async function mpRenderWallets() {
   const exchanges = wallets.filter(w => MP_EXCHANGE_CHAINS.has(w.chain));
   await mpRenderWalletGroup(wrap, onchain, balances || [], prices, {
     empty: 'No wallets yet — add an address above.', noBalances: 'No balances yet — press Sync now.',
-    head: ['Wallet', 'Chain', 'Address', 'Last sync', 'Status'],
+    head: ['Wallet', 'Chain', 'Address', 'Last sync', 'Status'], canDelete: true,
     cells: w => [MP_CHAIN_LABELS[w.chain] || w.chain, `<code>${mpEscapeHtml(mpShortAddress(w.address))}</code>`],
   });
   await mpRenderWalletGroup(exWrap, exchanges, balances || [], prices, {
@@ -3042,7 +3042,7 @@ async function mpRenderWalletGroup(wrap, wallets, allBalances, prices, opts) {
     ${opts.cells(w).map(c => `<td>${c}</td>`).join('')}
     <td>${w.last_synced_at ? new Date(w.last_synced_at).toLocaleString() : '<span class="muted">never</span>'}</td>
     <td>${w.last_sync_error ? `<span class="neg">${mpEscapeHtml(w.last_sync_error)}</span>` : '<span class="muted">ok</span>'}</td>
-    <td><button class="icon-btn" data-wallet-delete="${w.id}" title="Remove">✕</button></td>
+    ${opts.canDelete ? `<td><button class="icon-btn" data-wallet-delete="${w.id}" title="Remove">✕</button></td>` : ''}
   </tr>`).join('');
 
   const rows = balances.map(b => {
@@ -3062,7 +3062,7 @@ async function mpRenderWalletGroup(wrap, wallets, allBalances, prices, opts) {
   </tr>`;
 
   wrap.innerHTML = `<table class="data-table"><thead><tr>
-      ${opts.head.map(h => `<th>${h}</th>`).join('')}<th></th>
+      ${opts.head.map(h => `<th>${h}</th>`).join('')}${opts.canDelete ? '<th></th>' : ''}
     </tr></thead><tbody>${walletRows}</tbody></table>
     <table class="data-table"><thead><tr>
       <th>Asset</th><th>${opts.head[0]}</th><th>Quantity</th><th>Price (USD)</th><th>Value (USD)</th>
