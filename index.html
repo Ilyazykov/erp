@@ -2630,7 +2630,10 @@ async function mpRenderBondByType() {
       <td>${pct(rowUsd(t))}</td></tr>`).join('')}
     <tr class="total-row"><td class="ticker"><b>Total</b></td>
       ${cols.map(c => `<td><b>${native(colUsd(c), c)}</b></td>`).join('')}
-      <td></td></tr></tbody></table>`;
+      <td></td></tr>
+    <tr class="total-row"><td class="ticker"><b>Total (%)</b></td>
+      ${cols.map(c => `<td><b>${pct(colUsd(c))}</b></td>`).join('')}
+      <td><b>100%</b></td></tr></tbody></table>`;
 }
 
 // ---- Portfolio-composition pie charts (embedded in the existing tabs) ----
