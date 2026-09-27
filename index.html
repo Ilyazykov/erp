@@ -2628,7 +2628,10 @@ const mpFlagOf = code => (/^[A-Z]{2}$/.test(code || '') && code !== 'XX'
 // colorOf (optional): label -> colour (MP_COLORS); anything it doesn't
 // know gets a stable colour from the fallback palette; "other" is always
 // the same neutral grey.
-function mpPie(el, title, buckets, note = '', order = null, groupSmall = true, smallGroupOf = () => 0, colorOf = () => null) {
+// breakdown (optional): label -> {part: USD} -- a slice made of parts (EU
+// -> its member states), listed largest first on hover and under the chart.
+function mpPie(el, title, buckets, note = '', order = null, groupSmall = true, smallGroupOf = () => 0, colorOf = () => null,
+  breakdown = {}) {
   const card = document.createElement('div');
   card.className = 'pie-card';
   card.innerHTML = `<h4>${mpEscapeHtml(title)}</h4><div class="pie-plot"></div><p class="pie-total"></p>`
@@ -2656,6 +2659,16 @@ function mpPie(el, title, buckets, note = '', order = null, groupSmall = true, s
     const otherEl = card.querySelector('.pie-other');
     otherEl.textContent = `other: ${listed.join(', ')}`;
     otherEl.hidden = false;
+  }
+  for (const e of entries) {
+    const parts = breakdown[e[0]];
+    if (!parts) continue;
+    const listed = Object.entries(parts).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${(v / total * 100).toFixed(2)}%`);
+    e[2] = [...listed.slice(0, 12), ...(listed.length > 12 ? [`… +${listed.length - 12} more below`] : [])].join('<br>');
+    const line = document.createElement('p');
+    line.className = 'note';
+    line.textContent = `${e[0]}: ${listed.join(', ')}`;
+    card.querySelector('.pie-other').before(line);
   }
   Plotly.newPlot(card.querySelector('.pie-plot'), [{
     type: 'pie', labels: entries.map(e => e[0]), values: entries.map(e => e[1]), sort: false, direction: 'clockwise',
@@ -2769,7 +2782,12 @@ async function mpRenderCharts() {
   const countries = byCountry;
   // The same with the European Union's members as one slice.
   const countriesEu = {};
-  for (const [k, v] of Object.entries(byCountry)) mpAdd(countriesEu, MP_EU_MEMBERS.has(codeOfLabel[k]) ? 'European Union 🇪🇺' : k, v);
+  const euMembers = {};
+  for (const [k, v] of Object.entries(byCountry)) {
+    const eu = MP_EU_MEMBERS.has(codeOfLabel[k]);
+    mpAdd(countriesEu, eu ? 'EU 🇪🇺' : k, v);
+    if (eu) mpAdd(euMembers, k, v);
+  }
   // 5. Crypto by coin.
   const crypto = {};
   for (const r of base.data) if (r.asset_class === 'crypto' && r.value_usd > 0) mpAdd(crypto, r.ticker, r.value_usd);
@@ -2827,7 +2845,7 @@ async function mpRenderCharts() {
   const brokerColor = l => MP_COLORS.broker[brokerByLabel[l]] || null;
   const typeByLabel = Object.fromEntries(Object.keys(MP_COLORS.type).map(t => [MP_ASSET_CLASS_LABELS[t], t]));
   const typeColor = l => MP_COLORS.type[typeByLabel[l]] || null;
-  const countryColor = l => (l === 'European Union 🇪🇺' ? MP_COLORS.country.EU : MP_COLORS.country[codeOfLabel[l]] || null);
+  const countryColor = l => (l === 'EU 🇪🇺' ? MP_COLORS.country.EU : MP_COLORS.country[codeOfLabel[l]] || null);
   // Russian infrastructure: roubles in muted greys tinted by the asset type
   // (chart 3), yuan in vivid shades of CNY's magenta (chart 1) -- so the two
   // currencies stand apart, and within each the types differ in hue and
@@ -2846,7 +2864,8 @@ async function mpRenderCharts() {
   mpPie(grid, '2. Banks & brokers', brokerBuckets, '', brokerOrder, true, () => 0, brokerColor);
   mpPie(grid, '3. Asset types', types, '', typeOrder, true, () => 0, typeColor);
   mpPie(grid, '4. Stocks by country', countries, 'Funds split by the countries of what they hold.', null, true, () => 0, countryColor);
-  mpPie(grid, '5. Stocks by country, EU as one', countriesEu, 'The same, with the EU member states together.', null, true, () => 0, countryColor);
+  mpPie(grid, '5. Stocks by country, EU as one', countriesEu, 'The same, with the EU member states together.', null, true, () => 0, countryColor,
+    { 'EU 🇪🇺': euMembers });
   mpPie(grid, '6. Crypto', crypto, '', cryptoOrder, true, () => 0, currencyColor);
   // Russian infrastructure: every cell a slice of its own, however small
   // (roubles and yuan must stay apart).
