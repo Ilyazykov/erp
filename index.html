@@ -2935,9 +2935,57 @@ async function mpRenderCharts() {
   mpPie(grid, '5. Stocks by country, EU as one', countriesEu, 'The same, with the EU member states together.', null, true, () => 0, countryColor,
     { 'EU 🇪🇺': euMembers });
   mpPie(grid, '6. Crypto', crypto, '', cryptoOrder, true, () => 0, currencyColor);
-  // Russian infrastructure: every cell a slice of its own, however small
-  // (roubles and yuan must stay apart).
-  mpPie(grid, '7. Russian infrastructure', ruBuckets(), '', ruOrder, false, () => 0, ruColor);
+  // Targets for the Russian-infrastructure charts (7 and 11), per slice in
+  // dollars. Deposits can't be sold or topped up -- target = what's there;
+  // liquid assets and cash -- 0 (they're what gets moved).
+  //   11 (no stocks): yuan w_CNY (USD/RUB -> CNY Weight), roubles the rest;
+  //      each currency's bonds take what its deposits leave.
+  //   7 (with stocks): stocks at the ERP & Stocks/Bonds Allocation target
+  //      share, yuan at chart 11's dollars, rouble bonds whatever's left.
+  const wCny = DATA && DATA.currentWCny !== undefined && DATA.currentWCny !== null ? DATA.currentWCny : null;
+  const alloc = DATA && DATA.ruAllocTargetRaw && DATA.ruAllocTargetRaw.target;
+  const ccyOf = l => (l.includes(MP_RU_INFRA_CURRENCIES.CNY) ? 'CNY' : 'RUB');
+  const typeOf = l => MP_RU_INFRA_TYPES.find(t => l.startsWith(MP_RU_INFRA_LABELS[t]));
+  const bondLabel = c => `${MP_RU_INFRA_LABELS.bond} ${MP_RU_INFRA_CURRENCIES[c]}`;
+  const fixedTargets = cells => {
+    const out = {};
+    for (const [l, v] of Object.entries(cells)) {
+      const t = typeOf(l);
+      if (t === 'deposit') out[l] = v;
+      else if (t === 'liquid' || t === 'cash') out[l] = 0;
+    }
+    return out;
+  };
+  const sumWhere = (obj, pred) => Object.entries(obj).filter(([l]) => pred(l)).reduce((s, [, v]) => s + v, 0);
+  const ruNoStocks = ruBuckets(['stock']);
+  let target11 = null;
+  if (wCny !== null) {
+    const total = Object.values(ruNoStocks).reduce((s, v) => s + v, 0);
+    target11 = fixedTargets(ruNoStocks);
+    for (const [c, share] of [['RUB', 1 - wCny], ['CNY', wCny]]) {
+      target11[bondLabel(c)] = Math.max(0, share * total - sumWhere(target11, l => ccyOf(l) === c));
+    }
+  }
+  const ruAll = ruBuckets();
+  let target7 = null;
+  if (target11 && alloc && (alloc.Stocks + alloc.Bonds) > 0) {
+    const total = Object.values(ruAll).reduce((s, v) => s + v, 0);
+    target7 = fixedTargets(ruAll);
+    const stock = `${MP_RU_INFRA_LABELS.stock} ${MP_RU_INFRA_CURRENCIES.RUB}`;
+    target7[stock] = alloc.Stocks / (alloc.Stocks + alloc.Bonds) * total;
+    for (const [l, v] of Object.entries(target11)) if (ccyOf(l) === 'CNY') target7[l] = v;
+    target7[bondLabel('RUB')] = Math.max(0, total - sumWhere(target7, l => l !== bondLabel('RUB')));
+  }
+  const drawRuTarget = (title, cells, targets) => {
+    const total = Object.values(cells).reduce((s, v) => s + v, 0);
+    const labels = [...new Set([...Object.keys(cells), ...Object.keys(targets)])].sort((a, b) => ruOrder.indexOf(a) - ruOrder.indexOf(b));
+    mpTargetPie(grid, title, labels.map(l => ({
+      label: l, usd: cells[l] || 0, color: ruColor(l) || MP_OTHER_COLOR, target: (targets[l] || 0) / total * 100,
+    })));
+  };
+
+  if (target7) drawRuTarget('7. Russian infrastructure', ruAll, target7);
+  else mpPie(grid, '7. Russian infrastructure', ruAll, '', ruOrder, false, () => 0, ruColor);
   mpPie(grid, '8. Stocks, bonds, deposits, liquid assets',
     mpAssetBuckets(assetRows.filter(r => !isRealEstate(r)), ['stock', 'bond', 'deposit', 'liquid']), '', typeOrder, true, () => 0, typeColor);
   mpPie(grid, '9. IBKR vs Freedom', { [brokerName('Freedom24')]: byBroker.Freedom24 || 0, [brokerName('IBKR')]: byBroker.IBKR || 0 },
@@ -2945,36 +2993,8 @@ async function mpRenderCharts() {
   mpPie(grid, '10. Russian infrastructure vs the rest', { 'Russia 🇷🇺': ruTotal, 'rest of the world 🌍': allTotal - ruTotal },
     '', ['Russia 🇷🇺', 'rest of the world 🌍'], true, () => 0,
     l => (l === 'Russia 🇷🇺' ? MP_COLORS.country.RU : '#4a9ff5'));
-  // 11: against the USD/RUB -> CNY Weight target -- yuan w_CNY of the whole,
-  // roubles the rest, each split across its own slices as they stand now.
-  const ruNoStocks = ruBuckets(['stock']);
-  const wCny = DATA && DATA.currentWCny !== undefined && DATA.currentWCny !== null ? DATA.currentWCny : null;
-  if (wCny === null) {
-    mpPie(grid, '11. Russian infrastructure without stocks', ruNoStocks, '', ruOrder, false, () => 0, ruColor);
-  } else {
-    // Per currency: deposits can't be sold or topped up -- target = what's
-    // there; liquid assets and cash -- target 0 (they're what gets moved);
-    // bonds take the rest of that currency's w_CNY / 1 - w_CNY share.
-    const ccyOf = l => (l.includes(MP_RU_INFRA_CURRENCIES.CNY) ? 'CNY' : 'RUB');
-    const typeOf = l => MP_RU_INFRA_TYPES.find(t => l.startsWith(MP_RU_INFRA_LABELS[t]));
-    const total = Object.values(ruNoStocks).reduce((s, v) => s + v, 0);
-    const ccyTarget = { CNY: wCny * total, RUB: (1 - wCny) * total };
-    const targetUsd = {};
-    for (const [l, v] of Object.entries(ruNoStocks)) {
-      const t = typeOf(l);
-      if (t === 'deposit') targetUsd[l] = v;
-      else if (t === 'liquid' || t === 'cash') targetUsd[l] = 0;
-    }
-    for (const c of ['RUB', 'CNY']) {
-      const fixed = Object.entries(targetUsd).filter(([l]) => ccyOf(l) === c).reduce((s, [, v]) => s + v, 0);
-      const bond = `${MP_RU_INFRA_LABELS.bond} ${MP_RU_INFRA_CURRENCIES[c]}`;
-      targetUsd[bond] = Math.max(0, ccyTarget[c] - fixed);
-    }
-    const labels = Object.keys(targetUsd).sort((a, b) => ruOrder.indexOf(a) - ruOrder.indexOf(b));
-    mpTargetPie(grid, '11. Russian infrastructure without stocks', labels.map(l => ({
-      label: l, usd: ruNoStocks[l] || 0, color: ruColor(l) || MP_OTHER_COLOR, target: targetUsd[l] / total * 100,
-    })));
-  }
+  if (target11) drawRuTarget('11. Russian infrastructure without stocks', ruNoStocks, target11);
+  else mpPie(grid, '11. Russian infrastructure without stocks', ruNoStocks, '', ruOrder, false, () => 0, ruColor);
   mpPie(grid, '12. Asset types with real estate', typesWithRealEstate, '', typeOrder, true, () => 0, typeColor);
   // Size every plot to its card once the grid has laid out.
   requestAnimationFrame(() => grid.querySelectorAll('.pie-plot').forEach(el => { if (el.data) Plotly.Plots.resize(el); }));
