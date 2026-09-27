@@ -328,6 +328,11 @@
       <label for="mp_salary_amount">Salary to allocate (USD):</label>
       <input type="number" id="mp_salary_amount" min="0" step="100" placeholder="0" style="width:140px">
     </div>
+    <div class="form-row" style="gap:16px;flex-wrap:wrap">
+      <label><input type="checkbox" id="mp_salary_cash"> spend cash above $10,000</label>
+      <label><input type="checkbox" id="mp_salary_revolut"> spend Revolut euro liquid assets</label>
+      <label><input type="checkbox" id="mp_salary_ruliquid"> spend Russian liquid assets</label>
+    </div>
     <p class="empty-note" id="mp_charts_status"></p>
     <div id="mp_charts_grid" class="pie-grid"></div>
     <div id="mp_salary_plan"></div>
@@ -2855,7 +2860,12 @@ const MP_SALARY_KEY = 'mp_salary_usd';
 // The plan, from today's figures (ctx from mpBuildCharts' measuring pass):
 // { rows: [[step, action, usd, detail]], parts } -- parts are the amounts
 // mpSalaryDeltas turns into holdings.
-function mpSalaryPlan(c, salary) {
+// The salary plan's options (checkboxes above the charts, all off by default).
+function mpSalaryFlags() {
+  const on = id => !!document.getElementById(id).checked;
+  return { cash: on('mp_salary_cash'), revolut: on('mp_salary_revolut'), ruLiquid: on('mp_salary_ruliquid') };
+}
+function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
   const rows = [];
   const parts = {};
   let left = salary;
@@ -2864,10 +2874,13 @@ function mpSalaryPlan(c, salary) {
 
   // 0. Rent, then a month's expenses into the liquidity fund -- amounts not set up yet.
   rows.push(['0', 'Rent; month’s expenses → liquidity fund', null, 'not set up yet']);
-  // Cash above its $10,000 target joins the salary (cash outside Russia only).
-  parts.cashFree = Math.max(0, Math.min(c.cash - 10000, c.cashAbroad));
-  left += parts.cashFree;
+  // Options: cash above its $10,000 target (outside Russia), Revolut's liquid
+  // assets (its euro money-market funds), each joins the salary.
+  parts.cashFree = flags.cash ? Math.max(0, Math.min(c.cash - 10000, c.cashAbroad)) : 0;
+  parts.revolutFree = flags.revolut ? c.revolutLiquid : 0;
+  left += parts.cashFree + parts.revolutFree;
   if (parts.cashFree) rows.push(['0', 'Cash above $10,000 added to the salary', parts.cashFree, '']);
+  if (parts.revolutFree) rows.push(['0', 'Revolut liquid assets added to the salary', parts.revolutFree, '']);
   // 1-3. Gold, crypto, Russian infrastructure up to 5% each of the new total.
   // (gold / crypto of chart 3's total, Russia of chart 10's -- as the charts measure them)
   const newTotal3 = c.total3 + salary;
@@ -2899,7 +2912,7 @@ function mpSalaryPlan(c, salary) {
   // Yuan bonds' target: w_CNY of the non-stock part, less yuan deposits.
   const cnyTarget = c.wCny !== null ? Math.max(0, c.wCny * (ruNew - ruStockTarget) - cell('deposit', 'CNY')) : null;
   parts.cnySold = cnyTarget !== null && c.wCny < 0.3 ? Math.max(0, cell('bond', 'CNY') - cnyTarget) : 0;
-  parts.ruLiquid = c.ruLiquidRaw;
+  parts.ruLiquid = flags.ruLiquid ? c.ruLiquidRaw : 0;
   const ruPool = ruAdd + parts.cnySold + parts.ruLiquid;
   const ruStockAdd = Math.max(0, Math.min(ruPool, ruStockTarget - cell('stock', 'RUB')));
   const ruStocksNow = RU_STOCK_TICKERS.reduce((s, t) => s + (c.valueByTicker[t] || 0), 0);
@@ -2994,6 +3007,7 @@ function mpSalaryDeltas(c, plan) {
   const largest = rows => [...rows].sort((a, b) => b.value_usd - a.value_usd)[0];
   // Spent cash comes out of the cash balances, each by its size.
   // (from cash outside Russia: Russian money stays in Russian infrastructure)
+  spread(-p.revolutFree, held.filter(r => r.account === 'Revolut' && r.instrument_type === 'liquid'), {});
   spread(-p.cashFree, c.cashRows.filter(r => r.instrument_type === 'cash' && r.value_usd > 0 && !mpIsRuInfra(r)), {});
   spread(p.gold, held.filter(r => r.asset_class === 'gold'), { account: 'Revolut', ticker: 'XAU', asset_class: 'gold', instrument_type: 'gold', currency: 'USD' });
   const cryptoRows = held.filter(r => r.asset_class === 'crypto');
@@ -3034,6 +3048,9 @@ function mpSalaryDeltas(c, plan) {
     clearTimeout(timer);
     timer = setTimeout(() => mpDrawCharts(), 400);
   });
+  for (const id of ['mp_salary_cash', 'mp_salary_revolut', 'mp_salary_ruliquid']) {
+    document.getElementById(id).addEventListener('change', () => mpDrawCharts());
+  }
 }
 
 let mpChartsRun = 0;
@@ -3484,6 +3501,7 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     ibkr: byBroker.IBKR || 0, freedom: byBroker.Freedom24 || 0, coins: crypto,
     valueByTicker, priceUsdByTicker, holdings: baseIn.data, before: recorded,
     cash: types[MP_ASSET_CLASS_LABELS.cash] || 0, cashRows: baseIn.cashRows,
+    revolutLiquid: baseIn.data.filter(r => r.account === 'Revolut' && r.instrument_type === 'liquid' && r.value_usd > 0).reduce((a, r) => a + r.value_usd, 0),
     cashAbroad: baseIn.cashRows.filter(r => r.instrument_type === 'cash' && r.value_usd > 0 && !mpIsRuInfra(r)).reduce((a, r) => a + r.value_usd, 0),
     total3,   // chart 3's total (gold / crypto 5% are of it)
   };
