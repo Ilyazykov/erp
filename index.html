@@ -2710,17 +2710,20 @@ function mpContrastText(hex) {
 // (chart 8: the US ERP 77.6% is of the target total).
 // before (optional): {label: USD} before the salary plan -- the table then
 // shows what the plan buys / sells per slice instead of the gap to target.
-function mpTargetPie(el, title, items, note = '', targetTotal = null, shareOfTarget = false, before = null) {
+// money (optional): USD -> display string (chart 7 / 11 in roubles); USD otherwise.
+function mpTargetPie(el, title, items, note = '', targetTotal = null, shareOfTarget = false, before = null, money = null) {
+  const fmt = money || mpFormatUsd;
   const card = document.createElement('div');
   card.className = 'pie-card';
   card.innerHTML = `<h4>${mpEscapeHtml(title)}</h4><div class="pie-plot target"></div><p class="pie-total"></p>${note ? `<p class="note">${mpEscapeHtml(note)}</p>` : ''}`;
   el.appendChild(card);
-  const usable = items.filter(it => it.usd > 0 || it.target > 0);
+  // (a slice the plan emptied -- sold off -- stays listed)
+  const usable = items.filter(it => it.usd > 0 || it.target > 0 || (before && before[it.label] > 0));
   const total = usable.reduce((s, it) => s + Math.max(0, it.usd), 0);
   if (!total) { card.querySelector('.pie-plot').innerHTML = '<p class="empty-note">No data.</p>'; return; }
-  card.querySelector('.pie-total').innerHTML = `Total: <b>${mpFormatUsd(total)}</b>`
+  card.querySelector('.pie-total').innerHTML = `Total: <b>${fmt(total)}</b>`
     // A target is never below what's there: only a real shortfall (> $1) is shown.
-    + (targetTotal !== null && targetTotal - total > 1 ? ` / Target: <b>${mpFormatUsd(targetTotal)}</b>` : '');
+    + (targetTotal !== null && targetTotal - total > 1 ? ` / Target: <b>${fmt(targetTotal)}</b>` : '');
   // What each slice should be in dollars at its target share.
   const targets = document.createElement('table');
   targets.className = 'data-table';
@@ -2729,9 +2732,9 @@ function mpTargetPie(el, title, items, note = '', targetTotal = null, shareOfTar
   targets.innerHTML = `<thead><tr><th></th><th>Now</th><th>Target</th>${before ? '<th>Bought / sold</th>' : ''}</tr></thead><tbody>${usable.map(it => {
     const want = it.target / 100 * total;
     const delta = before ? it.usd - (before[it.label] || 0) : 0;
-    return `<tr><td class="ticker">${mpEscapeHtml(it.label)}</td><td>${mpFormatUsd(Math.max(0, it.usd))}</td>
-      <td><b>${mpFormatUsd(want)}</b></td>${before ? (Math.abs(delta) < 0.005 ? '<td class="muted">0</td>'
-        : `<td class="${delta > 0 ? 'pos' : 'neg'}">${delta > 0 ? '+' : '−'}${mpFormatUsd(Math.abs(delta))}</td>`) : ''}</tr>`;
+    return `<tr><td class="ticker">${mpEscapeHtml(it.label)}</td><td>${fmt(Math.max(0, it.usd))}</td>
+      <td><b>${fmt(want)}</b></td>${before ? (Math.abs(delta) < 0.005 ? '<td class="muted">0</td>'
+        : `<td class="${delta > 0 ? 'pos' : 'neg'}">${delta > 0 ? '+' : '−'}${fmt(Math.abs(delta))}</td>`) : ''}</tr>`;
   }).join('')}</tbody>`;
   card.querySelector('.pie-total').after(targets);
   const R_BASE = 100, PP_SCALE = 2;
@@ -3029,8 +3032,8 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   const recorded = {};
   const pie = draw ? mpPie : () => {};
   const tpie = draw
-    ? (el, title, items, note = '', targetTotal = null, shareOfTarget = false) =>
-      mpTargetPie(el, title, items, note, targetTotal, shareOfTarget, salary && before ? before[title] || {} : null)
+    ? (el, title, items, note = '', targetTotal = null, shareOfTarget = false, money = null) =>
+      mpTargetPie(el, title, items, note, targetTotal, shareOfTarget, salary && before ? before[title] || {} : null, money)
     : (el, title, items) => { recorded[title] = Object.fromEntries(items.map(it => [it.label, it.usd])); };
   const curRows = mpNetCreditIntoLiquid((await mpCurrencyRows(base)).filter(r => r.value_usd !== null));
   const assetRows = mpNetCreditIntoLiquid(
@@ -3276,9 +3279,15 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   const drawRuTarget = (title, cells, targets, targetTotal = null) => {
     const whole = Object.values(cells).reduce((s, v) => s + v, 0);
     const labels = [...new Set([...Object.keys(cells), ...Object.keys(targets)])].sort((a, b) => ruOrder.indexOf(a) - ruOrder.indexOf(b));
-    tpie(grid, title, labels.map(l => ({
+    // Russian infrastructure is shown in roubles.
+    const rub = base.fxByCurrency.RUB;
+    const inRub = rub ? usd => mpFormatCurrency(usd / rub, 'RUB') : null;
+    // (every slice the plan may have emptied -- liquid assets -- stays listed)
+    const all = [...new Set([...labels, ...Object.keys((before && before[title]) || {})])]
+      .sort((a, b) => ruOrder.indexOf(a) - ruOrder.indexOf(b));
+    tpie(grid, title, all.map(l => ({
       label: l, usd: cells[l] || 0, color: ruColor(l) || MP_OTHER_COLOR, target: (targets[l] || 0) / whole * 100,
-    })), '', targetTotal);
+    })), '', targetTotal, false, inRub);
   };
 
   if (target7) drawRuTarget('7. Russian infrastructure', ruAll, target7, ruTargetTotal);
