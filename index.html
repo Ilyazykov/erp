@@ -2928,7 +2928,8 @@ function mpSalaryPlan(c, salary) {
   const indAdd = Math.max(0, Math.min(stockAdd, 0.05 * (c.stockAll + stockAdd) - usTotal));
   parts.usStocks = mpSalaryAllocate(DATA && DATA.usTargetWeightsRaw, usTotal, indAdd, c);
   rows.push(['4.1', 'Individual stocks up to 5% of stocks', indAdd, mpSalaryBuysText(parts.usStocks)]);
-  const fundAdd = stockAdd - indAdd;
+  // (what whole-share rounding left of the single-stock money goes to the fund too)
+  const fundAdd = stockAdd - parts.usStocks.reduce((a, b) => a + b.usd, 0);
   // Freedom up to 20% of IBKR + Freedom after everything else step 4 puts
   // at IBKR (individual stocks, US Treasuries).
   parts.vwce = Math.max(0, Math.min(fundAdd,
@@ -3244,17 +3245,25 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   const cryptoTarget = Math.max(CRYPTO_TARGET_PCT / 100 * total3, types[MP_ASSET_CLASS_LABELS.crypto] || 0);
   const targetTotal8 = total3 - CASH_TARGET_USD - goldTarget - cryptoTarget;
   const usAlloc = DATA && DATA.usAllocTargetRaw;
-  let target8 = null;
-  if (usAlloc && (usAlloc.Stocks + usAlloc.Bonds) > 0 && total8 > 0 && targetTotal8 > 0) {
+  // Stocks at the US ERP share of `whole`, the other three the rest in
+  // today's proportions.
+  const splitGroup = whole => {
+    if (!(usAlloc && (usAlloc.Stocks + usAlloc.Bonds) > 0 && total8 > 0 && whole > 0)) return null;
     const stockLabel = MP_ASSET_CLASS_LABELS.stock;
-    const stockUsd = usAlloc.Stocks / (usAlloc.Stocks + usAlloc.Bonds) * targetTotal8;
+    const stockUsd = usAlloc.Stocks / (usAlloc.Stocks + usAlloc.Bonds) * whole;
     const restNow = total8 - (types8[stockLabel] || 0);
-    target8 = Object.fromEntries(Object.entries(types8).map(([l, v]) =>
-      [l, l === stockLabel ? stockUsd : (targetTotal8 - stockUsd) * (restNow ? v / restNow : 0)]));
-    if (!(stockLabel in target8)) target8[stockLabel] = stockUsd;
-  }
-  const target3 = target8 && {
-    ...target8,
+    const out = Object.fromEntries(Object.entries(types8).map(([l, v]) =>
+      [l, l === stockLabel ? stockUsd : (whole - stockUsd) * (restNow ? v / restNow : 0)]));
+    if (!(stockLabel in out)) out[stockLabel] = stockUsd;
+    return out;
+  };
+  // Every target chart's targets add up to its own total. Chart 9 splits
+  // its own total; chart 3 gives the four what the cash / gold / crypto
+  // targets leave of its total (the same thing once a salary plan has run).
+  const target8 = splitGroup(total8);
+  const group3 = splitGroup(targetTotal8);
+  const target3 = group3 && {
+    ...group3,
     [MP_ASSET_CLASS_LABELS.cash]: CASH_TARGET_USD,
     // money is only added: gold / crypto above 5% keep what they have
     [MP_ASSET_CLASS_LABELS.gold]: goldTarget,
@@ -3341,7 +3350,9 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   // total is the target (nothing gets pulled out to shrink it).
   const RU_TARGET_PCT = 5;
   const ruAll = ruBuckets();
-  const ruTargetTotal = Math.max(RU_TARGET_PCT / 100 * allTotal, Object.values(ruAll).reduce((s, v) => s + v, 0));
+  // (chart 8's whole is what Russia holds -- after the salary plan when one is
+  // typed in, which tops it up to 5%; its targets redistribute that)
+  const ruTargetTotal = Object.values(ruAll).reduce((s, v) => s + v, 0);
   let target7 = null;
   if (wCny !== null && alloc && (alloc.Stocks + alloc.Bonds) > 0) {
     target7 = fixedTargets(ruAll);
@@ -3413,8 +3424,8 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   if (target8) {
     const labels = Object.keys(types8).sort((a, b) => typeOrder.indexOf(a) - typeOrder.indexOf(b));
     tpie(grid, '9. Stocks, bonds, deposits, liquid assets', labels.map(l => ({
-      label: l, usd: types8[l], color: typeColor(l) || MP_OTHER_COLOR, target: target8[l] / targetTotal8 * 100,
-    })), '', targetTotal8, true);
+      label: l, usd: types8[l], color: typeColor(l) || MP_OTHER_COLOR, target: target8[l] / total8 * 100,
+    })));
   } else {
     pie(grid, '9. Stocks, bonds, deposits, liquid assets', types8, '', typeOrder, true, () => 0, typeColor);
   }
@@ -3436,8 +3447,12 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   // it fall back to its own w_CNY split of today's total.
   if (target7) {
     const stock = `${MP_RU_INFRA_LABELS.stock} ${MP_RU_INFRA_CURRENCIES.RUB}`;
+    // Chart 7's dollars for deposits, liquid assets and yuan bonds; rouble
+    // bonds whatever's left of this chart's own total.
     const { [stock]: stockTarget, ...rest } = target7;
-    drawRuTarget('12. Russian infrastructure without stocks', ruNoStocks, rest, ruTargetTotal - stockTarget);
+    const total12 = Object.values(ruNoStocks).reduce((a, v) => a + v, 0);
+    rest[bondLabel('RUB')] = Math.max(0, total12 - Object.entries(rest).filter(([l]) => l !== bondLabel('RUB')).reduce((a, [, v]) => a + v, 0));
+    drawRuTarget('12. Russian infrastructure without stocks', ruNoStocks, rest);
   } else if (target11) drawRuTarget('12. Russian infrastructure without stocks', ruNoStocks, target11);
   else pie(grid, '12. Russian infrastructure without stocks', ruNoStocks, '', ruOrder, false, () => 0, ruColor);
   pie(grid, '13. Asset types with real estate', typesWithRealEstate, '', typeOrder, true, () => 0, typeColor);
