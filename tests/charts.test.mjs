@@ -141,6 +141,9 @@ function targetChecks(pies, tag) {
   const stock3 = usdTarget(types3, 'stock 📈');
   const want5 = c5 ? Math.max(stock3, c5.total) : NaN;
   checkT(tag, c5 && near(c5.whole, want5, 0.5), `Stocks by country: target total $${c5 && c5.whole.toFixed(2)} = max(Asset types stock target $${stock3.toFixed(2)}, stocks now $${c5 && c5.total.toFixed(2)})`);
+  // 24. Chart 5's Russia target = chart 8's Russian stock target.
+  const ru5 = usdTarget(c5, 'Russia 🇷🇺'), ru8 = usdTarget(ruInfra, 'stock 📈 🇷🇺');
+  checkT(tag, near(ru5, ru8, 0.5), `Stocks by country: Russia target $${ru5.toFixed(2)} = Russian infrastructure stock target $${ru8.toFixed(2)}`);
   // 22. Chart 9's target total = chart 3's total less its cash, gold and crypto targets.
   const rest3 = types3 ? types3.whole - ['cash 💵', 'gold 🥇', 'crypto ₿'].reduce((a, l) => a + usdTarget(types3, l), 0) : NaN;
   checkT(tag, c9 && near(c9.whole, rest3, 0.5), `Stocks, bonds, deposits, liquid: target total $${c9 && c9.whole.toFixed(2)} = Asset types total less cash / gold / crypto targets $${rest3.toFixed(2)}`);
