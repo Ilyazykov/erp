@@ -2606,12 +2606,6 @@ const MP_COLORS = {
     FI: '#94c2ff', BE: '#2a57c9', IE: '#66a3ff', AT: '#3f78f0', PT: '#a3c8ff', PL: '#1d4fbf', LU: '#5a85e6',
   },
 };
-// A colour blended toward another (t = 0 keeps a, 1 gives b).
-function mpMix(a, b, t) {
-  const p = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
-  const [x, y] = [p(a), p(b)];
-  return `#${x.map((v, i) => Math.round(v + (y[i] - v) * t).toString(16).padStart(2, '0')).join('')}`;
-}
 function mpSliceColor(label, colorOf) {
   if (/^other\b/.test(label)) return MP_OTHER_COLOR;
   const c = colorOf(label);
@@ -2755,7 +2749,11 @@ async function mpRenderCharts() {
   const directC = Object.fromEntries((direct || []).map(d => [d.market_ticker, d]));
   const byCountry = {};
   const codeOfLabel = {};
-  const countryLabel = (name, code) => { const l = `${name} ${mpFlagOf(code)}`; codeOfLabel[l] = code; return l; };
+  // (DD / FX / UK are old codes for Germany / France / the UK some rows may still carry)
+  const countryLabel = (name, code) => {
+    code = { DD: 'DE', FX: 'FR', UK: 'GB' }[code] || code;
+    const l = `${name} ${mpFlagOf(code)}`; codeOfLabel[l] = code; return l;
+  };
   for (const r of stockRows) {
     const ws = fundW[r.ticker];
     if (ws) {
@@ -2767,18 +2765,11 @@ async function mpRenderCharts() {
       mpAdd(byCountry, r.infra_region === 'ru' ? countryLabel('Russia', 'RU') : countryLabel('United States', 'US'), r.value_usd);
     }
   }
-  // Countries under 1% of the stocks -> one "other" slice.
-  const stockTotal = Object.values(byCountry).reduce((s, v) => s + v, 0);
-  const groupSmall = src => {
-    const out = {};
-    for (const [k, v] of Object.entries(src)) mpAdd(out, v / stockTotal < 0.01 ? 'other 🌍' : k, v);
-    return out;
-  };
-  const countries = groupSmall(byCountry);
+  // (countries under 1% go into mpPie's "other" slice, listed on hover and below)
+  const countries = byCountry;
   // The same with the European Union's members as one slice.
-  const withEu = {};
-  for (const [k, v] of Object.entries(byCountry)) mpAdd(withEu, MP_EU_MEMBERS.has(codeOfLabel[k]) ? 'European Union 🇪🇺' : k, v);
-  const countriesEu = groupSmall(withEu);
+  const countriesEu = {};
+  for (const [k, v] of Object.entries(byCountry)) mpAdd(countriesEu, MP_EU_MEMBERS.has(codeOfLabel[k]) ? 'European Union 🇪🇺' : k, v);
   // 5. Crypto by coin.
   const crypto = {};
   for (const r of base.data) if (r.asset_class === 'crypto' && r.value_usd > 0) mpAdd(crypto, r.ticker, r.value_usd);
@@ -2837,12 +2828,17 @@ async function mpRenderCharts() {
   const typeByLabel = Object.fromEntries(Object.keys(MP_COLORS.type).map(t => [MP_ASSET_CLASS_LABELS[t], t]));
   const typeColor = l => MP_COLORS.type[typeByLabel[l]] || null;
   const countryColor = l => (l === 'European Union 🇪🇺' ? MP_COLORS.country.EU : MP_COLORS.country[codeOfLabel[l]] || null);
-  // Russian infrastructure: the currency's colour (chart 1) leaning toward the asset type's (chart 3).
+  // Russian infrastructure: roubles in muted greys tinted by the asset type
+  // (chart 3), yuan in vivid shades of CNY's magenta (chart 1) -- so the two
+  // currencies stand apart, and within each the types differ in hue and
+  // lightness (stock dark plum vs bonds light blue, etc.).
   const ruColorByLabel = {};
-  for (const t of MP_RU_INFRA_TYPES) for (const c of Object.keys(MP_RU_INFRA_CURRENCIES)) {
-    // (liquid sits next to deposit, both grey-ish: a lighter shade keeps them apart)
-    const mixed = mpMix(MP_COLORS.currency[c], MP_COLORS.type[t], t === 'deposit' ? 0.15 : t === 'liquid' ? 0.3 : 0.45);
-    ruColorByLabel[`${MP_RU_INFRA_LABELS[t]} ${MP_RU_INFRA_CURRENCIES[c]}`] = t === 'liquid' ? mpMix(mixed, '#ffffff', 0.3) : mixed;
+  const RU_SHADES = {
+    RUB: { stock: '#8a4a73', bond: '#7fa8d9', deposit: '#8e8e93', liquid: '#b4b4b9', cash: '#9fc98a' },
+    CNY: { stock: '#a81d59', bond: '#e0307f', deposit: '#f06ba6', liquid: '#f59ac2', cash: '#ffc0da' },
+  };
+  for (const [c, shades] of Object.entries(RU_SHADES)) for (const [t, color] of Object.entries(shades)) {
+    ruColorByLabel[`${MP_RU_INFRA_LABELS[t]} ${MP_RU_INFRA_CURRENCIES[c]}`] = color;
   }
   const ruColor = l => ruColorByLabel[l] || null;
 

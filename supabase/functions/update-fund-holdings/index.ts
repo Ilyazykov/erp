@@ -289,11 +289,13 @@ async function openFigi(isins: string[]): Promise<Map<string, { ticker: string; 
 
 // Country -> ISO code: issuers' names (iShares "Korea (South)", DWS
 // "United Kingdom") through the English region names, plus aliases.
+const DEPRECATED_REGIONS = new Set(['DD', 'FX', 'UK', 'YU', 'ZR', 'TP', 'BU', 'CS', 'SU', 'AN', 'NT', 'YD', 'DY', 'VD', 'EU', 'EZ', 'UN', 'QO']);
 const CODE_BY_NAME = new Map<string, string>();
 for (let a = 65; a <= 90; a++) for (let b = 65; b <= 90; b++) {
   const code = String.fromCharCode(a, b);
-  // First code wins: deprecated ones later in the alphabet (FX "France",
-  // UK "United Kingdom") mustn't replace FR / GB.
+  // Deprecated / exceptionally reserved codes share today's names (DD
+  // "Germany", FX "France", UK "United Kingdom") -- never pick those.
+  if (DEPRECATED_REGIONS.has(code)) continue;
   try { const n = regionName.of(code)?.toLowerCase(); if (n && n !== code.toLowerCase() && !CODE_BY_NAME.has(n)) CODE_BY_NAME.set(n, code); } catch { /* not a region */ }
 }
 for (const [n, c] of Object.entries({
