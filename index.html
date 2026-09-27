@@ -2743,7 +2743,17 @@ function mpTargetPie(el, title, items, note = '', targetTotal = null, shareOfTar
       : `<td class="${delta > 0 ? 'pos' : 'neg'}">${delta > 0 ? '+' : '−'}${fmt(Math.abs(delta))}</td>`;
     return `<tr><td class="ticker">${mpEscapeHtml(it.label)}</td><td>${fmt(Math.max(0, was))}</td>
       ${before ? `${deltaCell}<td>${fmt(Math.max(0, it.usd))}</td>` : ''}<td><b>${fmt(want)}</b></td></tr>`;
-  }).join('')}</tbody>`;
+  }).join('')}${(() => {
+    // Totals row.
+    const nowSum = usable.reduce((a, it) => a + Math.max(0, before ? (before[it.label] || 0) : it.usd), 0);
+    const afterSum = usable.reduce((a, it) => a + Math.max(0, it.usd), 0);
+    const wantSum = usable.reduce((a, it) => a + it.target / 100 * total, 0);
+    const d = afterSum - nowSum;
+    const dCell = Math.abs(d) < 0.005 ? '<td class="muted">0</td>'
+      : `<td class="${d > 0 ? 'pos' : 'neg'}"><b>${d > 0 ? '+' : '−'}${fmt(Math.abs(d))}</b></td>`;
+    return `<tr class="total-row"><td class="ticker"><b>Total</b></td><td><b>${fmt(nowSum)}</b></td>
+      ${before ? `${dCell}<td><b>${fmt(afterSum)}</b></td>` : ''}<td><b>${fmt(wantSum)}</b></td></tr>`;
+  })()}</tbody>`;
   card.querySelector('.pie-total').after(targets);
   const R_BASE = 100;
   let cursor = 0;
