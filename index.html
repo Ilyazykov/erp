@@ -328,9 +328,9 @@
       <label for="mp_salary_amount">Salary to allocate (USD):</label>
       <input type="number" id="mp_salary_amount" min="0" step="100" placeholder="0" style="width:140px">
     </div>
-    <div id="mp_salary_plan"></div>
     <p class="empty-note" id="mp_charts_status"></p>
     <div id="mp_charts_grid" class="pie-grid"></div>
+    <div id="mp_salary_plan"></div>
   </div>
 </div>
 
@@ -2877,10 +2877,10 @@ function mpSalaryPlan(c, salary) {
 function mpRenderSalaryTable(plan) {
   const wrap = document.getElementById('mp_salary_plan');
   if (!plan) { wrap.innerHTML = ''; return; }
-  wrap.innerHTML = `<div style="overflow-x:auto"><table class="data-table" style="width:auto">
-    <thead><tr><th>Step</th><th>Action</th><th>USD</th><th></th></tr></thead>
+  wrap.innerHTML = `<div class="section-title">Salary plan</div><div style="overflow-x:auto"><table class="data-table" style="width:auto">
+    <thead><tr><th>Step</th><th style="text-align:left">Action</th><th>USD</th><th></th></tr></thead>
     <tbody>${plan.rows.map(([step, what, usd, detail]) => `<tr>
-      <td>${step}</td><td class="ticker">${mpEscapeHtml(what)}</td>
+      <td>${step}</td><td class="ticker" style="text-align:left">${mpEscapeHtml(what)}</td>
       <td class="${usd < 0 ? 'neg' : ''}">${usd === null ? '—' : (usd < 0 ? '−' : '') + mpFormatUsd(Math.abs(usd))}</td>
       <td class="muted" style="text-align:left">${mpEscapeHtml(detail || '')}</td></tr>`).join('')}</tbody></table></div>`;
 }
@@ -3094,7 +3094,7 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0) {
   if (run !== mpChartsRun) return null;
   if (draw) {
     grid.innerHTML = '';
-    status.textContent = salary ? `After the salary plan (+${mpFormatUsd(salary)}) — see the steps above.` : '';
+    status.textContent = salary ? `After the salary plan (+${mpFormatUsd(salary)}) — the steps are below the charts.` : '';
   }
   // Slice order as in the user's own charts (clockwise from 12 o'clock).
   const currencyOrder = ['EUR', 'USD', 'RUB', 'GBP', 'CNY', 'JPY', 'TRY', 'RSD', MP_OTHER_CURRENCIES_COLUMN,
