@@ -11,7 +11,8 @@
 //      Yahoo chart history (US stocks, UCITS ETFs, crypto / gold);
 //      stablecoins and ЦФА at a constant; deposits / savings / blocked need
 //      none (refresh_capital_daily prices them by currency / at 0);
-//   3. refresh_capital_daily(user) for every user.
+//   3. refresh_capital_daily(user, from, to) for every user, in slices of
+//      SLICE_DAYS from their first transaction to today.
 // Each ticker's source is resolved once (market_prices' classification when
 // it's held, else by trying MOEX, then Yahoo) and cached in price_sources.
 // Only what's missing is fetched: from the day after the last stored close
@@ -24,7 +25,9 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
-const TIME_BUDGET_MS = 110_000;
+// Price fetching stops here; the rebuild (step 3) gets the rest of the run.
+const TIME_BUDGET_MS = 80_000;
+const SLICE_DAYS = 120;
 const OVERLAP_DAYS = 5;
 const UA = { 'User-Agent': 'Mozilla/5.0 (erp-portfolio capital history)' };
 const YAHOO = 'https://query1.finance.yahoo.com/v8/finance/chart';
@@ -261,12 +264,20 @@ Deno.serve(async () => {
     report.no_price = failed;
     report.tickers_left = queue.length - done.length - failed.length;
 
-    // 3. Rebuild every user's history.
+    // 3. Rebuild every user's history, a slice of days per call (one call
+    // for the whole history runs past the API's statement timeout).
     const users = [...new Set(trades.map(t => t.user_id))];
     const rebuilt: Record<string, unknown> = {};
     for (const u of users) {
-      const { data, error } = await db.rpc('refresh_capital_daily', { p_user: u });
-      rebuilt[u.slice(0, 8)] = error ? `error: ${error.message}` : data;
+      const { data: first, error: e1 } = await db.rpc('capital_first_day', { p_user: u });
+      if (e1 || !first) { rebuilt[u.slice(0, 8)] = e1 ? `error: ${e1.message}` : 0; continue; }
+      let rows = 0, err: string | null = null;
+      for (let from = String(first).slice(0, 10); from <= today() && !err; from = addDays(from, SLICE_DAYS)) {
+        const to = addDays(from, SLICE_DAYS - 1);
+        const { data, error } = await db.rpc('refresh_capital_daily', { p_user: u, p_from: from, p_to: to < today() ? to : today() });
+        if (error) err = `error at ${from}: ${error.message}`; else rows += Number(data ?? 0);
+      }
+      rebuilt[u.slice(0, 8)] = err ?? rows;
     }
     report.capital_rows = rebuilt;
     report.seconds = Math.round((Date.now() - started) / 1000);
