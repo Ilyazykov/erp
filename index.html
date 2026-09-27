@@ -2684,6 +2684,55 @@ function mpPie(el, title, buckets, note = '', order = null, groupSmall = true, s
   }, { responsive: true, displayModeBar: false });
 }
 
+// A pie measured against target weights, drawn like the USD/RUB -> CNY
+// Weight donuts (mpDrawTargetDonut): slice angle = actual share, radius =
+// the dotted target circle plus (actual% - target%) -- bulging past it =
+// overweight, short of it = underweight. items: [{label, usd, target (%), color}].
+function mpTargetPie(el, title, items, note = '') {
+  const card = document.createElement('div');
+  card.className = 'pie-card';
+  card.innerHTML = `<h4>${mpEscapeHtml(title)}</h4><div class="pie-plot"></div><p class="pie-total"></p>${note ? `<p class="note">${mpEscapeHtml(note)}</p>` : ''}`;
+  el.appendChild(card);
+  const usable = items.filter(it => it.usd > 0 || it.target > 0);
+  const total = usable.reduce((s, it) => s + Math.max(0, it.usd), 0);
+  if (!total) { card.querySelector('.pie-plot').innerHTML = '<p class="empty-note">No data.</p>'; return; }
+  card.querySelector('.pie-total').innerHTML = `Total: <b>${mpFormatUsd(total)}</b>`;
+  const R_BASE = 100, PP_SCALE = 2;
+  let cursor = 0;
+  const rows = usable.map(it => {
+    const current = Math.max(0, it.usd) / total * 100;
+    const w = current / 100 * 360;
+    const row = { ...it, current, theta: cursor + w / 2, width: w, r: Math.max(0, R_BASE + (current - it.target) * PP_SCALE) };
+    cursor += w;
+    return row;
+  });
+  const maxR = Math.max(R_BASE, ...rows.map(r => r.r));
+  const layout = mpDonutLayout(maxR);
+  layout.paper_bgcolor = layout.plot_bgcolor = layout.polar.bgcolor = '#13191f';
+  layout.showlegend = false;
+  layout.margin = { t: 20, b: 20, l: 20, r: 20 };
+  layout.polar.domain = { x: [0.08, 0.92], y: [0.08, 0.92] };
+  Plotly.newPlot(card.querySelector('.pie-plot'), [
+    {
+      type: 'barpolar', r: rows.map(r => r.r), theta: rows.map(r => r.theta), width: rows.map(r => r.width),
+      marker: { color: rows.map(r => r.color), line: { color: '#0d1117', width: 1 } },
+      hovertemplate: rows.map(r => `${r.label}<br>$${Math.round(r.usd).toLocaleString('en-US')} - ${r.current.toFixed(1)}%`
+        + `<br>target ${r.target.toFixed(1)}% (${r.current >= r.target ? '+' : '−'}$${Math.round(Math.abs(r.current - r.target) / 100 * total).toLocaleString('en-US')})<extra></extra>`),
+    },
+    {
+      type: 'scatterpolar', mode: 'lines', hoverinfo: 'skip',
+      r: Array.from({ length: 73 }, () => R_BASE), theta: Array.from({ length: 73 }, (_, i) => i * 5),
+      line: { color: '#e6edf3', width: 1.5, dash: 'dot' },
+    },
+    {
+      type: 'scatterpolar', mode: 'text', hoverinfo: 'skip',
+      r: rows.map(() => maxR * 1.16), theta: rows.map(r => r.theta),
+      text: rows.map(r => (r.width >= 12 ? `${r.label}<br>${r.current.toFixed(1)}% / ${r.target.toFixed(1)}%` : '')),
+      textfont: { color: rows.map(r => r.color), size: 11 },
+    },
+  ], layout, { responsive: true, displayModeBar: false });
+}
+
 const mpAdd = (acc, key, v) => { if (v) acc[key] = (acc[key] || 0) + v; return acc; };
 // Credit-card debt isn't shown on its own: it's netted against liquid
 // assets of the same infrastructure -- a Russian bank's card against the
@@ -2877,7 +2926,24 @@ async function mpRenderCharts() {
   mpPie(grid, '10. Russian infrastructure vs the rest', { 'Russia 🇷🇺': ruTotal, 'rest of the world 🌍': allTotal - ruTotal },
     '', ['Russia 🇷🇺', 'rest of the world 🌍'], true, () => 0,
     l => (l === 'Russia 🇷🇺' ? MP_COLORS.country.RU : '#4a9ff5'));
-  mpPie(grid, '11. Russian infrastructure without stocks', ruBuckets(['stock']), '', ruOrder, false, () => 0, ruColor);
+  // 11: against the USD/RUB -> CNY Weight target -- yuan w_CNY of the whole,
+  // roubles the rest, each split across its own slices as they stand now.
+  const ruNoStocks = ruBuckets(['stock']);
+  const wCny = DATA && DATA.currentWCny !== undefined && DATA.currentWCny !== null ? DATA.currentWCny : null;
+  if (wCny === null) {
+    mpPie(grid, '11. Russian infrastructure without stocks', ruNoStocks, '', ruOrder, false, () => 0, ruColor);
+  } else {
+    const ccyOf = l => (l.includes(MP_RU_INFRA_CURRENCIES.CNY) ? 'CNY' : 'RUB');
+    const ccyTotal = {};
+    for (const [l, v] of Object.entries(ruNoStocks)) mpAdd(ccyTotal, ccyOf(l), v);
+    const targetShare = { CNY: wCny * 100, RUB: (1 - wCny) * 100 };
+    const labels = Object.keys(ruNoStocks).sort((a, b) => ruOrder.indexOf(a) - ruOrder.indexOf(b));
+    mpTargetPie(grid, '11. Russian infrastructure without stocks', labels.map(l => ({
+      label: l, usd: ruNoStocks[l], color: ruColor(l) || MP_OTHER_COLOR,
+      target: targetShare[ccyOf(l)] * ruNoStocks[l] / ccyTotal[ccyOf(l)],
+    })), `Target: CNY ${(wCny * 100).toFixed(1)}% / RUB ${((1 - wCny) * 100).toFixed(1)}% (USD/RUB → CNY Weight). `
+      + 'Past the dotted circle = over target, inside = under. Labels: actual / target.');
+  }
   mpPie(grid, '12. Asset types with real estate', typesWithRealEstate, '', typeOrder, true, () => 0, typeColor);
   // Size every plot to its card once the grid has laid out.
   requestAnimationFrame(() => grid.querySelectorAll('.pie-plot').forEach(el => { if (el.data) Plotly.Plots.resize(el); }));
