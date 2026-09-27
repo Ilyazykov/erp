@@ -2716,7 +2716,10 @@ function mpContrastText(hex) {
 // before (optional): {label: USD} before the salary plan -- the table then
 // shows what the plan buys / sells per slice instead of the gap to target.
 // money (optional): USD -> display string (chart 7 / 11 in roubles); USD otherwise.
-function mpTargetPie(el, title, items, note = '', targetTotal = null, shareOfTarget = false, before = null, money = null) {
+// bought (optional, with `before`): [[what, USD]] -- the purchases listed
+// under the table instead of a per-slice Bought / sold column (chart 5:
+// what was bought -- VWRA, VWCE, single stocks -- not what each country got).
+function mpTargetPie(el, title, items, note = '', targetTotal = null, shareOfTarget = false, before = null, money = null, bought = null) {
   const fmt = money || mpFormatUsd;
   const card = document.createElement('div');
   card.className = 'pie-card';
@@ -2735,14 +2738,15 @@ function mpTargetPie(el, title, items, note = '', targetTotal = null, shareOfTar
   targets.style.cssText = 'width:auto;margin:0 auto 8px';
   // Without a salary: Now / Target. With one: Now (before the plan), what the
   // plan buys / sells, After (the chart's figures) and Target.
-  targets.innerHTML = `<thead><tr><th></th><th>Now</th>${before ? '<th>Bought / sold</th><th>After</th>' : ''}<th>Target</th></tr></thead><tbody>${usable.map(it => {
+  const showDelta = before && !bought;
+  targets.innerHTML = `<thead><tr><th></th><th>Now</th>${before ? `${showDelta ? '<th>Bought / sold</th>' : ''}<th>After</th>` : ''}<th>Target</th></tr></thead><tbody>${usable.map(it => {
     const want = it.target / 100 * total;
     const was = before ? (before[it.label] || 0) : Math.max(0, it.usd);
     const delta = before ? it.usd - was : 0;
     const deltaCell = Math.abs(delta) < 0.005 ? '<td class="muted">0</td>'
       : `<td class="${delta > 0 ? 'pos' : 'neg'}">${delta > 0 ? '+' : '−'}${fmt(Math.abs(delta))}</td>`;
     return `<tr><td class="ticker">${mpEscapeHtml(it.label)}</td><td>${fmt(Math.max(0, was))}</td>
-      ${before ? `${deltaCell}<td>${fmt(Math.max(0, it.usd))}</td>` : ''}<td><b>${fmt(want)}</b></td></tr>`;
+      ${before ? `${showDelta ? deltaCell : ''}<td>${fmt(Math.max(0, it.usd))}</td>` : ''}<td><b>${fmt(want)}</b></td></tr>`;
   }).join('')}${(() => {
     // Totals row.
     const nowSum = usable.reduce((a, it) => a + Math.max(0, before ? (before[it.label] || 0) : it.usd), 0);
@@ -2752,9 +2756,17 @@ function mpTargetPie(el, title, items, note = '', targetTotal = null, shareOfTar
     const dCell = Math.abs(d) < 0.005 ? '<td class="muted">0</td>'
       : `<td class="${d > 0 ? 'pos' : 'neg'}"><b>${d > 0 ? '+' : '−'}${fmt(Math.abs(d))}</b></td>`;
     return `<tr class="total-row"><td class="ticker"><b>Total</b></td><td><b>${fmt(nowSum)}</b></td>
-      ${before ? `${dCell}<td><b>${fmt(afterSum)}</b></td>` : ''}<td><b>${fmt(wantSum)}</b></td></tr>`;
+      ${before ? `${showDelta ? dCell : ''}<td><b>${fmt(afterSum)}</b></td>` : ''}<td><b>${fmt(wantSum)}</b></td></tr>`;
   })()}</tbody>`;
   card.querySelector('.pie-total').after(targets);
+  if (before && bought && bought.length) {
+    const list = document.createElement('table');
+    list.className = 'data-table';
+    list.style.cssText = 'width:auto;margin:0 auto 8px';
+    list.innerHTML = `<thead><tr><th>Bought</th><th>USD</th></tr></thead><tbody>${bought.map(([what, usd]) =>
+      `<tr><td class="ticker">${mpEscapeHtml(what)}</td><td class="${usd < 0 ? 'neg' : 'pos'}">${usd < 0 ? '−' : '+'}${fmt(Math.abs(usd))}</td></tr>`).join('')}</tbody>`;
+    targets.after(list);
+  }
   const R_BASE = 100;
   let cursor = 0;
   const rows = usable.map(it0 => {
@@ -3043,10 +3055,10 @@ async function mpDrawCharts(run = ++mpChartsRun) {
   const salary = Math.max(0, parseFloat(document.getElementById('mp_salary_amount').value) || 0);
   const plan = salary ? mpSalaryPlan(ctx, salary) : null;
   mpRenderSalaryTable(plan);
-  await mpBuildCharts(mpChartsBase, plan ? mpSalaryDeltas(ctx, plan) : [], true, run, salary, ctx.before);
+  await mpBuildCharts(mpChartsBase, plan ? mpSalaryDeltas(ctx, plan) : [], true, run, salary, ctx.before, plan);
 }
 
-async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null) {
+async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null, plan = null) {
   const grid = document.getElementById('mp_charts_grid');
   const status = document.getElementById('mp_charts_status');
   const base = { ...baseIn, data: [...baseIn.data, ...extra] };
@@ -3055,8 +3067,8 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   const recorded = {};
   const pie = draw ? mpPie : () => {};
   const tpie = draw
-    ? (el, title, items, note = '', targetTotal = null, shareOfTarget = false, money = null) =>
-      mpTargetPie(el, title, items, note, targetTotal, shareOfTarget, salary && before ? before[title] || {} : null, money)
+    ? (el, title, items, note = '', targetTotal = null, shareOfTarget = false, money = null, bought = null) =>
+      mpTargetPie(el, title, items, note, targetTotal, shareOfTarget, salary && before ? before[title] || {} : null, money, bought)
     : (el, title, items) => { recorded[title] = Object.fromEntries(items.map(it => [it.label, it.usd])); };
   const curRows = mpNetCreditIntoLiquid((await mpCurrencyRows(base)).filter(r => r.value_usd !== null));
   const assetRows = mpNetCreditIntoLiquid(
@@ -3352,20 +3364,33 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     const SINGLES_PCT = 5;
     const ruStockLabel = `${MP_RU_INFRA_LABELS.stock} ${MP_RU_INFRA_CURRENCIES.RUB}`;
     const ruTargetUsd = target7 ? target7[ruStockLabel] : (withSingles[RU] || 0);
+    // Countries under 1% together -- with a salary, the same ones as before it
+    // (so a country doesn't jump in or out of "other" and look bought / sold).
+    const TITLE5 = '5. Stocks by country, US single stocks apart';
+    const beforeKeys = draw && salary && before && before[TITLE5] ? Object.keys(before[TITLE5]) : null;
     const grouped = {};
-    for (const [k, v] of Object.entries(withSingles)) mpAdd(grouped, k !== SINGLES && k !== RU && v / stockSum < 0.01 ? 'other 🌍' : k, v);
+    for (const [k, v] of Object.entries(withSingles)) {
+      const small = beforeKeys ? !beforeKeys.includes(k) : v / stockSum < 0.01;
+      mpAdd(grouped, k !== SINGLES && k !== RU && small ? 'other 🌍' : k, v);
+    }
     const restNow = stockSum - usSingles - (grouped[RU] || 0);
     const restTargetPct = 100 - SINGLES_PCT - ruTargetUsd / stockSum * 100;
     const order5 = [SINGLES, US];
     const labels5 = Object.keys(grouped).sort((a, b) =>
       (order5.includes(a) ? order5.indexOf(a) : a.startsWith('other') ? 1e9 : 10) - (order5.includes(b) ? order5.indexOf(b) : b.startsWith('other') ? 1e9 : 10)
       || grouped[b] - grouped[a]);
-    tpie(slot5, '5. Stocks by country, US single stocks apart', labels5.map(l => ({
+    // What the salary plan bought in stocks: the funds and each single stock.
+    const bought5 = plan ? [
+      ['VWRA (IBKR)', plan.parts.vwra], ['VWCE (Freedom)', plan.parts.vwce],
+      ...plan.parts.usStocks.map(b => [`${b.ticker}${b.shares ? ` × ${b.shares}` : ''} (US single)`, b.usd]),
+      ...plan.parts.ruStocks.map(b => [`${b.ticker}${b.shares ? ` × ${b.shares}` : ''} (Russia)`, b.usd]),
+    ].filter(([, v]) => Math.abs(v) > 0.005) : null;
+    tpie(slot5, TITLE5, labels5.map(l => ({
       label: l, usd: grouped[l],
       color: l === SINGLES ? '#1f8f3a' : l.startsWith('other') ? MP_OTHER_COLOR : countryColor(l) || mpSliceColor(l, () => null),
       target: l === SINGLES ? SINGLES_PCT : l === RU ? ruTargetUsd / stockSum * 100
         : Math.max(0, restTargetPct) * (restNow ? grouped[l] / restNow : 0),
-    })));
+    })), '', null, false, null, bought5);
   }
   if (target7) drawRuTarget('8. Russian infrastructure', ruAll, target7, ruTargetTotal);
   else pie(grid, '8. Russian infrastructure', ruAll, '', ruOrder, false, () => 0, ruColor);
