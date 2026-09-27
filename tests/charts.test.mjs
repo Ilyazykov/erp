@@ -85,12 +85,55 @@ T.setPie((el, title, items, note, targetTotal, shareOfTarget, before, money, bou
   const total = items.reduce((a, it) => a + Math.max(0, it.usd), 0);
   const whole = shareOfTarget && targetTotal ? targetTotal : total;
   const targetSum = items.reduce((a, it) => a + it.target / 100 * whole, 0);
-  pies.push({ title, items, total, targetSum, before });
+  // `whole`: the total the targets are shares of -- the chart's own total, or
+  // the target total it was given (s2 for "Russian infrastructure without stocks").
+  pies.push({ title, items, total, whole, targetSum, before });
 });
 
 let failures = 0;
 const check = (ok, msg) => { if (!ok) failures++; console.log(`${ok ? 'ok  ' : 'FAIL'} ${msg}`); };
 const near = (a, b, tol = 0.5) => Math.abs(a - b) <= tol;
+
+function targetChecks(pies, tag) {
+  const vs = pies.find(p => /vs the rest/.test(p.title));
+  const ru = vs && vs.items.find(it => /Russia/.test(it.label));
+  checkT(tag, ru && near(ru.target, 5, 1e-9), `Russia vs the rest: Russia target ${ru && ru.target}% = 5%`);
+  // 7. Chart 12: yuan bonds' target = the USD/RUB -> CNY Weight target (no yuan deposits here).
+  const noStocks = pies.find(p => /without stocks/.test(p.title));
+  const cny = noStocks && noStocks.items.find(it => it.label === 'bonds 🏛️ 🇨🇳');
+  const wCny = INPUT.currentWCny * 100;
+  checkT(tag, cny && near(cny.target, wCny, 0.005), `Russia without stocks: yuan bonds target ${cny && cny.target.toFixed(3)}% = w_CNY ${wCny}%`);
+  // 8. Chart 8: Russian stocks' target = the ERP & Stocks/Bonds Allocation stocks target.
+  const ruInfra = pies.find(p => /^8\. Russian infrastructure/.test(p.title));
+  const ruStock = ruInfra && ruInfra.items.find(it => it.label === 'stock 📈 🇷🇺');
+  const ruA = INPUT.ruAllocTargetRaw.target;
+  const stocksPct = ruA.Stocks / (ruA.Stocks + ruA.Bonds) * 100;
+  checkT(tag, ruStock && near(ruStock.target, stocksPct, 0.005), `Russian infrastructure: stocks target ${ruStock && ruStock.target.toFixed(3)}% = ${stocksPct}%`);
+  // 9, 10. Chart 3: gold and crypto 5% each.
+  const types3 = pies.find(p => /^3\. Asset types/.test(p.title));
+  for (const [label, name] of [['gold 🥇', 'gold'], ['crypto ₿', 'crypto']]) {
+    const it = types3 && types3.items.find(x => x.label === label);
+    checkT(tag, it && near(it.target, 5, 0.005), `Asset types: ${name} target ${it && it.target.toFixed(3)}% = 5%`);
+  }
+  // 11. Chart 5: US single stocks 5%.
+  const c5 = pies.find(p => /US single stocks apart/.test(p.title));
+  const singles = c5 && c5.items.find(x => /^US single stocks/.test(x.label));
+  checkT(tag, singles && near(singles.target, 5, 0.005), `Stocks by country: US single stocks target ${singles && singles.target.toFixed(3)}% = 5%`);
+  // 12. Chart 9: stocks at the US ERP target.
+  const c9 = pies.find(p => /^9\. Stocks, bonds/.test(p.title));
+  const st9 = c9 && c9.items.find(x => x.label === 'stock 📈');
+  const usA = INPUT.usAllocTargetRaw;
+  const usPct = usA.Stocks / (usA.Stocks + usA.Bonds) * 100;
+  checkT(tag, st9 && near(st9.target, usPct, 0.005), `Stocks, bonds, deposits, liquid: stocks target ${st9 && st9.target.toFixed(3)}% = US ERP ${usPct}%`);
+  // 13-17. Chart 12's dollar targets = chart 8's, slice by slice.
+  const usdTarget = (p, label) => { const it = p && p.items.find(x => x.label === label); return it ? it.target / 100 * p.whole : 0; };
+  for (const label of ['bonds 🏛️ 🇨🇳', 'bonds 🏛️ 🇷🇺', 'deposit 🏦 🇷🇺', 'liquid assets 💧 🇷🇺']) {
+    const a = usdTarget(noStocks, label), b = usdTarget(ruInfra, label);
+    checkT(tag, near(a, b, 0.5), `Russia without stocks vs Russian infrastructure: ${label} target $${a.toFixed(2)} = $${b.toFixed(2)}`);
+  }
+
+}
+const checkT = (tag, ok, msg) => check(ok, `${tag} — ${msg}`);
 
 async function scenario(name, base, SALARY) {
   console.log(`\n== ${name}`);
@@ -98,43 +141,10 @@ async function scenario(name, base, SALARY) {
   pies = [];
   await T.build(base, [], true, 1, 0, null, null);
   check(pies.length >= 7, `target pies drawn without a salary: ${pies.length}`);
-  for (const p of pies) check(near(p.targetSum, p.total), `no salary — ${p.title}: targets ${p.targetSum.toFixed(2)} = total ${p.total.toFixed(2)}`);
-  const vs = pies.find(p => /vs the rest/.test(p.title));
-  const ru = vs && vs.items.find(it => /Russia/.test(it.label));
-  check(ru && near(ru.target, 5, 1e-9), `Russia vs the rest: Russia target ${ru && ru.target}% = 5%`);
-  // 7. Chart 12: yuan bonds' target = the USD/RUB -> CNY Weight target (no yuan deposits here).
-  const noStocks = pies.find(p => /without stocks/.test(p.title));
-  const cny = noStocks && noStocks.items.find(it => it.label === 'bonds 🏛️ 🇨🇳');
-  const wCny = INPUT.currentWCny * 100;
-  check(cny && near(cny.target, wCny, 0.005), `Russia without stocks: yuan bonds target ${cny && cny.target.toFixed(3)}% = w_CNY ${wCny}%`);
-  // 8. Chart 8: Russian stocks' target = the ERP & Stocks/Bonds Allocation stocks target.
-  const ruInfra = pies.find(p => /^8\. Russian infrastructure/.test(p.title));
-  const ruStock = ruInfra && ruInfra.items.find(it => it.label === 'stock 📈 🇷🇺');
-  const ruA = INPUT.ruAllocTargetRaw.target;
-  const stocksPct = ruA.Stocks / (ruA.Stocks + ruA.Bonds) * 100;
-  check(ruStock && near(ruStock.target, stocksPct, 0.005), `Russian infrastructure: stocks target ${ruStock && ruStock.target.toFixed(3)}% = ${stocksPct}%`);
-  // 9, 10. Chart 3: gold and crypto 5% each.
-  const types3 = pies.find(p => /^3\. Asset types/.test(p.title));
-  for (const [label, name] of [['gold 🥇', 'gold'], ['crypto ₿', 'crypto']]) {
-    const it = types3 && types3.items.find(x => x.label === label);
-    check(it && near(it.target, 5, 0.005), `Asset types: ${name} target ${it && it.target.toFixed(3)}% = 5%`);
-  }
-  // 11. Chart 5: US single stocks 5%.
-  const c5 = pies.find(p => /US single stocks apart/.test(p.title));
-  const singles = c5 && c5.items.find(x => /^US single stocks/.test(x.label));
-  check(singles && near(singles.target, 5, 0.005), `Stocks by country: US single stocks target ${singles && singles.target.toFixed(3)}% = 5%`);
-  // 12. Chart 9: stocks at the US ERP target.
-  const c9 = pies.find(p => /^9\. Stocks, bonds/.test(p.title));
-  const st9 = c9 && c9.items.find(x => x.label === 'stock 📈');
-  const usA = INPUT.usAllocTargetRaw;
-  const usPct = usA.Stocks / (usA.Stocks + usA.Bonds) * 100;
-  check(st9 && near(st9.target, usPct, 0.005), `Stocks, bonds, deposits, liquid: stocks target ${st9 && st9.target.toFixed(3)}% = US ERP ${usPct}%`);
-  // 13-17. Chart 12's dollar targets = chart 8's, slice by slice.
-  const usdTarget = (p, label) => { const it = p && p.items.find(x => x.label === label); return it ? it.target / 100 * p.total : 0; };
-  for (const label of ['bonds 🏛️ 🇨🇳', 'bonds 🏛️ 🇷🇺', 'deposit 🏦 🇷🇺', 'liquid assets 💧 🇷🇺']) {
-    const a = usdTarget(noStocks, label), b = usdTarget(ruInfra, label);
-    check(near(a, b, 0.5), `Russia without stocks vs Russian infrastructure: ${label} target $${a.toFixed(2)} = $${b.toFixed(2)}`);
-  }
+  // (a chart's total is `whole`: its own total, or the target total it was
+  // given -- s2 = s1 - x1 for "Russian infrastructure without stocks")
+  for (const p of pies) check(near(p.targetSum, p.whole), `no salary — ${p.title}: targets ${p.targetSum.toFixed(2)} = total ${p.whole.toFixed(2)}`);
+  targetChecks(pies, 'no salary');
 
   // 3: with a salary
 
@@ -146,8 +156,9 @@ async function scenario(name, base, SALARY) {
   check(near(bought, SALARY, 1), `salary plan adds ${bought.toFixed(2)} = salary ${SALARY}`);
   pies = [];
   await T.build(base, deltas, true, 3, SALARY, ctxM.before, plan);
+  targetChecks(pies, 'salary');
   for (const p of pies) {
-    check(near(p.targetSum, p.total, 1), `salary — ${p.title}: targets ${p.targetSum.toFixed(2)} = total after ${p.total.toFixed(2)}`);
+    check(near(p.targetSum, p.whole, 1), `salary — ${p.title}: targets ${p.targetSum.toFixed(2)} = total after ${p.whole.toFixed(2)}`);
     if (/vs the rest/.test(p.title)) continue;   // Russia is only ever not topped up there
     for (const it of p.items) {
       const was = (p.before || {})[it.label] || 0;

@@ -3430,8 +3430,10 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     target7[bondLabel('CNY')] = Math.max(0, wCny * nonStock - sumWhere(target7, l => ccyOf(l) === 'CNY'));
     target7[bondLabel('RUB')] = Math.max(0, ruTargetTotal - sumWhere(target7, l => l !== bondLabel('RUB')));
   }
+  // targetTotal given: the targets' own total (s2 for chart 12), which the
+  // target shares are of.
   const drawRuTarget = (title, cells, targets, targetTotal = null) => {
-    const whole = Object.values(cells).reduce((s, v) => s + v, 0);
+    const whole = targetTotal ?? Object.values(cells).reduce((s, v) => s + v, 0);
     const labels = [...new Set([...Object.keys(cells), ...Object.keys(targets)])].sort((a, b) => ruOrder.indexOf(a) - ruOrder.indexOf(b));
     // Russian infrastructure is shown in roubles.
     const rub = base.fxByCurrency.RUB;
@@ -3441,7 +3443,7 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
       .sort((a, b) => ruOrder.indexOf(a) - ruOrder.indexOf(b));
     tpie(grid, title, all.map(l => ({
       label: l, usd: cells[l] || 0, color: ruColor(l) || MP_OTHER_COLOR, target: (targets[l] || 0) / whole * 100,
-    })), '', targetTotal, false, inRub);
+    })), '', targetTotal, targetTotal !== null, inRub);
   };
 
   // 5: stocks by country, EU as one, the single US stocks apart from the US
@@ -3516,7 +3518,14 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   // Chart 12 splits its own total: yuan bonds at w_CNY (USD/RUB -> CNY
   // Weight) less yuan deposits, deposits stay, liquid assets 0, rouble bonds
   // the rest (target11).
-  if (target11) drawRuTarget('12. Russian infrastructure without stocks', ruNoStocks, target11);
+  // Chart 12 = chart 8 without its stocks: the same targets x2..x5 (yuan
+  // bonds p2 x s2, deposits as they are, liquid assets 0, rouble bonds the
+  // rest), against s2 = s1 - x1 (chart 8's total less its stocks' target).
+  if (target7) {
+    const stockL = `${MP_RU_INFRA_LABELS.stock} ${MP_RU_INFRA_CURRENCIES.RUB}`;
+    const { [stockL]: x1, ...x2to5 } = target7;
+    drawRuTarget('12. Russian infrastructure without stocks', ruNoStocks, x2to5, ruTargetTotal - x1);
+  } else if (target11) drawRuTarget('12. Russian infrastructure without stocks', ruNoStocks, target11);
   else pie(grid, '12. Russian infrastructure without stocks', ruNoStocks, '', ruOrder, false, () => 0, ruColor);
   pie(grid, '13. Asset types with real estate', typesWithRealEstate, '', typeOrder, true, () => 0, typeColor);
   // What the salary plan (mpSalaryPlan / mpSalaryDeltas) works from.
