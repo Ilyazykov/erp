@@ -1547,6 +1547,7 @@ async function loadData() {
            layer2_alloc: layer2Alloc, revYield, fcfYield, vkcoRevenueV2, usZscore,
            usTargetWeights, usTargetWeightsLayout, usErp, usErpZChart, usErpDefaultRange, damodaranZChart,
            usAllocTarget: usAllocTargetTrace, usAllocTargetLayout,
+           usAllocTargetRaw: usAllocTarget,
            sigmoidAmp, sigmoidAmpShapes, sigmoidAmpAnnotations, wCny5yCombined,
            targetWeights, targetWeightsLayout, allocTarget: allocTargetTrace, allocTargetLayout,
            sigmoidAxisRange: [axisMin, axisMax],
@@ -2998,10 +2999,28 @@ async function mpRenderCharts() {
 
   if (target7) drawRuTarget('7. Russian infrastructure', ruAll, target7, ruTargetTotal);
   else mpPie(grid, '7. Russian infrastructure', ruAll, '', ruOrder, false, () => 0, ruColor);
-  mpPie(grid, '8. Stocks, bonds, deposits, liquid assets',
-    mpAssetBuckets(assetRows.filter(r => !isRealEstate(r)), ['stock', 'bond', 'deposit', 'liquid']), '', typeOrder, true, () => 0, typeColor);
-  mpPie(grid, '9. IBKR vs Freedom', { [brokerName('Freedom24')]: byBroker.Freedom24 || 0, [brokerName('IBKR')]: byBroker.IBKR || 0 },
-    '', brokerOrder, true, () => 0, brokerColor);
+  // 8: stocks at the US ERP tab's target share; bonds, deposits and liquid
+  // assets share the rest in today's proportions.
+  const types8 = mpAssetBuckets(assetRows.filter(r => !isRealEstate(r)), ['stock', 'bond', 'deposit', 'liquid']);
+  const usAlloc = DATA && DATA.usAllocTargetRaw;
+  if (usAlloc && (usAlloc.Stocks + usAlloc.Bonds) > 0) {
+    const stockTarget = usAlloc.Stocks / (usAlloc.Stocks + usAlloc.Bonds) * 100;
+    const stockLabel = MP_ASSET_CLASS_LABELS.stock;
+    const restNow = Object.entries(types8).filter(([l]) => l !== stockLabel).reduce((s, [, v]) => s + v, 0);
+    const labels = Object.keys(types8).sort((a, b) => typeOrder.indexOf(a) - typeOrder.indexOf(b));
+    mpTargetPie(grid, '8. Stocks, bonds, deposits, liquid assets', labels.map(l => ({
+      label: l, usd: types8[l], color: typeColor(l) || MP_OTHER_COLOR,
+      target: l === stockLabel ? stockTarget : (100 - stockTarget) * (restNow ? types8[l] / restNow : 0),
+    })));
+  } else {
+    mpPie(grid, '8. Stocks, bonds, deposits, liquid assets', types8, '', typeOrder, true, () => 0, typeColor);
+  }
+  // 9: target -- Freedom 20% of the two, IBKR the rest.
+  const FREEDOM_TARGET_PCT = 20;
+  mpTargetPie(grid, '9. IBKR vs Freedom', [
+    { label: brokerName('Freedom24'), usd: byBroker.Freedom24 || 0, target: FREEDOM_TARGET_PCT, color: MP_COLORS.broker.Freedom24 },
+    { label: brokerName('IBKR'), usd: byBroker.IBKR || 0, target: 100 - FREEDOM_TARGET_PCT, color: MP_COLORS.broker.IBKR },
+  ]);
   // 10: target -- Russian infrastructure RU_TARGET_PCT of everything (no real estate).
   mpTargetPie(grid, '10. Russian infrastructure vs the rest', [
     { label: 'Russia 🇷🇺', usd: ruTotal, target: RU_TARGET_PCT, color: MP_COLORS.country.RU },
