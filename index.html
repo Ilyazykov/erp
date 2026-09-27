@@ -54,6 +54,7 @@
   .pie-grid .pie-card { flex: 1 1 420px; max-width: 560px; min-width: 0; overflow: hidden; background: #13191f; border: 1px solid #1e2830; border-radius: 8px; padding: 12px 12px 4px; }
   .pie-grid .pie-card h4 { margin: 0 0 4px; font-size: 0.9rem; font-weight: 600; color: #e6edf3; }
   .pie-grid .pie-plot { height: 380px; }
+  .pie-grid .pie-plot.target { height: 440px; }
   .pie-grid .pie-total { margin: 6px 0 8px; text-align: center; font-size: 0.9rem; color: #c9d1d9; }
   .drop-zone { margin-top: 8px; padding: 14px; border: 1px dashed #2a3540; border-radius: 6px; color: #8b949e;
     text-align: center; font-size: 0.85rem; }
@@ -2696,12 +2697,23 @@ function mpContrastText(hex) {
 function mpTargetPie(el, title, items, note = '') {
   const card = document.createElement('div');
   card.className = 'pie-card';
-  card.innerHTML = `<h4>${mpEscapeHtml(title)}</h4><div class="pie-plot"></div><p class="pie-total"></p>${note ? `<p class="note">${mpEscapeHtml(note)}</p>` : ''}`;
+  card.innerHTML = `<h4>${mpEscapeHtml(title)}</h4><div class="pie-plot target"></div><p class="pie-total"></p>${note ? `<p class="note">${mpEscapeHtml(note)}</p>` : ''}`;
   el.appendChild(card);
   const usable = items.filter(it => it.usd > 0 || it.target > 0);
   const total = usable.reduce((s, it) => s + Math.max(0, it.usd), 0);
   if (!total) { card.querySelector('.pie-plot').innerHTML = '<p class="empty-note">No data.</p>'; return; }
   card.querySelector('.pie-total').innerHTML = `Total: <b>${mpFormatUsd(total)}</b>`;
+  // What each slice should be in dollars at its target share.
+  const targets = document.createElement('table');
+  targets.className = 'data-table';
+  targets.style.cssText = 'width:auto;margin:0 auto 8px';
+  targets.innerHTML = `<thead><tr><th></th><th>Now</th><th>Target</th><th>Change</th></tr></thead><tbody>${usable.map(it => {
+    const want = it.target / 100 * total;
+    const delta = want - Math.max(0, it.usd);
+    return `<tr><td class="ticker">${mpEscapeHtml(it.label)}</td><td>${mpFormatUsd(Math.max(0, it.usd))}</td>
+      <td><b>${mpFormatUsd(want)}</b></td><td class="${delta >= 0 ? 'pos' : 'neg'}">${delta >= 0 ? '+' : '−'}${mpFormatUsd(Math.abs(delta))}</td></tr>`;
+  }).join('')}</tbody>`;
+  card.querySelector('.pie-total').after(targets);
   const R_BASE = 100, PP_SCALE = 2;
   let cursor = 0;
   const rows = usable.map(it => {
@@ -2715,8 +2727,9 @@ function mpTargetPie(el, title, items, note = '') {
   const layout = mpDonutLayout(maxR);
   layout.paper_bgcolor = layout.plot_bgcolor = layout.polar.bgcolor = '#13191f';
   layout.showlegend = false;
-  layout.margin = { t: 20, b: 20, l: 20, r: 20 };
-  layout.polar.domain = { x: [0.08, 0.92], y: [0.08, 0.92] };
+  layout.margin = { t: 10, b: 10, l: 10, r: 10 };
+  layout.polar.domain = { x: [0, 1], y: [0, 1] };
+  layout.polar.radialaxis.range = [0, maxR * 1.03];   // fill the card, only a hair of room past the widest slice
   Plotly.newPlot(card.querySelector('.pie-plot'), [
     {
       type: 'barpolar', r: rows.map(r => r.r), theta: rows.map(r => r.theta), width: rows.map(r => r.width),
@@ -2939,16 +2952,28 @@ async function mpRenderCharts() {
   if (wCny === null) {
     mpPie(grid, '11. Russian infrastructure without stocks', ruNoStocks, '', ruOrder, false, () => 0, ruColor);
   } else {
+    // Per currency: deposits can't be sold or topped up -- target = what's
+    // there; liquid assets and cash -- target 0 (they're what gets moved);
+    // bonds take the rest of that currency's w_CNY / 1 - w_CNY share.
     const ccyOf = l => (l.includes(MP_RU_INFRA_CURRENCIES.CNY) ? 'CNY' : 'RUB');
-    const ccyTotal = {};
-    for (const [l, v] of Object.entries(ruNoStocks)) mpAdd(ccyTotal, ccyOf(l), v);
-    const targetShare = { CNY: wCny * 100, RUB: (1 - wCny) * 100 };
-    const labels = Object.keys(ruNoStocks).sort((a, b) => ruOrder.indexOf(a) - ruOrder.indexOf(b));
+    const typeOf = l => MP_RU_INFRA_TYPES.find(t => l.startsWith(MP_RU_INFRA_LABELS[t]));
+    const total = Object.values(ruNoStocks).reduce((s, v) => s + v, 0);
+    const ccyTarget = { CNY: wCny * total, RUB: (1 - wCny) * total };
+    const targetUsd = {};
+    for (const [l, v] of Object.entries(ruNoStocks)) {
+      const t = typeOf(l);
+      if (t === 'deposit') targetUsd[l] = v;
+      else if (t === 'liquid' || t === 'cash') targetUsd[l] = 0;
+    }
+    for (const c of ['RUB', 'CNY']) {
+      const fixed = Object.entries(targetUsd).filter(([l]) => ccyOf(l) === c).reduce((s, [, v]) => s + v, 0);
+      const bond = `${MP_RU_INFRA_LABELS.bond} ${MP_RU_INFRA_CURRENCIES[c]}`;
+      targetUsd[bond] = Math.max(0, ccyTarget[c] - fixed);
+    }
+    const labels = Object.keys(targetUsd).sort((a, b) => ruOrder.indexOf(a) - ruOrder.indexOf(b));
     mpTargetPie(grid, '11. Russian infrastructure without stocks', labels.map(l => ({
-      label: l, usd: ruNoStocks[l], color: ruColor(l) || MP_OTHER_COLOR,
-      target: targetShare[ccyOf(l)] * ruNoStocks[l] / ccyTotal[ccyOf(l)],
-    })), `Target: CNY ${(wCny * 100).toFixed(1)}% / RUB ${((1 - wCny) * 100).toFixed(1)}% (USD/RUB → CNY Weight). `
-      + 'Past the dotted circle = over target, inside = under. Labels: actual / target.');
+      label: l, usd: ruNoStocks[l] || 0, color: ruColor(l) || MP_OTHER_COLOR, target: targetUsd[l] / total * 100,
+    })));
   }
   mpPie(grid, '12. Asset types with real estate', typesWithRealEstate, '', typeOrder, true, () => 0, typeColor);
   // Size every plot to its card once the grid has laid out.
