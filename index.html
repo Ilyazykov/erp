@@ -2801,6 +2801,7 @@ function mpAssetBuckets(rows, keep = null) {
 // ---- Salary plan (Charts tab): where a month's salary goes, step by step,
 // against the charts' targets. Money is only ever added, except step 6. ----
 let mpSalaryCtx = null;
+const FREEDOM_SHARE = 0.2;   // Freedom's target share of IBKR + Freedom (chart 9)
 // Target split of the crypto (chart 6, salary step 2); any other coin: 0.
 const MP_CRYPTO_TARGETS = { BTC: 76, ETH: 18, SOL: 3, GRAM: 2, TAO: 1 };
 const MP_SALARY_KEY = 'mp_salary_usd';
@@ -2816,6 +2817,10 @@ function mpSalaryPlan(c, salary) {
 
   // 0. Rent, then a month's expenses into the liquidity fund -- amounts not set up yet.
   rows.push(['0', 'Rent; month’s expenses → liquidity fund', null, 'not set up yet']);
+  // Cash above its $10,000 target joins the salary.
+  parts.cashFree = Math.max(0, c.cash - 10000);
+  left += parts.cashFree;
+  if (parts.cashFree) rows.push(['0', 'Cash above $10,000 added to the salary', parts.cashFree, '']);
   // 1-3. Gold, crypto, Russian infrastructure up to 5% each of the new total.
   parts.gold = take(0.05 * newTotal - c.gold);
   rows.push(['1', 'Gold up to 5%', parts.gold, `now ${(c.gold / c.total * 100).toFixed(1)}%`]);
@@ -2865,14 +2870,20 @@ function mpSalaryPlan(c, salary) {
   } else stockAdd = take(left);
   rows.push(['4', 'Stocks (US ERP target)', stockAdd, '']);
   parts.usBonds = take(left);
-  rows.push(['4', 'US Treasuries at IBKR', parts.usBonds, '']);
+  // US Treasuries split between the two brokers at their target shares.
+  parts.usBondsFreedom = parts.usBonds * FREEDOM_SHARE;
+  rows.push(['4', `US Treasuries \u2014 IBKR ${Math.round((1 - FREEDOM_SHARE) * 100)}% / Freedom ${Math.round(FREEDOM_SHARE * 100)}%`, parts.usBonds,
+    parts.usBonds ? `IBKR ${mpFormatUsd(parts.usBonds - parts.usBondsFreedom)}, Freedom ${mpFormatUsd(parts.usBondsFreedom)}` : '']);
   // 4.1 Individual companies up to 5% of the stocks (US Stocks Z-score allocator), the rest into the world fund.
   const usTotal = US_STOCK_TICKERS.reduce((s, t) => s + (c.valueByTicker[t] || 0), 0);
   const indAdd = Math.max(0, Math.min(stockAdd, 0.05 * (c.stockAll + stockAdd) - usTotal));
   parts.usStocks = mpSalaryAllocate(DATA && DATA.usTargetWeightsRaw, usTotal, indAdd, c);
   rows.push(['4.1', 'Individual stocks up to 5% of stocks', indAdd, mpSalaryBuysText(parts.usStocks)]);
   const fundAdd = stockAdd - indAdd;
-  parts.vwce = Math.max(0, Math.min(fundAdd, 0.2 * (c.ibkr + c.freedom + fundAdd) - c.freedom));
+  // Freedom up to 20% of IBKR + Freedom after everything else step 4 puts
+  // at IBKR (individual stocks, US Treasuries).
+  parts.vwce = Math.max(0, Math.min(fundAdd,
+    FREEDOM_SHARE * (c.ibkr + c.freedom + indAdd + parts.usBonds + fundAdd) - c.freedom - parts.usBondsFreedom));
   parts.vwra = fundAdd - parts.vwce;
   if (parts.vwce > 0) rows.push(['4.1', 'World fund — VWCE at Freedom (up to 20% of IBKR + Freedom)', parts.vwce, '']);
   if (parts.vwra > 0) rows.push(['4.1', 'World fund — VWRA at IBKR', parts.vwra, '']);
@@ -2929,6 +2940,8 @@ function mpSalaryDeltas(c, plan) {
     else out.push({ quantity: null, price_usd: null, ...template, value_usd: usd });
   };
   const largest = rows => [...rows].sort((a, b) => b.value_usd - a.value_usd)[0];
+  // Spent cash comes out of the cash balances, each by its size.
+  spread(-p.cashFree, c.cashRows.filter(r => r.instrument_type === 'cash' && r.value_usd > 0), {});
   spread(p.gold, held.filter(r => r.asset_class === 'gold'), { account: 'Revolut', ticker: 'XAU', asset_class: 'gold', instrument_type: 'gold', currency: 'USD' });
   const cryptoRows = held.filter(r => r.asset_class === 'crypto');
   for (const [t, usd] of Object.entries(p.coins)) {
@@ -2938,7 +2951,8 @@ function mpSalaryDeltas(c, plan) {
   }
   const usStock = { account: 'IBKR', asset_class: 'us_stock', instrument_type: 'stock', currency: 'USD', underlying_currency: 'USD', infra_region: 'foreign' };
   for (const b of p.usStocks) spread(b.usd, held.filter(r => r.ticker === b.ticker), { ...usStock, ticker: b.ticker });
-  spread(p.usBonds, [], { account: 'IBKR', ticker: 'US Treasuries', asset_class: 'bond', instrument_type: 'bond', currency: 'USD', underlying_currency: 'USD', infra_region: 'foreign' });
+  spread(p.usBondsFreedom, [], { account: 'Freedom24', ticker: 'US Treasuries', asset_class: 'bond', instrument_type: 'bond', currency: 'USD', underlying_currency: 'USD', infra_region: 'foreign' });
+  spread(p.usBonds - p.usBondsFreedom, [], { account: 'IBKR', ticker: 'US Treasuries', asset_class: 'bond', instrument_type: 'bond', currency: 'USD', underlying_currency: 'USD', infra_region: 'foreign' });
   const etf = { asset_class: 'western_etf', instrument_type: 'stock', infra_region: 'foreign' };
   spread(p.vwce, held.filter(r => r.ticker === 'VWCE' && r.account === 'Freedom24'), { ...etf, account: 'Freedom24', ticker: 'VWCE', currency: 'EUR', underlying_currency: 'EUR' });
   spread(p.vwra, held.filter(r => r.ticker === 'VWRA' && r.account === 'IBKR'), { ...etf, account: 'IBKR', ticker: 'VWRA', currency: 'USD', underlying_currency: 'USD' });
@@ -3276,7 +3290,7 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     pie(grid, '8. Stocks, bonds, deposits, liquid assets', types8, '', typeOrder, true, () => 0, typeColor);
   }
   // 9: target -- Freedom 20% of the two, IBKR the rest.
-  const FREEDOM_TARGET_PCT = 20;
+  const FREEDOM_TARGET_PCT = FREEDOM_SHARE * 100;
   tpie(grid, '9. IBKR vs Freedom', [
     { label: brokerName('Freedom24'), usd: byBroker.Freedom24 || 0, target: FREEDOM_TARGET_PCT, color: MP_COLORS.broker.Freedom24 },
     { label: brokerName('IBKR'), usd: byBroker.IBKR || 0, target: 100 - FREEDOM_TARGET_PCT, color: MP_COLORS.broker.IBKR },
@@ -3313,6 +3327,7 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     stockAll: types8[MP_ASSET_CLASS_LABELS.stock] || 0, groupAll: total8,   // chart 8: the whole portfolio
     ibkr: byBroker.IBKR || 0, freedom: byBroker.Freedom24 || 0, coins: crypto,
     valueByTicker, priceUsdByTicker, holdings: baseIn.data, before: recorded,
+    cash: types[MP_ASSET_CLASS_LABELS.cash] || 0, cashRows: baseIn.cashRows,
   };
   if (!draw) return ctx;
 
