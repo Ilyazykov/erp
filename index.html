@@ -323,6 +323,12 @@
   <div id="charts_signed_out" class="empty-note">Sign in with Google (top of page) to see your portfolio charts.</div>
   <div id="charts_signed_in" style="display:none">
     <p class="note">Built from the My Portfolio tables. Credit-card debt is netted against liquid assets.</p>
+    <div class="section-title">Salary</div>
+    <div class="form-row">
+      <label for="mp_salary_amount">Salary to allocate (USD):</label>
+      <input type="number" id="mp_salary_amount" min="0" step="100" placeholder="0" style="width:140px">
+    </div>
+    <div id="mp_salary_plan"></div>
     <p class="empty-note" id="mp_charts_status"></p>
     <div id="mp_charts_grid" class="pie-grid"></div>
   </div>
@@ -2783,6 +2789,105 @@ function mpAssetBuckets(rows, keep = null) {
     .map(([k, v]) => [MP_ASSET_CLASS_LABELS[k] || k, v]));
 }
 
+// ---- Salary plan (Charts tab): where a month's salary goes, step by step,
+// against the charts' targets. Money is only ever added, except step 6. ----
+let mpSalaryCtx = null;
+const MP_SALARY_KEY = 'mp_salary_usd';
+function mpRenderSalaryPlan() {
+  const wrap = document.getElementById('mp_salary_plan');
+  const input = document.getElementById('mp_salary_amount');
+  const salary = Math.max(0, parseFloat(input.value) || 0);
+  if (!mpSalaryCtx || !salary) { wrap.innerHTML = ''; return; }
+  const c = mpSalaryCtx;
+  const rows = [];   // [step, action, usd, details]
+  let left = salary;
+  const take = need => { const a = Math.max(0, Math.min(left, need)); left -= a; return a; };
+  const newTotal = c.total + salary;
+
+  // 0. Rent, then a month's expenses into the liquidity fund -- amounts not set up yet.
+  rows.push(['0', 'Rent; month’s expenses → liquidity fund', null, 'not set up yet']);
+  // 1-3. Gold, crypto, Russian infrastructure up to 5% each of the new total.
+  const gold = take(0.05 * newTotal - c.gold);
+  rows.push(['1', 'Gold up to 5%', gold, `now ${(c.gold / c.total * 100).toFixed(1)}%`]);
+  const crypto = take(0.05 * newTotal - c.crypto);
+  rows.push(['2', 'Crypto up to 5%', crypto, `now ${(c.crypto / c.total * 100).toFixed(1)}%`]);
+  const ruAdd = take(0.05 * newTotal - c.ruTotal);
+  rows.push(['3', 'Russian infrastructure up to 5%', ruAdd, `now ${(c.ruTotal / c.total * 100).toFixed(1)}%`]);
+
+  // 4. The rest: stocks vs bonds / deposits / liquid assets at the US ERP target.
+  const toGroup = left;
+  let stockAdd = 0;
+  if (c.usAlloc && (c.usAlloc.Stocks + c.usAlloc.Bonds) > 0) {
+    const share = c.usAlloc.Stocks / (c.usAlloc.Stocks + c.usAlloc.Bonds);
+    stockAdd = take(share * (c.nonRuGroup + toGroup) - c.nonRuStock);
+  } else stockAdd = take(toGroup);
+  rows.push(['4', 'Stocks (US ERP target)', stockAdd, '']);
+  const bondsAdd = take(left);
+  rows.push(['4', 'Bonds / deposits / liquid assets (non-Russian)', bondsAdd, '']);
+  // 4.1 Individual companies up to 5% of the stocks (US Stocks Z-score allocator), the rest into the world fund.
+  const usTotal = US_STOCK_TICKERS.reduce((s, t) => s + (c.valueByTicker[t] || 0), 0);
+  const indAdd = Math.max(0, Math.min(stockAdd, 0.05 * (c.nonRuStock + stockAdd) - usTotal));
+  rows.push(['4.1', 'Individual stocks up to 5% of stocks', indAdd, mpSalaryBuys(DATA && DATA.usTargetWeightsRaw, usTotal, indAdd, c)]);
+  const fundAdd = stockAdd - indAdd;
+  const toFreedom = Math.max(0, Math.min(fundAdd, 0.2 * (c.ibkr + c.freedom + fundAdd) - c.freedom));
+  if (toFreedom > 0) rows.push(['4.1', 'World fund — VWCE at Freedom (up to 20% of IBKR + Freedom)', toFreedom, '']);
+  if (fundAdd - toFreedom > 0) rows.push(['4.1', 'World fund — VWRA at IBKR', fundAdd - toFreedom, '']);
+
+  // 5-7. Inside Russian infrastructure, with the money from step 3.
+  let ruLeft = ruAdd;
+  const cell = (t, ccy) => c.ruCells[`${MP_RU_INFRA_LABELS[t]} ${MP_RU_INFRA_CURRENCIES[ccy]}`] || 0;
+  const ruNew = c.ruTotal + ruAdd;
+  let ruStockTarget = cell('stock', 'RUB');
+  if (c.ruAlloc && (c.ruAlloc.Stocks + c.ruAlloc.Bonds) > 0) {
+    ruStockTarget = c.ruAlloc.Stocks / (c.ruAlloc.Stocks + c.ruAlloc.Bonds) * ruNew;
+    const ruStockAdd = Math.max(0, Math.min(ruLeft, ruStockTarget - cell('stock', 'RUB')));
+    ruLeft -= ruStockAdd;
+    const ruStocksNow = RU_STOCK_TICKERS.reduce((s, t) => s + (c.valueByTicker[t] || 0), 0);
+    rows.push(['5', 'Russian stocks (ERP & Stocks/Bonds target)', ruStockAdd, mpSalaryBuys(DATA && DATA.ruTargetWeightsRaw, ruStocksNow, ruStockAdd, c)]);
+  }
+  let cnySold = 0;
+  if (c.wCny !== null && c.wCny < 0.3) {
+    const cnyTarget = Math.max(0, c.wCny * (ruNew - ruStockTarget) - cell('deposit', 'CNY'));
+    cnySold = Math.max(0, cell('bond', 'CNY') - cnyTarget);
+    rows.push(['6', `Sell yuan bonds (w_CNY ${(c.wCny * 100).toFixed(1)}% < 30%)`, -cnySold, '']);
+  }
+  const ruLiquid = cell('liquid', 'RUB') + cell('liquid', 'CNY');
+  rows.push(['7', 'Rouble bonds (step 3 leftover + yuan sale + Russian liquidity)', ruLeft + cnySold + ruLiquid,
+    ruLiquid ? `incl. ${mpFormatUsd(ruLiquid)} from Russian liquid assets` : '']);
+
+  wrap.innerHTML = `<div style="overflow-x:auto"><table class="data-table" style="width:auto">
+    <thead><tr><th>Step</th><th>Action</th><th>USD</th><th></th></tr></thead>
+    <tbody>${rows.map(([step, what, usd, detail]) => `<tr>
+      <td>${step}</td><td class="ticker">${mpEscapeHtml(what)}</td>
+      <td class="${usd < 0 ? 'neg' : ''}">${usd === null ? '—' : (usd < 0 ? '−' : '') + mpFormatUsd(Math.abs(usd))}</td>
+      <td class="muted" style="text-align:left">${detail || ''}</td></tr>`).join('')}</tbody></table></div>`;
+}
+// Tickers to buy with `usd` via the Z-score allocator (US Stocks Z-score /
+// Yield per Stock & Rebalancing), as "N × TICKER" (sales too, if the
+// allocator trims an overweight Z < -1.5 name).
+function mpSalaryBuys(weights, totalUsd, usd, c) {
+  if (!weights || !weights.length || usd <= 0) return '';
+  const items = weights.map(r => ({
+    label: r.ticker, target: r.target, z: r.z, priceUsd: c.priceUsdByTicker[r.ticker] || null,
+    current: (c.valueByTicker[r.ticker] || 0) / (totalUsd || 1) * 100,
+  }));
+  const { deltaUsdByItem } = mpAllocatePoolByZPriorityWithLots(items, totalUsd, usd);
+  return items.map(it => [it, deltaUsdByItem.get(it) || 0]).filter(([, d]) => Math.abs(d) > 0.5)
+    .sort((a, b) => b[1] - a[1])
+    .map(([it, d]) => {
+      const n = it.priceUsd ? Math.round(Math.abs(d) / it.priceUsd) : null;
+      return mpEscapeHtml(`${d < 0 ? 'sell ' : ''}${n ? `${n} × ` : ''}${it.label}${n ? '' : ` $${Math.round(Math.abs(d))}`}`);
+    }).join(', ');
+}
+{
+  const input = document.getElementById('mp_salary_amount');
+  try { input.value = localStorage.getItem(MP_SALARY_KEY) || ''; } catch { /* no storage */ }
+  input.addEventListener('input', () => {
+    try { localStorage.setItem(MP_SALARY_KEY, input.value); } catch { /* no storage */ }
+    mpRenderSalaryPlan();
+  });
+}
+
 let mpChartsRun = 0;
 let mpChartsPending = false;
 async function mpRenderCharts() {
@@ -2933,9 +3038,45 @@ async function mpRenderCharts() {
   }
   const ruColor = l => ruColorByLabel[l] || null;
 
+  // Dollar targets for charts 3 and 8 (the whole stays the same: chart 3's
+  // targets add up to today's total).
+  //   3: cash $10,000, gold 5%, crypto 5% of everything;
+  //   8: gets what's left of the whole -- stocks at the US ERP tab's target
+  //      share of it, bonds / deposits / liquid assets the rest in today's
+  //      proportions; chart 3 takes those four at chart 8's dollars.
+  const CASH_TARGET_USD = 10000, GOLD_TARGET_PCT = 5, CRYPTO_TARGET_PCT = 5;
+  const total3 = Object.values(types).reduce((s, v) => s + v, 0);
+  const types8 = mpAssetBuckets(assetRows.filter(r => !isRealEstate(r)), ['stock', 'bond', 'deposit', 'liquid']);
+  const total8 = Object.values(types8).reduce((s, v) => s + v, 0);
+  const targetTotal8 = total3 - CASH_TARGET_USD - (GOLD_TARGET_PCT + CRYPTO_TARGET_PCT) / 100 * total3;
+  const usAlloc = DATA && DATA.usAllocTargetRaw;
+  let target8 = null;
+  if (usAlloc && (usAlloc.Stocks + usAlloc.Bonds) > 0 && total8 > 0 && targetTotal8 > 0) {
+    const stockLabel = MP_ASSET_CLASS_LABELS.stock;
+    const stockUsd = usAlloc.Stocks / (usAlloc.Stocks + usAlloc.Bonds) * targetTotal8;
+    const restNow = total8 - (types8[stockLabel] || 0);
+    target8 = Object.fromEntries(Object.entries(types8).map(([l, v]) =>
+      [l, l === stockLabel ? stockUsd : (targetTotal8 - stockUsd) * (restNow ? v / restNow : 0)]));
+    if (!(stockLabel in target8)) target8[stockLabel] = stockUsd;
+  }
+  const target3 = target8 && {
+    ...target8,
+    [MP_ASSET_CLASS_LABELS.cash]: CASH_TARGET_USD,
+    [MP_ASSET_CLASS_LABELS.gold]: GOLD_TARGET_PCT / 100 * total3,
+    [MP_ASSET_CLASS_LABELS.crypto]: CRYPTO_TARGET_PCT / 100 * total3,
+  };
+
   mpPie(grid, '1. Currencies', byCurrency, '', currencyOrder, true, l => (isFiatLabel(l) ? 0 : 1), currencyColor);
   mpPie(grid, '2. Banks & brokers', brokerBuckets, '', brokerOrder, true, () => 0, brokerColor);
-  mpPie(grid, '3. Asset types', types, '', typeOrder, true, () => 0, typeColor);
+  if (target3) {
+    const labels = [...new Set([...Object.keys(types), ...Object.keys(target3)])].sort((a, b) => typeOrder.indexOf(a) - typeOrder.indexOf(b));
+    const sum3 = Object.values(target3).reduce((s, v) => s + v, 0);
+    mpTargetPie(grid, '3. Asset types', labels.map(l => ({
+      label: l, usd: types[l] || 0, color: typeColor(l) || MP_OTHER_COLOR, target: (target3[l] || 0) / total3 * 100,
+    })), '', sum3);
+  } else {
+    mpPie(grid, '3. Asset types', types, '', typeOrder, true, () => 0, typeColor);
+  }
   mpPie(grid, '4. Stocks by country', countries, 'Funds split by the countries of what they hold.', null, true, () => 0, countryColor);
   mpPie(grid, '5. Stocks by country, EU as one', countriesEu, 'The same, with the EU member states together.', null, true, () => 0, countryColor,
     { 'EU 🇪🇺': euMembers });
@@ -3001,17 +3142,11 @@ async function mpRenderCharts() {
   else mpPie(grid, '7. Russian infrastructure', ruAll, '', ruOrder, false, () => 0, ruColor);
   // 8: stocks at the US ERP tab's target share; bonds, deposits and liquid
   // assets share the rest in today's proportions.
-  const types8 = mpAssetBuckets(assetRows.filter(r => !isRealEstate(r)), ['stock', 'bond', 'deposit', 'liquid']);
-  const usAlloc = DATA && DATA.usAllocTargetRaw;
-  if (usAlloc && (usAlloc.Stocks + usAlloc.Bonds) > 0) {
-    const stockTarget = usAlloc.Stocks / (usAlloc.Stocks + usAlloc.Bonds) * 100;
-    const stockLabel = MP_ASSET_CLASS_LABELS.stock;
-    const restNow = Object.entries(types8).filter(([l]) => l !== stockLabel).reduce((s, [, v]) => s + v, 0);
+  if (target8) {
     const labels = Object.keys(types8).sort((a, b) => typeOrder.indexOf(a) - typeOrder.indexOf(b));
     mpTargetPie(grid, '8. Stocks, bonds, deposits, liquid assets', labels.map(l => ({
-      label: l, usd: types8[l], color: typeColor(l) || MP_OTHER_COLOR,
-      target: l === stockLabel ? stockTarget : (100 - stockTarget) * (restNow ? types8[l] / restNow : 0),
-    })));
+      label: l, usd: types8[l], color: typeColor(l) || MP_OTHER_COLOR, target: target8[l] / total8 * 100,
+    })), '', targetTotal8);
   } else {
     mpPie(grid, '8. Stocks, bonds, deposits, liquid assets', types8, '', typeOrder, true, () => 0, typeColor);
   }
@@ -3036,6 +3171,28 @@ async function mpRenderCharts() {
   } else if (target11) drawRuTarget('11. Russian infrastructure without stocks', ruNoStocks, target11);
   else mpPie(grid, '11. Russian infrastructure without stocks', ruNoStocks, '', ruOrder, false, () => 0, ruColor);
   mpPie(grid, '12. Asset types with real estate', typesWithRealEstate, '', typeOrder, true, () => 0, typeColor);
+  // What the salary plan (mpRenderSalaryPlan) works from.
+  const valueByTicker = {}, priceUsdByTicker = {};
+  for (const r of base.data) {
+    if (r.value_usd) valueByTicker[r.ticker] = (valueByTicker[r.ticker] || 0) + r.value_usd;
+    if (r.price_usd) priceUsdByTicker[r.ticker] = r.price_usd;
+  }
+  const missingPrices = [...US_STOCK_TICKERS, ...RU_STOCK_TICKERS].filter(t => !(t in priceUsdByTicker));
+  if (missingPrices.length) {
+    const { data: extra } = await sb.from('market_prices').select('ticker, price_usd').in('ticker', missingPrices);
+    for (const r of extra || []) if (r.price_usd) priceUsdByTicker[r.ticker] = r.price_usd;
+  }
+  const nonRu8 = mpAssetBuckets(assetRows.filter(r => !isRealEstate(r) && !isRu(r)), ['stock', 'bond', 'deposit', 'liquid']);
+  mpSalaryCtx = {
+    total: allTotal, gold: types[MP_ASSET_CLASS_LABELS.gold] || 0, crypto: types[MP_ASSET_CLASS_LABELS.crypto] || 0,
+    ruTotal, ruCells: ruAll, wCny, ruAlloc: alloc, usAlloc,
+    nonRuStock: nonRu8[MP_ASSET_CLASS_LABELS.stock] || 0,
+    nonRuGroup: Object.values(nonRu8).reduce((s, v) => s + v, 0),
+    ibkr: byBroker.IBKR || 0, freedom: byBroker.Freedom24 || 0,
+    valueByTicker, priceUsdByTicker,
+  };
+  mpRenderSalaryPlan();
+
   // Size every plot to its card once the grid has laid out.
   requestAnimationFrame(() => grid.querySelectorAll('.pie-plot').forEach(el => { if (el.data) Plotly.Plots.resize(el); }));
 }
