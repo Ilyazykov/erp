@@ -2645,7 +2645,9 @@ function mpPie(el, title, buckets, note = '', order = null, groupSmall = true, s
   card.innerHTML = `<h4>${mpEscapeHtml(title)}</h4><div class="pie-plot"></div><p class="pie-total"></p>`
     + `<p class="note pie-other" hidden></p>${note ? `<p class="note">${mpEscapeHtml(note)}</p>` : ''}`;
   el.appendChild(card);
-  const rank = k => (/^other\b/.test(k) ? 1e9 : order && order.includes(k) ? order.indexOf(k) : 1e6);
+  // (`order` may also be a function label -> rank number)
+  const rank = k => (/^other\b/.test(k) ? 1e9 : typeof order === 'function' ? order(k)
+    : order && order.includes(k) ? order.indexOf(k) : 1e6);
   let entries = Object.entries(buckets).filter(([, v]) => v > 0.005)
     .sort((a, b) => (rank(a[0]) - rank(b[0])) || (b[1] - a[1]));
   if (!entries.length) { card.querySelector('.pie-plot').innerHTML = '<p class="empty-note">No data.</p>'; return; }
@@ -2857,11 +2859,9 @@ function mpSalaryPlan(c, salary) {
   const ruNew = c.ruTotal + ruAdd;
   const ruStockTarget = c.ruAlloc && (c.ruAlloc.Stocks + c.ruAlloc.Bonds) > 0
     ? c.ruAlloc.Stocks / (c.ruAlloc.Stocks + c.ruAlloc.Bonds) * ruNew : cell('stock', 'RUB');
-  parts.cnySold = 0;
-  if (c.wCny !== null && c.wCny < 0.3) {
-    const cnyTarget = Math.max(0, c.wCny * (ruNew - ruStockTarget) - cell('deposit', 'CNY'));
-    parts.cnySold = Math.max(0, cell('bond', 'CNY') - cnyTarget);
-  }
+  // Yuan bonds' target: w_CNY of the non-stock part, less yuan deposits.
+  const cnyTarget = c.wCny !== null ? Math.max(0, c.wCny * (ruNew - ruStockTarget) - cell('deposit', 'CNY')) : null;
+  parts.cnySold = cnyTarget !== null && c.wCny < 0.3 ? Math.max(0, cell('bond', 'CNY') - cnyTarget) : 0;
   parts.ruLiquid = cell('liquid', 'RUB') + cell('liquid', 'CNY');
   const ruPool = ruAdd + parts.cnySold + parts.ruLiquid;
   const ruStockAdd = Math.max(0, Math.min(ruPool, ruStockTarget - cell('stock', 'RUB')));
@@ -2870,8 +2870,12 @@ function mpSalaryPlan(c, salary) {
   const ruStocksSpent = parts.ruStocks.reduce((s, b) => s + b.usd, 0);
   rows.push(['5', 'Russian stocks (ERP & Stocks/Bonds target)', ruStocksSpent, mpSalaryBuysText(parts.ruStocks)]);
   if (parts.cnySold) rows.push(['6', `Sell yuan bonds (w_CNY ${(c.wCny * 100).toFixed(1)}% < 30%)`, -parts.cnySold, '']);
-  // Whatever the stocks didn't take (lot sizes included) goes to bonds.
-  parts.rubBonds = ruPool - ruStocksSpent;
+  // 7. What the stocks didn't take (lot sizes included) goes to bonds:
+  // yuan bonds up to their target first, the rest rouble bonds.
+  const bondMoney = ruPool - ruStocksSpent;
+  parts.cnyBought = cnyTarget !== null ? Math.max(0, Math.min(bondMoney, cnyTarget - cell('bond', 'CNY'))) : 0;
+  parts.rubBonds = bondMoney - parts.cnyBought;
+  if (parts.cnyBought) rows.push(['7', 'Yuan bonds up to the w_CNY target', parts.cnyBought, '']);
   rows.push(['7', 'Rouble bonds (the rest of Russian free money)', parts.rubBonds,
     parts.ruLiquid ? `incl. ${mpFormatUsd(parts.ruLiquid)} from Russian liquid assets` : '']);
   return { rows, parts };
@@ -2940,6 +2944,8 @@ function mpSalaryDeltas(c, plan) {
   for (const b of p.ruStocks) spread(b.usd, ru.filter(r => r.ticker === b.ticker), { ...ruStock, ticker: b.ticker });
   const ccy = r => r.underlying_currency || r.currency;
   spread(-p.cnySold, ru.filter(r => r.instrument_type === 'bond' && ccy(r) === 'CNY'), {});
+  spread(p.cnyBought, ru.filter(r => r.instrument_type === 'bond' && ccy(r) === 'CNY'),
+    { ...ruStock, ticker: 'SBBY', asset_class: 'moex_bond_etf', instrument_type: 'bond', underlying_currency: 'CNY' });
   // Russian liquid assets: what's free of the card debt netted against them
   // (p.ruLiquid) moves into the rouble bonds; the part covering the debt stays.
   spread(-p.ruLiquid, ru.filter(r => r.instrument_type === 'liquid'), {});
@@ -3168,7 +3174,13 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     [MP_ASSET_CLASS_LABELS.crypto]: CRYPTO_TARGET_PCT / 100 * total3,
   };
 
-  pie(grid, '1. Currencies', byCurrency, '', currencyOrder, true, l => (isFiatLabel(l) ? 0 : 1), currencyColor);
+  // Currencies first (the listed ones in order, then the rest largest first),
+  // then gold and crypto (listed ones in order, then the rest).
+  const currencyRank = l => {
+    const i = currencyOrder.indexOf(l);
+    return isFiatLabel(l) ? (i >= 0 ? i : 100) : 1000 + (i >= 0 ? i : 500);
+  };
+  pie(grid, '1. Currencies', byCurrency, '', currencyRank, true, l => (isFiatLabel(l) ? 0 : 1), currencyColor);
   pie(grid, '2. Banks & brokers', brokerBuckets, '', brokerOrder, true, () => 0, brokerColor);
   if (target3) {
     const labels = [...new Set([...Object.keys(types), ...Object.keys(target3)])].sort((a, b) => typeOrder.indexOf(a) - typeOrder.indexOf(b));
