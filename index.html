@@ -2583,6 +2583,11 @@ const MP_PIE_COLORS = ['#4a9ff5', '#7fd351', '#8e8e8e', '#f0c040', '#e8452c', '#
 // ---- Slice colours: brand / association colours, the same thing the same
 // colour on every chart. ----
 const MP_OTHER_COLOR = '#4a5563';
+const MP_SECTOR_COLORS = {
+  Financials: '#f08a3c', Industrials: '#f5c542', 'Health Care': '#9b5de5', 'Information Technology': '#3a9bf7',
+  'Communication Services': '#4cb86a', 'Consumer Discretionary': '#f29bd0', 'Consumer Staples': '#4fd1c5',
+  Energy: '#e8574d', Materials: '#8e8e93', Utilities: '#b9b4f5', 'Real Estate': '#f7b6d8', Unclassified: '#5c6470',
+};
 const MP_COLORS = {
   // currencies & coins
   currency: {
@@ -2737,13 +2742,17 @@ function mpTargetPie(el, title, items, note = '', targetTotal = null, shareOfTar
         : `<td class="${delta > 0 ? 'pos' : 'neg'}">${delta > 0 ? '+' : '−'}${fmt(Math.abs(delta))}</td>`) : ''}</tr>`;
   }).join('')}</tbody>`;
   card.querySelector('.pie-total').after(targets);
-  const R_BASE = 100, PP_SCALE = 2;
+  const R_BASE = 100;
   let cursor = 0;
   const rows = usable.map(it0 => {
     const it = shareOfTarget && targetTotal ? { ...it0, target: it0.target * total / targetTotal } : it0;
     const current = Math.max(0, it.usd) / total * 100;
     const w = current / 100 * 360;
-    const row = { ...it, current, theta: cursor + w / 2, width: w, r: Math.max(0, R_BASE + (current - it.target) * PP_SCALE) };
+    // Radius = the target circle x actual / target (slices over / under by the
+    // same proportion stand out the same, whatever their size); capped at
+    // 1.6x, and a slice with a 0 target sits at the cap.
+    const ratio = it.target > 0 ? current / it.target : (current > 0 ? Infinity : 1);
+    const row = { ...it, current, theta: cursor + w / 2, width: w, r: R_BASE * Math.min(1.6, ratio) };
     cursor += w;
     return row;
   });
@@ -3063,10 +3072,16 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   // 4. Stocks by country: shares by their own country, funds split by what they hold.
   const stockRows = assetRows.filter(r => r.instrument_type === 'stock' && r.value_usd > 0);
   const tickers = [...new Set(stockRows.map(r => r.ticker).filter(Boolean))];
-  const [{ data: fundCountries }, { data: direct }] = await Promise.all([
+  const [{ data: fundCountries }, { data: direct }, { data: fundSectors }] = await Promise.all([
     sb.from('fund_country_weights').select('*').in('fund', tickers),
-    sb.from('securities').select('market_ticker, country, country_code').in('market_ticker', tickers),
+    sb.from('securities').select('market_ticker, country, country_code, sector').in('market_ticker', tickers),
+    sb.from('fund_sector_weights').select('*').in('fund', tickers),
   ]);
+  // Stocks by sector: shares by their own sector, funds split by what they hold.
+  const sectorW = {};
+  for (const w of fundSectors || []) (sectorW[w.fund] ??= []).push(w);
+  const directSector = Object.fromEntries((direct || []).map(d => [d.market_ticker, d.sector]));
+  const bySector = {};
   const fundW = {};
   for (const w of fundCountries || []) (fundW[w.fund] ??= []).push(w);
   const directC = Object.fromEntries((direct || []).map(d => [d.market_ticker, d]));
@@ -3079,6 +3094,11 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   };
   let usSingles = 0;   // US shares bought one by one (not through a fund)
   for (const r of stockRows) {
+    const sw = sectorW[r.ticker];
+    if (sw) {
+      const t = sw.reduce((a, w) => a + Number(w.weight), 0);
+      for (const w of sw) mpAdd(bySector, w.sector, r.value_usd * Number(w.weight) / t);
+    } else mpAdd(bySector, directSector[r.ticker] || 'Unclassified', r.value_usd);
     if (!fundW[r.ticker] && US_STOCK_TICKERS.includes(r.ticker)) usSingles += r.value_usd;
     const ws = fundW[r.ticker];
     if (ws) {
@@ -3223,11 +3243,13 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   const slot5 = document.createElement('div');
   slot5.style.display = 'contents';
   if (draw) grid.appendChild(slot5);
+  pie(grid, '6. Stocks by sector', bySector, 'Funds split by the sectors of what they hold.', null, true, () => 0,
+    l => MP_SECTOR_COLORS[l] || null);
   {
     const coins = [...new Set([...Object.keys(crypto), ...Object.keys(MP_CRYPTO_TARGETS)])]
       .sort((a, b) => (cryptoOrder.includes(a) ? cryptoOrder.indexOf(a) : 99) - (cryptoOrder.includes(b) ? cryptoOrder.indexOf(b) : 99)
         || (crypto[b] || 0) - (crypto[a] || 0));
-    tpie(grid, '6. Crypto', coins.map(t => ({
+    tpie(grid, '7. Crypto', coins.map(t => ({
       label: t, usd: crypto[t] || 0, target: MP_CRYPTO_TARGETS[t] || 0, color: currencyColor(t) || mpSliceColor(t, () => null),
     })));
   }
@@ -3322,26 +3344,26 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
         : Math.max(0, restTargetPct) * (restNow ? grouped[l] / restNow : 0),
     })));
   }
-  if (target7) drawRuTarget('7. Russian infrastructure', ruAll, target7, ruTargetTotal);
-  else pie(grid, '7. Russian infrastructure', ruAll, '', ruOrder, false, () => 0, ruColor);
+  if (target7) drawRuTarget('8. Russian infrastructure', ruAll, target7, ruTargetTotal);
+  else pie(grid, '8. Russian infrastructure', ruAll, '', ruOrder, false, () => 0, ruColor);
   // 8: stocks at the US ERP tab's target share; bonds, deposits and liquid
   // assets share the rest in today's proportions.
   if (target8) {
     const labels = Object.keys(types8).sort((a, b) => typeOrder.indexOf(a) - typeOrder.indexOf(b));
-    tpie(grid, '8. Stocks, bonds, deposits, liquid assets', labels.map(l => ({
+    tpie(grid, '9. Stocks, bonds, deposits, liquid assets', labels.map(l => ({
       label: l, usd: types8[l], color: typeColor(l) || MP_OTHER_COLOR, target: target8[l] / total8 * 100,
     })));
   } else {
-    pie(grid, '8. Stocks, bonds, deposits, liquid assets', types8, '', typeOrder, true, () => 0, typeColor);
+    pie(grid, '9. Stocks, bonds, deposits, liquid assets', types8, '', typeOrder, true, () => 0, typeColor);
   }
   // 9: target -- Freedom 20% of the two, IBKR the rest.
   const FREEDOM_TARGET_PCT = FREEDOM_SHARE * 100;
-  tpie(grid, '9. IBKR vs Freedom', [
+  tpie(grid, '10. IBKR vs Freedom', [
     { label: brokerName('Freedom24'), usd: byBroker.Freedom24 || 0, target: FREEDOM_TARGET_PCT, color: MP_COLORS.broker.Freedom24 },
     { label: brokerName('IBKR'), usd: byBroker.IBKR || 0, target: 100 - FREEDOM_TARGET_PCT, color: MP_COLORS.broker.IBKR },
   ]);
   // 10: target -- Russian infrastructure RU_TARGET_PCT of everything (no real estate).
-  tpie(grid, '10. Russian infrastructure vs the rest', [
+  tpie(grid, '11. Russian infrastructure vs the rest', [
     { label: 'Russia 🇷🇺', usd: ruTotal, target: RU_TARGET_PCT, color: MP_COLORS.country.RU },
     { label: 'rest of the world 🌍', usd: allTotal - ruTotal, target: 100 - RU_TARGET_PCT, color: '#4a9ff5' },
   ]);
@@ -3351,10 +3373,10 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   if (target7) {
     const stock = `${MP_RU_INFRA_LABELS.stock} ${MP_RU_INFRA_CURRENCIES.RUB}`;
     const { [stock]: stockTarget, ...rest } = target7;
-    drawRuTarget('11. Russian infrastructure without stocks', ruNoStocks, rest, ruTargetTotal - stockTarget);
-  } else if (target11) drawRuTarget('11. Russian infrastructure without stocks', ruNoStocks, target11);
-  else pie(grid, '11. Russian infrastructure without stocks', ruNoStocks, '', ruOrder, false, () => 0, ruColor);
-  pie(grid, '12. Asset types with real estate', typesWithRealEstate, '', typeOrder, true, () => 0, typeColor);
+    drawRuTarget('12. Russian infrastructure without stocks', ruNoStocks, rest, ruTargetTotal - stockTarget);
+  } else if (target11) drawRuTarget('12. Russian infrastructure without stocks', ruNoStocks, target11);
+  else pie(grid, '12. Russian infrastructure without stocks', ruNoStocks, '', ruOrder, false, () => 0, ruColor);
+  pie(grid, '13. Asset types with real estate', typesWithRealEstate, '', typeOrder, true, () => 0, typeColor);
   // What the salary plan (mpSalaryPlan / mpSalaryDeltas) works from.
   const valueByTicker = {}, priceUsdByTicker = {};
   for (const r of base.data) {
