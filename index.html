@@ -2728,6 +2728,8 @@ function mpTargetPie(el, title, items, note = '', targetTotal = null, shareOfTar
   // (a slice the plan emptied -- sold off -- stays listed)
   const usable = items.filter(it => it.usd > 0 || it.target > 0 || (before && before[it.label] > 0));
   const total = usable.reduce((s, it) => s + Math.max(0, it.usd), 0);
+  // Targets are % of this: the target total (shareOfTarget) or today's total.
+  const base = shareOfTarget && targetTotal ? targetTotal : total;
   if (!total) { card.querySelector('.pie-plot').innerHTML = '<p class="empty-note">No data.</p>'; return; }
   card.querySelector('.pie-total').innerHTML = `Total: <b>${fmt(total)}</b>`
     // A target is never below what's there: only a real shortfall (> $1) is shown.
@@ -2740,7 +2742,7 @@ function mpTargetPie(el, title, items, note = '', targetTotal = null, shareOfTar
   // plan buys / sells, After (the chart's figures) and Target.
   const showDelta = before && !bought;
   targets.innerHTML = `<thead><tr><th></th><th>Now</th>${before ? `${showDelta ? '<th>Bought / sold</th>' : ''}<th>After</th>` : ''}<th>Target</th></tr></thead><tbody>${usable.map(it => {
-    const want = it.target / 100 * total;
+    const want = it.target / 100 * base;
     const was = before ? (before[it.label] || 0) : Math.max(0, it.usd);
     const delta = before ? it.usd - was : 0;
     const deltaCell = Math.abs(delta) < 0.005 ? '<td class="muted">0</td>'
@@ -2751,7 +2753,7 @@ function mpTargetPie(el, title, items, note = '', targetTotal = null, shareOfTar
     // Totals row.
     const nowSum = usable.reduce((a, it) => a + Math.max(0, before ? (before[it.label] || 0) : it.usd), 0);
     const afterSum = usable.reduce((a, it) => a + Math.max(0, it.usd), 0);
-    const wantSum = usable.reduce((a, it) => a + it.target / 100 * total, 0);
+    const wantSum = usable.reduce((a, it) => a + it.target / 100 * base, 0);
     const d = afterSum - nowSum;
     const dCell = Math.abs(d) < 0.005 ? '<td class="muted">0</td>'
       : `<td class="${d > 0 ? 'pos' : 'neg'}"><b>${d > 0 ? '+' : '−'}${fmt(Math.abs(d))}</b></td>`;
@@ -2770,14 +2772,15 @@ function mpTargetPie(el, title, items, note = '', targetTotal = null, shareOfTar
   const R_BASE = 100;
   let cursor = 0;
   const rows = usable.map(it0 => {
-    const it = shareOfTarget && targetTotal ? { ...it0, target: it0.target * total / targetTotal } : it0;
+    const it = it0;
     const current = Math.max(0, it.usd) / total * 100;
+    const wantUsd = it.target / 100 * base;
     const w = current / 100 * 360;
     // Radius from actual / target (slices over / under by the same proportion
     // stand out the same, whatever their size), softened by a square root so
     // a small slice 40% over bulges ~18%, not 40%; capped at 1.4x, where a
     // slice with a 0 target sits.
-    const ratio = it.target > 0 ? current / it.target : (current > 0 ? Infinity : 1);
+    const ratio = wantUsd > 0 ? Math.max(0, it.usd) / wantUsd : (it.usd > 0 ? Infinity : 1);
     const row = { ...it, current, theta: cursor + w / 2, width: w, r: R_BASE * Math.min(1.4, Math.sqrt(ratio)) };
     cursor += w;
     return row;
@@ -2794,7 +2797,7 @@ function mpTargetPie(el, title, items, note = '', targetTotal = null, shareOfTar
       type: 'barpolar', r: rows.map(r => r.r), theta: rows.map(r => r.theta), width: rows.map(r => r.width),
       marker: { color: rows.map(r => r.color), line: { color: '#0d1117', width: 1 } },
       hovertemplate: rows.map(r => `${r.label}<br>$${Math.round(r.usd).toLocaleString('en-US')} - ${r.current.toFixed(1)}%`
-        + `<br>target ${r.target.toFixed(1)}% = $${Math.round(r.target / 100 * (shareOfTarget && targetTotal ? targetTotal : total)).toLocaleString('en-US')}<extra></extra>`),
+        + `<br>target ${r.target.toFixed(1)}% = $${Math.round(r.target / 100 * base).toLocaleString('en-US')}<extra></extra>`),
     },
     {
       type: 'scatterpolar', mode: 'lines', hoverinfo: 'skip',
@@ -3230,7 +3233,12 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   const total3 = Object.values(types).reduce((s, v) => s + v, 0);
   const types8 = mpAssetBuckets(assetRows.filter(r => !isRealEstate(r)), ['stock', 'bond', 'deposit', 'liquid']);
   const total8 = Object.values(types8).reduce((s, v) => s + v, 0);
-  const targetTotal8 = total8;
+  // Chart 8's target total: chart 3's total less the cash / gold / crypto
+  // targets (money is only added: gold / crypto above 5% keep what they have)
+  // -- so chart 3's targets add up to its total, salary or not.
+  const goldTarget = Math.max(GOLD_TARGET_PCT / 100 * total3, types[MP_ASSET_CLASS_LABELS.gold] || 0);
+  const cryptoTarget = Math.max(CRYPTO_TARGET_PCT / 100 * total3, types[MP_ASSET_CLASS_LABELS.crypto] || 0);
+  const targetTotal8 = total3 - CASH_TARGET_USD - goldTarget - cryptoTarget;
   const usAlloc = DATA && DATA.usAllocTargetRaw;
   let target8 = null;
   if (usAlloc && (usAlloc.Stocks + usAlloc.Bonds) > 0 && total8 > 0 && targetTotal8 > 0) {
@@ -3245,8 +3253,8 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     ...target8,
     [MP_ASSET_CLASS_LABELS.cash]: CASH_TARGET_USD,
     // money is only added: gold / crypto above 5% keep what they have
-    [MP_ASSET_CLASS_LABELS.gold]: Math.max(GOLD_TARGET_PCT / 100 * total3, types[MP_ASSET_CLASS_LABELS.gold] || 0),
-    [MP_ASSET_CLASS_LABELS.crypto]: Math.max(CRYPTO_TARGET_PCT / 100 * total3, types[MP_ASSET_CLASS_LABELS.crypto] || 0),
+    [MP_ASSET_CLASS_LABELS.gold]: goldTarget,
+    [MP_ASSET_CLASS_LABELS.crypto]: cryptoTarget,
   };
 
   // Currencies first (the listed ones in order, then the rest largest first),
@@ -3401,8 +3409,8 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   if (target8) {
     const labels = Object.keys(types8).sort((a, b) => typeOrder.indexOf(a) - typeOrder.indexOf(b));
     tpie(grid, '9. Stocks, bonds, deposits, liquid assets', labels.map(l => ({
-      label: l, usd: types8[l], color: typeColor(l) || MP_OTHER_COLOR, target: target8[l] / total8 * 100,
-    })));
+      label: l, usd: types8[l], color: typeColor(l) || MP_OTHER_COLOR, target: target8[l] / targetTotal8 * 100,
+    })), '', targetTotal8, true);
   } else {
     pie(grid, '9. Stocks, bonds, deposits, liquid assets', types8, '', typeOrder, true, () => 0, typeColor);
   }
