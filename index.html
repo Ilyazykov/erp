@@ -2694,8 +2694,9 @@ function mpContrastText(hex) {
   const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
   return 0.299 * r + 0.587 * g + 0.114 * b > 150 ? '#0d1117' : '#ffffff';
 }
-// targetTotal (optional): the whole the targets are shares of, when it
-// differs from today's total (chart 7: Russia's 5% of everything).
+// Target shares are of today's total (a slice whose dollars don't move --
+// deposits -- keeps its %); targetTotal (optional) is only shown, the sum
+// of the dollar targets when it differs from today's total.
 function mpTargetPie(el, title, items, note = '', targetTotal = null) {
   const card = document.createElement('div');
   card.className = 'pie-card';
@@ -2704,7 +2705,6 @@ function mpTargetPie(el, title, items, note = '', targetTotal = null) {
   const usable = items.filter(it => it.usd > 0 || it.target > 0);
   const total = usable.reduce((s, it) => s + Math.max(0, it.usd), 0);
   if (!total) { card.querySelector('.pie-plot').innerHTML = '<p class="empty-note">No data.</p>'; return; }
-  const wantTotal = targetTotal ?? total;
   card.querySelector('.pie-total').innerHTML = `Total: <b>${mpFormatUsd(total)}</b>`
     + (targetTotal !== null ? ` / Target: <b>${mpFormatUsd(targetTotal)}</b>` : '');
   // What each slice should be in dollars at its target share.
@@ -2712,7 +2712,7 @@ function mpTargetPie(el, title, items, note = '', targetTotal = null) {
   targets.className = 'data-table';
   targets.style.cssText = 'width:auto;margin:0 auto 8px';
   targets.innerHTML = `<thead><tr><th></th><th>Now</th><th>Target</th><th>Change</th></tr></thead><tbody>${usable.map(it => {
-    const want = it.target / 100 * wantTotal;
+    const want = it.target / 100 * total;
     const delta = want - Math.max(0, it.usd);
     return `<tr><td class="ticker">${mpEscapeHtml(it.label)}</td><td>${mpFormatUsd(Math.max(0, it.usd))}</td>
       <td><b>${mpFormatUsd(want)}</b></td><td class="${delta >= 0 ? 'pos' : 'neg'}">${delta >= 0 ? '+' : '−'}${mpFormatUsd(Math.abs(delta))}</td></tr>`;
@@ -2739,7 +2739,7 @@ function mpTargetPie(el, title, items, note = '', targetTotal = null) {
       type: 'barpolar', r: rows.map(r => r.r), theta: rows.map(r => r.theta), width: rows.map(r => r.width),
       marker: { color: rows.map(r => r.color), line: { color: '#0d1117', width: 1 } },
       hovertemplate: rows.map(r => `${r.label}<br>$${Math.round(r.usd).toLocaleString('en-US')} - ${r.current.toFixed(1)}%`
-        + `<br>target ${r.target.toFixed(1)}% = $${Math.round(r.target / 100 * wantTotal).toLocaleString('en-US')}<extra></extra>`),
+        + `<br>target ${r.target.toFixed(1)}% = $${Math.round(r.target / 100 * total).toLocaleString('en-US')}<extra></extra>`),
     },
     {
       type: 'scatterpolar', mode: 'lines', hoverinfo: 'skip',
@@ -2989,7 +2989,7 @@ async function mpRenderCharts() {
     target7[bondLabel('RUB')] = Math.max(0, ruTargetTotal - sumWhere(target7, l => l !== bondLabel('RUB')));
   }
   const drawRuTarget = (title, cells, targets, targetTotal = null) => {
-    const whole = targetTotal ?? Object.values(cells).reduce((s, v) => s + v, 0);
+    const whole = Object.values(cells).reduce((s, v) => s + v, 0);
     const labels = [...new Set([...Object.keys(cells), ...Object.keys(targets)])].sort((a, b) => ruOrder.indexOf(a) - ruOrder.indexOf(b));
     mpTargetPie(grid, title, labels.map(l => ({
       label: l, usd: cells[l] || 0, color: ruColor(l) || MP_OTHER_COLOR, target: (targets[l] || 0) / whole * 100,
