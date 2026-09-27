@@ -3326,11 +3326,10 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     if (!(stockLabel in out)) out[stockLabel] = stockUsd;
     return out;
   };
-  // Every target chart's targets add up to its own total. Chart 9 splits
-  // its own total; chart 3 gives the four what the cash / gold / crypto
-  // targets leave of its total (the same thing once a salary plan has run).
-  const target8 = splitGroup(total8);
-  const group3 = splitGroup(targetTotal8);
+  // Chart 9's target total is what chart 3's cash / gold / crypto targets
+  // leave of its total; chart 3 takes the same four targets.
+  const target8 = splitGroup(targetTotal8);
+  const group3 = target8;
   const target3 = group3 && {
     ...group3,
     [MP_ASSET_CLASS_LABELS.cash]: CASH_TARGET_USD,
@@ -3469,7 +3468,11 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
       mpAdd(grouped, k !== SINGLES && k !== RU && small ? 'other 🌍' : k, v);
     }
     const restNow = stockSum - usSingles - (grouped[RU] || 0);
-    const restTargetPct = 100 - SINGLES_PCT - ruTargetUsd / stockSum * 100;
+    // The whole the targets are shares of: chart 3's stock target (the same
+    // stocks, split by country) -- but never below today's stocks, as nothing
+    // is sold unless an option allows it.
+    const stockWhole = Math.max((target3 && target3[MP_ASSET_CLASS_LABELS.stock]) || 0, stockSum);
+    const restTargetPct = 100 - SINGLES_PCT - ruTargetUsd / stockWhole * 100;
     const order5 = [SINGLES, US];
     const labels5 = Object.keys(grouped).sort((a, b) =>
       (order5.includes(a) ? order5.indexOf(a) : a.startsWith('other') ? 1e9 : 10) - (order5.includes(b) ? order5.indexOf(b) : b.startsWith('other') ? 1e9 : 10)
@@ -3483,9 +3486,9 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     tpie(slot5, TITLE5, labels5.map(l => ({
       label: l, usd: grouped[l],
       color: l === SINGLES ? '#1f8f3a' : l.startsWith('other') ? MP_OTHER_COLOR : countryColor(l) || mpSliceColor(l, () => null),
-      target: l === SINGLES ? SINGLES_PCT : l === RU ? ruTargetUsd / stockSum * 100
+      target: l === SINGLES ? SINGLES_PCT : l === RU ? ruTargetUsd / stockWhole * 100
         : Math.max(0, restTargetPct) * (restNow ? grouped[l] / restNow : 0),
-    })), '', null, false, null, bought5);
+    })), '', stockWhole, true, null, bought5);
   }
   if (target7) drawRuTarget('8. Russian infrastructure', ruAll, target7, ruTargetTotal);
   else pie(grid, '8. Russian infrastructure', ruAll, '', ruOrder, false, () => 0, ruColor);
@@ -3494,8 +3497,8 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   if (target8) {
     const labels = Object.keys(types8).sort((a, b) => typeOrder.indexOf(a) - typeOrder.indexOf(b));
     tpie(grid, '9. Stocks, bonds, deposits, liquid assets', labels.map(l => ({
-      label: l, usd: types8[l], color: typeColor(l) || MP_OTHER_COLOR, target: target8[l] / total8 * 100,
-    })));
+      label: l, usd: types8[l], color: typeColor(l) || MP_OTHER_COLOR, target: target8[l] / targetTotal8 * 100,
+    })), '', targetTotal8, true);
   } else {
     pie(grid, '9. Stocks, bonds, deposits, liquid assets', types8, '', typeOrder, true, () => 0, typeColor);
   }

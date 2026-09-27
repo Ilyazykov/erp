@@ -131,6 +131,19 @@ function targetChecks(pies, tag) {
     const a = usdTarget(noStocks, label), b = usdTarget(ruInfra, label);
     checkT(tag, near(a, b, 0.5), `Russia without stocks vs Russian infrastructure: ${label} target $${a.toFixed(2)} = $${b.toFixed(2)}`);
   }
+  // 18-21. Chart 9's dollar targets = chart 3's, slice by slice.
+  for (const label of ['stock 📈', 'bond 🏛️', 'deposit 🏦', 'liquid assets 💧']) {
+    const a = usdTarget(c9, label), b = usdTarget(types3, label);
+    checkT(tag, near(a, b, 0.5), `Stocks, bonds, deposits, liquid vs Asset types: ${label} target $${a.toFixed(2)} = $${b.toFixed(2)}`);
+  }
+  // 23. Chart 5's target total = chart 3's stock target, or today's stocks
+  // when those are more (nothing is sold).
+  const stock3 = usdTarget(types3, 'stock 📈');
+  const want5 = c5 ? Math.max(stock3, c5.total) : NaN;
+  checkT(tag, c5 && near(c5.whole, want5, 0.5), `Stocks by country: target total $${c5 && c5.whole.toFixed(2)} = max(Asset types stock target $${stock3.toFixed(2)}, stocks now $${c5 && c5.total.toFixed(2)})`);
+  // 22. Chart 9's target total = chart 3's total less its cash, gold and crypto targets.
+  const rest3 = types3 ? types3.whole - ['cash 💵', 'gold 🥇', 'crypto ₿'].reduce((a, l) => a + usdTarget(types3, l), 0) : NaN;
+  checkT(tag, c9 && near(c9.whole, rest3, 0.5), `Stocks, bonds, deposits, liquid: target total $${c9 && c9.whole.toFixed(2)} = Asset types total less cash / gold / crypto targets $${rest3.toFixed(2)}`);
 
 }
 const checkT = (tag, ok, msg) => check(ok, `${tag} — ${msg}`);
