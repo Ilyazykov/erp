@@ -2832,25 +2832,8 @@ function mpSalaryPlan(c, salary) {
 
   // 4. The rest: stocks vs bonds at the US ERP target, over the whole
   // portfolio (chart 8) -- including step 3's money. Bonds: US Treasuries at IBKR.
-  let stockAdd;
-  if (c.usAlloc && (c.usAlloc.Stocks + c.usAlloc.Bonds) > 0) {
-    const share = c.usAlloc.Stocks / (c.usAlloc.Stocks + c.usAlloc.Bonds);
-    stockAdd = take(share * (c.groupAll + ruAdd + left) - c.stockAll);
-  } else stockAdd = take(left);
-  rows.push(['4', 'Stocks (US ERP target)', stockAdd, '']);
-  parts.usBonds = take(left);
-  rows.push(['4', 'US Treasuries at IBKR', parts.usBonds, '']);
-  // 4.1 Individual companies up to 5% of the stocks (US Stocks Z-score allocator), the rest into the world fund.
-  const usTotal = US_STOCK_TICKERS.reduce((s, t) => s + (c.valueByTicker[t] || 0), 0);
-  const indAdd = Math.max(0, Math.min(stockAdd, 0.05 * (c.stockAll + stockAdd) - usTotal));
-  parts.usStocks = mpSalaryAllocate(DATA && DATA.usTargetWeightsRaw, usTotal, indAdd, c);
-  rows.push(['4.1', 'Individual stocks up to 5% of stocks', indAdd, mpSalaryBuysText(parts.usStocks)]);
-  const fundAdd = stockAdd - indAdd;
-  parts.vwce = Math.max(0, Math.min(fundAdd, 0.2 * (c.ibkr + c.freedom + fundAdd) - c.freedom));
-  parts.vwra = fundAdd - parts.vwce;
-  if (parts.vwce > 0) rows.push(['4.1', 'World fund — VWCE at Freedom (up to 20% of IBKR + Freedom)', parts.vwce, '']);
-  if (parts.vwra > 0) rows.push(['4.1', 'World fund — VWRA at IBKR', parts.vwra, '']);
-
+  // (Steps 5-7 are worked out first -- their Russian stock purchases count
+  // toward step 4's stock target -- and listed after step 4.)
   // 5-7. Inside Russian infrastructure. Its free money -- step 3's, the
   // yuan-bond sale (step 6) and the Russian liquid assets (step 7) -- first
   // buys stocks up to the ERP & Stocks/Bonds share of the new total, the
@@ -2868,13 +2851,34 @@ function mpSalaryPlan(c, salary) {
   const ruStocksNow = RU_STOCK_TICKERS.reduce((s, t) => s + (c.valueByTicker[t] || 0), 0);
   parts.ruStocks = mpSalaryAllocate(DATA && DATA.ruTargetWeightsRaw, ruStocksNow, ruStockAdd, c);
   const ruStocksSpent = parts.ruStocks.reduce((s, b) => s + b.usd, 0);
-  rows.push(['5', 'Russian stocks (ERP & Stocks/Bonds target)', ruStocksSpent, mpSalaryBuysText(parts.ruStocks)]);
-  if (parts.cnySold) rows.push(['6', `Sell yuan bonds (w_CNY ${(c.wCny * 100).toFixed(1)}% < 30%)`, -parts.cnySold, '']);
   // 7. What the stocks didn't take (lot sizes included) goes to bonds:
   // yuan bonds up to their target first, the rest rouble bonds.
   const bondMoney = ruPool - ruStocksSpent;
   parts.cnyBought = cnyTarget !== null ? Math.max(0, Math.min(bondMoney, cnyTarget - cell('bond', 'CNY'))) : 0;
   parts.rubBonds = bondMoney - parts.cnyBought;
+
+  let stockAdd;
+  if (c.usAlloc && (c.usAlloc.Stocks + c.usAlloc.Bonds) > 0) {
+    const share = c.usAlloc.Stocks / (c.usAlloc.Stocks + c.usAlloc.Bonds);
+    // The Russian stocks step 5 buys count toward the same target.
+    stockAdd = take(share * (c.groupAll + ruAdd + left) - c.stockAll - ruStocksSpent);
+  } else stockAdd = take(left);
+  rows.push(['4', 'Stocks (US ERP target)', stockAdd, '']);
+  parts.usBonds = take(left);
+  rows.push(['4', 'US Treasuries at IBKR', parts.usBonds, '']);
+  // 4.1 Individual companies up to 5% of the stocks (US Stocks Z-score allocator), the rest into the world fund.
+  const usTotal = US_STOCK_TICKERS.reduce((s, t) => s + (c.valueByTicker[t] || 0), 0);
+  const indAdd = Math.max(0, Math.min(stockAdd, 0.05 * (c.stockAll + stockAdd) - usTotal));
+  parts.usStocks = mpSalaryAllocate(DATA && DATA.usTargetWeightsRaw, usTotal, indAdd, c);
+  rows.push(['4.1', 'Individual stocks up to 5% of stocks', indAdd, mpSalaryBuysText(parts.usStocks)]);
+  const fundAdd = stockAdd - indAdd;
+  parts.vwce = Math.max(0, Math.min(fundAdd, 0.2 * (c.ibkr + c.freedom + fundAdd) - c.freedom));
+  parts.vwra = fundAdd - parts.vwce;
+  if (parts.vwce > 0) rows.push(['4.1', 'World fund — VWCE at Freedom (up to 20% of IBKR + Freedom)', parts.vwce, '']);
+  if (parts.vwra > 0) rows.push(['4.1', 'World fund — VWRA at IBKR', parts.vwra, '']);
+
+  rows.push(['5', 'Russian stocks (ERP & Stocks/Bonds target)', ruStocksSpent, mpSalaryBuysText(parts.ruStocks)]);
+  if (parts.cnySold) rows.push(['6', `Sell yuan bonds (w_CNY ${(c.wCny * 100).toFixed(1)}% < 30%)`, -parts.cnySold, '']);
   if (parts.cnyBought) rows.push(['7', 'Yuan bonds up to the w_CNY target', parts.cnyBought, '']);
   rows.push(['7', 'Rouble bonds (the rest of Russian free money)', parts.rubBonds,
     parts.ruLiquid ? `incl. ${mpFormatUsd(parts.ruLiquid)} from Russian liquid assets` : '']);
