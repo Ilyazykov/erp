@@ -202,6 +202,9 @@ Deno.serve(async () => {
       if (timeLeft() < 8000) break;
       const from = lastDay.has(ticker) ? addDays(lastDay.get(ticker)!, -OVERLAP_DAYS) : addDays(since.get(ticker)!, -7);
       if (lastDay.get(ticker) === today()) continue;
+      // Found nowhere: try again once a week, not every run.
+      const cached = sources.get(ticker);
+      if (cached?.source === 'none' && Date.now() - Date.parse(cached.updated_at) < 7 * 86400_000) { failed.push(ticker); continue; }
       let src = sources.get(ticker);
       const m = mp.get(ticker);
       let points: { day: string; price: number; currency: string }[] = [];
@@ -277,7 +280,10 @@ Deno.serve(async () => {
         const { data, error } = await db.rpc('refresh_capital_daily', { p_user: u, p_from: from, p_to: to < today() ? to : today() });
         if (error) err = `error at ${from}: ${error.message}`; else rows += Number(data ?? 0);
       }
-      rebuilt[u.slice(0, 8)] = err ?? rows;
+      const { data: last } = await db.from('capital_daily').select('day, value_usd').eq('user_id', u)
+        .eq('day', today()).neq('account', 'real estate');
+      const total = (last ?? []).reduce((a, r) => a + Number(r.value_usd), 0);
+      rebuilt[u.slice(0, 8)] = err ?? { rows, today_usd: Math.round(total * 100) / 100 };
     }
     report.capital_rows = rebuilt;
     report.seconds = Math.round((Date.now() - started) / 1000);
