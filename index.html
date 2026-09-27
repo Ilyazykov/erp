@@ -3005,7 +3005,14 @@ async function mpRenderCharts() {
     { label: 'Russia 🇷🇺', usd: ruTotal, target: RU_TARGET_PCT, color: MP_COLORS.country.RU },
     { label: 'rest of the world 🌍', usd: allTotal - ruTotal, target: 100 - RU_TARGET_PCT, color: '#4a9ff5' },
   ]);
-  if (target11) drawRuTarget('11. Russian infrastructure without stocks', ruNoStocks, target11);
+  // 11 takes chart 7's dollar targets for everything but stocks, against
+  // chart 7's target minus its stocks; only without chart 7's inputs does
+  // it fall back to its own w_CNY split of today's total.
+  if (target7) {
+    const stock = `${MP_RU_INFRA_LABELS.stock} ${MP_RU_INFRA_CURRENCIES.RUB}`;
+    const { [stock]: stockTarget, ...rest } = target7;
+    drawRuTarget('11. Russian infrastructure without stocks', ruNoStocks, rest, ruTargetTotal - stockTarget);
+  } else if (target11) drawRuTarget('11. Russian infrastructure without stocks', ruNoStocks, target11);
   else mpPie(grid, '11. Russian infrastructure without stocks', ruNoStocks, '', ruOrder, false, () => 0, ruColor);
   mpPie(grid, '12. Asset types with real estate', typesWithRealEstate, '', typeOrder, true, () => 0, typeColor);
   // Size every plot to its card once the grid has laid out.
