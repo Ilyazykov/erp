@@ -78,6 +78,7 @@
   <div class="tab" data-tab="crypto">Crypto</div>
   <div class="tab" data-tab="lookthrough">Look-through</div>
   <div class="tab" data-tab="charts">Charts</div>
+  <div class="tab" data-tab="capital">Capital</div>
   <div class="tab" data-tab="sigmoid">USD/RUB → CNY Weight (current + 5Y)</div>
   <div class="tab" data-tab="layer2a">ERP &amp; Stocks/Bonds Allocation</div>
   <div class="tab" data-tab="layer2r">Yield per Stock &amp; Rebalancing</div>
@@ -319,6 +320,21 @@
   </div>
 </div>
 
+<div id="capital" class="chart-wrap">
+  <div id="capital_signed_out" class="empty-note">Sign in with Google (top of page) to see how your capital grew.</div>
+  <div id="capital_signed_in" style="display:none">
+    <div class="section-title">Capital over time</div>
+    <p class="note">Every day since the first transaction: holdings on that day × that day's prices and exchange
+      rates, in USD. Recomputed nightly. Pick a period with the buttons or the slider under the chart.</p>
+    <div class="form-row" style="gap:16px;flex-wrap:wrap">
+      <label><input type="checkbox" id="capital_show_re"> real estate line</label>
+      <span id="capital_period" class="note" style="margin:0"></span>
+    </div>
+    <p class="empty-note" id="capital_status"></p>
+    <div id="plot_capital" style="height:560px"></div>
+  </div>
+</div>
+
 <div id="charts" class="chart-wrap">
   <div id="charts_signed_out" class="empty-note">Sign in with Google (top of page) to see your portfolio charts.</div>
   <div id="charts_signed_in" style="display:none">
@@ -555,6 +571,7 @@ function showTab(id) {
     if (mpChartsPending && mpIsSignedIn) mpRenderCharts();
     else document.querySelectorAll('#mp_charts_grid .pie-plot').forEach(el => { if (el.data) Plotly.Plots.resize(el); });
   }
+  if (id === 'capital' && mpIsSignedIn) mpRenderCapital();
   if (DATA && !rendered[id]) {
     rendered[id] = true;
     renderChart(id);
@@ -4650,6 +4667,8 @@ function mpUpdateAuthUi(session) {
     document.getElementById('lookthrough_signed_in').style.display = '';
     document.getElementById('charts_signed_out').style.display = 'none';
     document.getElementById('charts_signed_in').style.display = '';
+    document.getElementById('capital_signed_out').style.display = 'none';
+    document.getElementById('capital_signed_in').style.display = '';
     mpRenderPortfolioPies();
     mpRenderBrokerCurrency();
     mpRenderBrokerAssetClass();
@@ -4658,6 +4677,7 @@ function mpUpdateAuthUi(session) {
     mpRenderRealEstate();
     mpRenderLookThrough();
     mpRenderCharts();
+    if (document.getElementById('capital').classList.contains('active')) mpRenderCapital();
   } else {
     btn.textContent = 'Sign in with Google';
     document.getElementById('mp_signed_out').style.display = '';
@@ -4668,6 +4688,10 @@ function mpUpdateAuthUi(session) {
     document.getElementById('lookthrough_signed_in').style.display = 'none';
     document.getElementById('charts_signed_out').style.display = '';
     document.getElementById('charts_signed_in').style.display = 'none';
+    document.getElementById('capital_signed_out').style.display = '';
+    document.getElementById('capital_signed_in').style.display = 'none';
+    mpCapitalRows = null;
+    Plotly.purge('plot_capital');
     document.getElementById('mp_charts_grid').innerHTML = '';
     document.getElementById('mp_lookthrough_wrap').innerHTML = '';
     ['plot_mp_pie_us_stocks', 'plot_mp_pie_ru_stocks', 'plot_mp_pie_stocksbonds', 'plot_mp_pie_deposits']
@@ -4691,6 +4715,77 @@ function mpUpdateAuthUi(session) {
   const el = document.getElementById(id);
   if (el) el.addEventListener('change', () => { mpRenderPortfolioPies(); });
 });
+
+// ---- Capital tab: capital_daily_total (nightly, update-capital-history) ----
+let mpCapitalRows = null;
+async function mpRenderCapital() {
+  const status = document.getElementById('capital_status');
+  const el = document.getElementById('plot_capital');
+  if (!mpCapitalRows) {
+    status.textContent = 'Loading…';
+    const rows = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await sb.from('capital_daily_total')
+        .select('day, capital_usd, real_estate_usd').order('day').range(from, from + 999);
+      if (error) { status.textContent = error.message; return; }
+      rows.push(...data);
+      if (data.length < 1000) break;
+    }
+    mpCapitalRows = rows;
+  }
+  if (!mpCapitalRows.length) { status.textContent = 'No history yet — it is built nightly by update-capital-history.'; return; }
+  status.textContent = '';
+  const days = mpCapitalRows.map(r => r.day);
+  const capital = mpCapitalRows.map(r => Number(r.capital_usd || 0));
+  const showRe = document.getElementById('capital_show_re').checked;
+  const traces = [{ x: days, y: capital, name: 'Capital', type: 'scatter', mode: 'lines',
+    line: { color: '#58a6ff', width: 2 }, hovertemplate: '$%{y:,.0f}<extra>Capital</extra>' }];
+  if (showRe) {
+    traces.push({ x: days, y: mpCapitalRows.map(r => Number(r.real_estate_usd || 0)), name: 'Real estate',
+      type: 'scatter', mode: 'lines', line: { color: '#d29922', width: 2 }, hovertemplate: '$%{y:,.0f}<extra>Real estate</extra>' });
+    traces.push({ x: days, y: mpCapitalRows.map(r => Number(r.capital_usd || 0) + Number(r.real_estate_usd || 0)),
+      name: 'Capital + real estate', type: 'scatter', mode: 'lines', line: { color: '#8b949e', width: 1, dash: 'dot' },
+      hovertemplate: '$%{y:,.0f}<extra>Total</extra>' });
+  }
+  const layout = Object.assign({}, LAYOUT_BASE, {
+    xaxis: Object.assign({}, LAYOUT_BASE.xaxis, { type: 'date', dtick: undefined, tickformat: undefined,
+      rangeslider: { visible: true, bgcolor: '#13191f', bordercolor: '#1e2830' },
+      rangeselector: { bgcolor: '#13191f', activecolor: '#1f6feb', font: { color: '#c9d1d9' }, buttons: [
+        { count: 1, label: '1M', step: 'month', stepmode: 'backward' },
+        { count: 3, label: '3M', step: 'month', stepmode: 'backward' },
+        { count: 6, label: '6M', step: 'month', stepmode: 'backward' },
+        { count: 1, label: 'YTD', step: 'year', stepmode: 'todate' },
+        { count: 1, label: '1Y', step: 'year', stepmode: 'backward' },
+        { count: 3, label: '3Y', step: 'year', stepmode: 'backward' },
+        { step: 'all', label: 'All' },
+      ] } }),
+    yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { title: 'USD', tickformat: '$,.0f', autorange: true, fixedrange: false }),
+    margin: { t: 40, r: 20, b: 40, l: 80 },
+  });
+  await Plotly.react(el, traces, layout, CONFIG);
+  mpCapitalPeriod(days[0], days[days.length - 1]);
+  if (!el.mpCapitalBound) {
+    el.mpCapitalBound = true;
+    el.on('plotly_relayout', ev => {
+      const a = ev['xaxis.range[0]'] ?? ev['xaxis.range']?.[0];
+      const b = ev['xaxis.range[1]'] ?? ev['xaxis.range']?.[1];
+      if (a && b) mpCapitalPeriod(String(a).slice(0, 10), String(b).slice(0, 10));
+      else if (ev['xaxis.autorange']) mpCapitalPeriod(days[0], days[days.length - 1]);
+    });
+  }
+}
+// Capital at the start and end of the shown period and the change between.
+function mpCapitalPeriod(a, b) {
+  const rows = (mpCapitalRows || []).filter(r => r.day >= a && r.day <= b);
+  const out = document.getElementById('capital_period');
+  if (rows.length < 2) { out.textContent = ''; return; }
+  const v0 = Number(rows[0].capital_usd || 0), v1 = Number(rows[rows.length - 1].capital_usd || 0);
+  const d = v1 - v0, pct = v0 ? d / v0 * 100 : 0;
+  const f = v => '$' + Math.round(v).toLocaleString('en-US');
+  out.textContent = `${rows[0].day}: ${f(v0)} → ${rows[rows.length - 1].day}: ${f(v1)} · `
+    + `${d >= 0 ? '+' : '−'}${f(Math.abs(d))} (${d >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(1)}%)`;
+}
+document.getElementById('capital_show_re').addEventListener('change', () => { if (mpIsSignedIn) mpRenderCapital(); });
 
 // Redraw only when who's signed in actually changes: Supabase re-fires
 // SIGNED_IN / TOKEN_REFRESHED whenever the tab regains focus (switching
