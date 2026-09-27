@@ -2974,9 +2974,11 @@ async function mpRenderCharts() {
   // RU_TARGET_PCT of everything. Stocks take the allocation share of it,
   // deposits stay, liquid / cash go to 0, yuan bonds w_CNY of the non-stock
   // part minus yuan deposits (chart 11's rule), rouble bonds the rest.
+  // Only ever grown toward the 5%: when Russia already holds more, today's
+  // total is the target (nothing gets pulled out to shrink it).
   const RU_TARGET_PCT = 5;
-  const ruTargetTotal = RU_TARGET_PCT / 100 * allTotal;
   const ruAll = ruBuckets();
+  const ruTargetTotal = Math.max(RU_TARGET_PCT / 100 * allTotal, Object.values(ruAll).reduce((s, v) => s + v, 0));
   let target7 = null;
   if (wCny !== null && alloc && (alloc.Stocks + alloc.Bonds) > 0) {
     target7 = fixedTargets(ruAll);
