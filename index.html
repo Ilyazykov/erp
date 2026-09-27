@@ -330,7 +330,9 @@
     </div>
     <div class="form-row" style="gap:16px;flex-wrap:wrap">
       <label><input type="checkbox" id="mp_salary_cash"> spend cash above $10,000</label>
-      <label><input type="checkbox" id="mp_salary_revolut"> spend Revolut euro liquid assets</label>
+      <label><input type="checkbox" id="mp_salary_revolut"> spend Revolut euro liquid assets above
+        <input type="number" id="mp_salary_revolut_keep" min="0" step="100" placeholder="0" style="width:110px">
+        <select id="mp_salary_revolut_keep_ccy"><option value="EUR" selected>EUR</option><option value="USD">USD</option></select></label>
       <label><input type="checkbox" id="mp_salary_ruliquid"> spend Russian liquid assets</label>
     </div>
     <p class="empty-note" id="mp_charts_status"></p>
@@ -2863,7 +2865,12 @@ const MP_SALARY_KEY = 'mp_salary_usd';
 // The salary plan's options (checkboxes above the charts, all off by default).
 function mpSalaryFlags() {
   const on = id => !!document.getElementById(id).checked;
-  return { cash: on('mp_salary_cash'), revolut: on('mp_salary_revolut'), ruLiquid: on('mp_salary_ruliquid') };
+  // The reserve in its chosen currency, converted to USD (EUR by default).
+  const keepNative = Math.max(0, parseFloat(document.getElementById('mp_salary_revolut_keep').value) || 0);
+  const keepCcy = document.getElementById('mp_salary_revolut_keep_ccy').value === 'USD' ? 'USD' : 'EUR';
+  const eurUsd = (mpChartsBase && mpChartsBase.fxByCurrency && mpChartsBase.fxByCurrency.EUR) || 1;
+  const keep = keepCcy === 'USD' ? keepNative : keepNative * eurUsd;
+  return { cash: on('mp_salary_cash'), revolut: on('mp_salary_revolut'), revolutKeep: keep, ruLiquid: on('mp_salary_ruliquid') };
 }
 function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
   const rows = [];
@@ -2877,10 +2884,12 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
   // Options: cash above its $10,000 target (outside Russia), Revolut's liquid
   // assets (its euro money-market funds), each joins the salary.
   parts.cashFree = flags.cash ? Math.max(0, Math.min(c.cash - 10000, c.cashAbroad)) : 0;
-  parts.revolutFree = flags.revolut ? c.revolutLiquid : 0;
+  // (keeping the amount set next to the option -- the month's expenses)
+  parts.revolutFree = flags.revolut ? Math.max(0, c.revolutLiquid - (flags.revolutKeep || 0)) : 0;
   left += parts.cashFree + parts.revolutFree;
   if (parts.cashFree) rows.push(['0', 'Cash above $10,000 added to the salary', parts.cashFree, '']);
-  if (parts.revolutFree) rows.push(['0', 'Revolut liquid assets added to the salary', parts.revolutFree, '']);
+  if (parts.revolutFree) rows.push(['0', 'Revolut liquid assets added to the salary', parts.revolutFree,
+    flags.revolutKeep ? `${mpFormatUsd(flags.revolutKeep)} kept` : '']);
   // 1-3. Gold, crypto, Russian infrastructure up to 5% each of the new total.
   // (gold / crypto of chart 3's total, Russia of chart 10's -- as the charts measure them)
   const newTotal3 = c.total3 + salary;
@@ -3051,6 +3060,23 @@ function mpSalaryDeltas(c, plan) {
   for (const id of ['mp_salary_cash', 'mp_salary_revolut', 'mp_salary_ruliquid']) {
     document.getElementById(id).addEventListener('change', () => mpDrawCharts());
   }
+  // The amount to keep at Revolut and its currency, remembered in this browser.
+  const keep = document.getElementById('mp_salary_revolut_keep');
+  const keepCcy = document.getElementById('mp_salary_revolut_keep_ccy');
+  try {
+    keep.value = localStorage.getItem('mp_salary_revolut_keep') || '';
+    keepCcy.value = localStorage.getItem('mp_salary_revolut_keep_ccy') || 'EUR';
+  } catch { /* no storage */ }
+  keepCcy.addEventListener('change', () => {
+    try { localStorage.setItem('mp_salary_revolut_keep_ccy', keepCcy.value); } catch { /* no storage */ }
+    mpDrawCharts();
+  });
+  let keepTimer = null;
+  keep.addEventListener('input', () => {
+    try { localStorage.setItem('mp_salary_revolut_keep', keep.value); } catch { /* no storage */ }
+    clearTimeout(keepTimer);
+    keepTimer = setTimeout(() => mpDrawCharts(), 400);
+  });
 }
 
 let mpChartsRun = 0;
