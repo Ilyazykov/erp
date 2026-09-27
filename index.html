@@ -2814,19 +2814,19 @@ function mpRenderSalaryPlan() {
   const ruAdd = take(0.05 * newTotal - c.ruTotal);
   rows.push(['3', 'Russian infrastructure up to 5%', ruAdd, `now ${(c.ruTotal / c.total * 100).toFixed(1)}%`]);
 
-  // 4. The rest: stocks vs bonds / deposits / liquid assets at the US ERP target.
-  const toGroup = left;
+  // 4. The rest: stocks vs bonds / deposits / liquid assets at the US ERP
+  // target, over the whole portfolio (chart 8) -- including step 3's money.
   let stockAdd = 0;
   if (c.usAlloc && (c.usAlloc.Stocks + c.usAlloc.Bonds) > 0) {
     const share = c.usAlloc.Stocks / (c.usAlloc.Stocks + c.usAlloc.Bonds);
-    stockAdd = take(share * (c.nonRuGroup + toGroup) - c.nonRuStock);
-  } else stockAdd = take(toGroup);
+    stockAdd = take(share * (c.groupAll + ruAdd + left) - c.stockAll);
+  } else stockAdd = take(left);
   rows.push(['4', 'Stocks (US ERP target)', stockAdd, '']);
   const bondsAdd = take(left);
-  rows.push(['4', 'Bonds / deposits / liquid assets (non-Russian)', bondsAdd, '']);
+  rows.push(['4', 'Bonds / deposits / liquid assets', bondsAdd, '']);
   // 4.1 Individual companies up to 5% of the stocks (US Stocks Z-score allocator), the rest into the world fund.
   const usTotal = US_STOCK_TICKERS.reduce((s, t) => s + (c.valueByTicker[t] || 0), 0);
-  const indAdd = Math.max(0, Math.min(stockAdd, 0.05 * (c.nonRuStock + stockAdd) - usTotal));
+  const indAdd = Math.max(0, Math.min(stockAdd, 0.05 * (c.stockAll + stockAdd) - usTotal));
   rows.push(['4.1', 'Individual stocks up to 5% of stocks', indAdd, mpSalaryBuys(DATA && DATA.usTargetWeightsRaw, usTotal, indAdd, c)]);
   const fundAdd = stockAdd - indAdd;
   const toFreedom = Math.max(0, Math.min(fundAdd, 0.2 * (c.ibkr + c.freedom + fundAdd) - c.freedom));
@@ -3182,12 +3182,10 @@ async function mpRenderCharts() {
     const { data: extra } = await sb.from('market_prices').select('ticker, price_usd').in('ticker', missingPrices);
     for (const r of extra || []) if (r.price_usd) priceUsdByTicker[r.ticker] = r.price_usd;
   }
-  const nonRu8 = mpAssetBuckets(assetRows.filter(r => !isRealEstate(r) && !isRu(r)), ['stock', 'bond', 'deposit', 'liquid']);
   mpSalaryCtx = {
     total: allTotal, gold: types[MP_ASSET_CLASS_LABELS.gold] || 0, crypto: types[MP_ASSET_CLASS_LABELS.crypto] || 0,
     ruTotal, ruCells: ruAll, wCny, ruAlloc: alloc, usAlloc,
-    nonRuStock: nonRu8[MP_ASSET_CLASS_LABELS.stock] || 0,
-    nonRuGroup: Object.values(nonRu8).reduce((s, v) => s + v, 0),
+    stockAll: types8[MP_ASSET_CLASS_LABELS.stock] || 0, groupAll: total8,   // chart 8: the whole portfolio
     ibkr: byBroker.IBKR || 0, freedom: byBroker.Freedom24 || 0,
     valueByTicker, priceUsdByTicker,
   };
