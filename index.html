@@ -2729,7 +2729,8 @@ function mpTargetPie(el, title, items, note = '', targetTotal = null, shareOfTar
     const want = it.target / 100 * total;
     const delta = before ? it.usd - (before[it.label] || 0) : 0;
     return `<tr><td class="ticker">${mpEscapeHtml(it.label)}</td><td>${mpFormatUsd(Math.max(0, it.usd))}</td>
-      <td><b>${mpFormatUsd(want)}</b></td>${before ? `<td class="${delta >= 0 ? 'pos' : 'neg'}">${delta >= 0 ? '+' : '−'}${mpFormatUsd(Math.abs(delta))}</td>` : ''}</tr>`;
+      <td><b>${mpFormatUsd(want)}</b></td>${before ? (Math.abs(delta) < 0.005 ? '<td class="muted">0</td>'
+        : `<td class="${delta > 0 ? 'pos' : 'neg'}">${delta > 0 ? '+' : '−'}${mpFormatUsd(Math.abs(delta))}</td>`) : ''}</tr>`;
   }).join('')}</tbody>`;
   card.querySelector('.pie-total').after(targets);
   const R_BASE = 100, PP_SCALE = 2;
