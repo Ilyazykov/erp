@@ -2893,17 +2893,17 @@ function mpSalaryPlan(c, salary) {
   // buys stocks up to the ERP & Stocks/Bonds share of the new total, the
   // rest goes into rouble bonds.
   const cell = (t, ccy) => c.ruCells[`${MP_RU_INFRA_LABELS[t]} ${MP_RU_INFRA_CURRENCIES[ccy]}`] || 0;
-  const ruNew = c.ruTotal + ruAdd;
+  const ruNew = c.ruInfraTotal + ruAdd;   // chart 8's total
   const ruStockTarget = c.ruAlloc && (c.ruAlloc.Stocks + c.ruAlloc.Bonds) > 0
     ? c.ruAlloc.Stocks / (c.ruAlloc.Stocks + c.ruAlloc.Bonds) * ruNew : cell('stock', 'RUB');
   // Yuan bonds' target: w_CNY of the non-stock part, less yuan deposits.
   const cnyTarget = c.wCny !== null ? Math.max(0, c.wCny * (ruNew - ruStockTarget) - cell('deposit', 'CNY')) : null;
   parts.cnySold = cnyTarget !== null && c.wCny < 0.3 ? Math.max(0, cell('bond', 'CNY') - cnyTarget) : 0;
-  parts.ruLiquid = cell('liquid', 'RUB') + cell('liquid', 'CNY');
+  parts.ruLiquid = c.ruLiquidRaw;
   const ruPool = ruAdd + parts.cnySold + parts.ruLiquid;
   const ruStockAdd = Math.max(0, Math.min(ruPool, ruStockTarget - cell('stock', 'RUB')));
   const ruStocksNow = RU_STOCK_TICKERS.reduce((s, t) => s + (c.valueByTicker[t] || 0), 0);
-  parts.ruStocks = mpSalaryAllocate(DATA && DATA.ruTargetWeightsRaw, ruStocksNow, ruStockAdd, c);
+  parts.ruStocks = mpSalaryAllocate(DATA && DATA.ruTargetWeightsRaw, ruStocksNow, ruStockAdd, c, true);
   const ruStocksSpent = parts.ruStocks.reduce((s, b) => s + b.usd, 0);
   // 7. What the stocks didn't take (lot sizes included) goes to bonds:
   // yuan bonds up to their target first, the rest rouble bonds.
@@ -2960,15 +2960,17 @@ function mpRenderSalaryTable(plan) {
 // The Z-score allocator (US Stocks Z-score / Yield per Stock & Rebalancing)
 // on `usd`: [{ticker, usd (signed), shares}] (a sale if it trims an
 // overweight Z < -1.5 name).
-function mpSalaryAllocate(weights, totalUsd, usd, c) {
+// exact: fractional amounts (no whole-share rounding) -- the Russian step,
+// where stocks must land on their target for the Russian charts to agree.
+function mpSalaryAllocate(weights, totalUsd, usd, c, exact = false) {
   if (!weights || !weights.length || usd <= 0) return [];
   const items = weights.map(r => ({
     label: r.ticker, target: r.target, z: r.z, priceUsd: c.priceUsdByTicker[r.ticker] || null,
     current: (c.valueByTicker[r.ticker] || 0) / (totalUsd || 1) * 100,
   }));
-  const { deltaUsdByItem } = mpAllocatePoolByZPriorityWithLots(items, totalUsd, usd);
+  const { deltaUsdByItem } = (exact ? mpAllocatePoolByZPriorityLegacy : mpAllocatePoolByZPriorityWithLots)(items, totalUsd, usd);
   return items.map(it => ({ ticker: it.label, usd: deltaUsdByItem.get(it) || 0, price: it.priceUsd }))
-    .filter(b => Math.abs(b.usd) > 0.5).sort((a, b) => b.usd - a.usd)
+    .filter(b => Math.abs(b.usd) > (exact ? 0.001 : 0.5)).sort((a, b) => b.usd - a.usd)
     .map(b => ({ ...b, shares: b.price ? Math.round(Math.abs(b.usd) / b.price) : null }));
 }
 const mpSalaryBuysText = buys => buys.map(b =>
@@ -3062,12 +3064,24 @@ async function mpDrawCharts(run = ++mpChartsRun) {
   if (!ctx || run !== mpChartsRun) return;
   mpSalaryCtx = ctx;
   const salary = Math.max(0, parseFloat(document.getElementById('mp_salary_amount').value) || 0);
-  const plan = salary ? mpSalaryPlan(ctx, salary) : null;
+  // (the plan runs with no salary too: it still moves the free money)
+  const plan = mpSalaryPlan(ctx, salary);
   mpRenderSalaryTable(plan);
-  await mpBuildCharts(mpChartsBase, plan ? mpSalaryDeltas(ctx, plan) : [], true, run, salary, ctx.before, plan);
+  await mpBuildCharts(mpChartsBase, mpSalaryDeltas(ctx, plan), true, run, salary, ctx.before, plan);
 }
 
 async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null, plan = null) {
+  // Drawing with no plan given: the plan runs anyway (with this salary, 0
+  // included) -- even without new money it moves the free money (cash above
+  // $10,000, Russian liquid assets, yuan above target) to the targets, and
+  // the charts show that.
+  if (draw && !plan) {
+    const ctx = await mpBuildCharts(baseIn, [], false, run);
+    if (!ctx) return null;
+    plan = mpSalaryPlan(ctx, salary);
+    extra = mpSalaryDeltas(ctx, plan);
+    before = ctx.before;
+  }
   const grid = document.getElementById('mp_charts_grid');
   const status = document.getElementById('mp_charts_status');
   const base = { ...baseIn, data: [...baseIn.data, ...extra] };
@@ -3077,7 +3091,7 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   const pie = draw ? mpPie : () => {};
   const tpie = draw
     ? (el, title, items, note = '', targetTotal = null, shareOfTarget = false, money = null, bought = null) =>
-      mpTargetPie(el, title, items, note, targetTotal, shareOfTarget, salary && before ? before[title] || {} : null, money, bought)
+      mpTargetPie(el, title, items, note, targetTotal, shareOfTarget, before ? before[title] || {} : null, money, bought)
     : (el, title, items) => { recorded[title] = Object.fromEntries(items.map(it => [it.label, it.usd])); };
   const curRows = mpNetCreditIntoLiquid((await mpCurrencyRows(base)).filter(r => r.value_usd !== null));
   const assetRows = mpNetCreditIntoLiquid(
@@ -3390,7 +3404,7 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     // Countries under 1% together -- with a salary, the same ones as before it
     // (so a country doesn't jump in or out of "other" and look bought / sold).
     const TITLE5 = '5. Stocks by country, US single stocks apart';
-    const beforeKeys = draw && salary && before && before[TITLE5] ? Object.keys(before[TITLE5]) : null;
+    const beforeKeys = draw && before && before[TITLE5] ? Object.keys(before[TITLE5]) : null;
     const grouped = {};
     for (const [k, v] of Object.entries(withSingles)) {
       const small = beforeKeys ? !beforeKeys.includes(k) : v / stockSum < 0.01;
@@ -3463,6 +3477,9 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   const ctx = {
     total: allTotal, gold: types[MP_ASSET_CLASS_LABELS.gold] || 0, crypto: types[MP_ASSET_CLASS_LABELS.crypto] || 0,
     ruTotal, ruCells: ruAll, wCny, ruAlloc: alloc, usAlloc,
+    ruInfraTotal: Object.values(ruAll).reduce((a, v) => a + v, 0),
+    // the liquid assets themselves (the charts' cells fold small cash into them)
+    ruLiquidRaw: Math.max(0, ruCells['liquid RUB'] || 0) + Math.max(0, ruCells['liquid CNY'] || 0),
     stockAll: types8[MP_ASSET_CLASS_LABELS.stock] || 0, groupAll: total8,   // chart 8: the whole portfolio
     ibkr: byBroker.IBKR || 0, freedom: byBroker.Freedom24 || 0, coins: crypto,
     valueByTicker, priceUsdByTicker, holdings: baseIn.data, before: recorded,

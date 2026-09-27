@@ -129,6 +129,12 @@ async function scenario(name, base, SALARY) {
   const usA = INPUT.usAllocTargetRaw;
   const usPct = usA.Stocks / (usA.Stocks + usA.Bonds) * 100;
   check(st9 && near(st9.target, usPct, 0.005), `Stocks, bonds, deposits, liquid: stocks target ${st9 && st9.target.toFixed(3)}% = US ERP ${usPct}%`);
+  // 13-17. Chart 12's dollar targets = chart 8's, slice by slice.
+  const usdTarget = (p, label) => { const it = p && p.items.find(x => x.label === label); return it ? it.target / 100 * p.total : 0; };
+  for (const label of ['bonds 🏛️ 🇨🇳', 'bonds 🏛️ 🇷🇺', 'deposit 🏦 🇷🇺', 'liquid assets 💧 🇷🇺']) {
+    const a = usdTarget(noStocks, label), b = usdTarget(ruInfra, label);
+    check(near(a, b, 0.5), `Russia without stocks vs Russian infrastructure: ${label} target $${a.toFixed(2)} = $${b.toFixed(2)}`);
+  }
 
   // 3: with a salary
 
