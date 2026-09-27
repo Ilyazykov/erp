@@ -2694,7 +2694,9 @@ function mpContrastText(hex) {
   const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
   return 0.299 * r + 0.587 * g + 0.114 * b > 150 ? '#0d1117' : '#ffffff';
 }
-function mpTargetPie(el, title, items, note = '') {
+// targetTotal (optional): the whole the targets are shares of, when it
+// differs from today's total (chart 7: Russia's 5% of everything).
+function mpTargetPie(el, title, items, note = '', targetTotal = null) {
   const card = document.createElement('div');
   card.className = 'pie-card';
   card.innerHTML = `<h4>${mpEscapeHtml(title)}</h4><div class="pie-plot target"></div><p class="pie-total"></p>${note ? `<p class="note">${mpEscapeHtml(note)}</p>` : ''}`;
@@ -2702,13 +2704,15 @@ function mpTargetPie(el, title, items, note = '') {
   const usable = items.filter(it => it.usd > 0 || it.target > 0);
   const total = usable.reduce((s, it) => s + Math.max(0, it.usd), 0);
   if (!total) { card.querySelector('.pie-plot').innerHTML = '<p class="empty-note">No data.</p>'; return; }
-  card.querySelector('.pie-total').innerHTML = `Total: <b>${mpFormatUsd(total)}</b>`;
+  const wantTotal = targetTotal ?? total;
+  card.querySelector('.pie-total').innerHTML = `Total: <b>${mpFormatUsd(total)}</b>`
+    + (targetTotal !== null ? ` / Target: <b>${mpFormatUsd(targetTotal)}</b>` : '');
   // What each slice should be in dollars at its target share.
   const targets = document.createElement('table');
   targets.className = 'data-table';
   targets.style.cssText = 'width:auto;margin:0 auto 8px';
   targets.innerHTML = `<thead><tr><th></th><th>Now</th><th>Target</th><th>Change</th></tr></thead><tbody>${usable.map(it => {
-    const want = it.target / 100 * total;
+    const want = it.target / 100 * wantTotal;
     const delta = want - Math.max(0, it.usd);
     return `<tr><td class="ticker">${mpEscapeHtml(it.label)}</td><td>${mpFormatUsd(Math.max(0, it.usd))}</td>
       <td><b>${mpFormatUsd(want)}</b></td><td class="${delta >= 0 ? 'pos' : 'neg'}">${delta >= 0 ? '+' : '−'}${mpFormatUsd(Math.abs(delta))}</td></tr>`;
@@ -2735,7 +2739,7 @@ function mpTargetPie(el, title, items, note = '') {
       type: 'barpolar', r: rows.map(r => r.r), theta: rows.map(r => r.theta), width: rows.map(r => r.width),
       marker: { color: rows.map(r => r.color), line: { color: '#0d1117', width: 1 } },
       hovertemplate: rows.map(r => `${r.label}<br>$${Math.round(r.usd).toLocaleString('en-US')} - ${r.current.toFixed(1)}%`
-        + `<br>target ${r.target.toFixed(1)}% (${r.current >= r.target ? '+' : '−'}$${Math.round(Math.abs(r.current - r.target) / 100 * total).toLocaleString('en-US')})<extra></extra>`),
+        + `<br>target ${r.target.toFixed(1)}% = $${Math.round(r.target / 100 * wantTotal).toLocaleString('en-US')}<extra></extra>`),
     },
     {
       type: 'scatterpolar', mode: 'lines', hoverinfo: 'skip',
@@ -2966,32 +2970,37 @@ async function mpRenderCharts() {
       target11[bondLabel(c)] = Math.max(0, share * total - sumWhere(target11, l => ccyOf(l) === c));
     }
   }
+  // Chart 7's whole is chart 10's target: Russian infrastructure at
+  // RU_TARGET_PCT of everything. Stocks take the allocation share of it,
+  // deposits stay, liquid / cash go to 0, yuan bonds w_CNY of the non-stock
+  // part minus yuan deposits (chart 11's rule), rouble bonds the rest.
+  const RU_TARGET_PCT = 5;
+  const ruTargetTotal = RU_TARGET_PCT / 100 * allTotal;
   const ruAll = ruBuckets();
   let target7 = null;
-  if (target11 && alloc && (alloc.Stocks + alloc.Bonds) > 0) {
-    const total = Object.values(ruAll).reduce((s, v) => s + v, 0);
+  if (wCny !== null && alloc && (alloc.Stocks + alloc.Bonds) > 0) {
     target7 = fixedTargets(ruAll);
     const stock = `${MP_RU_INFRA_LABELS.stock} ${MP_RU_INFRA_CURRENCIES.RUB}`;
-    target7[stock] = alloc.Stocks / (alloc.Stocks + alloc.Bonds) * total;
-    for (const [l, v] of Object.entries(target11)) if (ccyOf(l) === 'CNY') target7[l] = v;
-    target7[bondLabel('RUB')] = Math.max(0, total - sumWhere(target7, l => l !== bondLabel('RUB')));
+    target7[stock] = alloc.Stocks / (alloc.Stocks + alloc.Bonds) * ruTargetTotal;
+    const nonStock = ruTargetTotal - target7[stock];
+    target7[bondLabel('CNY')] = Math.max(0, wCny * nonStock - sumWhere(target7, l => ccyOf(l) === 'CNY'));
+    target7[bondLabel('RUB')] = Math.max(0, ruTargetTotal - sumWhere(target7, l => l !== bondLabel('RUB')));
   }
-  const drawRuTarget = (title, cells, targets) => {
-    const total = Object.values(cells).reduce((s, v) => s + v, 0);
+  const drawRuTarget = (title, cells, targets, targetTotal = null) => {
+    const whole = targetTotal ?? Object.values(cells).reduce((s, v) => s + v, 0);
     const labels = [...new Set([...Object.keys(cells), ...Object.keys(targets)])].sort((a, b) => ruOrder.indexOf(a) - ruOrder.indexOf(b));
     mpTargetPie(grid, title, labels.map(l => ({
-      label: l, usd: cells[l] || 0, color: ruColor(l) || MP_OTHER_COLOR, target: (targets[l] || 0) / total * 100,
-    })));
+      label: l, usd: cells[l] || 0, color: ruColor(l) || MP_OTHER_COLOR, target: (targets[l] || 0) / whole * 100,
+    })), '', targetTotal);
   };
 
-  if (target7) drawRuTarget('7. Russian infrastructure', ruAll, target7);
+  if (target7) drawRuTarget('7. Russian infrastructure', ruAll, target7, ruTargetTotal);
   else mpPie(grid, '7. Russian infrastructure', ruAll, '', ruOrder, false, () => 0, ruColor);
   mpPie(grid, '8. Stocks, bonds, deposits, liquid assets',
     mpAssetBuckets(assetRows.filter(r => !isRealEstate(r)), ['stock', 'bond', 'deposit', 'liquid']), '', typeOrder, true, () => 0, typeColor);
   mpPie(grid, '9. IBKR vs Freedom', { [brokerName('Freedom24')]: byBroker.Freedom24 || 0, [brokerName('IBKR')]: byBroker.IBKR || 0 },
     '', brokerOrder, true, () => 0, brokerColor);
-  // 10: target -- Russian infrastructure 5% of everything (no real estate).
-  const RU_TARGET_PCT = 5;
+  // 10: target -- Russian infrastructure RU_TARGET_PCT of everything (no real estate).
   mpTargetPie(grid, '10. Russian infrastructure vs the rest', [
     { label: 'Russia 🇷🇺', usd: ruTotal, target: RU_TARGET_PCT, color: MP_COLORS.country.RU },
     { label: 'rest of the world 🌍', usd: allTotal - ruTotal, target: 100 - RU_TARGET_PCT, color: '#4a9ff5' },
