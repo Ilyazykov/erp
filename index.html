@@ -2822,13 +2822,14 @@ function mpNetCreditIntoLiquid(rows) {
   const factor = {};
   for (const ru of [true, false]) {
     const group = rows.filter(r => mpIsRuInfra(r) === ru);
-    // net of any negative liquid rows (the salary plan moving some out)
+    // (only the holdings carry the debt; a negative row -- the salary plan
+    // moving the debt-free part out -- is taken as is)
     const credit = group.filter(r => r.instrument_type === 'credit').reduce((s, r) => s + r.value_usd, 0);
-    const liquid = group.filter(r => r.instrument_type === 'liquid').reduce((s, r) => s + r.value_usd, 0);
+    const liquid = group.filter(r => r.instrument_type === 'liquid' && r.value_usd > 0).reduce((s, r) => s + r.value_usd, 0);
     factor[ru] = liquid > 0 ? Math.max(0, (liquid + credit) / liquid) : 1;
   }
   return rows.filter(r => r.instrument_type !== 'credit')
-    .map(r => (r.instrument_type === 'liquid' ? { ...r, value_usd: r.value_usd * factor[mpIsRuInfra(r)] } : r));
+    .map(r => (r.instrument_type === 'liquid' && r.value_usd > 0 ? { ...r, value_usd: r.value_usd * factor[mpIsRuInfra(r)] } : r));
 }
 // Asset-type buckets (rows already credit-netted -- mpNetCreditIntoLiquid).
 function mpAssetBuckets(rows, keep = null) {
@@ -3243,8 +3244,9 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   const target3 = target8 && {
     ...target8,
     [MP_ASSET_CLASS_LABELS.cash]: CASH_TARGET_USD,
-    [MP_ASSET_CLASS_LABELS.gold]: GOLD_TARGET_PCT / 100 * total3,
-    [MP_ASSET_CLASS_LABELS.crypto]: CRYPTO_TARGET_PCT / 100 * total3,
+    // money is only added: gold / crypto above 5% keep what they have
+    [MP_ASSET_CLASS_LABELS.gold]: Math.max(GOLD_TARGET_PCT / 100 * total3, types[MP_ASSET_CLASS_LABELS.gold] || 0),
+    [MP_ASSET_CLASS_LABELS.crypto]: Math.max(CRYPTO_TARGET_PCT / 100 * total3, types[MP_ASSET_CLASS_LABELS.crypto] || 0),
   };
 
   // Currencies first (the listed ones in order, then the rest largest first),
