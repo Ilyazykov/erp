@@ -2777,12 +2777,13 @@ function mpNetCreditIntoLiquid(rows) {
   const factor = {};
   for (const ru of [true, false]) {
     const group = rows.filter(r => mpIsRuInfra(r) === ru);
+    // net of any negative liquid rows (the salary plan moving some out)
     const credit = group.filter(r => r.instrument_type === 'credit').reduce((s, r) => s + r.value_usd, 0);
-    const liquid = group.filter(r => r.instrument_type === 'liquid' && r.value_usd > 0).reduce((s, r) => s + r.value_usd, 0);
+    const liquid = group.filter(r => r.instrument_type === 'liquid').reduce((s, r) => s + r.value_usd, 0);
     factor[ru] = liquid > 0 ? Math.max(0, (liquid + credit) / liquid) : 1;
   }
   return rows.filter(r => r.instrument_type !== 'credit')
-    .map(r => (r.instrument_type === 'liquid' && r.value_usd > 0 ? { ...r, value_usd: r.value_usd * factor[mpIsRuInfra(r)] } : r));
+    .map(r => (r.instrument_type === 'liquid' ? { ...r, value_usd: r.value_usd * factor[mpIsRuInfra(r)] } : r));
 }
 // Asset-type buckets (rows already credit-netted -- mpNetCreditIntoLiquid).
 function mpAssetBuckets(rows, keep = null) {
@@ -2936,9 +2937,9 @@ function mpSalaryDeltas(c, plan) {
   for (const b of p.ruStocks) spread(b.usd, ru.filter(r => r.ticker === b.ticker), { ...ruStock, ticker: b.ticker });
   const ccy = r => r.underlying_currency || r.currency;
   spread(-p.cnySold, ru.filter(r => r.instrument_type === 'bond' && ccy(r) === 'CNY'), {});
-  // Russian liquid assets move into the rouble bonds (their gross value
-  // goes; the card debt netted against them goes with it).
-  for (const r of ru.filter(r => r.instrument_type === 'liquid')) out.push({ ...r, quantity: null, price_usd: null, value_usd: -r.value_usd });
+  // Russian liquid assets: what's free of the card debt netted against them
+  // (p.ruLiquid) moves into the rouble bonds; the part covering the debt stays.
+  spread(-p.ruLiquid, ru.filter(r => r.instrument_type === 'liquid'), {});
   spread(p.rubBonds, ru.filter(r => r.instrument_type === 'bond' && ccy(r) === 'RUB'),
     { ...ruStock, ticker: 'OFZ', asset_class: 'moex_bond', instrument_type: 'bond' });
   return out;
