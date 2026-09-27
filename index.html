@@ -2706,7 +2706,9 @@ function mpContrastText(hex) {
 // of the dollar targets when it differs from today's total.
 // shareOfTarget: show / draw each target as a share of targetTotal instead
 // (chart 8: the US ERP 77.6% is of the target total).
-function mpTargetPie(el, title, items, note = '', targetTotal = null, shareOfTarget = false) {
+// before (optional): {label: USD} before the salary plan -- the table then
+// shows what the plan buys / sells per slice instead of the gap to target.
+function mpTargetPie(el, title, items, note = '', targetTotal = null, shareOfTarget = false, before = null) {
   const card = document.createElement('div');
   card.className = 'pie-card';
   card.innerHTML = `<h4>${mpEscapeHtml(title)}</h4><div class="pie-plot target"></div><p class="pie-total"></p>${note ? `<p class="note">${mpEscapeHtml(note)}</p>` : ''}`;
@@ -2720,11 +2722,12 @@ function mpTargetPie(el, title, items, note = '', targetTotal = null, shareOfTar
   const targets = document.createElement('table');
   targets.className = 'data-table';
   targets.style.cssText = 'width:auto;margin:0 auto 8px';
-  targets.innerHTML = `<thead><tr><th></th><th>Now</th><th>Target</th><th>Change</th></tr></thead><tbody>${usable.map(it => {
+  // Bought / sold only with a salary plan; otherwise just now vs target.
+  targets.innerHTML = `<thead><tr><th></th><th>Now</th><th>Target</th>${before ? '<th>Bought / sold</th>' : ''}</tr></thead><tbody>${usable.map(it => {
     const want = it.target / 100 * total;
-    const delta = want - Math.max(0, it.usd);
+    const delta = before ? it.usd - (before[it.label] || 0) : 0;
     return `<tr><td class="ticker">${mpEscapeHtml(it.label)}</td><td>${mpFormatUsd(Math.max(0, it.usd))}</td>
-      <td><b>${mpFormatUsd(want)}</b></td><td class="${delta >= 0 ? 'pos' : 'neg'}">${delta >= 0 ? '+' : '−'}${mpFormatUsd(Math.abs(delta))}</td></tr>`;
+      <td><b>${mpFormatUsd(want)}</b></td>${before ? `<td class="${delta >= 0 ? 'pos' : 'neg'}">${delta >= 0 ? '+' : '−'}${mpFormatUsd(Math.abs(delta))}</td>` : ''}</tr>`;
   }).join('')}</tbody>`;
   card.querySelector('.pie-total').after(targets);
   const R_BASE = 100, PP_SCALE = 2;
@@ -2986,16 +2989,21 @@ async function mpDrawCharts(run = ++mpChartsRun) {
   const salary = Math.max(0, parseFloat(document.getElementById('mp_salary_amount').value) || 0);
   const plan = salary ? mpSalaryPlan(ctx, salary) : null;
   mpRenderSalaryTable(plan);
-  await mpBuildCharts(mpChartsBase, plan ? mpSalaryDeltas(ctx, plan) : [], true, run, salary);
+  await mpBuildCharts(mpChartsBase, plan ? mpSalaryDeltas(ctx, plan) : [], true, run, salary, ctx.before);
 }
 
-async function mpBuildCharts(baseIn, extra, draw, run, salary = 0) {
+async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null) {
   const grid = document.getElementById('mp_charts_grid');
   const status = document.getElementById('mp_charts_status');
   const base = { ...baseIn, data: [...baseIn.data, ...extra] };
-  // In the measuring pass nothing is drawn.
+  // In the measuring pass nothing is drawn; the target charts' slices are
+  // recorded (ctx.before) so the drawn pass can show what the plan bought / sold.
+  const recorded = {};
   const pie = draw ? mpPie : () => {};
-  const tpie = draw ? mpTargetPie : () => {};
+  const tpie = draw
+    ? (el, title, items, note = '', targetTotal = null, shareOfTarget = false) =>
+      mpTargetPie(el, title, items, note, targetTotal, shareOfTarget, salary && before ? before[title] || {} : null)
+    : (el, title, items) => { recorded[title] = Object.fromEntries(items.map(it => [it.label, it.usd])); };
   const curRows = mpNetCreditIntoLiquid((await mpCurrencyRows(base)).filter(r => r.value_usd !== null));
   const assetRows = mpNetCreditIntoLiquid(
     [...await mpSplitFundsCash(base.data), ...base.cashRows, ...base.realEstateRows].filter(r => r.value_usd !== null));
@@ -3288,7 +3296,7 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0) {
     ruTotal, ruCells: ruAll, wCny, ruAlloc: alloc, usAlloc,
     stockAll: types8[MP_ASSET_CLASS_LABELS.stock] || 0, groupAll: total8,   // chart 8: the whole portfolio
     ibkr: byBroker.IBKR || 0, freedom: byBroker.Freedom24 || 0, coins: crypto,
-    valueByTicker, priceUsdByTicker, holdings: baseIn.data,
+    valueByTicker, priceUsdByTicker, holdings: baseIn.data, before: recorded,
   };
   if (!draw) return ctx;
 
