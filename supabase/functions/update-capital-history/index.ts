@@ -27,7 +27,7 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 // Price fetching stops here; the rebuild (step 3) gets the rest of the run.
 const TIME_BUDGET_MS = 80_000;
-const SLICE_DAYS = 120;
+const SLICE_DAYS = 60;
 const OVERLAP_DAYS = 5;
 const UA = { 'User-Agent': 'Mozilla/5.0 (erp-portfolio capital history)' };
 const YAHOO = 'https://query1.finance.yahoo.com/v8/finance/chart';
