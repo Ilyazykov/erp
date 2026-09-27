@@ -2990,9 +2990,12 @@ async function mpRenderCharts() {
     mpAssetBuckets(assetRows.filter(r => !isRealEstate(r)), ['stock', 'bond', 'deposit', 'liquid']), '', typeOrder, true, () => 0, typeColor);
   mpPie(grid, '9. IBKR vs Freedom', { [brokerName('Freedom24')]: byBroker.Freedom24 || 0, [brokerName('IBKR')]: byBroker.IBKR || 0 },
     '', brokerOrder, true, () => 0, brokerColor);
-  mpPie(grid, '10. Russian infrastructure vs the rest', { 'Russia 🇷🇺': ruTotal, 'rest of the world 🌍': allTotal - ruTotal },
-    '', ['Russia 🇷🇺', 'rest of the world 🌍'], true, () => 0,
-    l => (l === 'Russia 🇷🇺' ? MP_COLORS.country.RU : '#4a9ff5'));
+  // 10: target -- Russian infrastructure 5% of everything (no real estate).
+  const RU_TARGET_PCT = 5;
+  mpTargetPie(grid, '10. Russian infrastructure vs the rest', [
+    { label: 'Russia 🇷🇺', usd: ruTotal, target: RU_TARGET_PCT, color: MP_COLORS.country.RU },
+    { label: 'rest of the world 🌍', usd: allTotal - ruTotal, target: 100 - RU_TARGET_PCT, color: '#4a9ff5' },
+  ]);
   if (target11) drawRuTarget('11. Russian infrastructure without stocks', ruNoStocks, target11);
   else mpPie(grid, '11. Russian infrastructure without stocks', ruNoStocks, '', ruOrder, false, () => 0, ruColor);
   mpPie(grid, '12. Asset types with real estate', typesWithRealEstate, '', typeOrder, true, () => 0, typeColor);
