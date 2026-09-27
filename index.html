@@ -2704,7 +2704,9 @@ function mpContrastText(hex) {
 // Target shares are of today's total (a slice whose dollars don't move --
 // deposits -- keeps its %); targetTotal (optional) is only shown, the sum
 // of the dollar targets when it differs from today's total.
-function mpTargetPie(el, title, items, note = '', targetTotal = null) {
+// shareOfTarget: show / draw each target as a share of targetTotal instead
+// (chart 8: the US ERP 77.6% is of the target total).
+function mpTargetPie(el, title, items, note = '', targetTotal = null, shareOfTarget = false) {
   const card = document.createElement('div');
   card.className = 'pie-card';
   card.innerHTML = `<h4>${mpEscapeHtml(title)}</h4><div class="pie-plot target"></div><p class="pie-total"></p>${note ? `<p class="note">${mpEscapeHtml(note)}</p>` : ''}`;
@@ -2727,7 +2729,8 @@ function mpTargetPie(el, title, items, note = '', targetTotal = null) {
   card.querySelector('.pie-total').after(targets);
   const R_BASE = 100, PP_SCALE = 2;
   let cursor = 0;
-  const rows = usable.map(it => {
+  const rows = usable.map(it0 => {
+    const it = shareOfTarget && targetTotal ? { ...it0, target: it0.target * total / targetTotal } : it0;
     const current = Math.max(0, it.usd) / total * 100;
     const w = current / 100 * 360;
     const row = { ...it, current, theta: cursor + w / 2, width: w, r: Math.max(0, R_BASE + (current - it.target) * PP_SCALE) };
@@ -2746,7 +2749,7 @@ function mpTargetPie(el, title, items, note = '', targetTotal = null) {
       type: 'barpolar', r: rows.map(r => r.r), theta: rows.map(r => r.theta), width: rows.map(r => r.width),
       marker: { color: rows.map(r => r.color), line: { color: '#0d1117', width: 1 } },
       hovertemplate: rows.map(r => `${r.label}<br>$${Math.round(r.usd).toLocaleString('en-US')} - ${r.current.toFixed(1)}%`
-        + `<br>target ${r.target.toFixed(1)}% = $${Math.round(r.target / 100 * total).toLocaleString('en-US')}<extra></extra>`),
+        + `<br>target ${r.target.toFixed(1)}% = $${Math.round(r.target / 100 * (shareOfTarget && targetTotal ? targetTotal : total)).toLocaleString('en-US')}<extra></extra>`),
     },
     {
       type: 'scatterpolar', mode: 'lines', hoverinfo: 'skip',
@@ -2842,31 +2845,30 @@ function mpSalaryPlan(c, salary) {
   if (parts.vwce > 0) rows.push(['4.1', 'World fund — VWCE at Freedom (up to 20% of IBKR + Freedom)', parts.vwce, '']);
   if (parts.vwra > 0) rows.push(['4.1', 'World fund — VWRA at IBKR', parts.vwra, '']);
 
-  // 5-7. Inside Russian infrastructure, with the money from step 3.
-  let ruLeft = ruAdd;
+  // 5-7. Inside Russian infrastructure. Its free money -- step 3's, the
+  // yuan-bond sale (step 6) and the Russian liquid assets (step 7) -- first
+  // buys stocks up to the ERP & Stocks/Bonds share of the new total, the
+  // rest goes into rouble bonds.
   const cell = (t, ccy) => c.ruCells[`${MP_RU_INFRA_LABELS[t]} ${MP_RU_INFRA_CURRENCIES[ccy]}`] || 0;
   const ruNew = c.ruTotal + ruAdd;
-  let ruStockTarget = cell('stock', 'RUB');
-  parts.ruStocks = [];
-  if (c.ruAlloc && (c.ruAlloc.Stocks + c.ruAlloc.Bonds) > 0) {
-    ruStockTarget = c.ruAlloc.Stocks / (c.ruAlloc.Stocks + c.ruAlloc.Bonds) * ruNew;
-    const ruStockAdd = Math.max(0, Math.min(ruLeft, ruStockTarget - cell('stock', 'RUB')));
-    ruLeft -= ruStockAdd;
-    const ruStocksNow = RU_STOCK_TICKERS.reduce((s, t) => s + (c.valueByTicker[t] || 0), 0);
-    parts.ruStocks = mpSalaryAllocate(DATA && DATA.ruTargetWeightsRaw, ruStocksNow, ruStockAdd, c);
-    rows.push(['5', 'Russian stocks (ERP & Stocks/Bonds target)', ruStockAdd, mpSalaryBuysText(parts.ruStocks)]);
-  }
+  const ruStockTarget = c.ruAlloc && (c.ruAlloc.Stocks + c.ruAlloc.Bonds) > 0
+    ? c.ruAlloc.Stocks / (c.ruAlloc.Stocks + c.ruAlloc.Bonds) * ruNew : cell('stock', 'RUB');
   parts.cnySold = 0;
   if (c.wCny !== null && c.wCny < 0.3) {
     const cnyTarget = Math.max(0, c.wCny * (ruNew - ruStockTarget) - cell('deposit', 'CNY'));
     parts.cnySold = Math.max(0, cell('bond', 'CNY') - cnyTarget);
-    rows.push(['6', `Sell yuan bonds (w_CNY ${(c.wCny * 100).toFixed(1)}% < 30%)`, -parts.cnySold, '']);
   }
   parts.ruLiquid = cell('liquid', 'RUB') + cell('liquid', 'CNY');
-  // Whatever the allocator couldn't place (lot sizes) goes to bonds too.
+  const ruPool = ruAdd + parts.cnySold + parts.ruLiquid;
+  const ruStockAdd = Math.max(0, Math.min(ruPool, ruStockTarget - cell('stock', 'RUB')));
+  const ruStocksNow = RU_STOCK_TICKERS.reduce((s, t) => s + (c.valueByTicker[t] || 0), 0);
+  parts.ruStocks = mpSalaryAllocate(DATA && DATA.ruTargetWeightsRaw, ruStocksNow, ruStockAdd, c);
   const ruStocksSpent = parts.ruStocks.reduce((s, b) => s + b.usd, 0);
-  parts.rubBonds = ruLeft + (ruAdd - ruLeft - ruStocksSpent) + parts.cnySold + parts.ruLiquid;
-  rows.push(['7', 'Rouble bonds (step 3 leftover + yuan sale + Russian liquidity)', parts.rubBonds,
+  rows.push(['5', 'Russian stocks (ERP & Stocks/Bonds target)', ruStocksSpent, mpSalaryBuysText(parts.ruStocks)]);
+  if (parts.cnySold) rows.push(['6', `Sell yuan bonds (w_CNY ${(c.wCny * 100).toFixed(1)}% < 30%)`, -parts.cnySold, '']);
+  // Whatever the stocks didn't take (lot sizes included) goes to bonds.
+  parts.rubBonds = ruPool - ruStocksSpent;
+  rows.push(['7', 'Rouble bonds (the rest of Russian free money)', parts.rubBonds,
     parts.ruLiquid ? `incl. ${mpFormatUsd(parts.ruLiquid)} from Russian liquid assets` : '']);
   return { rows, parts };
 }
@@ -3130,17 +3132,16 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0) {
   }
   const ruColor = l => ruColorByLabel[l] || null;
 
-  // Dollar targets for charts 3 and 8 (the whole stays the same: chart 3's
-  // targets add up to today's total).
-  //   3: cash $10,000, gold 5%, crypto 5% of everything;
-  //   8: gets what's left of the whole -- stocks at the US ERP tab's target
-  //      share of it, bonds / deposits / liquid assets the rest in today's
-  //      proportions; chart 3 takes those four at chart 8's dollars.
+  // Dollar targets for charts 3 and 8 (of the figures shown -- after the
+  // salary plan when one is typed in).
+  //   8: stocks at the US ERP tab's target share of chart 8's own total,
+  //      bonds / deposits / liquid assets the rest in their current proportions;
+  //   3: those four at chart 8's dollars, cash $10,000, gold 5%, crypto 5%.
   const CASH_TARGET_USD = 10000, GOLD_TARGET_PCT = 5, CRYPTO_TARGET_PCT = 5;
   const total3 = Object.values(types).reduce((s, v) => s + v, 0);
   const types8 = mpAssetBuckets(assetRows.filter(r => !isRealEstate(r)), ['stock', 'bond', 'deposit', 'liquid']);
   const total8 = Object.values(types8).reduce((s, v) => s + v, 0);
-  const targetTotal8 = total3 - CASH_TARGET_USD - (GOLD_TARGET_PCT + CRYPTO_TARGET_PCT) / 100 * total3;
+  const targetTotal8 = total8;
   const usAlloc = DATA && DATA.usAllocTargetRaw;
   let target8 = null;
   if (usAlloc && (usAlloc.Stocks + usAlloc.Bonds) > 0 && total8 > 0 && targetTotal8 > 0) {
@@ -3245,7 +3246,7 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0) {
     const labels = Object.keys(types8).sort((a, b) => typeOrder.indexOf(a) - typeOrder.indexOf(b));
     tpie(grid, '8. Stocks, bonds, deposits, liquid assets', labels.map(l => ({
       label: l, usd: types8[l], color: typeColor(l) || MP_OTHER_COLOR, target: target8[l] / total8 * 100,
-    })), '', targetTotal8);
+    })));
   } else {
     pie(grid, '8. Stocks, bonds, deposits, liquid assets', types8, '', typeOrder, true, () => 0, typeColor);
   }
