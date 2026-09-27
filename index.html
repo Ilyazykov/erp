@@ -3425,8 +3425,8 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     { label: brokerName('IBKR'), usd: byBroker.IBKR || 0, target: 100 - FREEDOM_TARGET_PCT, color: MP_COLORS.broker.IBKR },
   ]);
   // 10: target -- Russian infrastructure RU_TARGET_PCT of everything (no real estate).
-  // money is only added: Russia above 5% keeps what it has
-  const ruShare10 = Math.max(RU_TARGET_PCT, allTotal ? ruTotal / allTotal * 100 : 0);
+  // Russia's target is 5% of everything (above it, the plan simply adds nothing there)
+  const ruShare10 = RU_TARGET_PCT;
   tpie(grid, '11. Russian infrastructure vs the rest', [
     { label: 'Russia 🇷🇺', usd: ruTotal, target: ruShare10, color: MP_COLORS.country.RU },
     { label: 'rest of the world 🌍', usd: allTotal - ruTotal, target: 100 - ruShare10, color: '#4a9ff5' },
