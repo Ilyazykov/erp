@@ -2706,7 +2706,7 @@ function mpTargetPie(el, title, items, note = '', targetTotal = null) {
   const total = usable.reduce((s, it) => s + Math.max(0, it.usd), 0);
   if (!total) { card.querySelector('.pie-plot').innerHTML = '<p class="empty-note">No data.</p>'; return; }
   card.querySelector('.pie-total').innerHTML = `Total: <b>${mpFormatUsd(total)}</b>`
-    + (targetTotal !== null ? ` / Target: <b>${mpFormatUsd(targetTotal)}</b>` : '');
+    + (targetTotal !== null && Math.abs(targetTotal - total) >= 0.005 ? ` / Target: <b>${mpFormatUsd(targetTotal)}</b>` : '');
   // What each slice should be in dollars at its target share.
   const targets = document.createElement('table');
   targets.className = 'data-table';
