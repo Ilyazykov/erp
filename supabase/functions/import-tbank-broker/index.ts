@@ -12,7 +12,7 @@
 //     - 1.1 deals "Покупка" / "Продажа" in securities (REPO legs are skipped
 //       -- a loan of the securities, not a change of holding; so are currency
 //       deals, USD000UTSTOM & co -- their cash is in section 2): price,
-//       quantity, NKD,
+//       quantity, NKD, settle_date (the deal's cash settlement day),
 //       fee_tax = broker + exchange + clearing commission;
 //     - section 2 "Выплата доходов по корпоративным действиям": dividend /
 //       coupon -> side 'dividend' (quantity = the amount, price = "Выплата на
@@ -72,6 +72,10 @@ const num = (s: string | undefined) => {
   return t && Number.isFinite(n) ? n : 0;
 };
 const round = (x: number, d = 8) => Math.round(x * 10 ** d) / 10 ** d;
+const settleDate = (cell?: string) => {
+  const [plan, fact] = String(cell ?? '').split('/').map(x => iso(x.trim()));
+  return fact ?? plan ?? null;
+};
 // "13.07.2026" -> "2026-07-13"
 const iso = (s: string | undefined) => {
   const m = (s || '').match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
@@ -152,7 +156,11 @@ function parse(bytes: Uint8Array, splits: Map<string, Split[]>) {
     dealLog.set(isin, [...(dealLog.get(isin) ?? []), { date, qty: kind === 'Покупка' ? qty : -qty }]);
     trades.push({
       ticker: tickerOf(isin), side: kind === 'Покупка' ? 'buy' : 'sell', quantity: qty,
-      price: num(d['Цена за единицу']), trade_date: date, currency: d['Валюта цены'] || d['Валюта расчетов'] || 'RUB',
+      price: num(d['Цена за единицу']), trade_date: date,
+      // "Дата расчетов план/факт" -- "10.01.2022 / 10.01.2022": the cash moves
+      // then (section 2 books it on that date), the fact over the plan.
+      settle_date: settleDate(d['Дата расчетов план/факт']),
+      currency: d['Валюта цены'] || d['Валюта расчетов'] || 'RUB',
       fee_tax: round(num(d['Комиссия брокера']) + num(d['Комиссия биржи']) + num(d['Комиссия клир. центра']), 2),
       fee_currency: d['Валюта комиссии'] || null, nkd: num(d['НКД']) || null,
       exchange: d['Торговая площадка'] || null, note: `${d['Наименование актива'] ?? ''} (сделка ${d['Номер сделки']})`,
