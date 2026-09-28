@@ -29,6 +29,7 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 // Price fetching stops here; the rebuild (step 3) gets the rest of the run.
 const TIME_BUDGET_MS = 40_000;
 const SLICE_DAYS = 60;
+const SLICE_PARALLEL = 4;
 const OVERLAP_DAYS = 5;
 const UA = { 'User-Agent': 'Mozilla/5.0 (erp-portfolio capital history)' };
 const YAHOO = 'https://query1.finance.yahoo.com/v8/finance/chart';
@@ -319,11 +320,16 @@ Deno.serve(async () => {
       report[`transfers_paired_${u.slice(0, 8)}`] = e0 ? `error: ${e0.message}` : paired;
       const { data: first, error: e1 } = await db.rpc('capital_first_day', { p_user: u });
       if (e1 || !first) { rebuilt[u.slice(0, 8)] = e1 ? `error: ${e1.message}` : 0; continue; }
+      // Slices don't depend on each other: SLICE_PARALLEL at a time.
+      const slices: string[] = [];
+      for (let from = String(first).slice(0, 10); from <= today(); from = addDays(from, SLICE_DAYS)) slices.push(from);
       let rows = 0, err: string | null = null;
-      for (let from = String(first).slice(0, 10); from <= today() && !err; from = addDays(from, SLICE_DAYS)) {
-        const to = addDays(from, SLICE_DAYS - 1);
-        const { data, error } = await db.rpc('refresh_capital_daily', { p_user: u, p_from: from, p_to: to < today() ? to : today() });
-        if (error) err = `error at ${from}: ${error.message}`; else rows += Number(data ?? 0);
+      for (let i = 0; i < slices.length && !err; i += SLICE_PARALLEL) {
+        await Promise.all(slices.slice(i, i + SLICE_PARALLEL).map(async from => {
+          const to = addDays(from, SLICE_DAYS - 1);
+          const { data, error } = await db.rpc('refresh_capital_daily', { p_user: u, p_from: from, p_to: to < today() ? to : today() });
+          if (error) err ??= `error at ${from}: ${error.message}`; else rows += Number(data ?? 0);
+        }));
       }
       const { data: last } = await db.from('capital_daily').select('day, value_usd').eq('user_id', u)
         .eq('day', today()).neq('account', 'real estate');
