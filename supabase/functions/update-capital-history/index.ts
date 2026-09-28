@@ -11,9 +11,10 @@
 //      Yahoo chart history (US stocks, UCITS ETFs, crypto / gold);
 //      stablecoins and ЦФА at a constant; deposits / savings / blocked need
 //      none (refresh_capital_daily prices them by currency / at 0);
-//   3. match_internal_transfers(user), then refresh_capital_daily(user,
-//      from, to) for every user, in slices of
-//      SLICE_DAYS from their first transaction to today.
+//   3. request_capital_refresh(user) for every user: the database rebuilds
+//      capital_daily in the background (pg_cron, run_capital_refresh_step,
+//      migration 040) -- the internal-transfer pairs, then every day from
+//      the first transaction in 30-day slices.
 // Each ticker's source is resolved once (market_prices' classification when
 // it's held, else by trying MOEX, then Yahoo) and cached in price_sources.
 // Only what's missing is fetched: from the day after the last stored close
@@ -26,10 +27,8 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
-// Price fetching stops here; the rebuild (step 3) gets the rest of the run.
-const TIME_BUDGET_MS = 40_000;
-const SLICE_DAYS = 30;
-const SLICE_PARALLEL = 3;
+// Price fetching stops here (the function has ~150 s in all).
+const TIME_BUDGET_MS = 100_000;
 const OVERLAP_DAYS = 5;
 const UA = { 'User-Agent': 'Mozilla/5.0 (erp-portfolio capital history)' };
 const YAHOO = 'https://query1.finance.yahoo.com/v8/finance/chart';
@@ -309,43 +308,19 @@ Deno.serve(async () => {
     report.splits_changed = splitsFound;
     report.tickers_left = queue.length - done.length - failed.length;
 
-    // 3. Rebuild every user's history, a slice of days per call (one call
-    // for the whole history runs past the API's statement timeout).
+    // 3. Ask the database to rebuild every user's history: pg_cron's
+    // run_capital_refresh_step (migration 040) does it in the background,
+    // a few minutes -- the whole history doesn't fit this function's time.
+    // The report shows the previous rebuild's status.
     const users = [...new Set(trades.map(t => t.user_id))];
-    const rebuilt: Record<string, unknown> = {};
+    const status: Record<string, unknown> = {};
     for (const u of users) {
-      // Transfers between the user's own accounts first: their two rows
-      // count from the same day (internal_transfers, migration 037).
-      const { data: paired, error: e0 } = await db.rpc('match_internal_transfers', { p_user: u });
-      report[`transfers_paired_${u.slice(0, 8)}`] = e0 ? `error: ${e0.message}` : paired;
-      const { data: first, error: e1 } = await db.rpc('capital_first_day', { p_user: u });
-      if (e1 || !first) { rebuilt[u.slice(0, 8)] = e1 ? `error: ${e1.message}` : 0; continue; }
-      // Slices don't depend on each other: SLICE_PARALLEL at a time.
-      const slices: string[] = [];
-      for (let from = String(first).slice(0, 10); from <= today(); from = addDays(from, SLICE_DAYS)) slices.push(from);
-      let rows = 0, err: string | null = null;
-      const refresh = async (from: string) => {
-        const to = addDays(from, SLICE_DAYS - 1);
-        const { data, error } = await db.rpc('refresh_capital_daily', { p_user: u, p_from: from, p_to: to < today() ? to : today() });
-        if (!error) rows += Number(data ?? 0);
-        return error;
-      };
-      // A slice that times out while others run (a failed one rolls back
-      // whole) is retried alone afterwards.
-      const retry: string[] = [];
-      for (let i = 0; i < slices.length; i += SLICE_PARALLEL) {
-        await Promise.all(slices.slice(i, i + SLICE_PARALLEL).map(async from => { if (await refresh(from)) retry.push(from); }));
-      }
-      for (const from of retry) {
-        const error = await refresh(from);
-        if (error) err ??= `error at ${from}: ${error.message}`;
-      }
-      const { data: last } = await db.from('capital_daily').select('day, value_usd').eq('user_id', u)
-        .eq('day', today()).neq('account', 'real estate');
-      const total = (last ?? []).reduce((a, r) => a + Number(r.value_usd), 0);
-      rebuilt[u.slice(0, 8)] = err ?? { rows, today_usd: Math.round(total * 100) / 100 };
+      const { data: prev } = await db.from('capital_refresh_queue').select('*').eq('user_id', u).maybeSingle();
+      const { error } = await db.rpc('request_capital_refresh', { p_user: u });
+      status[u.slice(0, 8)] = error ? `error: ${error.message}`
+        : { queued: true, previous: prev && { finished_at: prev.finished_at, rows: prev.rows_total, today_usd: prev.today_usd, running_from: prev.next_from } };
     }
-    report.capital_rows = rebuilt;
+    report.capital_refresh = status;
     report.seconds = Math.round((Date.now() - started) / 1000);
     return json(report);
   } catch (err) {
