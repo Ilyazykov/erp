@@ -334,7 +334,7 @@
     <p class="empty-note" id="capital_status"></p>
     <div id="plot_capital" style="height:560px"></div>
     <div class="section-title">By asset type</div>
-    <p class="note">Stacked from the bottom: cash, liquid assets, deposits, gold, bonds, stocks, crypto. Credit-card debt is
+    <p class="note">Stacked from the bottom: crypto, stocks, bonds, gold, deposits, liquid assets, cash. Credit-card debt is
       netted within its infrastructure (Russian debt against Russian holdings) — against liquid assets first, then cash,
       bonds, stocks; whatever is left is drawn below zero.</p>
     <div class="form-row"><label><input type="checkbox" id="capital_types_re"> real estate (at the bottom)</label></div>
@@ -4854,7 +4854,8 @@ async function mpRenderCapitalTypes(ccy, conv) {
     traces.push(area('real_estate', MP_ASSET_CLASS_LABELS.real_estate,
       mpCapitalTypeRows.map(r => conv(r.day, r.real_estate)), 'assets'));
   }
-  for (const t of MP_CAPITAL_TYPES) {
+  // bottom to top: crypto, stocks, bonds, gold, deposits, liquid assets, cash
+  for (const t of [...MP_CAPITAL_TYPES].reverse()) {
     traces.push(area(t, MP_ASSET_CLASS_LABELS[t], buckets.map((b, i) => conv(days[i], b[t])), 'assets'));
   }
   if (buckets.some(b => b.negative < -0.5)) {
