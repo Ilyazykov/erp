@@ -4807,12 +4807,17 @@ const MP_CAPITAL_TYPE_COLORS = Object.assign({}, MP_COLORS.type, {
   negative: '#a855f7',   // debt beyond everything it could be netted against
 });
 // A day's buckets with credit netted within each infrastructure: against
-// liquid assets, then cash, bonds, stocks; what's left is `negative`.
+// liquid assets, then cash, bonds, stocks; what's left is `negative`. A
+// type below zero counts as debt the same way -- a broker's cash goes
+// negative for the days between a withdrawal and the settlement of the
+// sale that paid for it (the shares still held till then), so stacked it
+// would dip below zero while the total is right.
 function mpCapitalTypeBuckets(r) {
   const out = Object.fromEntries([...MP_CAPITAL_TYPES, 'negative'].map(t => [t, 0]));
   for (const p of ['ru', 'fx']) {
     const v = Object.fromEntries(MP_CAPITAL_TYPES.map(t => [t, Number(r[`${p}_${t}`] || 0)]));
     let debt = -Math.min(0, Number(r[`${p}_credit`] || 0));
+    for (const t of MP_CAPITAL_TYPES) if (v[t] < 0) { debt -= v[t]; v[t] = 0; }
     for (const t of ['liquid', 'cash', 'bond', 'stock']) {
       const take = Math.min(Math.max(v[t], 0), debt);
       v[t] -= take; debt -= take;
