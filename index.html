@@ -4834,11 +4834,6 @@ function mpCapitalTypeBuckets(r) {
   out.negative = -beyond;
   return out;
 }
-// '#rrggbb' -> 'rgba(r, g, b, a)'
-function mpAlpha(hex, a) {
-  const n = parseInt(hex.slice(1), 16);
-  return `rgba(${n >> 16}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
-}
 async function mpRenderCapitalTypes(ccy, conv) {
   const el = document.getElementById('plot_capital_types');
   if (!mpCapitalTypeRows) {
@@ -4858,8 +4853,7 @@ async function mpRenderCapitalTypes(ccy, conv) {
   const area = (key, label, ys, group) => ({
     x: days, y: ys, name: label, type: 'scatter', mode: 'lines', stackgroup: group,
     // no outline: a type at zero would still draw its line along the stack's top
-    // a little see-through, so the grid shows behind the areas
-    line: { width: 0, color: MP_CAPITAL_TYPE_COLORS[key] }, fillcolor: mpAlpha(MP_CAPITAL_TYPE_COLORS[key], 0.78),
+    line: { width: 0, color: MP_CAPITAL_TYPE_COLORS[key] }, fillcolor: MP_CAPITAL_TYPE_COLORS[key],
     hovertemplate: `${money}<extra>${label}</extra>`,
   });
   const traces = [];
@@ -4876,7 +4870,11 @@ async function mpRenderCapitalTypes(ccy, conv) {
   if (buckets.some(b => b.negative < -0.5)) {
     traces.push(area('negative', 'debt beyond assets 🔻', buckets.map((b, i) => conv(days[i], b.negative)), 'debt'));
   }
-  await Plotly.react(el, traces, mpCapitalLayout(ccy, { hovermode: 'x unified' }), CONFIG);
+  // the grid drawn over the areas, dotted, as in the spreadsheet's chart
+  const layout = mpCapitalLayout(ccy, { hovermode: 'x unified' });
+  layout.xaxis = Object.assign({}, layout.xaxis, { layer: 'above traces', griddash: 'dot' });
+  layout.yaxis = Object.assign({}, layout.yaxis, { layer: 'above traces', griddash: 'dot' });
+  await Plotly.react(el, traces, layout, CONFIG);
 }
 document.getElementById('capital_types_re').addEventListener('change', () => {
   if (mpIsSignedIn) mpRenderCapitalTypes(mpCapitalCcy(), mpCapitalConverter(mpCapitalCcy()));
