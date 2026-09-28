@@ -325,7 +325,7 @@
   <div id="capitalbrokers_signed_out" class="empty-note">Sign in with Google (top of page) to see your capital by bank and broker.</div>
   <div id="capitalbrokers_signed_in" style="display:none">
     <div class="section-title">Capital by bank / broker</div>
-    <p class="note">Every day since the first transaction, stacked by where it's held (oldest account at the bottom; Bank of Cyprus, Revolut and IBKR on top).
+    <p class="note">Every day since the first transaction, stacked by where it's held: Raiffeisen at the bottom, then the others in the order they first held money, Bank of Cyprus, Revolut, IBKR, Sber and T-Bank on top.
       A bank's credit-card debt is netted within that bank; a bank in the red as a whole is drawn below zero.</p>
     <div class="form-row" style="gap:16px;flex-wrap:wrap">
       <label>in <select id="brokers_ccy"><option value="USD">USD $</option><option value="RUB">RUB ₽</option></select></label>
@@ -4969,10 +4969,15 @@ async function mpRenderCapitalBrokers() {
   rows.forEach((r, i) => Object.entries(r.accounts || {}).forEach(([a, v]) => {
     if (Math.abs(Number(v)) >= 1 && !first.has(a)) first.set(a, i);
   }));
-  // ... except these, on top: where the money is now
-  const TOP = ['Bank of Cyprus', 'Revolut', 'IBKR'];
-  const accounts = [...first.keys()].sort((a, b) =>
-    (TOP.indexOf(a) + 1 || 0) - (TOP.indexOf(b) + 1 || 0) || first.get(a) - first.get(b));
+  // ... except Raiffeisen at the very bottom, these on top (Sber, then
+  // T-Bank the top ones), and Alfa right under Yandex Bank
+  const BOTTOM = ['Raiffeisen'], TOP = ['Bank of Cyprus', 'Revolut', 'IBKR', 'Sber', 'T-Bank'];
+  const rank = a => (BOTTOM.includes(a) ? -1 : TOP.indexOf(a) + 1);
+  const accounts = [...first.keys()].sort((a, b) => rank(a) - rank(b) || first.get(a) - first.get(b));
+  if (accounts.includes('Alfa') && accounts.includes('Yandex Bank')) {
+    accounts.splice(accounts.indexOf('Alfa'), 1);
+    accounts.splice(accounts.indexOf('Yandex Bank'), 0, 'Alfa');
+  }
   let fallback = 0;
   const color = a => MP_COLORS.broker[a] || MP_BROKER_FALLBACK_COLORS[fallback++ % MP_BROKER_FALLBACK_COLORS.length];
   const series = [];
