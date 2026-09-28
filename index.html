@@ -4840,7 +4840,7 @@ function mpCapitalTypeBuckets(r) {
 function mpGridOverAreas(el) {
   const fl = el._fullLayout;
   if (!fl?.xaxis?._vals || !fl?.yaxis?._vals) return;
-  const line = { color: 'rgba(13, 17, 23, 0.55)', width: 1, dash: 'dot' };
+  const line = { color: 'rgba(13, 17, 23, 0.18)', width: 1, dash: 'dot' };
   const shapes = [
     ...fl.xaxis._vals.map(v => ({ type: 'line', layer: 'above', xref: 'x', yref: 'paper', x0: v.x, x1: v.x, y0: 0, y1: 1, line })),
     ...fl.yaxis._vals.map(v => ({ type: 'line', layer: 'above', xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: v.x, y1: v.x, line })),
