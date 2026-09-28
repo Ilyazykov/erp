@@ -26,7 +26,11 @@
 //       date it), so the holding equals the report's closing balance. The
 //       closing balance is trusted over the in / out columns, which a report
 //       can get wrong (a closed 2020 agreement shows GAZP "in 0, out 10"
-//       after a buy and a sell of 10).
+//       after a buy and a sell of 10). The report never lists a stock
+//       split: when the period's splits (stock_splits, migration 034)
+//       account for the whole difference -- the shares held the day before
+//       each split times (ratio - 1) -- it's booked as one row per split on
+//       the split day instead (AAPL 4:1 on 31.08.2020: 2 held -> +6).
 //   bank_transactions (external_source 'tbank_broker_xlsx:<agreement>' --
 //   one cash balance per agreement and currency): every section 2 operation,
 //   running balance from the period's opening ("Входящий остаток"). Where the
@@ -74,7 +78,9 @@ const iso = (s: string | undefined) => {
   return m ? `${m[3]}-${m[2]}-${m[1]}` : null;
 };
 
-function parse(bytes: Uint8Array) {
+type Split = { day: string; ratio: number };
+
+function parse(bytes: Uint8Array, splits: Map<string, Split[]>) {
   const rows: Row[] = xlsxRows(bytes);
   const investor = rows.find(r => /^Инвестор:/.test(r.A || ''))?.A ?? '';
   const agreement = investor.match(/\/\s*(\S+)\s+от\s+(\d{2}\.\d{2}\.\d{4})/);
@@ -82,6 +88,7 @@ function parse(bytes: Uint8Array) {
     ?.match(/(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4})/);
   if (!agreement || !period) return null;
   const agr = agreement[1];
+  const periodStart = iso(period[1])!;
   const periodEnd = iso(period[2])!;
 
   // Walk the sections; `hdr` maps column letter -> header of the table in effect.
@@ -131,6 +138,7 @@ function parse(bytes: Uint8Array) {
 
   const trades = [];
   const netDeals = new Map<string, number>();
+  const dealLog = new Map<string, { date: string; qty: number }[]>();
   for (const d of deals) {
     const kind = d['Вид сделки'];
     if (kind !== 'Покупка' && kind !== 'Продажа') continue;   // REPO legs
@@ -141,6 +149,7 @@ function parse(bytes: Uint8Array) {
     if (!code || !date || !qty) continue;
     const isin = isinOfCode(code);
     netDeals.set(isin, (netDeals.get(isin) ?? 0) + (kind === 'Покупка' ? qty : -qty));
+    dealLog.set(isin, [...(dealLog.get(isin) ?? []), { date, qty: kind === 'Покупка' ? qty : -qty }]);
     trades.push({
       ticker: tickerOf(isin), side: kind === 'Покупка' ? 'buy' : 'sell', quantity: qty,
       price: num(d['Цена за единицу']), trade_date: date, currency: d['Валюта цены'] || d['Валюта расчетов'] || 'RUB',
@@ -183,9 +192,34 @@ function parse(bytes: Uint8Array) {
   const blockedAgreement = held.length > 0 && held.every(isin => Math.abs(netDeals.get(isin) ?? 0) < 1e-9);
   const heldTicker = (isin: string) => blockedAgreement && held.includes(isin) ? `BLOCKED:${tickerOf(isin)}` : tickerOf(isin);
   const adjustments = [];
+  const staleAdjustIds: string[] = [];
   for (const [isin, close] of closing) {
     const diff = round(close - (opening.get(isin) ?? 0) - (netDeals.get(isin) ?? 0));
     if (Math.abs(diff) < 1e-9) continue;
+    // Splits in the period that account for all of it: one row per split.
+    const inPeriod = (splits.get(tickerOf(isin)) ?? [])
+      .filter(x => x.day > periodStart && x.day <= periodEnd).sort((p, q) => p.day.localeCompare(q.day));
+    if (inPeriod.length) {
+      let added = 0;
+      const rows = inPeriod.map(x => {
+        const before = (opening.get(isin) ?? 0) + added
+          + (dealLog.get(isin) ?? []).filter(d => d.date < x.day).reduce((a, d) => a + d.qty, 0);
+        const qty = round(before * (x.ratio - 1));
+        added = round(added + qty);
+        const label = x.ratio >= 1 ? `${x.ratio}:1` : `1:${round(1 / x.ratio, 4)}`;
+        return {
+          ticker: heldTicker(isin), side: qty > 0 ? 'buy' : 'sell', quantity: Math.abs(qty), price: 0, trade_date: x.day,
+          currency: 'RUB', fee_tax: null, fee_currency: null, nkd: null, exchange: null,
+          note: `Stock split ${label}: ${round(before)} held -> ${round(before + qty)} (not listed in the report; its closing balance includes it)`,
+          external_id: `${agr}:split:${isin}:${x.day}`,
+        };
+      }).filter(r => r.quantity > 0);
+      if (Math.abs(added - diff) < 1e-6) {
+        adjustments.push(...rows);
+        staleAdjustIds.push(`${agr}:adjust:${isin}`);   // booked at the period end by an earlier upload
+        continue;
+      }
+    }
     adjustments.push({
       ticker: heldTicker(isin), side: diff > 0 ? 'buy' : 'sell', quantity: Math.abs(diff), price: 0, trade_date: periodEnd,
       currency: 'RUB', fee_tax: null, fee_currency: null, nkd: null, exchange: null,
@@ -236,7 +270,7 @@ function parse(bytes: Uint8Array) {
   const cashCheck = Object.fromEntries(Object.entries(cashSummary).map(([c, s]) =>
     [c, { computed: balance[c] ?? s.open, reported: s.close, unlisted: snapshots.find(x => x.currency === c)?.amount ?? 0 }]));
   const holdings = Object.fromEntries([...closing].filter(([, q]) => q).map(([isin, q]) => [heldTicker(isin), q]));
-  return { blocked: blockedAgreement, agreement: agr, periodEnd, trades, adjustments, bank, cashCheck, holdings };
+  return { blocked: blockedAgreement, agreement: agr, periodEnd, trades, adjustments, staleAdjustIds, bank, cashCheck, holdings };
 }
 
 Deno.serve(async (req) => {
@@ -256,13 +290,21 @@ Deno.serve(async (req) => {
     const { data: { user }, error: userErr } = await supabase.auth.getUser();
     if (userErr || !user) return json({ error: 'Not authenticated' }, 401);
 
-    const parsed = parse(new Uint8Array(await req.arrayBuffer()));
+    const splits = new Map<string, Split[]>();
+    const { data: splitRows } = await supabase.from('stock_splits').select('ticker, day, ratio');
+    for (const r of splitRows ?? []) splits.set(r.ticker, [...(splits.get(r.ticker) ?? []), { day: r.day, ratio: Number(r.ratio) }]);
+    const parsed = parse(new Uint8Array(await req.arrayBuffer()), splits);
     if (!parsed) return json({ error: 'Not a T-Bank broker report' }, 400);
 
     const all = [...parsed.trades, ...parsed.adjustments]
       .map(t => ({ ...t, user_id: user.id, account: ACCOUNT, external_source: SOURCE }));
     for (let i = 0; i < all.length; i += 500) {
       const { error } = await supabase.from('trades').upsert(all.slice(i, i + 500), { onConflict: 'user_id,external_source,external_id' });
+      if (error) return json({ error: error.message }, 500);
+    }
+    if (parsed.staleAdjustIds.length) {
+      const { error } = await supabase.from('trades').delete()
+        .eq('user_id', user.id).eq('external_source', SOURCE).in('external_id', parsed.staleAdjustIds);
       if (error) return json({ error: error.message }, 500);
     }
     // Every row carries every column: a bulk upsert takes the union of the
@@ -283,7 +325,9 @@ Deno.serve(async (req) => {
       agreement: parsed.agreement,
       deals: parsed.trades.filter(t => t.side === 'buy' || t.side === 'sell').length,
       payouts: parsed.trades.filter(t => !['buy', 'sell'].includes(t.side)).length,
-      adjustments: parsed.adjustments.length, cash_rows: bank.length,
+      adjustments: parsed.adjustments.length,
+      splits: parsed.adjustments.filter(a => a.external_id.includes(':split:')).map(a => `${a.ticker} ${a.trade_date}: ${a.side} ${a.quantity}`),
+      cash_rows: bank.length,
       removed_snowball_duplicates: removedSnowball, holdings: parsed.holdings, cash: parsed.cashCheck,
     });
   } catch (err) {

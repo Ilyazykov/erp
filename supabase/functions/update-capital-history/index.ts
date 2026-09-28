@@ -73,6 +73,18 @@ async function yahooHistory(symbol: string, from: string): Promise<{ closes: [st
   return { closes, currency: currency.toUpperCase() };
 }
 
+// ---- Yahoo split events over a range: [{day, ratio}] (null: no answer) ----
+async function yahooSplits(symbol: string, from: string): Promise<{ day: string; ratio: number }[] | null> {
+  const p1 = Math.floor(Date.parse(`${from}T00:00:00Z`) / 1000);
+  const p2 = Math.floor(Date.now() / 1000) + 86400;
+  const j = await getJson(`${YAHOO}/${encodeURIComponent(symbol)}?period1=${p1}&period2=${p2}&interval=3mo&events=split`);
+  const r = j?.chart?.result?.[0];
+  if (!r) return null;
+  return Object.values(r.events?.splits ?? {}).map((e: any) => ({
+    day: iso(new Date(e.date * 1000)), ratio: Number(e.numerator) / Number(e.denominator),
+  })).filter(x => x.ratio > 0 && x.ratio !== 1);
+}
+
 // ---- MOEX ISS history: per trading day the most-traded board's close ----
 async function moexHistory(secid: string, market: 'shares' | 'bonds', from: string) {
   const best = new Map<string, { vol: number; price: number; currency: string }>();
@@ -188,9 +200,18 @@ Deno.serve(async () => {
     const mp = new Map((mpRows ?? []).map(r => [r.ticker, r]));
     const { data: srcRows } = await db.from('price_sources').select('*');
     const sources = new Map((srcRows ?? []).map(r => [r.ticker, r]));
+    // Yahoo's closes are split-adjusted back in time; trades hold the
+    // quantities actually traded -- so a close is multiplied back by the
+    // ratios of the splits after its day (stock_splits, migration 034).
+    const splits = new Map<string, { day: string; ratio: number }[]>();
+    for (const r of await selectAll(() => db.from('stock_splits').select('ticker, day, ratio'))) {
+      splits.set(r.ticker, [...(splits.get(r.ticker) ?? []), { day: r.day, ratio: Number(r.ratio) }]);
+    }
+    const unsplit = (ticker: string, day: string) =>
+      (splits.get(ticker) ?? []).reduce((f, s) => (s.day > day ? f * s.ratio : f), 1);
     // Priced by currency / at 0 in refresh_capital_daily: no history needed.
     for (const [t, r] of mp) if (['deposit', 'savings_account', 'money_market_fund', 'blocked'].includes(r.asset_class)) since.delete(t);
-    const done: string[] = [], failed: string[] = [];
+    const done: string[] = [], failed: string[] = [], splitsFound: string[] = [];
     // Least recently fetched first, so a partial run moves on next time.
     const lastDay = new Map<string, string>();
     for (const t of since.keys()) {
@@ -208,9 +229,9 @@ Deno.serve(async () => {
       let src = sources.get(ticker);
       const m = mp.get(ticker);
       let points: { day: string; price: number; currency: string }[] = [];
-      const tryYahoo = async (symbol: string) => {
-        const h = await yahooHistory(symbol, from);
-        if (h && h.closes.length) { points = h.closes.map(([day, price]) => ({ day, price, currency: h.currency })); return true; }
+      const tryYahoo = async (symbol: string, start = from) => {
+        const h = await yahooHistory(symbol, start);
+        if (h && h.closes.length) { points = h.closes.map(([day, price]) => ({ day, price: price * unsplit(ticker, day), currency: h.currency })); return true; }
         return false;
       };
       if (src?.source === 'constant' || (!src && m && ['usd_peg', 'cfa_nominal'].includes(m.source))) {
@@ -219,7 +240,25 @@ Deno.serve(async () => {
       } else if (src?.source === 'moex_shares' || src?.source === 'moex_bonds') {
         points = await moexHistory(src.symbol, src.source === 'moex_bonds' ? 'bonds' : 'shares', from);
       } else if (src?.source === 'yahoo') {
-        await tryYahoo(src.symbol);
+        // Splits, weekly; a changed list means the stored closes are off by
+        // it -- they're dropped and fetched again from the start.
+        let start = from;
+        if (!src.splits_checked_at || Date.now() - Date.parse(src.splits_checked_at) > 7 * 86400_000) {
+          const found = await yahooSplits(src.symbol, addDays(since.get(ticker)!, -7));
+          if (found) {
+            const key = (l: { day: string; ratio: number }[]) => l.map(x => `${x.day}:${x.ratio}`).sort().join(',');
+            if (key(found) !== key(splits.get(ticker) ?? [])) {
+              await db.from('stock_splits').delete().eq('ticker', ticker);
+              if (found.length) await db.from('stock_splits').insert(found.map(x => ({ ticker, ...x })));
+              splits.set(ticker, found);
+              await db.from('price_history').delete().eq('ticker', ticker);
+              start = addDays(since.get(ticker)!, -7);
+              splitsFound.push(`${ticker}:${found.map(x => `${x.day}x${x.ratio}`).join('+') || 'none'}`);
+            }
+            await db.from('price_sources').update({ splits_checked_at: new Date().toISOString() }).eq('ticker', ticker);
+          }
+        }
+        await tryYahoo(src.symbol, start);
       } else if (!src || src.source === 'none') {
         // Resolve: market_prices' own classification first, then guesses.
         const cls = m ? `${m.source}:${m.asset_class}` : '';
@@ -265,6 +304,7 @@ Deno.serve(async () => {
     }
     report.prices = done;
     report.no_price = failed;
+    report.splits_changed = splitsFound;
     report.tickers_left = queue.length - done.length - failed.length;
 
     // 3. Rebuild every user's history, a slice of days per call (one call
