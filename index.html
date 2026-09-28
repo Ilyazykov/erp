@@ -79,6 +79,7 @@
   <div class="tab" data-tab="lookthrough">Look-through</div>
   <div class="tab" data-tab="charts">Charts</div>
   <div class="tab" data-tab="capital">Capital</div>
+  <div class="tab" data-tab="capitalbrokers">Capital by broker</div>
   <div class="tab" data-tab="sigmoid">USD/RUB → CNY Weight (current + 5Y)</div>
   <div class="tab" data-tab="layer2a">ERP &amp; Stocks/Bonds Allocation</div>
   <div class="tab" data-tab="layer2r">Yield per Stock &amp; Rebalancing</div>
@@ -317,6 +318,22 @@
     </div>
     <p class="empty-note" id="mp_exchange_status"></p>
     <div id="mp_exchanges_wrap"></div>
+  </div>
+</div>
+
+<div id="capitalbrokers" class="chart-wrap">
+  <div id="capitalbrokers_signed_out" class="empty-note">Sign in with Google (top of page) to see your capital by bank and broker.</div>
+  <div id="capitalbrokers_signed_in" style="display:none">
+    <div class="section-title">Capital by bank / broker</div>
+    <p class="note">Every day since the first transaction, stacked by where it's held (oldest account at the bottom).
+      A bank's credit-card debt is netted within that bank; a bank in the red as a whole is drawn below zero.</p>
+    <div class="form-row" style="gap:16px;flex-wrap:wrap">
+      <label>in <select id="brokers_ccy"><option value="USD">USD $</option><option value="RUB">RUB ₽</option></select></label>
+      <label><input type="checkbox" id="brokers_re"> real estate (at the bottom)</label>
+      <label><input type="checkbox" id="brokers_pct"> as % of the total</label>
+    </div>
+    <p class="empty-note" id="brokers_status"></p>
+    <div id="plot_capital_brokers" style="height:620px"></div>
   </div>
 </div>
 
@@ -583,6 +600,7 @@ function showTab(id) {
     else document.querySelectorAll('#mp_charts_grid .pie-plot').forEach(el => { if (el.data) Plotly.Plots.resize(el); });
   }
   if (id === 'capital' && mpIsSignedIn) mpRenderCapital();
+  if (id === 'capitalbrokers' && mpIsSignedIn) mpRenderCapitalBrokers();
   if (DATA && !rendered[id]) {
     rendered[id] = true;
     renderChart(id);
@@ -4680,6 +4698,8 @@ function mpUpdateAuthUi(session) {
     document.getElementById('charts_signed_in').style.display = '';
     document.getElementById('capital_signed_out').style.display = 'none';
     document.getElementById('capital_signed_in').style.display = '';
+    document.getElementById('capitalbrokers_signed_out').style.display = 'none';
+    document.getElementById('capitalbrokers_signed_in').style.display = '';
     mpRenderPortfolioPies();
     mpRenderBrokerCurrency();
     mpRenderBrokerAssetClass();
@@ -4689,6 +4709,7 @@ function mpUpdateAuthUi(session) {
     mpRenderLookThrough();
     mpRenderCharts();
     if (document.getElementById('capital').classList.contains('active')) mpRenderCapital();
+    if (document.getElementById('capitalbrokers').classList.contains('active')) mpRenderCapitalBrokers();
   } else {
     btn.textContent = 'Sign in with Google';
     document.getElementById('mp_signed_out').style.display = '';
@@ -4701,6 +4722,10 @@ function mpUpdateAuthUi(session) {
     document.getElementById('charts_signed_in').style.display = 'none';
     document.getElementById('capital_signed_out').style.display = '';
     document.getElementById('capital_signed_in').style.display = 'none';
+    document.getElementById('capitalbrokers_signed_out').style.display = '';
+    document.getElementById('capitalbrokers_signed_in').style.display = 'none';
+    mpCapitalBrokerRows = null;
+    Plotly.purge('plot_capital_brokers');
     mpCapitalRows = null;
     mpCapitalTypeRows = null;
     Plotly.purge('plot_capital');
@@ -4908,6 +4933,86 @@ for (const id of ['capital_types_re', 'capital_types_pct']) {
   document.getElementById(id).addEventListener('change', () => {
     try { localStorage.setItem('mp_capital_types_pct', document.getElementById('capital_types_pct').checked ? '1' : '0'); } catch { /* no storage */ }
     if (mpIsSignedIn) mpRenderCapitalTypes(mpCapitalCcy(), mpCapitalConverter(mpCapitalCcy()));
+  });
+}
+// ---- Capital by broker tab (capital_daily_by_account): stacked areas ----
+let mpCapitalBrokerRows = null;
+const MP_BROKER_FALLBACK_COLORS = ['#7b8494', '#c08457', '#6fa8ff', '#ff7eb6', '#00b86b', '#ffd000', '#9b6bff', '#ff6a13'];
+async function mpRenderCapitalBrokers() {
+  const status = document.getElementById('brokers_status');
+  const el = document.getElementById('plot_capital_brokers');
+  const ccy = document.getElementById('brokers_ccy').value === 'RUB' ? 'RUB' : 'USD';
+  if (!mpCapitalBrokerRows) {
+    status.textContent = 'Loading…';
+    const rows = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await sb.from('capital_daily_by_account').select('day, accounts, real_estate')
+        .order('day').range(from, from + 999);
+      if (error) { status.textContent = error.message; return; }
+      rows.push(...data);
+      if (data.length < 1000) break;
+    }
+    mpCapitalBrokerRows = rows;
+  }
+  if (ccy === 'RUB' && !mpCapitalRub) {
+    status.textContent = 'Loading RUB rates…';
+    try { mpCapitalRub = await mpLoadRubRates(); } catch (error) { status.textContent = error.message; return; }
+  }
+  if (!mpCapitalBrokerRows.length) { status.textContent = 'No history yet.'; return; }
+  status.textContent = '';
+  const conv = mpCapitalConverter(ccy);
+  const rows = mpCapitalBrokerRows, days = rows.map(r => r.day);
+  const pct = document.getElementById('brokers_pct').checked;
+  const withRe = document.getElementById('brokers_re').checked;
+  // accounts, the one holding money earliest at the bottom
+  const first = new Map();
+  rows.forEach((r, i) => Object.entries(r.accounts || {}).forEach(([a, v]) => {
+    if (Math.abs(Number(v)) >= 1 && !first.has(a)) first.set(a, i);
+  }));
+  const accounts = [...first.keys()].sort((a, b) => first.get(a) - first.get(b));
+  let fallback = 0;
+  const color = a => MP_COLORS.broker[a] || MP_BROKER_FALLBACK_COLORS[fallback++ % MP_BROKER_FALLBACK_COLORS.length];
+  const series = [];
+  if (withRe) series.push(['real estate 🏠', MP_COLORS.type.real_estate, rows.map(r => conv(r.day, r.real_estate))]);
+  for (const a of accounts) series.push([MP_BROKER_SHORT_NAMES[a] || a, color(a), rows.map(r => conv(r.day, (r.accounts || {})[a] || 0))]);
+  const totals = days.map((_, i) => series.reduce((s, [, , ys]) => s + Math.max(0, ys[i]), 0));
+  const money = pct ? '%{y:.1f}%' : ccy === 'RUB' ? '%{y:,.0f} ₽' : '$%{y:,.0f}';
+  const area = (label, c, ys, group, legend = true) => ({
+    x: days, y: ys, name: label, type: 'scatter', mode: 'lines', stackgroup: group, showlegend: legend,
+    legendgroup: label, line: { width: 0, color: c }, fillcolor: c, hovertemplate: `${money}<extra>${label}</extra>`,
+  });
+  // positive totals stacked up; a bank below zero as a whole stacked down
+  const traces = series.map(([label, c, ys]) => area(label, c,
+    ys.map((y, i) => (pct ? (totals[i] > 0 ? 100 * Math.max(0, y) / totals[i] : 0) : Math.max(0, y))), 'assets'));
+  if (!pct) {
+    for (const [label, c, ys] of series) {
+      if (ys.some(y => y < -0.5)) traces.push(area(label, c, ys.map(y => Math.min(0, y)), 'debt', false));
+    }
+  }
+  const layout = mpCapitalLayout(ccy, { hovermode: 'x unified' });
+  layout.xaxis = Object.assign({}, layout.xaxis, { griddash: 'dot' });
+  layout.yaxis = Object.assign({}, layout.yaxis, { griddash: 'dot' },
+    pct ? { title: '% of the total', tickformat: '.0f', ticksuffix: '%', tickprefix: '', range: [0, 100], autorange: false } : {});
+  await Plotly.react(el, traces, layout, CONFIG);
+  mpGridOverAreas(el);
+  if (!el.mpGridBound) {
+    el.mpGridBound = true;
+    el.on('plotly_relayout', ev => {
+      if (Object.keys(ev).some(k => /^(xaxis|yaxis|autosize)/.test(k))) mpGridOverAreas(el);
+    });
+  }
+}
+try {
+  const saved = localStorage.getItem('mp_capital_ccy'); if (saved) document.getElementById('brokers_ccy').value = saved;
+  document.getElementById('brokers_pct').checked = localStorage.getItem('mp_brokers_pct') === '1';
+} catch { /* no storage */ }
+for (const id of ['brokers_ccy', 'brokers_re', 'brokers_pct']) {
+  document.getElementById(id).addEventListener('change', () => {
+    try {
+      localStorage.setItem('mp_capital_ccy', document.getElementById('brokers_ccy').value);
+      localStorage.setItem('mp_brokers_pct', document.getElementById('brokers_pct').checked ? '1' : '0');
+    } catch { /* no storage */ }
+    if (mpIsSignedIn) mpRenderCapitalBrokers();
   });
 }
 // Capital at the start and end of the shown period and the change between.
