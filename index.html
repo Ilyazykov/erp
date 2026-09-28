@@ -328,6 +328,7 @@
       rates, in USD. Recomputed nightly. Pick a period with the buttons or the slider under the chart.</p>
     <div class="form-row" style="gap:16px;flex-wrap:wrap">
       <label><input type="checkbox" id="capital_show_re"> real estate line</label>
+      <label>in <select id="capital_ccy"><option value="USD">USD $</option><option value="RUB">RUB ₽</option></select></label>
       <span id="capital_period" class="note" style="margin:0"></span>
     </div>
     <p class="empty-note" id="capital_status"></p>
@@ -4734,18 +4735,26 @@ async function mpRenderCapital() {
     mpCapitalRows = rows;
   }
   if (!mpCapitalRows.length) { status.textContent = 'No history yet — it is built nightly by update-capital-history.'; return; }
+  const ccy = mpCapitalCcy();
+  if (ccy === 'RUB' && !mpCapitalRub) {
+    status.textContent = 'Loading RUB rates…';
+    try { mpCapitalRub = await mpLoadRubRates(); }
+    catch (error) { status.textContent = error.message; return; }
+  }
   status.textContent = '';
+  const conv = mpCapitalConverter(ccy);
   const days = mpCapitalRows.map(r => r.day);
-  const capital = mpCapitalRows.map(r => Number(r.capital_usd || 0));
+  const capital = mpCapitalRows.map(r => conv(r.day, r.capital_usd));
   const showRe = document.getElementById('capital_show_re').checked;
+  const hover = name => (ccy === 'RUB' ? '%{y:,.0f} ₽' : '$%{y:,.0f}') + `<extra>${name}</extra>`;
   const traces = [{ x: days, y: capital, name: 'Capital', type: 'scatter', mode: 'lines',
-    line: { color: '#58a6ff', width: 2 }, hovertemplate: '$%{y:,.0f}<extra>Capital</extra>' }];
+    line: { color: '#58a6ff', width: 2 }, hovertemplate: hover('Capital') }];
   if (showRe) {
-    traces.push({ x: days, y: mpCapitalRows.map(r => Number(r.real_estate_usd || 0)), name: 'Real estate',
-      type: 'scatter', mode: 'lines', line: { color: '#d29922', width: 2 }, hovertemplate: '$%{y:,.0f}<extra>Real estate</extra>' });
-    traces.push({ x: days, y: mpCapitalRows.map(r => Number(r.capital_usd || 0) + Number(r.real_estate_usd || 0)),
+    traces.push({ x: days, y: mpCapitalRows.map(r => conv(r.day, r.real_estate_usd)), name: 'Real estate',
+      type: 'scatter', mode: 'lines', line: { color: '#d29922', width: 2 }, hovertemplate: hover('Real estate') });
+    traces.push({ x: days, y: mpCapitalRows.map(r => conv(r.day, Number(r.capital_usd || 0) + Number(r.real_estate_usd || 0))),
       name: 'Capital + real estate', type: 'scatter', mode: 'lines', line: { color: '#8b949e', width: 1, dash: 'dot' },
-      hovertemplate: '$%{y:,.0f}<extra>Total</extra>' });
+      hovertemplate: hover('Total') });
   }
   const layout = Object.assign({}, LAYOUT_BASE, {
     xaxis: Object.assign({}, LAYOUT_BASE.xaxis, { type: 'date', dtick: undefined, tickformat: undefined,
@@ -4759,7 +4768,9 @@ async function mpRenderCapital() {
         { count: 3, label: '3Y', step: 'year', stepmode: 'backward' },
         { step: 'all', label: 'All' },
       ] } }),
-    yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { title: 'USD', tickformat: '$,.0f', autorange: true, fixedrange: false }),
+    yaxis: Object.assign({}, LAYOUT_BASE.yaxis, ccy === 'RUB'
+      ? { title: 'RUB', tickformat: ',.0f', ticksuffix: ' ₽', autorange: true, fixedrange: false }
+      : { title: 'USD', tickformat: '$,.0f', autorange: true, fixedrange: false }),
     margin: { t: 40, r: 20, b: 40, l: 80 },
   });
   await Plotly.react(el, traces, layout, CONFIG);
@@ -4779,12 +4790,44 @@ function mpCapitalPeriod(a, b) {
   const rows = (mpCapitalRows || []).filter(r => r.day >= a && r.day <= b);
   const out = document.getElementById('capital_period');
   if (rows.length < 2) { out.textContent = ''; return; }
-  const v0 = Number(rows[0].capital_usd || 0), v1 = Number(rows[rows.length - 1].capital_usd || 0);
+  const ccy = mpCapitalCcy(), conv = mpCapitalConverter(ccy);
+  const v0 = conv(rows[0].day, rows[0].capital_usd), v1 = conv(rows[rows.length - 1].day, rows[rows.length - 1].capital_usd);
   const d = v1 - v0, pct = v0 ? d / v0 * 100 : 0;
-  const f = v => '$' + Math.round(v).toLocaleString('en-US');
+  const f = v => ccy === 'RUB' ? `${Math.round(v).toLocaleString('en-US')} ₽` : '$' + Math.round(v).toLocaleString('en-US');
   out.textContent = `${rows[0].day}: ${f(v0)} → ${rows[rows.length - 1].day}: ${f(v1)} · `
     + `${d >= 0 ? '+' : '−'}${f(Math.abs(d))} (${d >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(1)}%)`;
 }
+// Shown in USD or RUB (the choice kept in this browser): RUB at each day's
+// Bank of Russia rate (fx_history, last rate on or before the day).
+let mpCapitalRub = null;
+function mpCapitalCcy() {
+  return document.getElementById('capital_ccy').value === 'RUB' ? 'RUB' : 'USD';
+}
+async function mpLoadRubRates() {
+  const rows = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await sb.from('fx_history').select('day, usd_per_unit')
+      .eq('currency', 'RUB').order('day').range(from, from + 999);
+    if (error) throw new Error(error.message);
+    rows.push(...data);
+    if (data.length < 1000) break;
+  }
+  return rows.map(r => [r.day, Number(r.usd_per_unit)]);
+}
+function mpCapitalConverter(ccy) {
+  if (ccy !== 'RUB' || !mpCapitalRub?.length) return (_day, usd) => Number(usd || 0);
+  const rates = mpCapitalRub;
+  return (day, usd) => {
+    let lo = 0, hi = rates.length - 1, rate = rates[0][1];
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (rates[mid][0] <= day) { rate = rates[mid][1]; lo = mid + 1; } else hi = mid - 1; }
+    return Number(usd || 0) / rate;
+  };
+}
+try { const saved = localStorage.getItem('mp_capital_ccy'); if (saved) document.getElementById('capital_ccy').value = saved; } catch { /* no storage */ }
+document.getElementById('capital_ccy').addEventListener('change', e => {
+  try { localStorage.setItem('mp_capital_ccy', e.target.value); } catch { /* no storage */ }
+  if (mpIsSignedIn) mpRenderCapital();
+});
 document.getElementById('capital_show_re').addEventListener('change', () => { if (mpIsSignedIn) mpRenderCapital(); });
 
 // Redraw only when who's signed in actually changes: Supabase re-fires
