@@ -325,8 +325,8 @@
   <div id="capitalbrokers_signed_out" class="empty-note">Sign in with Google (top of page) to see your capital by bank and broker.</div>
   <div id="capitalbrokers_signed_in" style="display:none">
     <div class="section-title">Capital by bank / broker</div>
-    <p class="note">Every day since the first transaction, stacked by where it's held: Ziraat and Raiffeisen at the bottom, then the others in the order they first held money;
-      on top Bank of Cyprus, Revolut, IBKR and the Russian banks — Yandex, Alfa, Ozon, Finuslugi, Sber, T-Bank.
+    <p class="note">Every day since the first transaction, stacked by where it's held, top down: Bank of Cyprus, Revolut, IBKR, Freedom, UniCredit,
+      T-Bank, Sber, Finuslugi, Ozon, Alfa, Yandex, the rest, Raiffeisen, Ziraat.
       A bank's credit-card debt is netted within that bank; a bank in the red as a whole is drawn below zero.</p>
     <div class="form-row" style="gap:16px;flex-wrap:wrap">
       <label>in <select id="brokers_ccy"><option value="USD">USD $</option><option value="RUB">RUB ₽</option></select></label>
@@ -4970,11 +4970,11 @@ async function mpRenderCapitalBrokers() {
   rows.forEach((r, i) => Object.entries(r.accounts || {}).forEach(([a, v]) => {
     if (Math.abs(Number(v)) >= 1 && !first.has(a)) first.set(a, i);
   }));
-  // ... except Ziraat, then Raiffeisen at the very bottom, and on top Bank of
-  // Cyprus, Revolut, IBKR, then the Russian banks: Yandex, Alfa, Ozon,
-  // Finuslugi, Sber and T-Bank the top one
+  // ... except these, top down: BoC, Revolut, IBKR, Freedom, UniCredit,
+  // T-Bank, Sber, Finuslugi, Ozon, Alfa, Yandex -- then the rest -- then
+  // Raiffeisen and Ziraat at the very bottom
   const BOTTOM = ['Ziraat Bank', 'Raiffeisen'];
-  const TOP = ['Bank of Cyprus', 'Revolut', 'IBKR', 'Yandex Bank', 'Alfa', 'Ozon Bank', 'Finuslugi', 'Sber', 'T-Bank'];
+  const TOP = ['Yandex Bank', 'Alfa', 'Ozon Bank', 'Finuslugi', 'Sber', 'T-Bank', 'UniCredit', 'Freedom24', 'IBKR', 'Revolut', 'Bank of Cyprus'];
   const rank = a => (BOTTOM.includes(a) ? BOTTOM.indexOf(a) - BOTTOM.length : TOP.indexOf(a) + 1);
   const accounts = [...first.keys()].sort((a, b) => rank(a) - rank(b) || first.get(a) - first.get(b));
   let fallback = 0;
