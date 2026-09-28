@@ -40,6 +40,9 @@ const CRYPTO_YAHOO: Record<string, string> = {
 const ETF_SUFFIXES = ['.L', '.DE', '.AS', '.SW', '.MI', '.PA'];
 const ETF_OVERRIDE: Record<string, string> = { XSX6: '.DE' };
 const NO_PRICE = /^(DEPOSIT|ВКЛАД|SAVINGS|BLOCKED):/i;
+// Valued at 1 USD / not priced by refresh_capital_daily (exchange balances).
+const STABLE_OR_FIAT = new Set(['USDT', 'USDC', 'DAI', 'USDS', 'USDE', 'FDUSD', 'PYUSD', 'TUSD', 'BUSD', 'USDP',
+  'EUR', 'USD', 'GBP', 'CHF', 'RUB', 'TRY', 'AUD', 'CAD', 'BRL', 'SGD']);
 
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 const addDays = (day: string, n: number) => { const d = new Date(`${day}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return iso(d); };
@@ -156,6 +159,17 @@ Deno.serve(async () => {
     for (const t of trades) if (!NO_PRICE.test(t.ticker)) note(t.ticker, t.trade_date);
     const walletStart = firstTx[0] ? String(firstTx[0].tx_time).slice(0, 10) : today();
     for (const w of walletBal) note(w.ticker, walletStart);
+    // Every coin ever on a custodial exchange, held today or not
+    // (refresh_capital_daily rebuilds their history from the rows, 045) --
+    // priced as crypto first: "ETH" alone is also a US stock ticker.
+    const exchRows = await selectAll(() => db.from('wallet_transactions').select('symbol, tx_time')
+      .in('chain', ['binance', 'bybit', 'cryptocom', 'telegram']).not('symbol', 'is', null));
+    const cryptoFirst = new Set<string>();
+    for (const r of exchRows) {
+      if (STABLE_OR_FIAT.has(r.symbol)) continue;
+      cryptoFirst.add(r.symbol);
+      note(r.symbol, String(r.tx_time).slice(0, 10));
+    }
     const allDays = [...trades.map(t => t.trade_date), banks[0] ? String(banks[0].tx_date).slice(0, 10) : today(), walletStart].sort();
     const start = allDays[0] || today();
 
@@ -275,7 +289,8 @@ Deno.serve(async () => {
           return false;
         };
         const crypto = CRYPTO_YAHOO[ticker.toUpperCase()] ?? `${ticker.toUpperCase()}-USD`;
-        if (moexBond) candidates.push(viaMoex('bonds'));
+        if (cryptoFirst.has(ticker) && !m) candidates.push(viaYahoo(crypto));
+        else if (moexBond) candidates.push(viaMoex('bonds'));
         else if (m?.source === 'moex_iss') candidates.push(viaMoex('shares'));
         else if (m && /crypto|gold/.test(m.asset_class)) candidates.push(viaYahoo(crypto));
         else if (m?.asset_class === 'western_etf') {
