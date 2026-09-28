@@ -338,7 +338,10 @@
       netted within its infrastructure first (Russian debt against Russian holdings) — against liquid assets, then cash,
       bonds, stocks — and what that leaves against the other infrastructure's holdings; only debt beyond everything is
       drawn below zero.</p>
-    <div class="form-row"><label><input type="checkbox" id="capital_types_re"> real estate (at the bottom)</label></div>
+    <div class="form-row" style="gap:16px;flex-wrap:wrap">
+      <label><input type="checkbox" id="capital_types_re"> real estate (at the bottom)</label>
+      <label><input type="checkbox" id="capital_types_pct"> as % of the total</label>
+    </div>
     <div id="plot_capital_types" style="height:560px"></div>
   </div>
 </div>
@@ -4862,30 +4865,34 @@ async function mpRenderCapitalTypes(ccy, conv) {
   if (!mpCapitalTypeRows.length) return;
   const days = mpCapitalTypeRows.map(r => r.day);
   const buckets = mpCapitalTypeRows.map(mpCapitalTypeBuckets);
-  const money = ccy === 'RUB' ? '%{y:,.0f} ₽' : '$%{y:,.0f}';
+  const pct = document.getElementById('capital_types_pct').checked;
+  const withRe = document.getElementById('capital_types_re').checked;
+  const money = pct ? '%{y:.1f}%' : ccy === 'RUB' ? '%{y:,.0f} ₽' : '$%{y:,.0f}';
   const area = (key, label, ys, group) => ({
     x: days, y: ys, name: label, type: 'scatter', mode: 'lines', stackgroup: group,
     // no outline: a type at zero would still draw its line along the stack's top
     line: { width: 0, color: MP_CAPITAL_TYPE_COLORS[key] }, fillcolor: MP_CAPITAL_TYPE_COLORS[key],
     hovertemplate: `${money}<extra>${label}</extra>`,
   });
-  const traces = [];
-  if (document.getElementById('capital_types_re').checked) {
-    traces.push(area('real_estate', MP_ASSET_CLASS_LABELS.real_estate,
-      mpCapitalTypeRows.map(r => conv(r.day, r.real_estate)), 'assets'));
-  }
   // bottom to top: the more rarely a type jumps, the lower -- deposits sit
   // still, bonds and gold drift, crypto swings but is seldom bought, stocks
   // grow with every purchase, liquid assets and cash move with every transfer
-  for (const t of ['deposit', 'bond', 'gold', 'crypto', 'stock', 'liquid', 'cash']) {
-    traces.push(area(t, MP_ASSET_CLASS_LABELS[t], buckets.map((b, i) => conv(days[i], b[t])), 'assets'));
-  }
-  if (buckets.some(b => b.negative < -0.5)) {
+  const order = ['deposit', 'bond', 'gold', 'crypto', 'stock', 'liquid', 'cash'];
+  const series = [];
+  if (withRe) series.push(['real_estate', MP_ASSET_CLASS_LABELS.real_estate, mpCapitalTypeRows.map(r => conv(r.day, r.real_estate))]);
+  for (const t of order) series.push([t, MP_ASSET_CLASS_LABELS[t], buckets.map((b, i) => conv(days[i], b[t]))]);
+  // as %: each type's share of the day's holdings (the debt left over, if
+  // any, isn't a holding -- it's not drawn then)
+  const totals = days.map((_, i) => series.reduce((a, [, , ys]) => a + Math.max(0, ys[i]), 0));
+  const traces = series.map(([key, label, ys]) =>
+    area(key, label, pct ? ys.map((y, i) => (totals[i] > 0 ? 100 * Math.max(0, y) / totals[i] : 0)) : ys, 'assets'));
+  if (!pct && buckets.some(b => b.negative < -0.5)) {
     traces.push(area('negative', 'debt beyond assets 🔻', buckets.map((b, i) => conv(days[i], b.negative)), 'debt'));
   }
   const layout = mpCapitalLayout(ccy, { hovermode: 'x unified' });
   layout.xaxis = Object.assign({}, layout.xaxis, { griddash: 'dot' });
-  layout.yaxis = Object.assign({}, layout.yaxis, { griddash: 'dot' });
+  layout.yaxis = Object.assign({}, layout.yaxis, { griddash: 'dot' },
+    pct ? { title: '% of the total', tickformat: '.0f', ticksuffix: '%', tickprefix: '', range: [0, 100], autorange: false } : {});
   await Plotly.react(el, traces, layout, CONFIG);
   mpGridOverAreas(el);
   if (!el.mpGridBound) {
@@ -4896,9 +4903,13 @@ async function mpRenderCapitalTypes(ccy, conv) {
     });
   }
 }
-document.getElementById('capital_types_re').addEventListener('change', () => {
-  if (mpIsSignedIn) mpRenderCapitalTypes(mpCapitalCcy(), mpCapitalConverter(mpCapitalCcy()));
-});
+try { document.getElementById('capital_types_pct').checked = localStorage.getItem('mp_capital_types_pct') === '1'; } catch { /* no storage */ }
+for (const id of ['capital_types_re', 'capital_types_pct']) {
+  document.getElementById(id).addEventListener('change', () => {
+    try { localStorage.setItem('mp_capital_types_pct', document.getElementById('capital_types_pct').checked ? '1' : '0'); } catch { /* no storage */ }
+    if (mpIsSignedIn) mpRenderCapitalTypes(mpCapitalCcy(), mpCapitalConverter(mpCapitalCcy()));
+  });
+}
 // Capital at the start and end of the shown period and the change between.
 function mpCapitalPeriod(a, b) {
   const rows = (mpCapitalRows || []).filter(r => r.day >= a && r.day <= b);
