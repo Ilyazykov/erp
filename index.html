@@ -333,6 +333,12 @@
     </div>
     <p class="empty-note" id="capital_status"></p>
     <div id="plot_capital" style="height:560px"></div>
+    <div class="section-title">By asset type</div>
+    <p class="note">Stacked from the bottom: cash, liquid assets, deposits, gold, bonds, stocks, crypto. Credit-card debt is
+      netted within its infrastructure (Russian debt against Russian holdings) — against liquid assets first, then cash,
+      bonds, stocks; whatever is left is drawn below zero.</p>
+    <div class="form-row"><label><input type="checkbox" id="capital_types_re"> real estate (at the bottom)</label></div>
+    <div id="plot_capital_types" style="height:560px"></div>
   </div>
 </div>
 
@@ -4692,7 +4698,9 @@ function mpUpdateAuthUi(session) {
     document.getElementById('capital_signed_out').style.display = '';
     document.getElementById('capital_signed_in').style.display = 'none';
     mpCapitalRows = null;
+    mpCapitalTypeRows = null;
     Plotly.purge('plot_capital');
+    Plotly.purge('plot_capital_types');
     document.getElementById('mp_charts_grid').innerHTML = '';
     document.getElementById('mp_lookthrough_wrap').innerHTML = '';
     ['plot_mp_pie_us_stocks', 'plot_mp_pie_ru_stocks', 'plot_mp_pie_stocksbonds', 'plot_mp_pie_deposits']
@@ -4756,7 +4764,21 @@ async function mpRenderCapital() {
       name: 'Capital + real estate', type: 'scatter', mode: 'lines', line: { color: '#8b949e', width: 1, dash: 'dot' },
       hovertemplate: hover('Total') });
   }
-  const layout = Object.assign({}, LAYOUT_BASE, {
+  await Plotly.react(el, traces, mpCapitalLayout(ccy), CONFIG);
+  mpCapitalPeriod(days[0], days[days.length - 1]);
+  if (!el.mpCapitalBound) {
+    el.mpCapitalBound = true;
+    el.on('plotly_relayout', ev => {
+      const a = ev['xaxis.range[0]'] ?? ev['xaxis.range']?.[0];
+      const b = ev['xaxis.range[1]'] ?? ev['xaxis.range']?.[1];
+      if (a && b) mpCapitalPeriod(String(a).slice(0, 10), String(b).slice(0, 10));
+      else if (ev['xaxis.autorange']) mpCapitalPeriod(days[0], days[days.length - 1]);
+    });
+  }
+  await mpRenderCapitalTypes(ccy, conv);
+}
+function mpCapitalLayout(ccy, extra = {}) {
+  return Object.assign({}, LAYOUT_BASE, {
     xaxis: Object.assign({}, LAYOUT_BASE.xaxis, { type: 'date', dtick: undefined, tickformat: undefined,
       rangeslider: { visible: true, bgcolor: '#13191f', bordercolor: '#1e2830' },
       rangeselector: { bgcolor: '#13191f', activecolor: '#1f6feb', font: { color: '#c9d1d9' }, buttons: [
@@ -4773,19 +4795,69 @@ async function mpRenderCapital() {
       ? { title: 'RUB', tickformat: ',.0f', ticksuffix: ' ₽', autorange: true, fixedrange: false }
       : { title: 'USD', tickformat: '$,.0f', autorange: true, fixedrange: false }),
     margin: { t: 40, r: 20, b: 40, l: 80 },
-  });
-  await Plotly.react(el, traces, layout, CONFIG);
-  mpCapitalPeriod(days[0], days[days.length - 1]);
-  if (!el.mpCapitalBound) {
-    el.mpCapitalBound = true;
-    el.on('plotly_relayout', ev => {
-      const a = ev['xaxis.range[0]'] ?? ev['xaxis.range']?.[0];
-      const b = ev['xaxis.range[1]'] ?? ev['xaxis.range']?.[1];
-      if (a && b) mpCapitalPeriod(String(a).slice(0, 10), String(b).slice(0, 10));
-      else if (ev['xaxis.autorange']) mpCapitalPeriod(days[0], days[days.length - 1]);
-    });
-  }
+  }, extra);
 }
+
+// ---- Capital by asset type (capital_daily_by_type): stacked areas ----
+let mpCapitalTypeRows = null;
+const MP_CAPITAL_TYPES = ['cash', 'liquid', 'deposit', 'gold', 'bond', 'stock', 'crypto'];
+const MP_CAPITAL_TYPE_COLORS = Object.assign({}, MP_COLORS.type, {
+  liquid: '#b8b8bd',     // a lighter grey than deposits: the two sit next to each other here
+  negative: '#a855f7',   // debt beyond everything it could be netted against
+});
+// A day's buckets with credit netted within each infrastructure: against
+// liquid assets, then cash, bonds, stocks; what's left is `negative`.
+function mpCapitalTypeBuckets(r) {
+  const out = Object.fromEntries([...MP_CAPITAL_TYPES, 'negative'].map(t => [t, 0]));
+  for (const p of ['ru', 'fx']) {
+    const v = Object.fromEntries(MP_CAPITAL_TYPES.map(t => [t, Number(r[`${p}_${t}`] || 0)]));
+    let debt = -Math.min(0, Number(r[`${p}_credit`] || 0));
+    for (const t of ['liquid', 'cash', 'bond', 'stock']) {
+      const take = Math.min(Math.max(v[t], 0), debt);
+      v[t] -= take; debt -= take;
+    }
+    for (const t of MP_CAPITAL_TYPES) out[t] += v[t];
+    out.negative -= debt;
+  }
+  return out;
+}
+async function mpRenderCapitalTypes(ccy, conv) {
+  const el = document.getElementById('plot_capital_types');
+  if (!mpCapitalTypeRows) {
+    const rows = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await sb.from('capital_daily_by_type').select('*').order('day').range(from, from + 999);
+      if (error) { el.textContent = error.message; return; }
+      rows.push(...data);
+      if (data.length < 1000) break;
+    }
+    mpCapitalTypeRows = rows;
+  }
+  if (!mpCapitalTypeRows.length) return;
+  const days = mpCapitalTypeRows.map(r => r.day);
+  const buckets = mpCapitalTypeRows.map(mpCapitalTypeBuckets);
+  const money = ccy === 'RUB' ? '%{y:,.0f} ₽' : '$%{y:,.0f}';
+  const area = (key, label, ys, group) => ({
+    x: days, y: ys, name: label, type: 'scatter', mode: 'lines', stackgroup: group,
+    line: { width: 0.5, color: MP_CAPITAL_TYPE_COLORS[key] }, fillcolor: MP_CAPITAL_TYPE_COLORS[key],
+    hovertemplate: `${money}<extra>${label}</extra>`,
+  });
+  const traces = [];
+  if (document.getElementById('capital_types_re').checked) {
+    traces.push(area('real_estate', MP_ASSET_CLASS_LABELS.real_estate,
+      mpCapitalTypeRows.map(r => conv(r.day, r.real_estate)), 'assets'));
+  }
+  for (const t of MP_CAPITAL_TYPES) {
+    traces.push(area(t, MP_ASSET_CLASS_LABELS[t], buckets.map((b, i) => conv(days[i], b[t])), 'assets'));
+  }
+  if (buckets.some(b => b.negative < -0.5)) {
+    traces.push(area('negative', 'debt beyond assets 🔻', buckets.map((b, i) => conv(days[i], b.negative)), 'debt'));
+  }
+  await Plotly.react(el, traces, mpCapitalLayout(ccy, { hovermode: 'x unified' }), CONFIG);
+}
+document.getElementById('capital_types_re').addEventListener('change', () => {
+  if (mpIsSignedIn) mpRenderCapitalTypes(mpCapitalCcy(), mpCapitalConverter(mpCapitalCcy()));
+});
 // Capital at the start and end of the shown period and the change between.
 function mpCapitalPeriod(a, b) {
   const rows = (mpCapitalRows || []).filter(r => r.day >= a && r.day <= b);
