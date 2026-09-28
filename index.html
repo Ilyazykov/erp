@@ -4845,7 +4845,8 @@ async function mpRenderCapitalTypes(ccy, conv) {
   const money = ccy === 'RUB' ? '%{y:,.0f} ₽' : '$%{y:,.0f}';
   const area = (key, label, ys, group) => ({
     x: days, y: ys, name: label, type: 'scatter', mode: 'lines', stackgroup: group,
-    line: { width: 0.5, color: MP_CAPITAL_TYPE_COLORS[key] }, fillcolor: MP_CAPITAL_TYPE_COLORS[key],
+    // no outline: a type at zero would still draw its line along the stack's top
+    line: { width: 0, color: MP_CAPITAL_TYPE_COLORS[key] }, fillcolor: MP_CAPITAL_TYPE_COLORS[key],
     hovertemplate: `${money}<extra>${label}</extra>`,
   });
   const traces = [];
