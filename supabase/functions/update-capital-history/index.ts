@@ -28,8 +28,8 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 // Price fetching stops here; the rebuild (step 3) gets the rest of the run.
 const TIME_BUDGET_MS = 40_000;
-const SLICE_DAYS = 60;
-const SLICE_PARALLEL = 4;
+const SLICE_DAYS = 30;
+const SLICE_PARALLEL = 3;
 const OVERLAP_DAYS = 5;
 const UA = { 'User-Agent': 'Mozilla/5.0 (erp-portfolio capital history)' };
 const YAHOO = 'https://query1.finance.yahoo.com/v8/finance/chart';
@@ -324,12 +324,21 @@ Deno.serve(async () => {
       const slices: string[] = [];
       for (let from = String(first).slice(0, 10); from <= today(); from = addDays(from, SLICE_DAYS)) slices.push(from);
       let rows = 0, err: string | null = null;
-      for (let i = 0; i < slices.length && !err; i += SLICE_PARALLEL) {
-        await Promise.all(slices.slice(i, i + SLICE_PARALLEL).map(async from => {
-          const to = addDays(from, SLICE_DAYS - 1);
-          const { data, error } = await db.rpc('refresh_capital_daily', { p_user: u, p_from: from, p_to: to < today() ? to : today() });
-          if (error) err ??= `error at ${from}: ${error.message}`; else rows += Number(data ?? 0);
-        }));
+      const refresh = async (from: string) => {
+        const to = addDays(from, SLICE_DAYS - 1);
+        const { data, error } = await db.rpc('refresh_capital_daily', { p_user: u, p_from: from, p_to: to < today() ? to : today() });
+        if (!error) rows += Number(data ?? 0);
+        return error;
+      };
+      // A slice that times out while others run (a failed one rolls back
+      // whole) is retried alone afterwards.
+      const retry: string[] = [];
+      for (let i = 0; i < slices.length; i += SLICE_PARALLEL) {
+        await Promise.all(slices.slice(i, i + SLICE_PARALLEL).map(async from => { if (await refresh(from)) retry.push(from); }));
+      }
+      for (const from of retry) {
+        const error = await refresh(from);
+        if (error) err ??= `error at ${from}: ${error.message}`;
       }
       const { data: last } = await db.from('capital_daily').select('day, value_usd').eq('user_id', u)
         .eq('day', today()).neq('account', 'real estate');
