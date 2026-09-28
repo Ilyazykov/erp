@@ -334,9 +334,10 @@
     <p class="empty-note" id="capital_status"></p>
     <div id="plot_capital" style="height:560px"></div>
     <div class="section-title">By asset type</div>
-    <p class="note">Stacked from the bottom, the steadiest first: deposits, bonds, gold, stocks, crypto, liquid assets, cash. Credit-card debt is
-      netted within its infrastructure (Russian debt against Russian holdings) — against liquid assets first, then cash,
-      bonds, stocks; whatever is left is drawn below zero.</p>
+    <p class="note">Stacked from the bottom, the steadiest first: deposits, bonds, gold, crypto, stocks, liquid assets, cash. Credit-card debt is
+      netted within its infrastructure first (Russian debt against Russian holdings) — against liquid assets, then cash,
+      bonds, stocks — and what that leaves against the other infrastructure's holdings; only debt beyond everything is
+      drawn below zero.</p>
     <div class="form-row"><label><input type="checkbox" id="capital_types_re"> real estate (at the bottom)</label></div>
     <div id="plot_capital_types" style="height:560px"></div>
   </div>
@@ -4806,25 +4807,31 @@ const MP_CAPITAL_TYPE_COLORS = Object.assign({}, MP_COLORS.type, {
   crypto: '#ff9f1a',     // orange: the pies' red merges with stocks' crimson when stacked on it
   negative: '#a855f7',   // debt beyond everything it could be netted against
 });
-// A day's buckets with credit netted within each infrastructure: against
-// liquid assets, then cash, bonds, stocks; what's left is `negative`. A
-// type below zero counts as debt the same way -- a broker's cash goes
-// negative for the days between a withdrawal and the settlement of the
-// sale that paid for it (the shares still held till then), so stacked it
-// would dip below zero while the total is right.
+// A day's buckets with credit netted within each infrastructure first
+// (Russian debt against Russian holdings, as the tables do): against liquid
+// assets, then cash, bonds, stocks. Whatever that leaves is netted against
+// the other infrastructure's holdings the same way; only what's still left
+// is `negative`. A type below zero counts as debt too -- a broker's cash
+// goes negative between a withdrawal and the settlement of the sale that
+// paid for it (the shares still held till then).
 function mpCapitalTypeBuckets(r) {
-  const out = Object.fromEntries([...MP_CAPITAL_TYPES, 'negative'].map(t => [t, 0]));
+  const v = {}, debt = {};
   for (const p of ['ru', 'fx']) {
-    const v = Object.fromEntries(MP_CAPITAL_TYPES.map(t => [t, Number(r[`${p}_${t}`] || 0)]));
-    let debt = -Math.min(0, Number(r[`${p}_credit`] || 0));
-    for (const t of MP_CAPITAL_TYPES) if (v[t] < 0) { debt -= v[t]; v[t] = 0; }
-    for (const t of ['liquid', 'cash', 'bond', 'stock']) {
-      const take = Math.min(Math.max(v[t], 0), debt);
-      v[t] -= take; debt -= take;
-    }
-    for (const t of MP_CAPITAL_TYPES) out[t] += v[t];
-    out.negative -= debt;
+    v[p] = Object.fromEntries(MP_CAPITAL_TYPES.map(t => [t, Number(r[`${p}_${t}`] || 0)]));
+    debt[p] = -Math.min(0, Number(r[`${p}_credit`] || 0));
+    for (const t of MP_CAPITAL_TYPES) if (v[p][t] < 0) { debt[p] -= v[p][t]; v[p][t] = 0; }
   }
+  const net = (p, d) => {
+    for (const t of ['liquid', 'cash', 'bond', 'stock']) {
+      const take = Math.min(v[p][t], d);
+      v[p][t] -= take; d -= take;
+    }
+    return d;
+  };
+  const left = { ru: net('ru', debt.ru), fx: net('fx', debt.fx) };
+  const beyond = net('fx', left.ru) + net('ru', left.fx);
+  const out = Object.fromEntries(MP_CAPITAL_TYPES.map(t => [t, v.ru[t] + v.fx[t]]));
+  out.negative = -beyond;
   return out;
 }
 async function mpRenderCapitalTypes(ccy, conv) {
@@ -4855,9 +4862,9 @@ async function mpRenderCapitalTypes(ccy, conv) {
       mpCapitalTypeRows.map(r => conv(r.day, r.real_estate)), 'assets'));
   }
   // bottom to top: the more rarely a type jumps, the lower -- deposits sit
-  // still, bonds and gold drift, stocks and crypto swing, liquid assets and
-  // cash move with every transfer
-  for (const t of ['deposit', 'bond', 'gold', 'stock', 'crypto', 'liquid', 'cash']) {
+  // still, bonds and gold drift, crypto swings but is seldom bought, stocks
+  // grow with every purchase, liquid assets and cash move with every transfer
+  for (const t of ['deposit', 'bond', 'gold', 'crypto', 'stock', 'liquid', 'cash']) {
     traces.push(area(t, MP_ASSET_CLASS_LABELS[t], buckets.map((b, i) => conv(days[i], b[t])), 'assets'));
   }
   if (buckets.some(b => b.negative < -0.5)) {
