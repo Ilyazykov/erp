@@ -140,6 +140,16 @@ const CATEGORY_RULES: [RegExp, string][] = [
   [/revolut|wise\b/i, 'brokerage_funding'],
 ];
 
+// A card payment is booked days after it was made; the day it was made is
+// in the description ("IE 6012 Revolut 4722 PURCHASE Card 4***7924
+// 2025-11-27 2000.00 EUR ..." booked 01.12.2025). A top-up of Revolut is on
+// Revolut that same day, so capital history counts it from then
+// (bank_transactions.authorized_on, migration 036). Only an earlier day.
+function madeOn(description: string, booked: string): string | null {
+  const m = description.match(/\bCard \S+ (\d{4}-\d{2}-\d{2})\b/);
+  return m && m[1] < booked ? m[1] : null;
+}
+
 function categorize(type: string, description: string): string | null {
   const haystack = `${type} ${description}`;
   for (const [re, cat] of CATEGORY_RULES) {
@@ -209,6 +219,7 @@ Deno.serve(async (req) => {
         currency: 'EUR',
         category: categorize(r.transactionType, r.description),
         balance_after: r.balanceAfter,
+        authorized_on: madeOn(r.description, isoDate),
         external_source: 'boc_csv',
         external_id: occurrence === 0 ? signature : `${signature}:dup${occurrence}`,
       });
