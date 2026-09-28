@@ -122,6 +122,15 @@ async function moexHistory(secid: string, market: 'shares' | 'bonds', from: stri
   return [...best].sort((a, b) => a[0].localeCompare(b[0])).map(([day, v]) => ({ day, price: v.price, currency: v.currency }));
 }
 
+// ---- MOEX code of an ISIN (bonds are traded under their own secid:
+// RU000A0JX0H6 is SU29012RMFS0) and its market ----
+async function moexByIsin(isin: string): Promise<{ secid: string; market: 'shares' | 'bonds' } | null> {
+  const j = await getJson(`${ISS}/securities.json?q=${encodeURIComponent(isin)}&iss.meta=off&securities.columns=secid,isin,group`);
+  const hit = (j?.securities?.data ?? []).find((r: string[]) => r[1] === isin);
+  if (!hit) return null;
+  return { secid: hit[0], market: /bond/.test(hit[2] ?? '') ? 'bonds' : 'shares' };
+}
+
 // ---- FX: USD per unit ----
 async function cbrRubHistory(from: string): Promise<[string, number][]> {
   const dm = (day: string) => day.split('-').reverse().join('/');
@@ -279,6 +288,16 @@ Deno.serve(async () => {
         const cls = m ? `${m.source}:${m.asset_class}` : '';
         const moexBond = /moex_iss:moex_(ofz|bond)$/.test(cls) || (!m && /^(RU|SU)[0-9A-Z]{10}$/.test(ticker) && /^(SU|RU000A)/.test(ticker));
         const candidates: (() => Promise<boolean>)[] = [];
+        // An ISIN: MOEX knows it under its own code.
+        if (/^[A-Z]{2}[A-Z0-9]{9}\d$/.test(ticker)) {
+          candidates.push(async () => {
+            const hit = await moexByIsin(ticker);
+            if (!hit) return false;
+            points = await moexHistory(hit.secid, hit.market, from);
+            if (points.length) { src = { ticker, source: hit.market === 'bonds' ? 'moex_bonds' : 'moex_shares', symbol: hit.secid, currency: points[0].currency }; return true; }
+            return false;
+          });
+        }
         const viaMoex = (market: 'shares' | 'bonds') => async () => {
           points = await moexHistory(ticker, market, from);
           if (points.length) { src = { ticker, source: market === 'bonds' ? 'moex_bonds' : 'moex_shares', symbol: ticker, currency: points[0].currency }; return true; }
