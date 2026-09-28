@@ -326,7 +326,7 @@
   <div id="capitalbrokers_signed_in" style="display:none">
     <div class="section-title">Capital by bank / broker</div>
     <p class="note">Every day since the first transaction, stacked by where it's held, top down: Bank of Cyprus, Revolut, IBKR, Freedom, UniCredit,
-      T-Bank, Sber, Finuslugi, Ozon, Alfa, Yandex, the rest, Raiffeisen, Ziraat.
+      T-Bank, Sber, Finuslugi, Ozon, Yandex, Alfa, the rest, Raiffeisen, Ziraat.
       A bank's credit-card debt is netted within that bank; a bank in the red as a whole is drawn below zero.</p>
     <div class="form-row" style="gap:16px;flex-wrap:wrap">
       <label>in <select id="brokers_ccy"><option value="USD">USD $</option><option value="RUB">RUB ₽</option></select></label>
@@ -2659,7 +2659,7 @@ const MP_COLORS = {
     Freedom24: '#00d1b2', 'Bank of Cyprus': '#4fc3f7', Revolut: '#8e8e93', Wise: '#9fe870', Raiffeisen: '#c9a400',
     UniCredit: '#8c1c28', 'Ziraat Bank': '#ff1f2d', IBKR: '#a64dff', Sber: '#4fd05b', 'T-Bank': '#ffdd2d',
     'Ozon Bank': '#1f6bff', Alfa: '#ff2d2d', 'Yandex Bank': '#ff6a1f', Finuslugi: '#00b4ff', Telegram: '#29b6f6',
-    Binance: '#f3ba2f', Bybit: '#ff9500', 'Crypto.com': '#1a5fb4', Trust: '#3b8cff', cash: '#86e04a',
+    Binance: '#b5651d', Bybit: '#ff9500', 'Crypto.com': '#1a5fb4', Trust: '#3b8cff', cash: '#86e04a',
     '(unspecified)': '#7b8494',
   },
   // asset types (liquid assets the same grey as deposits, as asked)
@@ -4971,10 +4971,10 @@ async function mpRenderCapitalBrokers() {
     if (Math.abs(Number(v)) >= 1 && !first.has(a)) first.set(a, i);
   }));
   // ... except these, top down: BoC, Revolut, IBKR, Freedom, UniCredit,
-  // T-Bank, Sber, Finuslugi, Ozon, Alfa, Yandex -- then the rest -- then
+  // T-Bank, Sber, Finuslugi, Ozon, Yandex, Alfa -- then the rest -- then
   // Raiffeisen and Ziraat at the very bottom
   const BOTTOM = ['Ziraat Bank', 'Raiffeisen'];
-  const TOP = ['Yandex Bank', 'Alfa', 'Ozon Bank', 'Finuslugi', 'Sber', 'T-Bank', 'UniCredit', 'Freedom24', 'IBKR', 'Revolut', 'Bank of Cyprus'];
+  const TOP = ['Alfa', 'Yandex Bank', 'Ozon Bank', 'Finuslugi', 'Sber', 'T-Bank', 'UniCredit', 'Freedom24', 'IBKR', 'Revolut', 'Bank of Cyprus'];
   const rank = a => (BOTTOM.includes(a) ? BOTTOM.indexOf(a) - BOTTOM.length : TOP.indexOf(a) + 1);
   const accounts = [...first.keys()].sort((a, b) => rank(a) - rank(b) || first.get(a) - first.get(b));
   let fallback = 0;
