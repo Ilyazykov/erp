@@ -11,7 +11,8 @@
 //      Yahoo chart history (US stocks, UCITS ETFs, crypto / gold);
 //      stablecoins and ЦФА at a constant; deposits / savings / blocked need
 //      none (refresh_capital_daily prices them by currency / at 0);
-//   3. refresh_capital_daily(user, from, to) for every user, in slices of
+//   3. match_internal_transfers(user), then refresh_capital_daily(user,
+//      from, to) for every user, in slices of
 //      SLICE_DAYS from their first transaction to today.
 // Each ticker's source is resolved once (market_prices' classification when
 // it's held, else by trying MOEX, then Yahoo) and cached in price_sources.
@@ -26,7 +27,7 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 // Price fetching stops here; the rebuild (step 3) gets the rest of the run.
-const TIME_BUDGET_MS = 55_000;
+const TIME_BUDGET_MS = 40_000;
 const SLICE_DAYS = 60;
 const OVERLAP_DAYS = 5;
 const UA = { 'User-Agent': 'Mozilla/5.0 (erp-portfolio capital history)' };
@@ -312,6 +313,10 @@ Deno.serve(async () => {
     const users = [...new Set(trades.map(t => t.user_id))];
     const rebuilt: Record<string, unknown> = {};
     for (const u of users) {
+      // Transfers between the user's own accounts first: their two rows
+      // count from the same day (internal_transfers, migration 037).
+      const { data: paired, error: e0 } = await db.rpc('match_internal_transfers', { p_user: u });
+      report[`transfers_paired_${u.slice(0, 8)}`] = e0 ? `error: ${e0.message}` : paired;
       const { data: first, error: e1 } = await db.rpc('capital_first_day', { p_user: u });
       if (e1 || !first) { rebuilt[u.slice(0, 8)] = e1 ? `error: ${e1.message}` : 0; continue; }
       let rows = 0, err: string | null = null;
