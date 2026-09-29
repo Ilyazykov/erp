@@ -30,7 +30,9 @@
 // on hand, bank 'cash': balance = the count, amount = change since the
 // previous count). Stored as bank_transactions.synthetic / synthetic_kind /
 // data_gap_until (see migrations ...010, ...011 and ...023), explanation in
-// `note`.
+// `note`. An optional `amount_approximate` column (true/yes/1) marks a real
+// transaction whose amount is only an estimate -- stored as
+// bank_transactions.amount_approximate (migration ...049).
 //
 // `bank` becomes the `account` label, so every account at one bank
 // collapses into a single row in the broker pivot tables (same idea as
@@ -89,6 +91,7 @@ interface BankRow {
   syntheticKind: string | null;
   dataGapUntil: string | null;
   note: string;
+  amountApproximate: boolean;
   replacesSnowball: string;
   depositName: string;
   date: string;
@@ -133,7 +136,7 @@ function parseRows(text: string): BankRow[] {
 
   let idx: {
     bank: number; accountNumber: number; product: number; categoryBank: number;
-    syntheticKind: number; dataGapUntil: number; note: number; replacesSnowball: number; depositName: number; date: number; time: number; description: number;
+    syntheticKind: number; dataGapUntil: number; note: number; amountApproximate: number; replacesSnowball: number; depositName: number; date: number; time: number; description: number;
     amount: number; currency: number; balance: number;
   } | null = null;
   const rows: BankRow[] = [];
@@ -146,7 +149,7 @@ function parseRows(text: string): BankRow[] {
         idx = {
           bank: col('bank'), accountNumber: col('account_number'), product: col('product'),
           categoryBank: col('category_bank'), syntheticKind: col('synthetic_kind'),
-          dataGapUntil: col('data_gap_until'), note: col('note'), replacesSnowball: col('replaces_snowball'), depositName: col('deposit_name'),
+          dataGapUntil: col('data_gap_until'), note: col('note'), amountApproximate: col('amount_approximate'), replacesSnowball: col('replaces_snowball'), depositName: col('deposit_name'),
           date: col('date'), time: col('time'),
           description: col('description'), amount: col('amount'), currency: col('currency'),
           balance: col('balance'),
@@ -169,6 +172,7 @@ function parseRows(text: string): BankRow[] {
       syntheticKind: idx.syntheticKind >= 0 ? (cells[idx.syntheticKind] || '').trim() || null : null,
       dataGapUntil: idx.dataGapUntil >= 0 ? (cells[idx.dataGapUntil] || '').trim() || null : null,
       note: idx.note >= 0 ? (cells[idx.note] || '').trim() : '',
+      amountApproximate: idx.amountApproximate >= 0 && /^(true|yes|1)$/i.test((cells[idx.amountApproximate] || '').trim()),
       replacesSnowball: idx.replacesSnowball >= 0 ? (cells[idx.replacesSnowball] || '').trim() : '',
       depositName: idx.depositName >= 0 ? (cells[idx.depositName] || '').trim() : '',
       accountNumber: (cells[idx.accountNumber] || '').trim(),
@@ -296,6 +300,7 @@ Deno.serve(async (req) => {
         synthetic_kind: r.syntheticKind,
         data_gap_until: r.dataGapUntil,
         note: r.note || null,
+        amount_approximate: r.amountApproximate,
         external_source: externalSource,
         external_id: externalId,
       });
