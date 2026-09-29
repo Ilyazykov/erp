@@ -28,8 +28,9 @@
 // known until data_gap_until), 'account_closed' (closure mark, amount 0) or
 // 'balance_snapshot' (a counted balance with no statement behind it -- cash
 // on hand, bank 'cash': balance = the count, amount = change since the
-// previous count). Stored as bank_transactions.synthetic / synthetic_kind /
-// data_gap_until (see migrations ...010, ...011 and ...023), explanation in
+// previous count) or 'extrapolated' (spending that left no trace, filled in
+// from a per-day norm). Stored as bank_transactions.synthetic / synthetic_kind /
+// data_gap_until (see migrations ...010, ...011, ...023 and ...050), explanation in
 // `note`. An optional `amount_approximate` column (true/yes/1) marks a real
 // transaction whose amount is only an estimate -- stored as
 // bank_transactions.amount_approximate (migration ...049).
