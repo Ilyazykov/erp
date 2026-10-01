@@ -4991,7 +4991,9 @@ async function mpLoadExactMask() {
 // the withdrawal that paid for it. An exact cash inflow lowers that need by its
 // amount; an inflow of an approximate amount (estimated / extrapolated) ends it,
 // since nothing proves how much came in. Approximate spending is left out. Kept
-// in USD across currencies, so an unrecorded exchange changes nothing. The flat
+// in USD across currencies, so an unrecorded exchange changes nothing. An inflow
+// whose amount is known though its day is not (the salary in cash) lowers the
+// need like an exact one. The flat
 // rent counts too where only its amount is uncertain (the rent went up at an
 // unknown date): at the lowest rent known exactly in that currency.
 let mpProvenCash = null;
@@ -5004,7 +5006,7 @@ async function mpLoadProvenCash(cashOnDay) {
   const countDay = cnt[0].tx_date.slice(0, 10);
   const ev = [];
   for (let from = 0; ; from += 1000) {
-    const { data, error } = await sb.from('bank_transactions').select('tx_date, amount, currency, synthetic_kind, external_source, description')
+    const { data, error } = await sb.from('bank_transactions').select('tx_date, amount, currency, synthetic_kind, external_source, description, amount_approximate')
       .like('external_source', 'cash_csv:%').lte('tx_date', countDay + 'T23:59:59Z').order('tx_date').range(from, from + 999);
     if (error) throw error;
     ev.push(...data);
@@ -5058,7 +5060,7 @@ async function mpLoadProvenCash(cashOnDay) {
         if (a < 0) {
           if (exact) need += v;
           else if (isRent(r) && minRent[r.currency]) need += usd(r.currency, d, Math.min(-a, minRent[r.currency]));
-        } else need = exact ? Math.max(0, need - v) : 0;
+        } else need = exact || r.amount_approximate === false ? Math.max(0, need - v) : 0;
       }
       k++;
     }
