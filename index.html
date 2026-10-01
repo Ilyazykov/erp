@@ -5054,6 +5054,8 @@ async function mpLoadProvenCash(cashOnDay) {
     if (d < countDay) out[d] = need;
     if (k < days.length && days[k] === d) {
       for (const r of byDay.get(d).slice().reverse()) {
+        // an exchange within the cash (both legs here, in USD it nets out) brings no new money in
+        if (!isExact(r) && /^Exchanged .* in cash/.test(r.description || '')) continue;
         const a = Number(r.amount), exact = isExact(r);
         const v = usd(r.currency, d, Math.abs(a));
         if (!Number.isFinite(v)) { need = 0; continue; }
