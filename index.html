@@ -5168,10 +5168,10 @@ async function mpRenderCapitalBrokers() {
     const m = mid ? mid.map((v, i) => Math.min(pos(full[i]), Math.max(pos(v), pos(ys[i])))) : ys.map(pos);
     const layer = (lo, hi) => hi.map((h, i) => share(Math.max(0, h - lo[i]), i));
     if (mid && m.some((v, i) => v - pos(ys[i]) > 0.5)) {
-      traces.push(area(label, c, layer(ys.map(pos), m), 'assets', false, `${label} (known, approximate amount)`, fade(c, 0.55)));
+      traces.push(area(label, c, layer(ys.map(pos), m), 'assets', false, `${label} (known, approximate amount)`, fade(c, 0.75)));
     }
     if (full.some((f, i) => pos(f) - m[i] > 0.5)) {
-      traces.push(area(label, c, layer(m, full.map(pos)), 'assets', false, `${label} (extrapolated)`, fade(c, 0.25)));
+      traces.push(area(label, c, layer(m, full.map(pos)), 'assets', false, `${label} (extrapolated)`, fade(c, 0.45)));
     }
   }
   if (!pct) {
