@@ -332,6 +332,7 @@
       <label>in <select id="brokers_ccy"><option value="USD">USD $</option><option value="RUB">RUB ₽</option></select></label>
       <label><input type="checkbox" id="brokers_re"> real estate (at the bottom)</label>
       <label><input type="checkbox" id="brokers_pct"> as % of the total</label>
+      <label title="Cash only from the first cash count on; a bank blank where its rows are synthetic (extrapolated, a data gap) until its next real transaction"><input type="checkbox" id="brokers_exact"> only what is known exactly</label>
     </div>
     <p class="empty-note" id="brokers_status"></p>
     <div id="plot_capital_brokers" style="height:620px"></div>
@@ -4726,6 +4727,7 @@ function mpUpdateAuthUi(session) {
     document.getElementById('capitalbrokers_signed_out').style.display = '';
     document.getElementById('capitalbrokers_signed_in').style.display = 'none';
     mpCapitalBrokerRows = null;
+    mpExactMask = null;
     Plotly.purge('plot_capital_brokers');
     mpCapitalRows = null;
     mpCapitalTypeRows = null;
@@ -4938,6 +4940,43 @@ for (const id of ['capital_types_re', 'capital_types_pct']) {
 }
 // ---- Capital by broker tab (capital_daily_by_account): stacked areas ----
 let mpCapitalBrokerRows = null;
+// "Only what is known exactly": per account, the stretches [from, to) to blank --
+// cash before its first count (all before is reconstructed), and a bank from its
+// first synthetic row (extrapolated / data gap) to its next real transaction.
+let mpExactMask = null;
+async function mpLoadExactMask() {
+  const mask = {};
+  const add = (a, from, to) => (mask[a] = mask[a] || []).push([from, to]);
+  const { data: cnt, error: e1 } = await sb.from('bank_transactions').select('tx_date')
+    .like('external_source', 'cash_csv:%').eq('synthetic_kind', 'balance_snapshot').ilike('description', 'Cash on hand count%')
+    .order('tx_date').limit(1);
+  if (e1) throw e1;
+  add('cash', '0000-01-01', cnt && cnt.length ? cnt[0].tx_date : '9999-12-31');
+  const syn = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await sb.from('bank_transactions').select('account, tx_date, external_source')
+      .in('synthetic_kind', ['extrapolated', 'data_gap']).not('external_source', 'like', 'cash_csv:%')
+      .order('tx_date').range(from, from + 999);
+    if (error) throw error;
+    syn.push(...data);
+    if (data.length < 1000) break;
+  }
+  const bySrc = new Map();
+  for (const r of syn) { if (!bySrc.has(r.external_source)) bySrc.set(r.external_source, []); bySrc.get(r.external_source).push(r); }
+  for (const [src, rs] of bySrc) {
+    let i = 0;
+    while (i < rs.length) {
+      const start = rs[i].tx_date;
+      const { data: nx, error } = await sb.from('bank_transactions').select('tx_date').eq('external_source', src)
+        .is('synthetic_kind', null).gt('tx_date', start).order('tx_date').limit(1);
+      if (error) throw error;
+      const end = nx && nx.length ? nx[0].tx_date : '9999-12-31';
+      add(rs[i].account, start, end);
+      while (i < rs.length && rs[i].tx_date < end) i++;
+    }
+  }
+  return mask;
+}
 const MP_BROKER_FALLBACK_COLORS = ['#7b8494', '#c08457', '#6fa8ff', '#ff7eb6', '#00b86b', '#ffd000', '#9b6bff', '#ff6a13'];
 async function mpRenderCapitalBrokers() {
   const status = document.getElementById('brokers_status');
@@ -4965,6 +5004,13 @@ async function mpRenderCapitalBrokers() {
   const rows = mpCapitalBrokerRows, days = rows.map(r => r.day);
   const pct = document.getElementById('brokers_pct').checked;
   const withRe = document.getElementById('brokers_re').checked;
+  const exact = document.getElementById('brokers_exact').checked;
+  if (exact && !mpExactMask) {
+    status.textContent = 'Loading…';
+    try { mpExactMask = await mpLoadExactMask(); } catch (error) { status.textContent = error.message; return; }
+    status.textContent = '';
+  }
+  const hidden = (a, day) => exact && (mpExactMask[a] || []).some(([f, t]) => f <= day && day < t);
   // accounts, the one holding money earliest at the bottom
   const first = new Map();
   rows.forEach((r, i) => Object.entries(r.accounts || {}).forEach(([a, v]) => {
@@ -4981,7 +5027,7 @@ async function mpRenderCapitalBrokers() {
   const color = a => MP_COLORS.broker[a] || MP_BROKER_FALLBACK_COLORS[fallback++ % MP_BROKER_FALLBACK_COLORS.length];
   const series = [];
   if (withRe) series.push(['real estate 🏠', MP_COLORS.type.real_estate, rows.map(r => conv(r.day, r.real_estate))]);
-  for (const a of accounts) series.push([MP_BROKER_SHORT_NAMES[a] || a, color(a), rows.map(r => conv(r.day, (r.accounts || {})[a] || 0))]);
+  for (const a of accounts) series.push([MP_BROKER_SHORT_NAMES[a] || a, color(a), rows.map(r => (hidden(a, r.day) ? 0 : conv(r.day, (r.accounts || {})[a] || 0)))]);
   const totals = days.map((_, i) => series.reduce((s, [, , ys]) => s + Math.max(0, ys[i]), 0));
   const money = pct ? '%{y:.1f}%' : ccy === 'RUB' ? '%{y:,.0f} ₽' : '$%{y:,.0f}';
   const area = (label, c, ys, group, legend = true) => ({
@@ -5012,12 +5058,14 @@ async function mpRenderCapitalBrokers() {
 try {
   const saved = localStorage.getItem('mp_capital_ccy'); if (saved) document.getElementById('brokers_ccy').value = saved;
   document.getElementById('brokers_pct').checked = localStorage.getItem('mp_brokers_pct') === '1';
+  document.getElementById('brokers_exact').checked = localStorage.getItem('mp_brokers_exact') === '1';
 } catch { /* no storage */ }
-for (const id of ['brokers_ccy', 'brokers_re', 'brokers_pct']) {
+for (const id of ['brokers_ccy', 'brokers_re', 'brokers_pct', 'brokers_exact']) {
   document.getElementById(id).addEventListener('change', () => {
     try {
       localStorage.setItem('mp_capital_ccy', document.getElementById('brokers_ccy').value);
       localStorage.setItem('mp_brokers_pct', document.getElementById('brokers_pct').checked ? '1' : '0');
+      localStorage.setItem('mp_brokers_exact', document.getElementById('brokers_exact').checked ? '1' : '0');
     } catch { /* no storage */ }
     if (mpIsSignedIn) mpRenderCapitalBrokers();
   });
