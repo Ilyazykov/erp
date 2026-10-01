@@ -332,7 +332,7 @@
       <label>in <select id="brokers_ccy"><option value="USD">USD $</option><option value="RUB">RUB ₽</option></select></label>
       <label><input type="checkbox" id="brokers_re"> real estate (at the bottom)</label>
       <label><input type="checkbox" id="brokers_pct"> as % of the total</label>
-      <label title="Cash only from the first cash count on; a bank blank where its rows are synthetic (extrapolated, a data gap) until its next real transaction"><input type="checkbox" id="brokers_exact"> only what is known exactly</label>
+      <select id="brokers_exact" title="exact: cash only from the first cash count on, a bank blank where its rows are synthetic (extrapolated, a data gap) or past its last statement row. proven: the same, plus before the count the least cash that must have been on hand -- every cash purchase known exactly (not on any card) carried back to the withdrawal that paid for it"><option value="all">everything, estimates too</option><option value="proven">exact + cash proven by purchases</option><option value="exact">only what is known exactly</option></select>
     </div>
     <p class="empty-note" id="brokers_status"></p>
     <div id="plot_capital_brokers" style="height:620px"></div>
@@ -4728,6 +4728,7 @@ function mpUpdateAuthUi(session) {
     document.getElementById('capitalbrokers_signed_in').style.display = 'none';
     mpCapitalBrokerRows = null;
     mpExactMask = null;
+    mpProvenCash = null;
     Plotly.purge('plot_capital_brokers');
     mpCapitalRows = null;
     mpCapitalTypeRows = null;
@@ -4951,31 +4952,118 @@ async function mpLoadExactMask() {
     .like('external_source', 'cash_csv:%').eq('synthetic_kind', 'balance_snapshot').ilike('description', 'Cash on hand count%')
     .order('tx_date').limit(1);
   if (e1) throw e1;
-  add('cash', '0000-01-01', cnt && cnt.length ? cnt[0].tx_date : '9999-12-31');
+  add('cash', '0000-01-01', cnt && cnt.length ? cnt[0].tx_date.slice(0, 10) : '9999-12-31');
   const syn = [];
   for (let from = 0; ; from += 1000) {
     const { data, error } = await sb.from('bank_transactions').select('account, tx_date, external_source')
       .in('synthetic_kind', ['extrapolated', 'data_gap']).not('external_source', 'like', 'cash_csv:%')
       .order('tx_date').range(from, from + 999);
     if (error) throw error;
-    syn.push(...data);
+    syn.push(...data.map(r => ({ ...r, tx_date: r.tx_date.slice(0, 10) })));
     if (data.length < 1000) break;
   }
   const bySrc = new Map();
   for (const r of syn) { if (!bySrc.has(r.external_source)) bySrc.set(r.external_source, []); bySrc.get(r.external_source).push(r); }
+  const nextDay = d => new Date(Date.parse(d + 'T00:00:00Z') + 86400000).toISOString().slice(0, 10);
   for (const [src, rs] of bySrc) {
+    // past the last statement row only synthetic rows: blank from the day after it
+    const { data: lr, error: el } = await sb.from('bank_transactions').select('tx_date').eq('external_source', src)
+      .is('synthetic_kind', null).order('tx_date', { ascending: false }).limit(1);
+    if (el) throw el;
+    const lastReal = lr && lr.length ? lr[0].tx_date.slice(0, 10) : '0000-01-01';
+    if (rs.some(r => r.tx_date > lastReal)) add(rs[0].account, nextDay(lastReal), '9999-12-31');
     let i = 0;
-    while (i < rs.length) {
+    while (i < rs.length && rs[i].tx_date <= lastReal) {
       const start = rs[i].tx_date;
       const { data: nx, error } = await sb.from('bank_transactions').select('tx_date').eq('external_source', src)
         .is('synthetic_kind', null).gt('tx_date', start).order('tx_date').limit(1);
       if (error) throw error;
-      const end = nx && nx.length ? nx[0].tx_date : '9999-12-31';
+      const end = nx && nx.length ? nx[0].tx_date.slice(0, 10) : '9999-12-31';
       add(rs[i].account, start, end);
       while (i < rs.length && rs[i].tx_date < end) i++;
     }
   }
   return mask;
+}
+// The least cash on hand (USD) on each day before the first cash count: walking
+// back from the count, every exact cash payment (cash_csv:on_hand, not synthetic
+// -- a purchase known with its price and on no card) must have been held since
+// the withdrawal that paid for it. An exact cash inflow lowers that need by its
+// amount; an inflow of an approximate amount (estimated / extrapolated) ends it,
+// since nothing proves how much came in. Approximate spending is left out. Kept
+// in USD across currencies, so an unrecorded exchange changes nothing. The flat
+// rent counts too where only its amount is uncertain (the rent went up at an
+// unknown date): at the lowest rent known exactly in that currency.
+let mpProvenCash = null;
+async function mpLoadProvenCash(cashOnDay) {
+  const { data: cnt, error: e1 } = await sb.from('bank_transactions').select('tx_date')
+    .like('external_source', 'cash_csv:%').eq('synthetic_kind', 'balance_snapshot').ilike('description', 'Cash on hand count%')
+    .order('tx_date').limit(1);
+  if (e1) throw e1;
+  if (!cnt || !cnt.length) return {};
+  const countDay = cnt[0].tx_date.slice(0, 10);
+  const ev = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await sb.from('bank_transactions').select('tx_date, amount, currency, synthetic_kind, external_source, description')
+      .like('external_source', 'cash_csv:%').lte('tx_date', countDay + 'T23:59:59Z').order('tx_date').range(from, from + 999);
+    if (error) throw error;
+    ev.push(...data);
+    if (data.length < 1000) break;
+  }
+  const rates = {};
+  for (const c of new Set(ev.map(r => r.currency))) {
+    if (c === 'USD') continue;
+    rates[c] = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await sb.from('fx_history').select('day, usd_per_unit').eq('currency', c).order('day').range(from, from + 999);
+      if (error) throw error;
+      rates[c].push(...data.map(r => [r.day, Number(r.usd_per_unit)]));
+      if (data.length < 1000) break;
+    }
+  }
+  const usd = (c, day, a) => {
+    if (c === 'USD') return a;
+    const rs = rates[c] || [];
+    if (!rs.length) return NaN;
+    let lo = 0, hi = rs.length - 1, rate = rs[0][1];
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (rs[mid][0] <= day) { rate = rs[mid][1]; lo = mid + 1; } else hi = mid - 1; }
+    return a * rate;
+  };
+  const isExact = r => r.external_source === 'cash_csv:on_hand' && !r.synthetic_kind;
+  const isRent = r => /^Paid the flat rent/.test(r.description || '');
+  const minRent = {};
+  for (const r of ev) {
+    if (isExact(r) && isRent(r) && Number(r.amount) < 0) minRent[r.currency] = Math.min(minRent[r.currency] ?? Infinity, -Number(r.amount));
+  }
+  const byDay = new Map();
+  for (const r of ev) {
+    if (r.synthetic_kind === 'balance_snapshot') continue;
+    const d = r.tx_date.slice(0, 10);
+    if (!byDay.has(d)) byDay.set(d, []);
+    byDay.get(d).push(r);
+  }
+  const out = {};
+  let need = cashOnDay(countDay);
+  const days = [...byDay.keys()].sort().reverse();
+  let k = 0;
+  // need at the end of day d = need before the first event of the next day with events
+  for (let t = Date.parse(countDay + 'T00:00:00Z'); k < days.length; t -= 86400000) {
+    const d = new Date(t).toISOString().slice(0, 10);
+    if (d < countDay) out[d] = need;
+    if (k < days.length && days[k] === d) {
+      for (const r of byDay.get(d).slice().reverse()) {
+        const a = Number(r.amount), exact = isExact(r);
+        const v = usd(r.currency, d, Math.abs(a));
+        if (!Number.isFinite(v)) { need = 0; continue; }
+        if (a < 0) {
+          if (exact) need += v;
+          else if (isRent(r) && minRent[r.currency]) need += usd(r.currency, d, Math.min(-a, minRent[r.currency]));
+        } else need = exact ? Math.max(0, need - v) : 0;
+      }
+      k++;
+    }
+  }
+  return out;
 }
 const MP_BROKER_FALLBACK_COLORS = ['#7b8494', '#c08457', '#6fa8ff', '#ff7eb6', '#00b86b', '#ffd000', '#9b6bff', '#ff6a13'];
 async function mpRenderCapitalBrokers() {
@@ -5004,13 +5092,22 @@ async function mpRenderCapitalBrokers() {
   const rows = mpCapitalBrokerRows, days = rows.map(r => r.day);
   const pct = document.getElementById('brokers_pct').checked;
   const withRe = document.getElementById('brokers_re').checked;
-  const exact = document.getElementById('brokers_exact').checked;
+  const mode = document.getElementById('brokers_exact').value;
+  const exact = mode !== 'all';
   if (exact && !mpExactMask) {
     status.textContent = 'Loading…';
     try { mpExactMask = await mpLoadExactMask(); } catch (error) { status.textContent = error.message; return; }
     status.textContent = '';
   }
+  if (mode === 'proven' && !mpProvenCash) {
+    status.textContent = 'Loading…';
+    const cashOn = new Map(rows.map(r => [r.day, Number((r.accounts || {}).cash || 0)]));
+    try { mpProvenCash = await mpLoadProvenCash(day => cashOn.get(day) || 0); } catch (error) { status.textContent = error.message; return; }
+    status.textContent = '';
+  }
   const hidden = (a, day) => exact && (mpExactMask[a] || []).some(([f, t]) => f <= day && day < t);
+  const value = (a, r) => (a === 'cash' && mode === 'proven' && hidden(a, r.day) ? mpProvenCash[r.day] || 0
+    : hidden(a, r.day) ? 0 : (r.accounts || {})[a] || 0);
   // accounts, the one holding money earliest at the bottom
   const first = new Map();
   rows.forEach((r, i) => Object.entries(r.accounts || {}).forEach(([a, v]) => {
@@ -5027,7 +5124,7 @@ async function mpRenderCapitalBrokers() {
   const color = a => MP_COLORS.broker[a] || MP_BROKER_FALLBACK_COLORS[fallback++ % MP_BROKER_FALLBACK_COLORS.length];
   const series = [];
   if (withRe) series.push(['real estate 🏠', MP_COLORS.type.real_estate, rows.map(r => conv(r.day, r.real_estate))]);
-  for (const a of accounts) series.push([MP_BROKER_SHORT_NAMES[a] || a, color(a), rows.map(r => (hidden(a, r.day) ? 0 : conv(r.day, (r.accounts || {})[a] || 0)))]);
+  for (const a of accounts) series.push([MP_BROKER_SHORT_NAMES[a] || a, color(a), rows.map(r => conv(r.day, value(a, r)))]);
   const totals = days.map((_, i) => series.reduce((s, [, , ys]) => s + Math.max(0, ys[i]), 0));
   const money = pct ? '%{y:.1f}%' : ccy === 'RUB' ? '%{y:,.0f} ₽' : '$%{y:,.0f}';
   const area = (label, c, ys, group, legend = true) => ({
@@ -5058,14 +5155,15 @@ async function mpRenderCapitalBrokers() {
 try {
   const saved = localStorage.getItem('mp_capital_ccy'); if (saved) document.getElementById('brokers_ccy').value = saved;
   document.getElementById('brokers_pct').checked = localStorage.getItem('mp_brokers_pct') === '1';
-  document.getElementById('brokers_exact').checked = localStorage.getItem('mp_brokers_exact') === '1';
+  const m = localStorage.getItem('mp_brokers_exact');
+  document.getElementById('brokers_exact').value = m === '1' ? 'exact' : ['proven', 'exact'].includes(m) ? m : 'all';
 } catch { /* no storage */ }
 for (const id of ['brokers_ccy', 'brokers_re', 'brokers_pct', 'brokers_exact']) {
   document.getElementById(id).addEventListener('change', () => {
     try {
       localStorage.setItem('mp_capital_ccy', document.getElementById('brokers_ccy').value);
       localStorage.setItem('mp_brokers_pct', document.getElementById('brokers_pct').checked ? '1' : '0');
-      localStorage.setItem('mp_brokers_exact', document.getElementById('brokers_exact').checked ? '1' : '0');
+      localStorage.setItem('mp_brokers_exact', document.getElementById('brokers_exact').value);
     } catch { /* no storage */ }
     if (mpIsSignedIn) mpRenderCapitalBrokers();
   });
