@@ -1746,6 +1746,7 @@ function mpDetectCsvKind(headerLine, fullText) {
 // is running join its end.
 const mpImportQueue = [];
 let mpImportRunning = false;
+let mpImportedSinceRefresh = false;   // a file went in since the last capital-rebuild request
 async function mpImportFiles(files) {
   const listEl = document.getElementById('mp_any_csv_status');
   files = [...files];
@@ -1774,6 +1775,16 @@ async function mpImportFiles(files) {
   } finally {
     mpImportRunning = false;
     mpRenderLatestSources();
+    // the capital charts are rebuilt in the database a few minutes later
+    // (queued here; the capital-refresh-step cron job does the work)
+    if (mpImportedSinceRefresh) {
+      mpImportedSinceRefresh = false;
+      const line = document.createElement('div');
+      const { error } = await sb.rpc('request_my_capital_refresh');
+      line.textContent = error ? `Capital history not queued for a rebuild: ${error.message}`
+        : 'Capital history queued for a rebuild -- the Capital charts catch up in a few minutes (reload the page then).';
+      listEl.appendChild(line);
+    }
   }
 }
 document.getElementById('mp_any_csv_upload').addEventListener('click', () => {
@@ -1953,6 +1964,7 @@ async function mpImportOneFile(file, statusEl, session) {
         || result.code || res.statusText || 'no details'}`;
       return;
     }
+    mpImportedSinceRefresh = true;
 
     if (kind === 'snowball') {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} rows, removed `
