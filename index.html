@@ -252,6 +252,12 @@
     <div id="mp_any_csv_drop" class="drop-zone">…or drop any number of files here — they're queued and imported one by one</div>
     <div class="empty-note" id="mp_any_csv_status"></div>
 
+    <div class="section-title">Latest data per source</div>
+    <p class="note">The newest real record of each bank / broker account -- bank rows not made up here
+      (synthetic: extrapolated, data gaps, balance snapshots), broker trades and payouts by the source they came from --
+      to see when a fresh statement is due. Older than 35 days in orange.</p>
+    <div id="mp_latest_sources"><div class="empty-note">Loading…</div></div>
+
     <div class="section-title">Export Revolut fund trades to Snowball</div>
     <p class="note">Generates a Snowball-importable CSV from the trades already stored here for the
       Revolut Flexible Cash Funds money-market fund share classes (IE0002RUHW32, IE000AZVL3K0, IE000H9J0QX4).</p>
@@ -1767,6 +1773,7 @@ async function mpImportFiles(files) {
     }
   } finally {
     mpImportRunning = false;
+    mpRenderLatestSources();
   }
 }
 document.getElementById('mp_any_csv_upload').addEventListener('click', () => {
@@ -1783,6 +1790,56 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', () => {
     drop.classList.remove('over');
     mpImportFiles(e.dataTransfer.files);
   });
+}
+
+// The newest real record per account: bank_transactions (synthetic rows left
+// out -- they say nothing about which statement is in) and trades, each with
+// the external_source it came from.
+async function mpRenderLatestSources() {
+  const wrap = document.getElementById('mp_latest_sources');
+  try {
+    const { data: accs, error: e1 } = await sb.from('bank_latest_balances').select('account, external_source');
+    if (e1) throw e1;
+    const rows = [];
+    const srcs = [...new Set((accs || []).map(r => r.external_source))];
+    await Promise.all(srcs.map(async src => {
+      const { data, error } = await sb.from('bank_transactions').select('account, tx_date')
+        .eq('external_source', src).is('synthetic_kind', null).order('tx_date', { ascending: false }).limit(1);
+      if (error) throw error;
+      if (data && data.length) rows.push({ account: data[0].account, kind: 'bank', source: src, day: data[0].tx_date.slice(0, 10) });
+    }));
+    const latest = new Map();
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await sb.from('trades').select('account, external_source, trade_date')
+        .order('trade_date', { ascending: false }).range(from, from + 999);
+      if (error) throw error;
+      for (const r of data) {
+        const key = `${r.account || '(unspecified)'}\u0000${r.external_source || 'manual'}`;
+        if (!latest.has(key)) latest.set(key, r.trade_date);
+      }
+      if (data.length < 1000) break;
+    }
+    for (const [key, day] of latest) {
+      const [account, source] = key.split('\u0000');
+      rows.push({ account, kind: 'trades', source, day });
+    }
+    if (!rows.length) { wrap.innerHTML = '<div class="empty-note">Nothing imported yet.</div>'; return; }
+    // per account: its newest source first, accounts by their newest date, oldest at the top
+    const best = new Map();
+    for (const r of rows) if (!best.has(r.account) || best.get(r.account) < r.day) best.set(r.account, r.day);
+    rows.sort((a, b) => best.get(a.account).localeCompare(best.get(b.account)) || a.account.localeCompare(b.account) || b.day.localeCompare(a.day));
+    const today = Date.parse(new Date().toISOString().slice(0, 10) + 'T00:00:00Z');
+    const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    wrap.innerHTML = `<table class="data-table"><thead><tr><th>Account</th><th>Records</th><th>Source</th><th>Latest</th><th>Days ago</th></tr></thead><tbody>${
+      rows.map(r => {
+        const ago = Math.round((today - Date.parse(r.day + 'T00:00:00Z')) / 86400000);
+        const style = ago > 35 ? ' style="color:#ff9500"' : '';
+        return `<tr><td>${esc(r.account)}</td><td>${r.kind}</td><td>${esc(r.source)}</td><td${style}>${r.day}</td><td${style}>${ago}</td></tr>`;
+      }).join('')}</tbody></table>`;
+  } catch (error) {
+    wrap.innerHTML = '';
+    const d = document.createElement('div'); d.className = 'empty-note'; d.textContent = error.message; wrap.appendChild(d);
+  }
 }
 
 async function mpImportOneFile(file, statusEl, session) {
@@ -4703,6 +4760,7 @@ function mpUpdateAuthUi(session) {
     document.getElementById('capitalbrokers_signed_out').style.display = 'none';
     document.getElementById('capitalbrokers_signed_in').style.display = '';
     mpRenderPortfolioPies();
+    mpRenderLatestSources();
     mpRenderBrokerCurrency();
     mpRenderBrokerAssetClass();
     mpRenderBondByType();
