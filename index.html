@@ -1796,10 +1796,14 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', () => {
 // out -- they say nothing about which statement is in) and trades, each with
 // the external_source it came from.
 // How often each account wants a fresh statement: closed ones never; cash and
-// Wise only now and then (no reminder); a broker (trades from its own report)
-// monthly; a bank weekly while in active use -- at least 4 real transactions
-// per 30 days over the 90 days before its newest record -- else monthly.
-const MP_ACCOUNT_SCHEDULE = { UniCredit: 'closed', Finuslugi: 'closed', cash: 'rarely', Wise: 'rarely' };
+// Wise only now and then (no reminder); brokers and banks no longer in daily
+// use monthly (30 days). Any other bank weekly while in active use -- at least
+// 4 real transactions per 30 days over the 90 days before its newest record --
+// else monthly.
+const MP_ACCOUNT_SCHEDULE = {
+  UniCredit: 'closed', Finuslugi: 'closed', cash: 'rarely', Wise: 'rarely',
+  IBKR: 30, Freedom24: 30, Raiffeisen: 30, 'Ziraat Bank': 30,
+};
 async function mpRenderLatestSources() {
   const wrap = document.getElementById('mp_latest_sources');
   try {
@@ -1834,7 +1838,7 @@ async function mpRenderLatestSources() {
     const iso = t => new Date(t).toISOString().slice(0, 10);
     await Promise.all([...acc].map(async ([name, a]) => {
       const fixed = MP_ACCOUNT_SCHEDULE[name];
-      if (fixed) { a.every = fixed; return; }
+      if (fixed !== undefined) { a.every = fixed; return; }
       a.every = 30;   // a broker, or a bank in little use
       if (!a.bankDay) return;
       const to = Date.parse(a.bankDay + 'T00:00:00Z');
