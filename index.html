@@ -252,12 +252,6 @@
     <div id="mp_any_csv_drop" class="drop-zone">…or drop any number of files here — they're queued and imported one by one</div>
     <div class="empty-note" id="mp_any_csv_status"></div>
 
-    <div class="section-title">Latest data per source</div>
-    <p class="note">The newest real record of each bank / broker account -- bank rows not made up here
-      (synthetic: extrapolated, data gaps, balance snapshots), broker trades and payouts by the source they came from --
-      to see when a fresh statement is due. Older than 35 days in orange.</p>
-    <div id="mp_latest_sources"><div class="empty-note">Loading…</div></div>
-
     <div class="section-title">Export Revolut fund trades to Snowball</div>
     <p class="note">Generates a Snowball-importable CSV from the trades already stored here for the
       Revolut Flexible Cash Funds money-market fund share classes (IE0002RUHW32, IE000AZVL3K0, IE000H9J0QX4).</p>
@@ -289,6 +283,11 @@
 
     <div class="section-title">Russian infrastructure 🇷🇺</div>
     <div id="mp_bond_subtype_wrap"></div>
+    <div class="section-title">Latest data per account</div>
+    <p class="note">The date of the newest real record of each bank / broker account (bank rows and broker
+      trades or payouts from any of its sources; synthetic rows -- extrapolated, data gaps, snapshots -- left out),
+      to see when a fresh statement is due. Older than 35 days in orange; a closed account greyed out.</p>
+    <div id="mp_latest_sources"><div class="empty-note">Loading…</div></div>
   </div>
 </div>
 
@@ -1800,41 +1799,41 @@ async function mpRenderLatestSources() {
   try {
     const { data: accs, error: e1 } = await sb.from('bank_latest_balances').select('account, external_source');
     if (e1) throw e1;
-    const rows = [];
+    const { data: closed, error: e2 } = await sb.from('bank_transactions').select('external_source').eq('synthetic_kind', 'account_closed');
+    if (e2) throw e2;
+    const closedSrc = new Set((closed || []).map(r => r.external_source));
+    // per account: its newest date over all sources, and whether every bank source of it is closed
+    const acc = new Map();
+    const note = (account, day, isClosed) => {
+      const a = acc.get(account) || { day: '', open: false };
+      if (day > a.day) a.day = day;
+      if (!isClosed) a.open = true;
+      acc.set(account, a);
+    };
     const srcs = [...new Set((accs || []).map(r => r.external_source))];
     await Promise.all(srcs.map(async src => {
       const { data, error } = await sb.from('bank_transactions').select('account, tx_date')
         .eq('external_source', src).is('synthetic_kind', null).order('tx_date', { ascending: false }).limit(1);
       if (error) throw error;
-      if (data && data.length) rows.push({ account: data[0].account, kind: 'bank', source: src, day: data[0].tx_date.slice(0, 10) });
+      if (data && data.length) note(data[0].account, data[0].tx_date.slice(0, 10), closedSrc.has(src));
     }));
-    const latest = new Map();
     for (let from = 0; ; from += 1000) {
       const { data, error } = await sb.from('trades').select('account, external_source, trade_date')
         .order('trade_date', { ascending: false }).range(from, from + 999);
       if (error) throw error;
-      for (const r of data) {
-        const key = `${r.account || '(unspecified)'}\u0000${r.external_source || 'manual'}`;
-        if (!latest.has(key)) latest.set(key, r.trade_date);
-      }
+      for (const r of data) note(r.account || (r.external_source === 'snowball_csv' ? 'Snowball' : '(unspecified)'), r.trade_date, false);
       if (data.length < 1000) break;
     }
-    for (const [key, day] of latest) {
-      const [account, source] = key.split('\u0000');
-      rows.push({ account, kind: 'trades', source, day });
-    }
-    if (!rows.length) { wrap.innerHTML = '<div class="empty-note">Nothing imported yet.</div>'; return; }
-    // per account: its newest source first, accounts by their newest date, oldest at the top
-    const best = new Map();
-    for (const r of rows) if (!best.has(r.account) || best.get(r.account) < r.day) best.set(r.account, r.day);
-    rows.sort((a, b) => best.get(a.account).localeCompare(best.get(b.account)) || a.account.localeCompare(b.account) || b.day.localeCompare(a.day));
+    if (!acc.size) { wrap.innerHTML = '<div class="empty-note">Nothing imported yet.</div>'; return; }
+    // open accounts, the longest without data first; closed ones at the end
+    const rows = [...acc].sort(([an, a], [bn, b]) => (b.open - a.open) || a.day.localeCompare(b.day) || an.localeCompare(bn));
     const today = Date.parse(new Date().toISOString().slice(0, 10) + 'T00:00:00Z');
     const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-    wrap.innerHTML = `<table class="data-table"><thead><tr><th>Account</th><th>Records</th><th>Source</th><th>Latest</th><th>Days ago</th></tr></thead><tbody>${
-      rows.map(r => {
-        const ago = Math.round((today - Date.parse(r.day + 'T00:00:00Z')) / 86400000);
-        const style = ago > 35 ? ' style="color:#ff9500"' : '';
-        return `<tr><td>${esc(r.account)}</td><td>${r.kind}</td><td>${esc(r.source)}</td><td${style}>${r.day}</td><td${style}>${ago}</td></tr>`;
+    wrap.innerHTML = `<table class="data-table"><thead><tr><th>Account</th><th>Latest</th><th>Days ago</th></tr></thead><tbody>${
+      rows.map(([name, a]) => {
+        const ago = Math.round((today - Date.parse(a.day + 'T00:00:00Z')) / 86400000);
+        const style = !a.open ? ' style="color:#6a7381"' : ago > 35 ? ' style="color:#ff9500"' : '';
+        return `<tr${style}><td>${esc(name)}${a.open ? '' : ' (closed)'}</td><td>${a.day}</td><td>${ago}</td></tr>`;
       }).join('')}</tbody></table>`;
   } catch (error) {
     wrap.innerHTML = '';
