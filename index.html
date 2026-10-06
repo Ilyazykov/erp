@@ -286,7 +286,8 @@
     <div class="section-title">Latest data per account</div>
     <p class="note">The date of the newest real record of each bank / broker account (bank rows and broker
       trades or payouts from any of its sources; synthetic rows -- extrapolated, data gaps, snapshots -- left out),
-      to see when a fresh statement is due. Older than 35 days in orange; a closed account greyed out.</p>
+      to see when a fresh statement is due: a broker monthly, a bank in active use weekly, one in little use monthly;
+      cash and Wise without a reminder; closed accounts greyed out. Overdue in orange.</p>
     <div id="mp_latest_sources"><div class="empty-note">Loading…</div></div>
   </div>
 </div>
@@ -1794,20 +1795,22 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', () => {
 // The newest real record per account: bank_transactions (synthetic rows left
 // out -- they say nothing about which statement is in) and trades, each with
 // the external_source it came from.
+// How often each account wants a fresh statement: closed ones never; cash and
+// Wise only now and then (no reminder); a broker (trades from its own report)
+// monthly; a bank weekly while in active use -- at least 4 real transactions
+// per 30 days over the 90 days before its newest record -- else monthly.
+const MP_ACCOUNT_SCHEDULE = { UniCredit: 'closed', Finuslugi: 'closed', cash: 'rarely', Wise: 'rarely' };
 async function mpRenderLatestSources() {
   const wrap = document.getElementById('mp_latest_sources');
   try {
     const { data: accs, error: e1 } = await sb.from('bank_latest_balances').select('account, external_source');
     if (e1) throw e1;
-    const { data: closed, error: e2 } = await sb.from('bank_transactions').select('external_source').eq('synthetic_kind', 'account_closed');
-    if (e2) throw e2;
-    const closedSrc = new Set((closed || []).map(r => r.external_source));
-    // per account: its newest date over all sources, and whether every bank source of it is closed
     const acc = new Map();
-    const note = (account, day, isClosed) => {
-      const a = acc.get(account) || { day: '', open: false };
+    const note = (account, day, kind) => {
+      const a = acc.get(account) || { day: '', bankDay: '', broker: false };
       if (day > a.day) a.day = day;
-      if (!isClosed) a.open = true;
+      if (kind === 'bank' && day > a.bankDay) a.bankDay = day;
+      if (kind === 'trades') a.broker = true;
       acc.set(account, a);
     };
     const srcs = [...new Set((accs || []).map(r => r.external_source))];
@@ -1815,25 +1818,45 @@ async function mpRenderLatestSources() {
       const { data, error } = await sb.from('bank_transactions').select('account, tx_date')
         .eq('external_source', src).is('synthetic_kind', null).order('tx_date', { ascending: false }).limit(1);
       if (error) throw error;
-      if (data && data.length) note(data[0].account, data[0].tx_date.slice(0, 10), closedSrc.has(src));
+      if (data && data.length) note(data[0].account, data[0].tx_date.slice(0, 10), 'bank');
     }));
+    // broker trades and payouts from the broker's own reports (Snowball is no statement)
     for (let from = 0; ; from += 1000) {
       const { data, error } = await sb.from('trades').select('account, external_source, trade_date')
+        .neq('external_source', 'snowball_csv').not('account', 'is', null)
         .order('trade_date', { ascending: false }).range(from, from + 999);
       if (error) throw error;
-      for (const r of data) note(r.account || (r.external_source === 'snowball_csv' ? 'Snowball' : '(unspecified)'), r.trade_date, false);
+      for (const r of data) note(r.account, r.trade_date, 'trades');
       if (data.length < 1000) break;
     }
     if (!acc.size) { wrap.innerHTML = '<div class="empty-note">Nothing imported yet.</div>'; return; }
-    // open accounts, the longest without data first; closed ones at the end
-    const rows = [...acc].sort(([an, a], [bn, b]) => (b.open - a.open) || a.day.localeCompare(b.day) || an.localeCompare(bn));
+    const dayMs = 86400000;
+    const iso = t => new Date(t).toISOString().slice(0, 10);
+    await Promise.all([...acc].map(async ([name, a]) => {
+      const fixed = MP_ACCOUNT_SCHEDULE[name];
+      if (fixed) { a.every = fixed; return; }
+      a.every = 30;   // a broker, or a bank in little use
+      if (!a.bankDay) return;
+      const to = Date.parse(a.bankDay + 'T00:00:00Z');
+      const { count, error } = await sb.from('bank_transactions').select('id', { count: 'exact', head: true })
+        .eq('account', name).is('synthetic_kind', null)
+        .gte('tx_date', iso(to - 90 * dayMs)).lte('tx_date', a.bankDay + 'T23:59:59Z');
+      if (error) throw error;
+      if ((count || 0) >= 12) a.every = 7;
+    }));
     const today = Date.parse(new Date().toISOString().slice(0, 10) + 'T00:00:00Z');
+    const rank = a => (a.every === 'closed' ? 2 : a.every === 'rarely' ? 1 : 0);
+    const ago = a => Math.round((today - Date.parse(a.day + 'T00:00:00Z')) / dayMs);
+    // due ones first, the most overdue at the top; then rarely-updated; closed at the end
+    const rows = [...acc].sort(([an, a], [bn, b]) => rank(a) - rank(b)
+      || (typeof b.every === 'number' ? ago(b) - b.every : 0) - (typeof a.every === 'number' ? ago(a) - a.every : 0) || an.localeCompare(bn));
     const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-    wrap.innerHTML = `<table class="data-table"><thead><tr><th>Account</th><th>Latest</th><th>Days ago</th></tr></thead><tbody>${
+    const label = e => (e === 7 ? 'weekly' : e === 30 ? 'monthly' : e);
+    wrap.innerHTML = `<table class="data-table"><thead><tr><th>Account</th><th>Update</th><th>Latest</th><th>Days ago</th></tr></thead><tbody>${
       rows.map(([name, a]) => {
-        const ago = Math.round((today - Date.parse(a.day + 'T00:00:00Z')) / 86400000);
-        const style = !a.open ? ' style="color:#6a7381"' : ago > 35 ? ' style="color:#ff9500"' : '';
-        return `<tr${style}><td>${esc(name)}${a.open ? '' : ' (closed)'}</td><td>${a.day}</td><td>${ago}</td></tr>`;
+        const d = ago(a);
+        const style = a.every === 'closed' ? ' style="color:#6a7381"' : typeof a.every === 'number' && d > a.every ? ' style="color:#ff9500"' : '';
+        return `<tr${style}><td>${esc(name)}</td><td>${label(a.every)}</td><td>${a.day}</td><td>${d}</td></tr>`;
       }).join('')}</tbody></table>`;
   } catch (error) {
     wrap.innerHTML = '';
