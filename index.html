@@ -5278,7 +5278,17 @@ const MP_ASSET_NAMES = {
   IE0002RUHW32: 'Revolut Flexible Cash Funds GBP (Fidelity ILF)',
   IE000AZVL3K0: 'Revolut Flexible Cash Funds EUR (Fidelity ILF)',
   IE000H9J0QX4: 'Revolut Flexible Cash Funds USD (Fidelity ILF)',
+  TEUR: 'TEUR (with its blocked part TEUR2)',
 };
+// Blocked securities (price_freezes: worth 0 from the day they froze) get a
+// "(blocked)" mark, so a -100% reads as frozen, not sold.
+let mpFrozenTickers = null;
+async function mpLoadFrozen() {
+  if (mpFrozenTickers) return mpFrozenTickers;
+  const { data } = await sb.from('price_freezes').select('ticker');
+  mpFrozenTickers = new Set((data || []).map(r => String(r.ticker).toUpperCase()));
+  return mpFrozenTickers;
+}
 async function mpBondNames(tickers) {
   let cache = {};
   try { cache = JSON.parse(localStorage.getItem('mp_bond_names') || '{}'); } catch { /* no storage */ }
@@ -5325,7 +5335,9 @@ function mpAssetXirr(r, from, to) {
   for (const [d, v] of cash) flows.push([d, -v]);   // put in: money out of the pocket
   const last = v1 > 0 ? to : (cash.length ? cash[cash.length - 1][0] : to);
   if (v1 > 0) flows.push([to, v1]);
-  if (flows.length < 2) return null;
+  if (flows.length < 2 && !(flows.length === 1 && flows[0][1] < 0)) return null;
+  // nothing ever came back (blocked, worth 0; written off): all of it lost
+  if (flows.every(([, v]) => v <= 0) && flows.some(([, v]) => v < 0)) return -100;
   const t0 = Date.parse(flows[0][0]);
   const minDays = /^(SAVINGS|DEPOSIT|ВКЛАД):/i.test(r.asset) ? 1 : 30;
   if ((Date.parse(last) - t0) / 86400000 < minDays) return null;
@@ -5379,7 +5391,8 @@ async function mpRenderInvestedAssets() {
     .sort((a, b) => a.v - b.v);   // biggest on top
   if (!rows.length) { status.textContent = 'Nothing held in this period.'; Plotly.purge(el); return; }
   const names = { ...MP_ASSET_NAMES, ...await mpBondNames(rows.map(r => r.asset)) };
-  const label = r => (names[r.asset] ? `${names[r.asset]}` : r.asset);
+  const frozen = await mpLoadFrozen();
+  const label = r => `${names[r.asset] || r.asset}${frozen.has(r.asset) ? ' (blocked)' : ''}`;
   const x = rows.map(r => r.v);
   // every asset, also one with no % (nothing at the start, nothing put in)
   const total = mpInvestedAssetsRows.reduce((t, r) => t + conv(to, Number(r.earned)), 0);
@@ -5388,7 +5401,7 @@ async function mpRenderInvestedAssets() {
     type: 'bar', orientation: 'h', y: rows.map(label), x,
     marker: { color: x.map(v => (v >= 0 ? '#3fb950' : '#f85149')) },
     text: rows.map(r => (mode === 'money' ? signed(r.money, fmtMoney) : mode === 'xirr' ? pctText(r.xirr) : pctText(r.pctv))),
-    textposition: 'outside', cliponaxis: false,
+    textposition: 'outside', cliponaxis: false, constraintext: 'none', textfont: { size: 11 },
     customdata: rows.map(r => [r.accounts, signed(r.money, fmtMoney), r.pctv == null ? '—' : pctText(r.pctv),
       fmtMoney(conv(from, Number(r.value_start))), fmtMoney(conv(to, Number(r.value_end))),
       fmtMoney(conv(to, Number(r.put_in))), fmtMoney(conv(to, Number(r.taken_out))), fmtMoney(conv(to, Number(r.income))),
@@ -5403,7 +5416,7 @@ async function mpRenderInvestedAssets() {
     margin: { l: 230, r: 70, t: 40, b: 40 }, showlegend: false, bargap: 0.35, hovermode: 'closest',
     xaxis: Object.assign({}, LAYOUT_BASE.xaxis, { type: 'linear', dtick: undefined, tickformat: undefined, tickangle: 0, zeroline: true, zerolinecolor: '#30363d',
       ticksuffix: mode === 'money' ? '' : '%', tickprefix: mode === 'money' && ccy === 'USD' ? '$' : '' }),
-    yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { type: 'category', automargin: true, tickfont: { size: 11 } }),
+    yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { type: 'category', automargin: true, tickfont: { size: 11 }, dtick: 1 }),
   }), CONFIG);
 }
 try { const v = localStorage.getItem('mp_invested_by_mode'); if (v) document.getElementById('invested_by_mode').value = v; } catch { /* no storage */ }
