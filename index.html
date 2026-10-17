@@ -31,6 +31,13 @@
   .data-table td.pos { color: #3dd68c; }
   .data-table td.neg { color: #e05252; }
   .data-table td.muted { color: #6a7381; }
+  .mp-src { cursor: help; text-decoration: underline dotted; position: relative; }
+  .mp-src:hover::after {
+    content: attr(data-src); position: absolute; left: 0; top: 100%; margin-top: 4px; z-index: 20;
+    width: max-content; max-width: min(520px, 80vw); white-space: normal; text-align: left;
+    background: #222c38; color: #e6edf3; border: 1px solid #3a4656; border-radius: 6px;
+    padding: 8px 10px; font-size: 0.8rem; font-weight: normal; line-height: 1.4; box-shadow: 0 4px 14px rgba(0,0,0,.4);
+  }
   .data-table .zero { color: #4b5560; font-size: 0.78rem; }
   .data-table th:last-child, .data-table td:last-child { background: #171d25; }
   .data-table tbody tr:hover { background: #13191f; }
@@ -1813,7 +1820,7 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', () => {
 // else monthly.
 const MP_ACCOUNT_SCHEDULE = {
   UniCredit: 'closed', Finuslugi: 'closed', cash: 'rarely', Wise: 'rarely',
-  IBKR: 30, Freedom24: 30, Raiffeisen: 30, 'Ziraat Bank': 30,
+  IBKR: 30, Freedom24: 30, Raiffeisen: 30, 'Ziraat Bank': 30, 'Yandex Bank': 30,
 };
 // Where each account's statements come from (the row's tooltip). "As is":
 // the bank's own file goes straight into Upload; "to Claude": a PDF /
@@ -1922,8 +1929,10 @@ async function mpRenderLatestSources() {
       rows.map(([name, a]) => {
         const d = ago(a);
         const style = a.every === 'closed' ? ' style="color:#6a7381"' : typeof a.every === 'number' && d > a.every ? ' style="color:#ff9500"' : '';
-        const tip = MP_ACCOUNT_SOURCE[name] ? ` title="${esc(MP_ACCOUNT_SOURCE[name])}"` : '';
-        return `<tr${style}><td${tip}${tip ? ' style="cursor:help;text-decoration:underline dotted"' : ''}>${esc(name)}</td><td>${label(a.every)}</td><td>${a.record}</td><td>${a.uploaded || '—'}</td><td>${d}</td><td${a.gaps?.length ? ' style="color:#ff9500"' : ''}>${(a.gaps || []).join('<br>') || ''}</td></tr>`;
+        // where the statements come from: a popup drawn by the page on hover
+        // (the browser's own title tooltip didn't show)
+        const src = MP_ACCOUNT_SOURCE[name];
+        return `<tr${style}><td>${src ? `<span class="mp-src" data-src="${esc(src)}">${esc(name)}</span>` : esc(name)}</td><td>${label(a.every)}</td><td>${a.record}</td><td>${a.uploaded || '—'}</td><td>${d}</td><td${a.gaps?.length ? ' style="color:#ff9500"' : ''}>${(a.gaps || []).join('<br>') || ''}</td></tr>`;
       }).join('')}</tbody></table>`;
   } catch (error) {
     wrap.innerHTML = '';
