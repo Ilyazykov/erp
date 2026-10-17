@@ -38,6 +38,10 @@ const CRYPTO_YAHOO: Record<string, string> = {
   XAU: 'PAXG-USD', XAUT: 'PAXG-USD', TAO: 'TAO22974-USD', ADI: 'ADI38185-USD', MON: 'MON30495-USD', MEW: 'MEW30126-USD',
 };
 const ETF_SUFFIXES = ['.L', '.DE', '.AS', '.SW', '.MI', '.PA'];
+// Coins whose Yahoo history is someone else's: Gram (prev. Toncoin) -- Yahoo's
+// GRAM-USD before the rename (June 2026) is another coin at ~$0.003. Bybit's
+// GRAMUSDT carries Toncoin's whole history on.
+const CRYPTO_BYBIT: Record<string, string> = { GRAM: 'GRAMUSDT' };
 const ETF_OVERRIDE: Record<string, string> = { XSX6: '.DE' };
 const NO_PRICE = /^(DEPOSIT|ВКЛАД|SAVINGS|BLOCKED):/i;
 // Valued at 1 USD / not priced by refresh_capital_daily (exchange balances).
@@ -75,6 +79,18 @@ async function yahooHistory(symbol: string, from: string): Promise<{ closes: [st
     if (close[i] !== null && close[i] !== undefined) closes.push([iso(new Date(t * 1000)), close[i] * scale]);
   });
   return { closes, currency: currency.toUpperCase() };
+}
+
+// ---- Bybit spot daily closes (USDT ~ USD), oldest first ----
+async function bybitHistory(symbol: string, from: string): Promise<{ day: string; price: number; currency: string }[]> {
+  const out = new Map<string, number>();
+  const end = Date.now();
+  for (let start = Date.parse(`${from}T00:00:00Z`); start < end && timeLeft() > 5000; start += 900 * 86400_000) {
+    const j = await getJson(`https://api.bybit.com/v5/market/kline?category=spot&symbol=${encodeURIComponent(symbol)}`
+      + `&interval=D&start=${start}&end=${Math.min(start + 900 * 86400_000, end)}&limit=1000`);
+    for (const k of j?.result?.list ?? []) out.set(iso(new Date(Number(k[0]))), Number(k[4]));
+  }
+  return [...out].sort((a, b) => a[0].localeCompare(b[0])).map(([day, price]) => ({ day, price, currency: 'USD' }));
 }
 
 // ---- Yahoo split events over a range: [{day, ratio}] (null: no answer) ----
@@ -265,6 +281,8 @@ Deno.serve(async () => {
       if (src?.source === 'constant' || (!src && m && ['usd_peg', 'cfa_nominal'].includes(m.source))) {
         src = { ticker, source: 'constant', symbol: null, currency: 'USD' };
         points = [{ day: since.get(ticker)!, price: Number(m?.price_usd ?? 1), currency: 'USD' }];
+      } else if (src?.source === 'bybit') {
+        points = await bybitHistory(src.symbol, from);
       } else if (src?.source === 'moex_shares' || src?.source === 'moex_bonds') {
         points = await moexHistory(src.symbol, src.source === 'moex_bonds' ? 'bonds' : 'shares', from);
       } else if (src?.source === 'yahoo') {
@@ -312,7 +330,13 @@ Deno.serve(async () => {
           return false;
         };
         const crypto = CRYPTO_YAHOO[ticker.toUpperCase()] ?? `${ticker.toUpperCase()}-USD`;
-        if (cryptoFirst.has(ticker) && !m) candidates.push(viaYahoo(crypto));
+        if (CRYPTO_BYBIT[ticker.toUpperCase()]) candidates.push(async () => {
+          const symbol = CRYPTO_BYBIT[ticker.toUpperCase()];
+          points = await bybitHistory(symbol, from);
+          if (points.length) { src = { ticker, source: 'bybit', symbol, currency: 'USD' }; return true; }
+          return false;
+        });
+        else if (cryptoFirst.has(ticker) && !m) candidates.push(viaYahoo(crypto));
         else if (moexBond) candidates.push(viaMoex('bonds'));
         else if (m?.source === 'moex_iss') candidates.push(viaMoex('shares'));
         else if (m && /crypto|gold/.test(m.asset_class)) candidates.push(viaYahoo(crypto));

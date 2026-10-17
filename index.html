@@ -5252,7 +5252,8 @@ async function mpRenderInvestedAssets() {
     .sort((a, b) => (mode === 'money' ? a.money - b.money : a.pctv - b.pctv));   // biggest on top
   if (!rows.length) { status.textContent = 'Nothing held in this period.'; Plotly.purge(el); return; }
   const x = rows.map(r => (mode === 'money' ? r.money : r.pctv));
-  const total = rows.reduce((t, r) => t + r.money, 0);
+  // every asset, also one with no % (nothing at the start, nothing put in)
+  const total = mpInvestedAssetsRows.reduce((t, r) => t + conv(to, Number(r.earned)), 0);
   const pctText = v => signed(v, a => `${a >= 10 ? a.toFixed(0) : a >= 1 ? a.toFixed(1) : a.toFixed(2)}%`);
   const trace = {
     type: 'bar', orientation: 'h', y: rows.map(r => r.asset), x,
