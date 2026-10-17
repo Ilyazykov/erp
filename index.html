@@ -295,7 +295,7 @@
     <p class="note">The date of the newest real record of each bank / broker account (bank rows and broker
       trades or payouts from any of its sources; synthetic rows -- extrapolated, data gaps, snapshots -- left out),
       to see when a fresh statement is due -- dated by the later of the newest record and the end of the latest statement uploaded for it (an account with no movements stays fresh once its statement is in); holes of more than 3 days between the periods of the uploaded statements listed: a broker monthly, a bank in active use weekly, one in little use monthly;
-      cash and Wise without a reminder, crypto exchanges monthly, on-chain wallets (synced by themselves) dated by their last sync; closed accounts greyed out. Overdue in orange. Hover an account's name for where its statements come from.</p>
+      cash and Wise without a reminder, crypto exchanges monthly (Binance rarely), on-chain wallets (synced by themselves) dated by their last sync; closed accounts greyed out. Overdue in orange. Hover an account's name for where its statements come from.</p>
     <div id="mp_latest_sources"><div class="empty-note">Loading…</div></div>
   </div>
 </div>
@@ -1822,7 +1822,7 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', () => {
 const MP_ACCOUNT_SCHEDULE = {
   UniCredit: 'closed', Finuslugi: 'closed', cash: 'rarely', Wise: 'rarely',
   IBKR: 30, Freedom24: 30, Raiffeisen: 30, 'Ziraat Bank': 30, 'Yandex Bank': 30,
-  Bybit: 30, 'Crypto.com': 30, Binance: 30, Telegram: 30,
+  Bybit: 30, 'Crypto.com': 30, Telegram: 30, Binance: 'rarely',
 };
 // Where each account's statements come from (the row's tooltip). "As is":
 // the bank's own file goes straight into Upload; "to Claude": a PDF /
@@ -1876,6 +1876,20 @@ async function mpRenderLatestSources() {
       for (const r of data) note(r.account, r.trade_date, 'trades');
       if (data.length < 1000) break;
     }
+    // crypto: exchange exports (Bybit, Crypto.com, Binance, Telegram Wallet) by
+    // their newest movement; on-chain wallets sync by themselves -- dated by
+    // the last sync, no reminder
+    const { data: wallets } = await sb.from('crypto_wallets').select('id, chain, account, last_synced_at');
+    for (const w of wallets || []) {
+      if (MP_EXCHANGE_CHAINS.has(w.chain)) {
+        const { data: t } = await sb.from('wallet_transactions').select('tx_time').eq('wallet_id', w.id)
+          .order('tx_time', { ascending: false }).limit(1);
+        if (t && t.length) note(w.account, t[0].tx_time.slice(0, 10), 'trades');
+      } else if (w.last_synced_at) {
+        note(w.account, w.last_synced_at.slice(0, 10), 'bank');
+        acc.get(w.account).auto = true;
+      }
+    }
     // the latest upload of a statement for the account counts too
     // -- by the end of the period it covers where that's known (an old
     // statement uploaded today doesn't make the account fresh); the periods
@@ -1905,20 +1919,6 @@ async function mpRenderLatestSources() {
       acc.get(name).gaps = gaps;
     }
     for (const a of acc.values()) a.record = a.day, a.day = a.uploaded && a.uploaded > a.day ? a.uploaded : a.day;
-    // crypto: exchange exports (Bybit, Crypto.com, Binance, Telegram Wallet) by
-    // their newest movement; on-chain wallets sync by themselves -- dated by
-    // the last sync, no reminder
-    const { data: wallets } = await sb.from('crypto_wallets').select('id, chain, account, last_synced_at');
-    for (const w of wallets || []) {
-      if (MP_EXCHANGE_CHAINS.has(w.chain)) {
-        const { data: t } = await sb.from('wallet_transactions').select('tx_time').eq('wallet_id', w.id)
-          .order('tx_time', { ascending: false }).limit(1);
-        if (t && t.length) note(w.account, t[0].tx_time.slice(0, 10), 'trades');
-      } else if (w.last_synced_at) {
-        note(w.account, w.last_synced_at.slice(0, 10), 'bank');
-        acc.get(w.account).auto = true;
-      }
-    }
     if (!acc.size) { wrap.innerHTML = '<div class="empty-note">Nothing imported yet.</div>'; return; }
     const dayMs = 86400000;
     const iso = t => new Date(t).toISOString().slice(0, 10);
@@ -1936,7 +1936,7 @@ async function mpRenderLatestSources() {
       if ((count || 0) >= 12) a.every = 7;
     }));
     const today = Date.parse(new Date().toISOString().slice(0, 10) + 'T00:00:00Z');
-    const rank = a => (a.every === 'closed' ? 2 : a.every === 'rarely' || a.every === 'auto' ? 1 : 0);
+    const rank = a => ({ rarely: 1, auto: 2, closed: 3 })[a.every] ?? 0;
     const ago = a => Math.round((today - Date.parse(a.day + 'T00:00:00Z')) / dayMs);
     // due ones first, the most overdue at the top; then rarely-updated; closed at the end
     const rows = [...acc].sort(([an, a], [bn, b]) => rank(a) - rank(b)
