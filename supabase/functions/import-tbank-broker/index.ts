@@ -105,9 +105,17 @@ async function reconcileHoldings(db: any, userId: string, agr: string, periodEnd
       qty.set(r.ticker, Math.round(((qty.get(r.ticker) ?? 0) + signed(r)) * 1e8) / 1e8);
     }
     // A bond redeemed at maturity ("Погашение в уст. срок" -> 'repayment')
-    // leaves on that day, not at the end of a report spanning years after it.
-    const redeemed = stored.filter(r => r.side === 'repayment' && r.external_id.startsWith(`${agr}:income:`)
-      && r.external_id.split(':')[3] === it.isin && r.trade_date <= periodEnd).map(r => r.trade_date).sort().pop();
+    // leaves on that day, not at the end of a report spanning years after it
+    // -- on any agreement: ОФЗ 26209 moved to a new one in May 2022 and was
+    // redeemed there.
+    let redeemed: string | undefined;
+    if (it.close === 0) {
+      const { data, error } = await db.from('trades').select('trade_date').eq('user_id', userId).eq('external_source', SOURCE)
+        .eq('side', 'repayment').like('external_id', `%:income:%:${it.isin}:%`).lte('trade_date', periodEnd)
+        .order('trade_date', { ascending: false }).limit(1);
+      if (error) throw new Error(error.message);
+      redeemed = data?.[0]?.trade_date;
+    }
     const keep = new Set<string>();
     for (const t of cand) {
       const need = Math.round(((t === it.primary ? it.close : 0) - (qty.get(t) ?? 0)) * 1e8) / 1e8;
