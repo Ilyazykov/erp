@@ -5145,7 +5145,7 @@ async function mpRenderInvested() {
   if (!mpInvestedRows) {
     const rows = [];
     for (let from = 0; ; from += 1000) {
-      const { data, error } = await sb.from('investment_daily').select('day, value_usd, invested_usd, income_usd').order('day').range(from, from + 999);
+      const { data, error } = await sb.from('investment_daily').select('day, value_usd, invested_usd, income_usd, value_rub, invested_rub, income_rub').order('day').range(from, from + 999);
       if (error) { status.textContent = error.message; return; }
       rows.push(...data);
       if (data.length < 1000) break;
@@ -5154,11 +5154,14 @@ async function mpRenderInvested() {
   }
   if (!mpInvestedRows.length) { status.textContent = 'No history yet -- built with the next capital rebuild.'; return; }
   const days = mpInvestedRows.map(r => r.day);
-  const value = mpInvestedRows.map(r => conv(r.day, r.value_usd));
+  // roubles: kept by the database at each day's own rate (migration 071)
+  const rub = ccy === 'RUB';
+  const value = mpInvestedRows.map(r => (rub ? Number(r.value_rub) : conv(r.day, r.value_usd)));
   // own money put in: what's invested less the income that stayed invested (a
   // reinvested dividend, capitalised interest) -- the gap to the value is then
   // all that was earned: price growth, exchange rates, dividends, coupons, interest
-  const invested = mpInvestedRows.map(r => conv(r.day, Number(r.invested_usd) - Number(r.income_usd)));
+  const invested = mpInvestedRows.map(r => (rub ? Number(r.invested_rub) - Number(r.income_rub)
+    : conv(r.day, Number(r.invested_usd) - Number(r.income_usd))));
   const money = ccy === 'RUB' ? '%{y:,.0f} ₽' : '$%{y:,.0f}';
   const earned = value.map((v, i) => v - invested[i]);
   const traces = [
