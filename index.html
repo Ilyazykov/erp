@@ -355,6 +355,17 @@
     </div>
     <div id="invested_status" class="empty-note"></div>
     <div id="plot_capital_invested" style="height:560px"></div>
+    <div class="section-title" style="margin-top:24px">Earned by asset</div>
+    <p class="note">Over the same period as the chart above (from the day counted from, or the zoom's start, to its end): each
+      asset's value at the end less its value at the start and the money put in between -- dividends, coupons and interest count as
+      earned. <b>%</b> is that over the value at the start plus the money put in. An asset is its ticker across accounts; crypto goes
+      coin by coin (a trade on an exchange moves money from one coin to another), stablecoins and an exchange's USD Earn together.</p>
+    <div class="form-row" style="gap:16px">
+      <label>show <select id="invested_by_mode"><option value="pct">%</option><option value="money">money</option></select></label>
+      <span id="invested_by_period" class="note" style="margin:0"></span>
+    </div>
+    <div id="invested_by_status" class="empty-note"></div>
+    <div id="plot_invested_assets" style="height:400px"></div>
   </div>
 </div>
 
@@ -5040,6 +5051,7 @@ function mpUpdateAuthUi(session) {
     mpCapitalRows = null;
     mpCapitalTypeRows = null;
     mpInvestedRows = null;
+    mpInvestedAssetsKey = '';
     Plotly.purge('plot_capital');
     Plotly.purge('plot_capital_types');
     document.getElementById('mp_charts_grid').innerHTML = '';
@@ -5167,6 +5179,7 @@ async function mpRenderInvested() {
     const inv = invested.map(v => v - off);
     const earn = value.map((v, i) => v - inv[i]);
     Plotly.restyle(el, { y: [inv, value], customdata: [null, earn] }, [0, 1]);
+    mpInvestedAssetsSoon();
   };
   el.mpInvestedRebase = rebase;
   // the day counted from, marked by a vertical line
@@ -5180,6 +5193,7 @@ async function mpRenderInvested() {
     await Plotly.relayout(el, { 'xaxis.range': [fixedFrom, days[days.length - 1]] });
     await mark(fixedFrom);
   }
+  mpInvestedAssetsSoon();
   if (!el.mpInvestedBound) {
     el.mpInvestedBound = true;
     // a click on the chart sets the day to count from (the zoom stays)
@@ -5192,13 +5206,80 @@ async function mpRenderInvested() {
       el.mpInvestedMark(d);
     });
     el.on('plotly_relayout', ev => {
-      if (document.getElementById('invested_from').value || ev.shapes) return;
+      if (ev.shapes) return;
+      mpInvestedAssetsSoon();   // a new end of the period
+      if (document.getElementById('invested_from').value) return;
       const a = ev['xaxis.range[0]'] ?? ev['xaxis.range']?.[0];
       if (a) el.mpInvestedRebase(String(a).slice(0, 10));
       else if (ev['xaxis.autorange']) el.mpInvestedRebase(null);
     });
   }
 }
+// What each asset earned over the chart's period (investment_by_asset, migration 062).
+let mpInvestedAssetsTimer = null, mpInvestedAssetsKey = '', mpInvestedAssetsRows = null;
+function mpInvestedAssetsSoon() {
+  clearTimeout(mpInvestedAssetsTimer);
+  mpInvestedAssetsTimer = setTimeout(() => mpRenderInvestedAssets(), 300);
+}
+async function mpRenderInvestedAssets() {
+  const el = document.getElementById('plot_invested_assets');
+  const status = document.getElementById('invested_by_status');
+  const chart = document.getElementById('plot_capital_invested');
+  if (!mpInvestedRows?.length) return;
+  const days = mpInvestedRows.map(r => r.day);
+  const range = chart.layout?.xaxis?.range ?? null;
+  const clamp = d => (d < days[0] ? days[0] : d > days[days.length - 1] ? days[days.length - 1] : d);
+  const from = clamp(document.getElementById('invested_from').value || (range ? String(range[0]).slice(0, 10) : days[0]));
+  const to = clamp(range ? String(range[1]).slice(0, 10) : days[days.length - 1]);
+  const ccy = document.getElementById('invested_ccy').value === 'RUB' ? 'RUB' : 'USD';
+  const mode = document.getElementById('invested_by_mode').value === 'money' ? 'money' : 'pct';
+  document.getElementById('invested_by_period').textContent = `${from} → ${to}`;
+  const key = `${from}|${to}`;
+  if (key !== mpInvestedAssetsKey) {
+    status.textContent = 'Loading…';
+    const { data, error } = await sb.rpc('investment_by_asset', { p_from: from, p_to: to });
+    if (error) { status.textContent = error.message; return; }
+    mpInvestedAssetsKey = key;
+    mpInvestedAssetsRows = data;
+  }
+  status.textContent = '';
+  const conv = mpCapitalConverter(ccy);
+  const fmtMoney = v => (ccy === 'RUB' ? `${Math.round(v).toLocaleString('en-US')} ₽` : `$${Math.round(v).toLocaleString('en-US')}`);
+  const signed = (v, f) => (v > 0 ? '+' : v < 0 ? '−' : '') + f(Math.abs(v));
+  const rows = mpInvestedAssetsRows
+    .map(r => ({ ...r, money: conv(to, Number(r.earned)), pctv: r.pct == null ? null : Number(r.pct) }))
+    .filter(r => mode === 'money' || r.pctv != null)
+    .sort((a, b) => (mode === 'money' ? a.money - b.money : a.pctv - b.pctv));   // biggest on top
+  if (!rows.length) { status.textContent = 'Nothing held in this period.'; Plotly.purge(el); return; }
+  const x = rows.map(r => (mode === 'money' ? r.money : r.pctv));
+  const total = rows.reduce((t, r) => t + r.money, 0);
+  const pctText = v => signed(v, a => `${a >= 10 ? a.toFixed(0) : a >= 1 ? a.toFixed(1) : a.toFixed(2)}%`);
+  const trace = {
+    type: 'bar', orientation: 'h', y: rows.map(r => r.asset), x,
+    marker: { color: x.map(v => (v >= 0 ? '#3fb950' : '#f85149')) },
+    text: rows.map(r => (mode === 'money' ? signed(r.money, fmtMoney) : pctText(r.pctv))),
+    textposition: 'outside', cliponaxis: false,
+    customdata: rows.map(r => [r.accounts, signed(r.money, fmtMoney), r.pctv == null ? '—' : pctText(r.pctv),
+      fmtMoney(conv(from, Number(r.value_start))), fmtMoney(conv(to, Number(r.value_end))),
+      fmtMoney(conv(to, Number(r.put_in))), fmtMoney(conv(to, Number(r.taken_out))), fmtMoney(conv(to, Number(r.income)))]),
+    hovertemplate: '<b>%{y}</b> (%{customdata[0]})<br>earned %{customdata[1]} · %{customdata[2]}<br>'
+      + 'value %{customdata[3]} → %{customdata[4]}<br>put in %{customdata[5]}, taken out %{customdata[6]}<br>'
+      + 'of which dividends / coupons / interest %{customdata[7]}<extra></extra>',
+  };
+  el.style.height = `${Math.max(300, rows.length * 22 + 90)}px`;
+  await Plotly.react(el, [trace], Object.assign({}, LAYOUT_BASE, {
+    title: { text: `earned in all: ${signed(total, fmtMoney)}`, font: { size: 13 } },
+    margin: { l: 230, r: 70, t: 40, b: 40 }, showlegend: false, bargap: 0.35, hovermode: 'closest',
+    xaxis: Object.assign({}, LAYOUT_BASE.xaxis, { type: 'linear', dtick: undefined, tickformat: undefined, tickangle: 0, zeroline: true, zerolinecolor: '#30363d',
+      ticksuffix: mode === 'pct' ? '%' : '', tickprefix: mode === 'money' && ccy === 'USD' ? '$' : '' }),
+    yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { type: 'category', automargin: true, tickfont: { size: 11 } }),
+  }), CONFIG);
+}
+try { const v = localStorage.getItem('mp_invested_by_mode'); if (v) document.getElementById('invested_by_mode').value = v; } catch { /* no storage */ }
+document.getElementById('invested_by_mode').addEventListener('change', e => {
+  try { localStorage.setItem('mp_invested_by_mode', e.target.value); } catch { /* no storage */ }
+  if (mpIsSignedIn) mpRenderInvestedAssets();
+});
 try { const v = localStorage.getItem('mp_invested_from'); if (v) document.getElementById('invested_from').value = v; } catch { /* no storage */ }
 document.getElementById('invested_from').addEventListener('change', e => {
   try { localStorage.setItem('mp_invested_from', e.target.value); } catch { /* no storage */ }
