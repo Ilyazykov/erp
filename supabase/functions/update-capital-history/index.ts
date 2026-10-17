@@ -42,6 +42,9 @@ const ETF_SUFFIXES = ['.L', '.DE', '.AS', '.SW', '.MI', '.PA'];
 // GRAM-USD before the rename (June 2026) is another coin at ~$0.003. Bybit's
 // GRAMUSDT carries Toncoin's whole history on.
 const CRYPTO_BYBIT: Record<string, string> = { GRAM: 'GRAMUSDT' };
+// Securities held under a name Yahoo no longer uses: Royal Dutch Shell A ->
+// Shell plc (one share for one, January 2022).
+const RENAMED_YAHOO: Record<string, string> = { 'RDS.A': 'SHEL' };
 const ETF_OVERRIDE: Record<string, string> = { XSX6: '.DE' };
 const NO_PRICE = /^(DEPOSIT|ВКЛАД|SAVINGS|BLOCKED):/i;
 // Valued at 1 USD / not priced by refresh_capital_daily (exchange balances).
@@ -330,6 +333,11 @@ Deno.serve(async () => {
           return false;
         };
         const crypto = CRYPTO_YAHOO[ticker.toUpperCase()] ?? `${ticker.toUpperCase()}-USD`;
+        // T-Bank renames a security after a corporate action ("BYNDold",
+        // "BTAI_old", "OZONold"): its prices before it are the base ticker's;
+        // a few were renamed outright (RENAMED_YAHOO).
+        const base = RENAMED_YAHOO[ticker.toUpperCase()] ?? (/_?old$/i.test(ticker) ? ticker.replace(/_?old$/i, '').toUpperCase() : null);
+        if (base) candidates.push(viaYahoo(base));
         if (CRYPTO_BYBIT[ticker.toUpperCase()]) candidates.push(async () => {
           const symbol = CRYPTO_BYBIT[ticker.toUpperCase()];
           points = await bybitHistory(symbol, from);
