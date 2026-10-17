@@ -2541,17 +2541,37 @@ const MP_BROKER_SHORT_NAMES = {
 
 // "<account> <category>" pairs that ever held a value (capital_ever_held), for
 // mpRenderBrokerPivot: a zero there is drawn in the normal colour.
+// The currency column is worked out by the table's own rules
+// (mpBrokerCurrencyUnit / mpCurrencyRows), from each ticker's market data --
+// a wallet's USDT has no currency in the history but sits under USD.
 let mpEverHeldRows = null;
 async function mpEverHeld(field) {
   if (!mpEverHeldRows) {
     const rows = [];
     for (let from = 0; ; from += 1000) {
-      const { data, error } = await sb.from('capital_ever_held').select('account, currency, instrument_type').range(from, from + 999);
+      const { data, error } = await sb.from('capital_ever_held').select('account, currency, instrument_type, ticker').range(from, from + 999);
       if (error) return new Set();
       rows.push(...data);
       if (data.length < 1000) break;
     }
-    mpEverHeldRows = rows;
+    const tickers = [...new Set(rows.map(r => r.ticker).filter(t => t && !/^(CASH|REAL_ESTATE):/.test(t)))];
+    const info = new Map();
+    for (let i = 0; i < tickers.length; i += 200) {
+      const { data } = await sb.from('market_prices').select('ticker, asset_class, underlying_currency, currency, instrument_type')
+        .in('ticker', tickers.slice(i, i + 200));
+      for (const m of data || []) info.set(m.ticker, m);
+    }
+    mpEverHeldRows = rows.map(r => {
+      const m = info.get(r.ticker) || {};
+      const cash = /^CASH:([^:]+):/.exec(r.ticker || '');
+      const row = { ticker: r.ticker, asset_class: m.asset_class, underlying_currency: cash ? cash[1] : m.underlying_currency,
+        currency: cash ? cash[1] : (r.currency || m.currency) };
+      const unit = mpBrokerCurrencyUnit(row);
+      const fiat = !MP_UNIT_QUOTED_ASSET_CLASSES.has(row.asset_class) && unit !== MP_ALTCOINS_COLUMN;
+      const ccy = fiat && MP_EUROPEAN_AS_EUR.has(unit) ? 'EUR' : unit;
+      return { account: r.account, currency: fiat && !MP_MAIN_CURRENCIES.has(ccy) ? MP_OTHER_CURRENCIES_COLUMN : ccy,
+        instrument_type: m.instrument_type || r.instrument_type };
+    });
   }
   return new Set(mpEverHeldRows.map(r => `${r.account} ${r[field]}`));
 }
