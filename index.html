@@ -286,6 +286,7 @@
     <div id="mp_broker_currency_wrap"></div>
 
     <div class="section-title">Portfolio by broker × asset class</div>
+    <div class="form-row"><label>in <select id="assetclass_ccy"><option value="USD">USD $</option><option value="RUB">RUB ₽</option></select></label></div>
     <div id="mp_broker_assetclass_wrap"></div>
 
 
@@ -2547,7 +2548,9 @@ async function mpEverHeld(field) {
   return new Set(mpEverHeldRows.map(r => `${r.account} ${r[field]}`));
 }
 
-function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurrency, everHeld = new Set()) {
+// money: how a USD amount is shown in the non-currency cells and the totals
+// (the asset-class table can show them in roubles).
+function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurrency, everHeld = new Set(), money = mpFormatUsd) {
   if (!data.length) { wrap.innerHTML = `<p class="empty-note">${emptyMessage}</p>`; return; }
   // Zero balances (a closed account like UniCredit, a spent-down currency)
   // are left out, so an account whose every balance is zero gets no row.
@@ -2591,13 +2594,13 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
   const anyMissing = data.some(r => r.value_usd === null);
   // a zero where the account once held something keeps its currency ("€0.00")
   const heldZero = category => (fxByCurrency && category in fxByCurrency
-    ? mpFormatCurrency(0, category, false, fxByCurrency[category], true) : mpFormatUsd(0));
+    ? mpFormatCurrency(0, category, false, fxByCurrency[category], true) : money(0));
   const cellDisplay = (usd, category) => {
     if (fxByCurrency && category in fxByCurrency) {
       return mpFormatCurrency(usd / fxByCurrency[category], category, false, fxByCurrency[category]);
     }
     if (usd === 0) return '<span class="zero">0</span>';
-    return mpFormatUsd(usd);
+    return money(usd);
   };
   const nativeTotalRow = fxByCurrency
     ? `<tr class="total-row"><td class="ticker"><b>Total (native)</b></td>
@@ -2623,12 +2626,12 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
   </tr></thead><tbody>${accounts.map(a => `<tr${dimmed.has(a) ? ' style="opacity:0.45" title="Not included in the totals"' : ''}>
     <td class="ticker">${brokerLabel(a)}</td>
     ${categories.map(c => `<td>${!cell[`${a} ${c}`] && everHeld.has(`${a} ${c}`) ? heldZero(c) : cellDisplay(cell[`${a} ${c}`] || 0, c)}</td>`).join('')}
-    <td><b>${mpFormatUsd(rowTotal(a))}</b></td>
+    <td><b>${money(rowTotal(a))}</b></td>
   </tr>`).join('')}
   ${nativeTotalRow}
-  <tr class="total-row"><td class="ticker"><b>Total (USD)</b></td>
-    ${categories.map(c => `<td><b>${mpFormatUsd(colTotal(c))}</b></td>`).join('')}
-    <td><b>${mpFormatUsd(grandTotal)}</b></td>
+  <tr class="total-row"><td class="ticker"><b>Total (${money.unit || 'USD'})</b></td>
+    ${categories.map(c => `<td><b>${money(colTotal(c))}</b></td>`).join('')}
+    <td><b>${money(grandTotal)}</b></td>
   </tr></tbody></table>
   ${anyMissing ? '<p class="empty-note">Some tickers have no price yet — totals are a partial sum.</p>' : ''}`;
 }
@@ -2898,9 +2901,17 @@ async function mpRenderBrokerAssetClass() {
   const cashRows = await mpFetchCashRows(fxByCurrency);
   const realEstateRows = await mpFetchRealEstateRows(fxByCurrency);
   const split = await mpSplitFundsCash(data);
+  // in roubles at today's rate when chosen (the choice kept in this browser)
+  const rub = document.getElementById('assetclass_ccy').value === 'RUB' && fxByCurrency.RUB;
+  const money = rub ? Object.assign(usd => mpFormatCurrency(usd / fxByCurrency.RUB, 'RUB'), { unit: 'RUB' }) : mpFormatUsd;
   mpRenderBrokerPivot(wrap, [...split, ...cashRows, ...realEstateRows], 'instrument_type', 'No holdings yet — import trades above.',
-    undefined, await mpEverHeld('instrument_type'));
+    undefined, await mpEverHeld('instrument_type'), money);
 }
+try { const v = localStorage.getItem('mp_assetclass_ccy'); if (v) document.getElementById('assetclass_ccy').value = v; } catch { /* no storage */ }
+document.getElementById('assetclass_ccy').addEventListener('change', e => {
+  try { localStorage.setItem('mp_assetclass_ccy', e.target.value); } catch { /* no storage */ }
+  if (mpIsSignedIn) mpRenderBrokerAssetClass();
+});
 
 // ---- Charts tab: pies built from the same rows as the My Portfolio tables ----
 const MP_PIE_COLORS = ['#4a9ff5', '#7fd351', '#8e8e8e', '#f0c040', '#e8452c', '#c2307a', '#6fc0f8', '#a86ee8',
