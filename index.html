@@ -1968,8 +1968,14 @@ function mpUploadPeriod(fileName, text, result) {
     const rows = text ? mpUploadPeriod('', text, null) : null;
     return [rows && rows[0] <= iso[0] ? rows[0] : iso[0], iso[0]];
   }
-  const dmy = [...fileName.matchAll(/(?:^|[_ -])(\d{2})(\d{2})(\d{4})(?=[_. -]|$)/g)].map(m => `${m[3]}-${m[2]}-${m[1]}`);
-  if (dmy.length) return [dmy[0], dmy[dmy.length - 1]];
+  // eight digits: IBKR's yyyymmdd (U…_20260831_20261016) or Sber's ddmmyyyy
+  // (422XX2Y_01092026_30092026) -- whichever reads as a real date
+  const real = d => /^(19|20)\d\d-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(d);
+  const eight = [...fileName.matchAll(/(?:^|[_ -])(\d{8})(?=[_. -]|$)/g)].map(m => {
+    const g = m[1], ymd = `${g.slice(0, 4)}-${g.slice(4, 6)}-${g.slice(6)}`, dmy = `${g.slice(4)}-${g.slice(2, 4)}-${g.slice(0, 2)}`;
+    return real(ymd) ? ymd : real(dmy) ? dmy : null;
+  }).filter(Boolean);
+  if (eight.length) return [eight[0], eight[eight.length - 1]];
   if (!text) return null;
   const days = [];
   for (const m of text.matchAll(/\b(\d{4})-(\d{2})-(\d{2})\b|\b(\d{2})[/.](\d{2})[/.](\d{4})\b/g)) {
