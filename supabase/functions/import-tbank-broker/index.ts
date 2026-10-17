@@ -104,6 +104,10 @@ async function reconcileHoldings(db: any, userId: string, agr: string, periodEnd
       if (!cand.has(r.ticker) || recon.includes(r) || r.trade_date > periodEnd) continue;
       qty.set(r.ticker, Math.round(((qty.get(r.ticker) ?? 0) + signed(r)) * 1e8) / 1e8);
     }
+    // A bond redeemed at maturity ("Погашение в уст. срок" -> 'repayment')
+    // leaves on that day, not at the end of a report spanning years after it.
+    const redeemed = stored.filter(r => r.side === 'repayment' && r.external_id.startsWith(`${agr}:income:`)
+      && r.external_id.split(':')[3] === it.isin && r.trade_date <= periodEnd).map(r => r.trade_date).sort().pop();
     const keep = new Set<string>();
     for (const t of cand) {
       const need = Math.round(((t === it.primary ? it.close : 0) - (qty.get(t) ?? 0)) * 1e8) / 1e8;
@@ -112,9 +116,12 @@ async function reconcileHoldings(db: any, userId: string, agr: string, periodEnd
       keep.add(id);
       rows.push({
         user_id: userId, account: ACCOUNT, external_source: SOURCE, external_id: id,
-        ticker: t, side: need > 0 ? 'buy' : 'sell', quantity: Math.abs(need), price: 0, trade_date: periodEnd,
+        ticker: t, side: need > 0 ? 'buy' : 'sell', quantity: Math.abs(need), price: 0,
+        trade_date: need < 0 && it.close === 0 && redeemed ? redeemed : periodEnd,
         currency: 'RUB', fee_tax: null, fee_currency: null, nkd: null, exchange: null,
-        note: t === it.primary
+        note: t === it.primary && need < 0 && it.close === 0 && redeemed
+          ? `Redeemed at maturity (the report's "Погашение в уст. срок" payout of ${redeemed}), holding brought to the report's closing 0`
+          : t === it.primary
           ? `Movement without a deal per report section 3.1 (transfer between agreements / code change / redemption), holding brought to the report's closing ${it.close}; the report gives no date`
           : `${it.name || it.isin} held under ${it.primary}: moved off this ticker`,
       });
