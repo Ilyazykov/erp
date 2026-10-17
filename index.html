@@ -5215,6 +5215,39 @@ async function mpRenderInvested() {
     });
   }
 }
+// Bonds by name, not by ISIN / MOEX code: MOEX ISS (allows this site's origin).
+// The bonds market lists the ones trading; a matured one is looked up alone.
+// Remembered in the browser (names don't change).
+const MP_BOND_RE = /^(RU|SU)[0-9A-Z]{10}$/;
+async function mpBondNames(tickers) {
+  let cache = {};
+  try { cache = JSON.parse(localStorage.getItem('mp_bond_names') || '{}'); } catch { /* no storage */ }
+  const want = [...new Set(tickers.filter(t => MP_BOND_RE.test(t) && !cache[t]))];
+  const iss = 'https://iss.moex.com/iss';
+  const put = (rows, cols) => {
+    for (const r of rows) {
+      const o = Object.fromEntries(cols.map((c, i) => [c.toLowerCase(), r[i]]));
+      const name = o.secname || o.name || o.shortname;
+      if (!name) continue;
+      for (const k of [o.secid, o.isin]) if (k && want.includes(k) && !cache[k]) cache[k] = name;
+    }
+  };
+  try {
+    for (let i = 0; i < want.length; i += 50) {
+      const r = await fetch(`${iss}/engines/stock/markets/bonds/securities.json?iss.meta=off&iss.only=securities`
+        + `&securities.columns=SECID,ISIN,SECNAME&securities=${want.slice(i, i + 50).join(',')}`);
+      const j = await r.json();
+      put(j.securities.data, j.securities.columns);
+    }
+    for (const t of want.filter(t => !cache[t])) {
+      const r = await fetch(`${iss}/securities.json?iss.meta=off&iss.only=securities&securities.columns=secid,isin,name&q=${t}`);
+      const j = await r.json();
+      put(j.securities.data, j.securities.columns);
+    }
+  } catch { /* MOEX unreachable: the codes stay */ }
+  try { localStorage.setItem('mp_bond_names', JSON.stringify(cache)); } catch { /* no storage */ }
+  return cache;
+}
 // What each asset earned over the chart's period (investment_by_asset, migration 062).
 let mpInvestedAssetsTimer = null, mpInvestedAssetsKey = '', mpInvestedAssetsRows = null;
 function mpInvestedAssetsSoon() {
@@ -5251,19 +5284,22 @@ async function mpRenderInvestedAssets() {
     .filter(r => mode === 'money' || r.pctv != null)
     .sort((a, b) => (mode === 'money' ? a.money - b.money : a.pctv - b.pctv));   // biggest on top
   if (!rows.length) { status.textContent = 'Nothing held in this period.'; Plotly.purge(el); return; }
+  const names = await mpBondNames(rows.map(r => r.asset));
+  const label = r => (names[r.asset] ? `${names[r.asset]}` : r.asset);
   const x = rows.map(r => (mode === 'money' ? r.money : r.pctv));
   // every asset, also one with no % (nothing at the start, nothing put in)
   const total = mpInvestedAssetsRows.reduce((t, r) => t + conv(to, Number(r.earned)), 0);
   const pctText = v => signed(v, a => `${a >= 10 ? a.toFixed(0) : a >= 1 ? a.toFixed(1) : a.toFixed(2)}%`);
   const trace = {
-    type: 'bar', orientation: 'h', y: rows.map(r => r.asset), x,
+    type: 'bar', orientation: 'h', y: rows.map(label), x,
     marker: { color: x.map(v => (v >= 0 ? '#3fb950' : '#f85149')) },
     text: rows.map(r => (mode === 'money' ? signed(r.money, fmtMoney) : pctText(r.pctv))),
     textposition: 'outside', cliponaxis: false,
     customdata: rows.map(r => [r.accounts, signed(r.money, fmtMoney), r.pctv == null ? '—' : pctText(r.pctv),
       fmtMoney(conv(from, Number(r.value_start))), fmtMoney(conv(to, Number(r.value_end))),
-      fmtMoney(conv(to, Number(r.put_in))), fmtMoney(conv(to, Number(r.taken_out))), fmtMoney(conv(to, Number(r.income)))]),
-    hovertemplate: '<b>%{y}</b> (%{customdata[0]})<br>earned %{customdata[1]} · %{customdata[2]}<br>'
+      fmtMoney(conv(to, Number(r.put_in))), fmtMoney(conv(to, Number(r.taken_out))), fmtMoney(conv(to, Number(r.income))),
+      names[r.asset] ? ` · ${r.asset}` : '']),
+    hovertemplate: '<b>%{y}</b>%{customdata[8]} (%{customdata[0]})<br>earned %{customdata[1]} · %{customdata[2]}<br>'
       + 'value %{customdata[3]} → %{customdata[4]}<br>put in %{customdata[5]}, taken out %{customdata[6]}<br>'
       + 'of which dividends / coupons / interest %{customdata[7]}<extra></extra>',
   };
