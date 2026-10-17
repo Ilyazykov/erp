@@ -2263,7 +2263,8 @@ async function mpImportOneFile(file, statusEl, session) {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} transactions and `
         + `${result.imported_deposit} savings-account / deposit trades (${result.total_rows} parsed)`
         + `${result.removed_snowball_duplicates ? `, replacing ${result.removed_snowball_duplicates} Snowball rows` : ''}`
-        + `${result.covered_by_report ? `; ${result.covered_by_report} left out, a broker report already has them` : ''}.`;
+        + `${result.covered_by_report ? `; ${result.covered_by_report} left out, a broker report already has them` : ''}`
+        + `${result.dropped_stale ? `; ${result.dropped_stale} stored rows on these dates no longer in the file removed` : ''}.`;
       if (result.imported_deposit) {
         mpRenderPortfolioPies();
         mpRenderBondByType();

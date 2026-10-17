@@ -204,6 +204,44 @@ const CATEGORY_RULES: [RegExp, string][] = [
 
 const DEPOSIT_PRODUCTS = new Set(['savings_account', 'term_deposit']);
 
+// This project's CSV is the record of each of its accounts over the days it
+// spans: a stored row of that account dated within them that the file no
+// longer has -- one taken from an app screenshot and since replaced by the
+// statement's own row, say -- goes. A file cut to a few dates
+// (tbank_debit_card_since_2026-09-01.csv) touches only those dates.
+// deno-lint-ignore no-explicit-any
+async function dropStale(db: any, userId: string, table: 'bank_transactions' | 'trades', dateCol: 'tx_date' | 'trade_date',
+  rows: { external_source: string; external_id: string; day: string }[]): Promise<number> {
+  const bySource = new Map<string, { ids: Set<string>; from: string; to: string }>();
+  for (const r of rows) {
+    const g = bySource.get(r.external_source) ?? { ids: new Set<string>(), from: r.day, to: r.day };
+    g.ids.add(r.external_id);
+    if (r.day < g.from) g.from = r.day;
+    if (r.day > g.to) g.to = r.day;
+    bySource.set(r.external_source, g);
+  }
+  let dropped = 0;
+  for (const [src, g] of bySource) {
+    const from = dateCol === 'tx_date' ? `${g.from}T00:00:00Z` : g.from;
+    const to = dateCol === 'tx_date' ? `${g.to}T23:59:59.999Z` : g.to;
+    const stale: string[] = [];
+    for (let off = 0; ; off += 1000) {
+      const { data, error } = await db.from(table).select('id, external_id')
+        .eq('user_id', userId).eq('external_source', src).gte(dateCol, from).lte(dateCol, to)
+        .order('id').range(off, off + 999);
+      if (error) throw new Error(error.message);
+      for (const r of data ?? []) if (!g.ids.has(r.external_id)) stale.push(r.id);
+      if (!data || data.length < 1000) break;
+    }
+    for (let i = 0; i < stale.length; i += 200) {
+      const { error } = await db.from(table).delete().in('id', stale.slice(i, i + 200));
+      if (error) throw new Error(error.message);
+    }
+    dropped += stale.length;
+  }
+  return dropped;
+}
+
 function categorize(description: string): string | null {
   for (const [re, cat] of CATEGORY_RULES) {
     if (re.test(description)) return cat;
@@ -340,6 +378,9 @@ Deno.serve(async (req) => {
       imported = count ?? rows.length;
     }
 
+    const droppedStale = await dropStale(supabase, user.id, 'bank_transactions', 'tx_date',
+      rows.map(r => ({ external_source: r.external_source, external_id: r.external_id, day: r.tx_date.slice(0, 10) })));
+
     let importedDeposit = 0;
     if (depositRows.length) {
       const { error: upsertErr, count } = await supabase
@@ -351,6 +392,9 @@ Deno.serve(async (req) => {
       }
       importedDeposit = count ?? depositRows.length;
     }
+
+    const droppedStaleDeposit = await dropStale(supabase, user.id, 'trades', 'trade_date',
+      depositRows.map(r => ({ external_source: r.external_source, external_id: r.external_id, day: r.trade_date })));
 
     // Snowball rows of deposits this statement now covers (see header).
     let removedSnowball = 0;
@@ -369,6 +413,7 @@ Deno.serve(async (req) => {
       imported_deposit: importedDeposit,
       removed_snowball_duplicates: removedSnowball,
       covered_by_report: coveredByReport,
+      dropped_stale: droppedStale + droppedStaleDeposit,
       total_rows: csvRows.length,
     }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (err) {
