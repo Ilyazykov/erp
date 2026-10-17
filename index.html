@@ -287,7 +287,7 @@
     <p class="note">The date of the newest real record of each bank / broker account (bank rows and broker
       trades or payouts from any of its sources; synthetic rows -- extrapolated, data gaps, snapshots -- left out),
       to see when a fresh statement is due -- dated by the later of the newest record and the end of the latest statement uploaded for it (an account with no movements stays fresh once its statement is in); holes of more than 3 days between the periods of the uploaded statements listed: a broker monthly, a bank in active use weekly, one in little use monthly;
-      cash and Wise without a reminder; closed accounts greyed out. Overdue in orange.</p>
+      cash and Wise without a reminder; closed accounts greyed out. Overdue in orange. Hover an account's name for where its statements come from.</p>
     <div id="mp_latest_sources"><div class="empty-note">Loading…</div></div>
   </div>
 </div>
@@ -1815,6 +1815,28 @@ const MP_ACCOUNT_SCHEDULE = {
   UniCredit: 'closed', Finuslugi: 'closed', cash: 'rarely', Wise: 'rarely',
   IBKR: 30, Freedom24: 30, Raiffeisen: 30, 'Ziraat Bank': 30,
 };
+// Where each account's statements come from (the row's tooltip). "As is":
+// the bank's own file goes straight into Upload; "to Claude": a PDF /
+// screenshots turned into this project's CSV first.
+const MP_ACCOUNT_SOURCE = {
+  Revolut: 'Revolut app → Profile → Statements → Account statement → CSV; also the Flexible Cash Funds and savings statements. Upload as is.',
+  'Bank of Cyprus': '1Bank → Accounts → Transaction history → Export (CSV). Upload as is.',
+  IBKR: 'IBKR Activity Statement, CSV, for the period since the last one. Upload as is.',
+  Freedom24: 'Freedom24 web cabinet → Отчёты брокера → JSON, from 28.04.2026 to today. Or the cash-movement table (tradernet_table.xlsx) without a filter -- it must keep the «Сделка» rows. Upload as is.',
+  'Ziraat Bank': 'Ziraat internet banking → account activity (Hesap Hareketleri) → Excel (.xlsx). Upload as is.',
+  Raiffeisen: 'Raiffeisen statements (PDF) → to Claude, who adds them to the combined Raiffeisen CSV.',
+  'T-Bank': 'Broker: T-Investments → reports → broker report (.xlsx), upload as is. Cards, credit card, deposit, metal account: «Справка о движении средств» (PDF) for each contract → to Claude.',
+  Sber: 'Broker: SberBank Online → Инвестиции → account → Отчёты и справки → broker report (.html, one per month), upload as is. Card and savings account: Выписки и справки → PDF → to Claude.',
+  Alfa: 'Alfa-Online → statements of the current, salary and Alfa-Account (PDF); broker account: screenshots of Alfa-Investments → History → to Claude.',
+  'Yandex Bank': 'Yandex Bank app → statement for each contract (current account, «Сейв») (PDF) → to Claude.',
+  'Ozon Bank': 'Ozon Bank → statement of movements (PDF) → to Claude.',
+  Wise: 'Wise → balance statement, CSV, one per currency. Upload as is.',
+  Bybit: 'Bybit → Data Export → Transaction Log → Account Change Details: the Funding and the Unified Trading file. Upload as is.',
+  'Crypto.com': 'Crypto.com App → Accounts → History → Export → Crypto Wallet. Upload as is.',
+  Binance: 'Binance → Orders → Assets History → Export → Export Transaction Records; keep the file name (its time zone). Upload as is.',
+  Telegram: 'Telegram Wallet history → to Claude, who builds the Telegram Wallet CSV.',
+  cash: 'statements/cash: cash.csv (exact), cash_estimated.csv, cash_extrapolated.csv -- kept by hand with Claude; the counts of cash on hand.',
+};
 async function mpRenderLatestSources() {
   const wrap = document.getElementById('mp_latest_sources');
   try {
@@ -1900,7 +1922,8 @@ async function mpRenderLatestSources() {
       rows.map(([name, a]) => {
         const d = ago(a);
         const style = a.every === 'closed' ? ' style="color:#6a7381"' : typeof a.every === 'number' && d > a.every ? ' style="color:#ff9500"' : '';
-        return `<tr${style}><td>${esc(name)}</td><td>${label(a.every)}</td><td>${a.record}</td><td>${a.uploaded || '—'}</td><td>${d}</td><td${a.gaps?.length ? ' style="color:#ff9500"' : ''}>${(a.gaps || []).join('<br>') || ''}</td></tr>`;
+        const tip = MP_ACCOUNT_SOURCE[name] ? ` title="${esc(MP_ACCOUNT_SOURCE[name])}"` : '';
+        return `<tr${style}><td${tip}${tip ? ' style="cursor:help;text-decoration:underline dotted"' : ''}>${esc(name)}</td><td>${label(a.every)}</td><td>${a.record}</td><td>${a.uploaded || '—'}</td><td>${d}</td><td${a.gaps?.length ? ' style="color:#ff9500"' : ''}>${(a.gaps || []).join('<br>') || ''}</td></tr>`;
       }).join('')}</tbody></table>`;
   } catch (error) {
     wrap.innerHTML = '';
