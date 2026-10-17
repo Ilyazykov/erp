@@ -346,7 +346,7 @@
       savings less withdrawals, money and coins brought onto the crypto exchanges / wallets less taken out -- each at that day's
       rate; dividends, coupons and interest that were reinvested are not your money and stay out. <b>Value</b>: what it was worth
       that day. The gap is what was earned: price growth, exchange rates, dividends, coupons, interest. With a period chosen -- or
-      a day set in "count from" -- invested starts from the value on that first day and adds only what was put in after it, so
+      a day set in "count from" (or clicked on the chart) -- invested starts from the value on that first day and adds only what was put in after it, so
       the gap is what that period earned. Worked out in the database with every capital rebuild.</p>
     <div class="form-row" style="gap:16px;flex-wrap:wrap">
       <label>in <select id="invested_ccy"><option value="USD">USD $</option><option value="RUB">RUB ₽</option></select></label>
@@ -5169,16 +5169,30 @@ async function mpRenderInvested() {
     Plotly.restyle(el, { y: [inv, value], customdata: [null, earn] }, [0, 1]);
   };
   el.mpInvestedRebase = rebase;
+  // the day counted from, marked by a vertical line
+  const mark = d => Plotly.relayout(el, { shapes: d ? [{ type: 'line', xref: 'x', yref: 'paper', x0: d, x1: d, y0: 0, y1: 1,
+    line: { color: '#d29922', width: 1.5, dash: 'dot' } }] : [] });
+  el.mpInvestedMark = mark;
   // a day chosen to count from wins over the zoom
   const fixedFrom = document.getElementById('invested_from').value;
   if (fixedFrom) {
     rebase(fixedFrom);
     await Plotly.relayout(el, { 'xaxis.range': [fixedFrom, days[days.length - 1]] });
+    await mark(fixedFrom);
   }
   if (!el.mpInvestedBound) {
     el.mpInvestedBound = true;
+    // a click on the chart sets the day to count from (the zoom stays)
+    el.on('plotly_click', ev => {
+      const d = String(ev.points?.[0]?.x ?? '').slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return;
+      document.getElementById('invested_from').value = d;
+      try { localStorage.setItem('mp_invested_from', d); } catch { /* no storage */ }
+      el.mpInvestedRebase(d);
+      el.mpInvestedMark(d);
+    });
     el.on('plotly_relayout', ev => {
-      if (document.getElementById('invested_from').value) return;
+      if (document.getElementById('invested_from').value || ev.shapes) return;
       const a = ev['xaxis.range[0]'] ?? ev['xaxis.range']?.[0];
       if (a) el.mpInvestedRebase(String(a).slice(0, 10));
       else if (ev['xaxis.autorange']) el.mpInvestedRebase(null);
