@@ -2439,13 +2439,13 @@ const MP_CURRENCY_SYMBOLS = { RUB: '₽', TRY: '₺', CNY: '¥' };
 // that still move the USD value by at least a tenth of a cent -- the last
 // shown digit is worth >= $0.001 (SOL at ~$120 -> 5 decimals, BTC at ~$84k
 // -> 7).
-function mpFormatCurrency(n, currency, withCode = false, unitPriceUsd = null) {
+function mpFormatCurrency(n, currency, withCode = false, unitPriceUsd = null, keepZero = false) {
   if (n === null || n === undefined) return '<span class="muted">—</span>';
   // A zero balance carries no unit-specific information ("$0.00" and
   // "£0.00" say the same thing), so every column collapses to a single
   // dim, small "0" instead of repeating the symbol/code -- keeps the wide
   // broker x currency row from being cluttered with empty-currency noise.
-  if (n === 0) return '<span class="zero">0</span>';
+  if (n === 0 && !keepZero) return '<span class="zero">0</span>';
   const isCrypto = MP_CURRENCY_COLUMN_ORDER.slice(7).includes(currency) || !MP_ISO_CURRENCIES.has(currency);
   if (isCrypto) {
     const digits = unitPriceUsd > 0 ? Math.min(8, Math.max(0, Math.floor(Math.log10(unitPriceUsd * 1000)))) : 8;
@@ -2598,6 +2598,9 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
   const colTotal = c => accounts.reduce((s, a) => s + (counted[`${a} ${c}`] || 0), 0);
   const grandTotal = categories.reduce((s, c) => s + colTotal(c), 0);
   const anyMissing = data.some(r => r.value_usd === null);
+  // a zero where the account once held something keeps its currency ("€0.00")
+  const heldZero = category => (fxByCurrency && category in fxByCurrency
+    ? mpFormatCurrency(0, category, false, fxByCurrency[category], true) : mpFormatUsd(0));
   const cellDisplay = (usd, category) => {
     if (fxByCurrency && category in fxByCurrency) {
       return mpFormatCurrency(usd / fxByCurrency[category], category, false, fxByCurrency[category]);
@@ -2628,7 +2631,7 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
     <th class="corner">Broker</th>${categories.map(c => `<th>${headerLabel(c)}</th>`).join('')}<th class="corner">Total</th>
   </tr></thead><tbody>${accounts.map(a => `<tr${dimmed.has(a) ? ' style="opacity:0.45" title="Not included in the totals"' : ''}>
     <td class="ticker">${brokerLabel(a)}</td>
-    ${categories.map(c => `<td>${!cell[`${a} ${c}`] && everHeld.has(`${a} ${c}`) ? '<span class="zero-held">0</span>' : cellDisplay(cell[`${a} ${c}`] || 0, c)}</td>`).join('')}
+    ${categories.map(c => `<td>${!cell[`${a} ${c}`] && everHeld.has(`${a} ${c}`) ? heldZero(c) : cellDisplay(cell[`${a} ${c}`] || 0, c)}</td>`).join('')}
     <td><b>${mpFormatUsd(rowTotal(a))}</b></td>
   </tr>`).join('')}
   ${nativeTotalRow}
