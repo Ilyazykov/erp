@@ -371,6 +371,7 @@
       buy, to the period end, or its last sale) -- money back early (amortisation, a sale) counts for less. An asset is its ticker across accounts; crypto goes
       coin by coin (a trade on an exchange moves money from one coin to another), stablecoins (USDT, USDC, DAI...) are dollars: one row, USD, with an exchange's USD Earn.</p>
     <div class="form-row" style="gap:16px">
+      <label>by <select id="invested_by_group"><option value="asset">asset</option><option value="type">type</option></select></label>
       <label>show <select id="invested_by_mode"><option value="pct">%</option><option value="money">money</option><option value="xirr">XIRR (a year)</option></select></label>
       <label title="The period's last day (empty: the zoom's end); moves the zoom of the charts above too">to <input type="date" id="invested_to"></label>
       <span id="invested_by_period" class="note" style="margin:0"></span>
@@ -5339,7 +5340,7 @@ function mpAssetXirr(r, from, to) {
   // nothing ever came back (blocked, worth 0; written off): all of it lost
   if (flows.every(([, v]) => v <= 0) && flows.some(([, v]) => v < 0)) return -100;
   const t0 = Date.parse(flows[0][0]);
-  const minDays = /^(SAVINGS|DEPOSIT|ВКЛАД):/i.test(r.asset) ? 1 : 30;
+  const minDays = /^(SAVINGS|DEPOSIT|ВКЛАД):/i.test(r.asset) || ['deposit', 'liquid'].includes(r.kind) ? 1 : 30;
   if ((Date.parse(last) - t0) / 86400000 < minDays) return null;
   const yrs = flows.map(([d]) => (Date.parse(d) - t0) / (365 * 86400000));
   const npv = rate => flows.reduce((s, [, v], i) => s + v / Math.pow(1 + rate, yrs[i]), 0);
@@ -5351,6 +5352,44 @@ function mpAssetXirr(r, from, to) {
     if (fm * flo > 0) { lo = mid; flo = fm; } else { hi = mid; }
   }
   return ((lo + hi) / 2) * 100;
+}
+// The assets summed by type (stock, bond, deposit, liquid, cash, gold,
+// crypto): money summed, the money flows merged by day, and the % worked out
+// the way investment_by_asset does it -- over the capital at work averaged
+// over the days something was held, but never less than what's in at the end.
+function mpGroupAssetsByKind(rows, from, to) {
+  const groups = new Map();
+  for (const r of rows) {
+    const k = r.kind || 'stock';
+    const g = groups.get(k) || { kind: k, assets: [], value_start: 0, value_end: 0, put_in: 0, taken_out: 0, income: 0, earned: 0, flows: new Map() };
+    g.assets.push(r.asset);
+    for (const c of ['value_start', 'value_end', 'put_in', 'taken_out', 'income', 'earned']) g[c] += Number(r[c]) || 0;
+    for (const [d, v] of r.cash || []) { const day = String(d).slice(0, 10); g.flows.set(day, (g.flows.get(day) || 0) + Number(v)); }
+    groups.set(k, g);
+  }
+  return [...groups.values()].map(g => {
+    const cash = [...g.flows].sort((a, b) => a[0].localeCompare(b[0]));
+    const s = g.value_start > 0 ? from : (cash[0]?.[0] ?? from);
+    const e = g.value_end > 0 ? to : (cash[cash.length - 1]?.[0] ?? to);
+    const days = (a, b) => (Date.parse(b) - Date.parse(a)) / 86400000;
+    let cap = g.value_start, w = 0, len = 0, putIn = g.value_start;
+    let at = s;
+    for (const [d, v] of cash) {
+      if (d > e) break;
+      const l = Math.max(days(at, d), 0);
+      if (cap > 0 && l > 0) { w += cap * l; len += l; }
+      cap += v; if (v > 0) putIn += v; at = d;
+    }
+    const l = Math.max(days(at, e), 0);
+    if (cap > 0 && l > 0) { w += cap * l; len += l; }
+    const finalIn = g.value_start + cash.reduce((t, [, v]) => t + v, 0);
+    const base = Math.max(len > 0 ? w / len : putIn, finalIn);
+    return {
+      asset: MP_ASSET_CLASS_LABELS[g.kind] || g.kind, accounts: `${g.assets.length} assets`,
+      value_start: g.value_start, value_end: g.value_end, put_in: g.put_in, taken_out: g.taken_out, income: g.income,
+      earned: g.earned, pct: base > 0 ? g.earned / base * 100 : null, cash, kind: g.kind,
+    };
+  });
 }
 // What each asset earned over the chart's period (investment_by_asset, migration 062).
 let mpInvestedAssetsTimer = null, mpInvestedAssetsKey = '', mpInvestedAssetsRows = null;
@@ -5384,7 +5423,8 @@ async function mpRenderInvestedAssets() {
   const conv = (_day, v) => v;
   const fmtMoney = v => (ccy === 'RUB' ? `${Math.round(v).toLocaleString('en-US')} ₽` : `$${Math.round(v).toLocaleString('en-US')}`);
   const signed = (v, f) => (v > 0 ? '+' : v < 0 ? '−' : '') + f(Math.abs(v));
-  const rows = mpInvestedAssetsRows
+  const group = document.getElementById('invested_by_group').value === 'type' ? 'type' : 'asset';
+  const rows = (group === 'type' ? mpGroupAssetsByKind(mpInvestedAssetsRows, from, to) : mpInvestedAssetsRows)
     .map(r => ({ ...r, money: conv(to, Number(r.earned)), pctv: r.pct == null ? null : Number(r.pct), xirr: mpAssetXirr(r, from, to) }))
     .map(r => ({ ...r, v: mode === 'money' ? r.money : mode === 'xirr' ? r.xirr : r.pctv }))
     .filter(r => r.v != null)
@@ -5420,6 +5460,11 @@ async function mpRenderInvestedAssets() {
   }), CONFIG);
 }
 try { const v = localStorage.getItem('mp_invested_by_mode'); if (v) document.getElementById('invested_by_mode').value = v; } catch { /* no storage */ }
+try { const v = localStorage.getItem('mp_invested_by_group'); if (v) document.getElementById('invested_by_group').value = v; } catch { /* no storage */ }
+document.getElementById('invested_by_group').addEventListener('change', e => {
+  try { localStorage.setItem('mp_invested_by_group', e.target.value); } catch { /* no storage */ }
+  if (mpIsSignedIn) mpRenderInvestedAssets();
+});
 document.getElementById('invested_by_mode').addEventListener('change', e => {
   try { localStorage.setItem('mp_invested_by_mode', e.target.value); } catch { /* no storage */ }
   if (mpIsSignedIn) mpRenderInvestedAssets();
