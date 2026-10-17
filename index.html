@@ -2554,6 +2554,22 @@ async function mpEverHeld(field) {
       rows.push(...data);
       if (data.length < 1000) break;
     }
+    // coins that ever moved in a wallet / on an exchange count too: the history
+    // leaves out a coin with a movement of unknown size (Telegram Wallet's USDT
+    // spent on purchases), but it was held
+    const { data: wallets } = await sb.from('crypto_wallets').select('id, account');
+    const walletAccount = new Map((wallets || []).map(w => [w.id, w.account]));
+    const seen = new Set();
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await sb.from('wallet_transactions').select('wallet_id, symbol').not('symbol', 'is', null)
+        .order('wallet_id').order('tx_hash').order('kind').order('seq').range(from, from + 999);
+      if (error || !data) break;
+      for (const t of data) {
+        const key = `${walletAccount.get(t.wallet_id)} ${t.symbol}`;
+        if (walletAccount.has(t.wallet_id) && !seen.has(key)) { seen.add(key); rows.push({ account: walletAccount.get(t.wallet_id), ticker: t.symbol, currency: null, instrument_type: 'crypto' }); }
+      }
+      if (data.length < 1000) break;
+    }
     const tickers = [...new Set(rows.map(r => r.ticker).filter(t => t && !/^(CASH|REAL_ESTATE):/.test(t)))];
     const info = new Map();
     for (let i = 0; i < tickers.length; i += 200) {
