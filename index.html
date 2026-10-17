@@ -2561,8 +2561,13 @@ async function mpEverHeld(field) {
         .in('ticker', tickers.slice(i, i + 200));
       for (const m of data || []) info.set(m.ticker, m);
     }
+    // US-dollar stablecoins count as dollars wherever they're held (as in
+    // update-market-prices) -- also those no price row exists for (Bybit's
+    // DAI, USDS); a wallet coin without one is a coin (Altcoins)
+    const STABLE = new Set(['USDT', 'USDC', 'DAI', 'USDS', 'USDE', 'FDUSD', 'PYUSD', 'TUSD', 'BUSD', 'USDP']);
     mpEverHeldRows = rows.map(r => {
-      const m = info.get(r.ticker) || {};
+      const m = info.get(r.ticker) || (STABLE.has(r.ticker) ? { asset_class: 'stablecoin', underlying_currency: 'USD', instrument_type: 'cash' }
+        : r.instrument_type === 'crypto' ? { asset_class: 'crypto', instrument_type: 'crypto' } : {});
       const cash = /^CASH:([^:]+):/.exec(r.ticker || '');
       const row = { ticker: r.ticker, asset_class: m.asset_class, underlying_currency: cash ? cash[1] : m.underlying_currency,
         currency: cash ? cash[1] : (r.currency || m.currency) };
