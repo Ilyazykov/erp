@@ -5303,7 +5303,9 @@ async function mpBondNames(tickers) {
 // XIRR of an asset over the period: the yearly return of its own money flows
 // -- its value at the start put in on the period's first day (or its first
 // buy), each put-in / taken-out on its day, its value at the end taken out on
-// the last day (or its last sale). Under 30 days held it says nothing.
+// the last day (or its last sale). A savings account / deposit has it from a
+// day held (opened for a month: does it pay what was promised?); anything
+// whose price moves needs 30 days (a week's +1% is "+70% a year").
 function mpAssetXirr(r, from, to) {
   const cash = (r.cash || []).map(([d, v]) => [String(d).slice(0, 10), Number(v)]);
   const v0 = Number(r.value_start), v1 = Number(r.value_end);
@@ -5314,7 +5316,8 @@ function mpAssetXirr(r, from, to) {
   if (v1 > 0) flows.push([to, v1]);
   if (flows.length < 2) return null;
   const t0 = Date.parse(flows[0][0]);
-  if ((Date.parse(last) - t0) / 86400000 < 30) return null;
+  const minDays = /^(SAVINGS|DEPOSIT|ВКЛАД):/i.test(r.asset) ? 1 : 30;
+  if ((Date.parse(last) - t0) / 86400000 < minDays) return null;
   const yrs = flows.map(([d]) => (Date.parse(d) - t0) / (365 * 86400000));
   const npv = rate => flows.reduce((s, [, v], i) => s + v / Math.pow(1 + rate, yrs[i]), 0);
   let lo = -0.99, hi = 10;
