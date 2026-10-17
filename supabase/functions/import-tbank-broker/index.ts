@@ -244,7 +244,9 @@ function parse(bytes: Uint8Array, splits: Map<string, Split[]>) {
       // "Дата расчетов план/факт" -- "10.01.2022 / 10.01.2022": the cash moves
       // then (section 2 books it on that date), the fact over the plan.
       settle_date: settleDate(d['Дата расчетов план/факт']),
-      currency: d['Валюта цены'] || d['Валюта расчетов'] || 'RUB',
+      // a bond's price is in % of its face ("Валюта цены" = '%'): the money is
+      // the settlement currency (RUB, or CNY for a yuan bond)
+      currency: (d['Валюта цены'] && d['Валюта цены'] !== '%' ? d['Валюта цены'] : '') || d['Валюта расчетов'] || 'RUB',
       fee_tax: round(num(d['Комиссия брокера']) + num(d['Комиссия биржи']) + num(d['Комиссия клир. центра']), 2),
       fee_currency: d['Валюта комиссии'] || null, nkd: num(d['НКД']) || null,
       exchange: d['Торговая площадка'] || null, note: `${d['Наименование актива'] ?? ''} (сделка ${d['Номер сделки']})`,

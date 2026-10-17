@@ -5360,9 +5360,9 @@ function mpAssetXirr(r, from, to) {
 // Groups: shares and liquid assets Russian / foreign, bonds in roubles /
 // yuan, an exchange's dollars as liquid crypto; deposits, gold, crypto whole.
 const MP_KIND_REGION_LABELS = {
-  'stock|ru': 'stock 📈 Russian', 'stock|foreign': 'stock 📈 foreign',
-  'bond|ru': 'bond 🏛️ Russian', 'bond|cny': 'bond 🏛️ Chinese (yuan)',
-  'liquid|ru': 'liquid assets 💧 Russian', 'liquid|foreign': 'liquid assets 💧 foreign', 'liquid|crypto': 'liquid assets 💧 crypto (stablecoins)',
+  'stock|ru': 'stock 📈 🇷🇺', 'stock|foreign': 'stock 📈 🌍',
+  'bond|ru': 'bond 🏛️ 🇷🇺', 'bond|cny': 'bond 🏛️ 🇨🇳',
+  'liquid|ru': 'liquid assets 💧 🇷🇺', 'liquid|foreign': 'liquid assets 💧 🌍', 'liquid|crypto': 'liquid assets 💧 ₿',
 };
 function mpKindKey(r) {
   const k = r.kind || 'stock';
