@@ -88,6 +88,7 @@
   <div class="tab" data-tab="charts">Charts</div>
   <div class="tab" data-tab="capital">Capital</div>
   <div class="tab" data-tab="capitalbrokers">Capital by broker</div>
+  <div class="tab" data-tab="invested">Invested vs earned</div>
   <div class="tab" data-tab="sigmoid">USD/RUB → CNY Weight (current + 5Y)</div>
   <div class="tab" data-tab="layer2a">ERP &amp; Stocks/Bonds Allocation</div>
   <div class="tab" data-tab="layer2r">Yield per Stock &amp; Rebalancing</div>
@@ -333,6 +334,22 @@
     </div>
     <p class="empty-note" id="mp_exchange_status"></p>
     <div id="mp_exchanges_wrap"></div>
+  </div>
+</div>
+
+<div id="invested" class="chart-wrap">
+  <div id="invested_signed_out" class="empty-note">Sign in with Google (top of page) to see what your investments earned.</div>
+  <div id="invested_signed_in" style="display:none">
+    <div class="section-title">Invested vs earned</div>
+    <p class="note">The investments only -- shares, bonds, funds, deposits, savings accounts, gold, ЦФА and crypto (money on cards,
+      cash and real estate stay out). <b>Invested</b>: what was put in -- buys less sells and redemptions, top-ups of deposits and
+      savings less withdrawals, money and coins brought onto the crypto exchanges / wallets less taken out -- each at that day's
+      rate (interest and dividends that stayed invested count as put in). <b>Value</b>: what it was worth that day. <b>Income</b>:
+      dividends, coupons, interest and rewards. Earned (in the hover) = value − invested + income: price growth and exchange
+      rates plus all the income. Worked out in the database with every capital rebuild.</p>
+    <div class="form-row"><label>in <select id="invested_ccy"><option value="USD">USD $</option><option value="RUB">RUB ₽</option></select></label></div>
+    <div id="invested_status" class="empty-note"></div>
+    <div id="plot_capital_invested" style="height:560px"></div>
   </div>
 </div>
 
@@ -618,6 +635,7 @@ function showTab(id) {
   }
   if (id === 'capital' && mpIsSignedIn) mpRenderCapital();
   if (id === 'capitalbrokers' && mpIsSignedIn) mpRenderCapitalBrokers();
+  if (id === 'invested' && mpIsSignedIn) mpRenderInvested();
   if (DATA && !rendered[id]) {
     rendered[id] = true;
     renderChart(id);
@@ -4979,6 +4997,8 @@ function mpUpdateAuthUi(session) {
     document.getElementById('capital_signed_in').style.display = '';
     document.getElementById('capitalbrokers_signed_out').style.display = 'none';
     document.getElementById('capitalbrokers_signed_in').style.display = '';
+    document.getElementById('invested_signed_out').style.display = 'none';
+    document.getElementById('invested_signed_in').style.display = '';
     mpRenderPortfolioPies();
     mpRenderLatestSources();
     mpRenderBrokerCurrency();
@@ -4990,6 +5010,7 @@ function mpUpdateAuthUi(session) {
     mpRenderCharts();
     if (document.getElementById('capital').classList.contains('active')) mpRenderCapital();
     if (document.getElementById('capitalbrokers').classList.contains('active')) mpRenderCapitalBrokers();
+    if (document.getElementById('invested').classList.contains('active')) mpRenderInvested();
   } else {
     btn.textContent = 'Sign in with Google';
     document.getElementById('mp_signed_out').style.display = '';
@@ -5004,6 +5025,8 @@ function mpUpdateAuthUi(session) {
     document.getElementById('capital_signed_in').style.display = 'none';
     document.getElementById('capitalbrokers_signed_out').style.display = '';
     document.getElementById('capitalbrokers_signed_in').style.display = 'none';
+    document.getElementById('invested_signed_out').style.display = '';
+    document.getElementById('invested_signed_in').style.display = 'none';
     mpCapitalBrokerRows = null;
     mpExactMask = null;
     mpEverHeldRows = null;
@@ -5011,6 +5034,7 @@ function mpUpdateAuthUi(session) {
     Plotly.purge('plot_capital_brokers');
     mpCapitalRows = null;
     mpCapitalTypeRows = null;
+    mpInvestedRows = null;
     Plotly.purge('plot_capital');
     Plotly.purge('plot_capital_types');
     document.getElementById('mp_charts_grid').innerHTML = '';
@@ -5089,6 +5113,52 @@ async function mpRenderCapital() {
   }
   await mpRenderCapitalTypes(ccy, conv);
 }
+// Invested vs value of the investments (investment_daily, migration 058).
+let mpInvestedRows = null;
+async function mpRenderInvested() {
+  const el = document.getElementById('plot_capital_invested');
+  const status = document.getElementById('invested_status');
+  const ccy = document.getElementById('invested_ccy').value === 'RUB' ? 'RUB' : 'USD';
+  if (ccy === 'RUB' && !mpCapitalRub) {
+    status.textContent = 'Loading RUB rates…';
+    try { mpCapitalRub = await mpLoadRubRates(); } catch (error) { status.textContent = error.message; return; }
+  }
+  status.textContent = '';
+  const conv = mpCapitalConverter(ccy);
+  if (!mpInvestedRows) {
+    const rows = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await sb.from('investment_daily').select('day, value_usd, invested_usd, income_usd').order('day').range(from, from + 999);
+      if (error) { status.textContent = error.message; return; }
+      rows.push(...data);
+      if (data.length < 1000) break;
+    }
+    mpInvestedRows = rows;
+  }
+  if (!mpInvestedRows.length) { status.textContent = 'No history yet -- built with the next capital rebuild.'; return; }
+  const days = mpInvestedRows.map(r => r.day);
+  const value = mpInvestedRows.map(r => conv(r.day, r.value_usd));
+  const invested = mpInvestedRows.map(r => conv(r.day, r.invested_usd));
+  const income = mpInvestedRows.map(r => conv(r.day, r.income_usd));
+  const money = ccy === 'RUB' ? '%{y:,.0f} ₽' : '$%{y:,.0f}';
+  // earned = value - invested + income: what stayed invested is in both
+  const earned = value.map((v, i) => v - invested[i] + income[i]);
+  const traces = [
+    { x: days, y: invested, name: 'Invested', type: 'scatter', mode: 'lines', line: { color: '#a371f7', width: 2, dash: 'dash' },
+      hovertemplate: `${money}<extra>Invested</extra>` },
+    { x: days, y: value, name: 'Value', type: 'scatter', mode: 'lines', line: { color: '#58a6ff', width: 2 },
+      fill: 'tonexty', fillcolor: 'rgba(88,166,255,0.12)', customdata: earned,
+      hovertemplate: `${money}<br>earned ${ccy === 'RUB' ? '%{customdata:,.0f} ₽' : '$%{customdata:,.0f}'}<extra>Value</extra>` },
+    { x: days, y: income, name: 'Income (dividends, coupons, interest)', type: 'scatter', mode: 'lines',
+      line: { color: '#3fb950', width: 1.5 }, hovertemplate: `${money}<extra>Income</extra>` },
+  ];
+  await Plotly.react(el, traces, mpCapitalLayout(ccy, { hovermode: 'x unified' }), CONFIG);
+}
+try { const v = localStorage.getItem('mp_invested_ccy'); if (v) document.getElementById('invested_ccy').value = v; } catch { /* no storage */ }
+document.getElementById('invested_ccy').addEventListener('change', e => {
+  try { localStorage.setItem('mp_invested_ccy', e.target.value); } catch { /* no storage */ }
+  if (mpIsSignedIn) mpRenderInvested();
+});
 function mpCapitalLayout(ccy, extra = {}) {
   return Object.assign({}, LAYOUT_BASE, {
     xaxis: Object.assign({}, LAYOUT_BASE.xaxis, { type: 'date', dtick: undefined, tickformat: undefined,
