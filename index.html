@@ -39,6 +39,7 @@
     padding: 8px 10px; font-size: 0.8rem; font-weight: normal; line-height: 1.4; box-shadow: 0 4px 14px rgba(0,0,0,.4);
   }
   .data-table .zero { color: #4b5560; font-size: 0.78rem; }
+  .data-table .zero-held { font-size: 0.78rem; }   /* a zero where the account once held something */
   .data-table th:last-child, .data-table td:last-child { background: #171d25; }
   .data-table tbody tr:hover { background: #13191f; }
   .data-table tbody tr:hover td.ticker, .data-table tbody tr:hover td:last-child { background: #1a222b; }
@@ -2521,7 +2522,24 @@ const MP_BROKER_SHORT_NAMES = {
   'Ozon Bank': 'Ozon', 'Yandex Bank': 'Yandex',
 };
 
-function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurrency) {
+// "<account> <category>" pairs that ever held a value (capital_ever_held), for
+// mpRenderBrokerPivot: a zero there is drawn in the normal colour.
+let mpEverHeldRows = null;
+async function mpEverHeld(field) {
+  if (!mpEverHeldRows) {
+    const rows = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await sb.from('capital_ever_held').select('account, currency, instrument_type').range(from, from + 999);
+      if (error) return new Set();
+      rows.push(...data);
+      if (data.length < 1000) break;
+    }
+    mpEverHeldRows = rows;
+  }
+  return new Set(mpEverHeldRows.map(r => `${r.account} ${r[field]}`));
+}
+
+function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurrency, everHeld = new Set()) {
   if (!data.length) { wrap.innerHTML = `<p class="empty-note">${emptyMessage}</p>`; return; }
   // Zero balances (a closed account like UniCredit, a spent-down currency)
   // are left out, so an account whose every balance is zero gets no row.
@@ -2593,7 +2611,7 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
     <th class="corner">Broker</th>${categories.map(c => `<th>${headerLabel(c)}</th>`).join('')}<th class="corner">Total</th>
   </tr></thead><tbody>${accounts.map(a => `<tr${dimmed.has(a) ? ' style="opacity:0.45" title="Not included in the totals"' : ''}>
     <td class="ticker">${brokerLabel(a)}</td>
-    ${categories.map(c => `<td>${cellDisplay(cell[`${a} ${c}`] || 0, c)}</td>`).join('')}
+    ${categories.map(c => `<td>${!cell[`${a} ${c}`] && everHeld.has(`${a} ${c}`) ? '<span class="zero-held">0</span>' : cellDisplay(cell[`${a} ${c}`] || 0, c)}</td>`).join('')}
     <td><b>${mpFormatUsd(rowTotal(a))}</b></td>
   </tr>`).join('')}
   ${nativeTotalRow}
@@ -2830,7 +2848,8 @@ async function mpRenderBrokerCurrency() {
   let base;
   try { base = await mpLoadPortfolioBase(); }
   catch (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
-  mpRenderBrokerPivot(wrap, await mpCurrencyRows(base), 'currency', 'No holdings yet — import trades above.', base.fxByCurrency);
+  mpRenderBrokerPivot(wrap, await mpCurrencyRows(base), 'currency', 'No holdings yet — import trades above.', base.fxByCurrency,
+    await mpEverHeld('currency'));
 }
 
 // Funds whose value is split across currency columns by what they hold
@@ -2868,7 +2887,8 @@ async function mpRenderBrokerAssetClass() {
   const cashRows = await mpFetchCashRows(fxByCurrency);
   const realEstateRows = await mpFetchRealEstateRows(fxByCurrency);
   const split = await mpSplitFundsCash(data);
-  mpRenderBrokerPivot(wrap, [...split, ...cashRows, ...realEstateRows], 'instrument_type', 'No holdings yet — import trades above.');
+  mpRenderBrokerPivot(wrap, [...split, ...cashRows, ...realEstateRows], 'instrument_type', 'No holdings yet — import trades above.',
+    undefined, await mpEverHeld('instrument_type'));
 }
 
 // ---- Charts tab: pies built from the same rows as the My Portfolio tables ----
@@ -4964,6 +4984,7 @@ function mpUpdateAuthUi(session) {
     document.getElementById('capitalbrokers_signed_in').style.display = 'none';
     mpCapitalBrokerRows = null;
     mpExactMask = null;
+    mpEverHeldRows = null;
     mpProvenCash = null;
     Plotly.purge('plot_capital_brokers');
     mpCapitalRows = null;
