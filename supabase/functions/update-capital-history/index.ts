@@ -234,7 +234,11 @@ Deno.serve(async () => {
     const unsplit = (ticker: string, day: string) =>
       (splits.get(ticker) ?? []).reduce((f, s) => (s.day > day ? f * s.ratio : f), 1);
     // Priced by currency / at 0 in refresh_capital_daily: no history needed.
-    for (const [t, r] of mp) if (['deposit', 'savings_account', 'money_market_fund', 'blocked'].includes(r.asset_class)) since.delete(t);
+    // MOEX money-market funds (SBMM, AKMM, AMNY) trade at a price per unit: they need it.
+    for (const [t, r] of mp) {
+      if (r.asset_class === 'money_market_fund' && r.source === 'moex_iss') continue;
+      if (['deposit', 'savings_account', 'money_market_fund', 'blocked'].includes(r.asset_class)) since.delete(t);
+    }
     const done: string[] = [], failed: string[] = [], splitsFound: string[] = [];
     // Least recently fetched first, so a partial run moves on next time.
     const lastDay = new Map<string, string>();
