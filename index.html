@@ -5314,6 +5314,9 @@ async function mpBondNames(tickers) {
 // day held (opened for a month: does it pay what was promised?); anything
 // whose price moves needs 30 days (a week's +1% is "+70% a year").
 function mpAssetXirr(r, from, to) {
+  // dollars on the exchanges are money passing through (in for days, then into
+  // a coin): a rouble's move over those days, made yearly, says nothing
+  if (r.asset === 'USD') return null;
   const cash = (r.cash || []).map(([d, v]) => [String(d).slice(0, 10), Number(v)]);
   const v0 = Number(r.value_start), v1 = Number(r.value_end);
   const flows = [];
