@@ -5271,6 +5271,13 @@ async function mpRenderInvested() {
 // The bonds market lists the ones trading; a matured one is looked up alone.
 // Remembered in the browser (names don't change).
 const MP_BOND_RE = /^(RU|SU)[0-9A-Z]{10}$/;
+// Funds known by their ISIN only: Revolut's Flexible Cash Funds -- Fidelity
+// Institutional Liquidity Fund, one share class per currency.
+const MP_ASSET_NAMES = {
+  IE0002RUHW32: 'Revolut Flexible Cash Funds GBP (Fidelity ILF)',
+  IE000AZVL3K0: 'Revolut Flexible Cash Funds EUR (Fidelity ILF)',
+  IE000H9J0QX4: 'Revolut Flexible Cash Funds USD (Fidelity ILF)',
+};
 async function mpBondNames(tickers) {
   let cache = {};
   try { cache = JSON.parse(localStorage.getItem('mp_bond_names') || '{}'); } catch { /* no storage */ }
@@ -5367,7 +5374,7 @@ async function mpRenderInvestedAssets() {
     .filter(r => r.v != null)
     .sort((a, b) => a.v - b.v);   // biggest on top
   if (!rows.length) { status.textContent = 'Nothing held in this period.'; Plotly.purge(el); return; }
-  const names = await mpBondNames(rows.map(r => r.asset));
+  const names = { ...MP_ASSET_NAMES, ...await mpBondNames(rows.map(r => r.asset)) };
   const label = r => (names[r.asset] ? `${names[r.asset]}` : r.asset);
   const x = rows.map(r => r.v);
   // every asset, also one with no % (nothing at the start, nothing put in)
