@@ -19,11 +19,12 @@
 //       1 бумагу"), "Частичное погашение" -> 'amortisation', "Погашение в
 //       уст. срок" -> 'repayment' -- matched to the security by the ISIN in
 //       the comment;
-//     - 3.1 "Движение по ценным бумагам": a security whose opening + net
-//       deals differ from its reported closing balance (a transfer between
-//       agreements, a code change, a redemption) gets one adjusting row for
-//       the difference (price 0, dated the period end -- the report doesn't
-//       date it), so the holding equals the report's closing balance. The
+//     - 3.1 "Движение по ценным бумагам": each security's stored holding is
+//       brought to the report's closing balance (a transfer between
+//       agreements, a code change, a redemption) by reconciling rows dated
+//       the period end -- against what's stored, under every ticker the
+//       security sits under (reconcileHoldings), so reports can come in any
+//       order and overlap. The
 //       closing balance is trusted over the in / out columns, which a report
 //       can get wrong (a closed 2020 agreement shows GAZP "in 0, out 10"
 //       after a buy and a sell of 10). The report never lists a stock
@@ -63,6 +64,73 @@ import { removeCoveredSnowball } from '../_shared/statement_priority.ts';
 import { removeAppRows } from '../_shared/app_rows.ts';
 
 const ACCOUNT = 'T-Bank';
+
+// Holdings per security are brought to a report's closing balance against
+// what's stored -- order-free, whatever reports were uploaded before:
+//   - one reconciling row per security and ticker ('<agr>:adjust:<isin>' on
+//     the security's ticker, '<agr>:adjust:<isin>:<ticker>' on another one it
+//     sits under), dated the report's period end; a report whose period ends
+//     before the stored reconciling rows leaves them (the later report holds);
+//   - the security can sit under more than one ticker: a full report names
+//     Volkswagen VOW3, a monthly one by its ISIN (DE0007664039) -- the deals of
+//     the agreement booked under the security's name count too; all of it ends
+//     on the one ticker, the others at zero.
+// Before (a single '<agr>:adjust:<isin>' row from the report's own opening
+// balance) a monthly report overwrote the full report's correction: -2
+// DE0007664039 against +2 VOW3.
+// deno-lint-ignore no-explicit-any
+async function reconcileHoldings(db: any, userId: string, agr: string, periodEnd: string,
+  items: { isin: string; close: number; name: string; primary: string; tickers: string[] }[]): Promise<number> {
+  const stored: { external_id: string; ticker: string; side: string; quantity: number; trade_date: string; note: string | null }[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await db.from('trades').select('external_id, ticker, side, quantity, trade_date, note')
+      .eq('user_id', userId).eq('external_source', SOURCE).like('external_id', `${agr}:%`).order('external_id').range(from, from + 999);
+    if (error) throw new Error(error.message);
+    stored.push(...(data ?? []));
+    if (!data || data.length < 1000) break;
+  }
+  const signed = (r: { side: string; quantity: number }) =>
+    r.side === 'buy' || r.side === 'stock_as_dividend' ? Number(r.quantity) : r.side === 'sell' ? -Number(r.quantity) : 0;
+  const rows = [];
+  const drop: string[] = [];
+  for (const it of items) {
+    const prefix = `${agr}:adjust:${it.isin}`;
+    const recon = stored.filter(r => r.external_id === prefix || r.external_id.startsWith(`${prefix}:`));
+    if (recon.some(r => r.trade_date > periodEnd)) continue;   // a later report's
+    const cand = new Set([it.primary, ...it.tickers, ...recon.map(r => r.ticker)]);
+    if (it.name) for (const r of stored) if ((r.note ?? '').startsWith(`${it.name} (`)) cand.add(r.ticker);
+    const qty = new Map<string, number>();
+    for (const r of stored) {
+      if (!cand.has(r.ticker) || recon.includes(r) || r.trade_date > periodEnd) continue;
+      qty.set(r.ticker, Math.round(((qty.get(r.ticker) ?? 0) + signed(r)) * 1e8) / 1e8);
+    }
+    const keep = new Set<string>();
+    for (const t of cand) {
+      const need = Math.round(((t === it.primary ? it.close : 0) - (qty.get(t) ?? 0)) * 1e8) / 1e8;
+      if (Math.abs(need) < 1e-9) continue;
+      const id = t === it.primary ? prefix : `${prefix}:${t}`;
+      keep.add(id);
+      rows.push({
+        user_id: userId, account: ACCOUNT, external_source: SOURCE, external_id: id,
+        ticker: t, side: need > 0 ? 'buy' : 'sell', quantity: Math.abs(need), price: 0, trade_date: periodEnd,
+        currency: 'RUB', fee_tax: null, fee_currency: null, nkd: null, exchange: null,
+        note: t === it.primary
+          ? `Movement without a deal per report section 3.1 (transfer between agreements / code change / redemption), holding brought to the report's closing ${it.close}; the report gives no date`
+          : `${it.name || it.isin} held under ${it.primary}: moved off this ticker`,
+      });
+    }
+    for (const r of recon) if (!keep.has(r.external_id)) drop.push(r.external_id);
+  }
+  if (rows.length) {
+    const { error } = await db.from('trades').upsert(rows, { onConflict: 'user_id,external_source,external_id' });
+    if (error) throw new Error(error.message);
+  }
+  for (let i = 0; i < drop.length; i += 200) {
+    const { error } = await db.from('trades').delete().eq('user_id', userId).eq('external_source', SOURCE).in('external_id', drop.slice(i, i + 200));
+    if (error) throw new Error(error.message);
+  }
+  return rows.length;
+}
 const SOURCE = 'tbank_broker_xlsx';
 const ISIN = /^[A-Z]{2}[A-Z0-9]{9}\d$/;
 
@@ -229,13 +297,13 @@ function parse(bytes: Uint8Array, splits: Map<string, Split[]>) {
         continue;
       }
     }
-    adjustments.push({
-      ticker: heldTicker(isin), side: diff > 0 ? 'buy' : 'sell', quantity: Math.abs(diff), price: 0, trade_date: periodEnd,
-      currency: 'RUB', fee_tax: null, fee_currency: null, nkd: null, exchange: null,
-      note: 'Movement without a deal per report section 3.1 (transfer between agreements / code change / redemption); the report gives no date',
-      external_id: `${agr}:adjust:${isin}`,
-    });
   }
+  // Every security of section 3.1 is brought to the report's closing balance
+  // against what's stored (reconcileHoldings, after the deals are in).
+  const nameOf = new Map(moves.map(m => [m['ISIN'], m['Наименование актива'] ?? '']));
+  const reconcile = [...closing].map(([isin, close]) => ({
+    isin, close: round(close), name: nameOf.get(isin) ?? '', primary: heldTicker(isin), tickers: [tickerOf(isin), isin],
+  }));
 
   // Cash, one running balance per currency.
   const balance: Record<string, number> = Object.fromEntries(Object.entries(cashSummary).map(([c, s]) => [c, s.open]));
@@ -279,7 +347,7 @@ function parse(bytes: Uint8Array, splits: Map<string, Split[]>) {
   const cashCheck = Object.fromEntries(Object.entries(cashSummary).map(([c, s]) =>
     [c, { computed: balance[c] ?? s.open, reported: s.close, unlisted: snapshots.find(x => x.currency === c)?.amount ?? 0 }]));
   const holdings = Object.fromEntries([...closing].filter(([, q]) => q).map(([isin, q]) => [heldTicker(isin), q]));
-  return { blocked: blockedAgreement, agreement: agr, periodStart, periodEnd, trades, adjustments, staleAdjustIds, bank, cashCheck, holdings };
+  return { blocked: blockedAgreement, agreement: agr, periodStart, periodEnd, trades, adjustments, staleAdjustIds, reconcile, bank, cashCheck, holdings };
 }
 
 Deno.serve(async (req) => {
@@ -316,6 +384,7 @@ Deno.serve(async (req) => {
         .eq('user_id', user.id).eq('external_source', SOURCE).in('external_id', parsed.staleAdjustIds);
       if (error) return json({ error: error.message }, 500);
     }
+    const reconciled = await reconcileHoldings(supabase, user.id, parsed.agreement, parsed.periodEnd, parsed.reconcile);
     // Every row carries every column: a bulk upsert takes the union of the
     // rows' keys, and a missing one would be sent as null (synthetic is NOT
     // NULL -- only the closing-gap rows set it).
@@ -336,7 +405,7 @@ Deno.serve(async (req) => {
       agreement: parsed.agreement, period_start: parsed.periodStart, period_end: parsed.periodEnd,
       deals: parsed.trades.filter(t => t.side === 'buy' || t.side === 'sell').length,
       payouts: parsed.trades.filter(t => !['buy', 'sell'].includes(t.side)).length,
-      adjustments: parsed.adjustments.length,
+      adjustments: parsed.adjustments.length + reconciled,
       splits: parsed.adjustments.filter(a => a.external_id.includes(':split:')).map(a => `${a.ticker} ${a.trade_date}: ${a.side} ${a.quantity}`),
       cash_rows: bank.length,
       removed_snowball_duplicates: removedSnowball, removed_app_rows: removedApp, holdings: parsed.holdings, cash: parsed.cashCheck,
