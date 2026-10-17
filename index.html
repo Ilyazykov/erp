@@ -1954,13 +1954,20 @@ const MP_UPLOAD_ACCOUNT = {
 // broker reports), else two dates in the file name (Revolut
 // account-statement_2026-09-01_2026-10-06, Freedom24 <id>_2026-04-28 ..._2026-09-26
 // ..._all.json, T-Bank broker-report-2026-09-01-2026-10-01, Sber
-// 422XX2Y_01092026_30092026 or one day 422XX2Y_24092026), else the first and
+// 422XX2Y_01092026_30092026 or one day 422XX2Y_24092026; one ISO date alone --
+// boc_combined_2026-10-17.csv -- is the day it runs to), else the first and
 // last date of the file's rows (yyyy-mm-dd, dd/mm/yyyy, dd.mm.yyyy).
 function mpUploadPeriod(fileName, text, result) {
   const ok = d => /^\d{4}-\d{2}-\d{2}$/.test(d || '');
   if (ok(result?.period_start) && ok(result?.period_end)) return [result.period_start, result.period_end];
   const iso = [...fileName.matchAll(/(\d{4}-\d{2}-\d{2})/g)].map(m => m[1]);
   if (iso.length >= 2) return [iso[0], iso[iso.length - 1]];
+  // one date in the name: the day the statement runs to (boc_combined_2026-10-17.csv),
+  // the start from the rows
+  if (iso.length === 1) {
+    const rows = text ? mpUploadPeriod('', text, null) : null;
+    return [rows && rows[0] <= iso[0] ? rows[0] : iso[0], iso[0]];
+  }
   const dmy = [...fileName.matchAll(/(?:^|[_ -])(\d{2})(\d{2})(\d{4})(?=[_. -]|$)/g)].map(m => `${m[3]}-${m[2]}-${m[1]}`);
   if (dmy.length) return [dmy[0], dmy[dmy.length - 1]];
   if (!text) return null;
