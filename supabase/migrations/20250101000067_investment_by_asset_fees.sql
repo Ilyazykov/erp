@@ -1,8 +1,9 @@
 -- investment_by_asset (062, 066): an on-chain network fee (wallet_transactions
 -- kind 'fee', e.g. ~13 TRX for sending USDT over TRON) counted as a loss on
--- the coin it was paid in -- TRX -41%. It's the cost of the transfer: the
--- coin now shows it taken out, and the fees are a row of their own,
--- "Network fees" (in money only: no % of anything).
+-- the coin it was paid in -- TRX -41%. It's a cost of what the transfer was
+-- for: the fee coin now shows it taken out, and it's put in -- and lost --
+-- on the coin the transfer moved; when that was dollars (USDT to an
+-- exchange), on the first coin bought on an exchange after it.
 
 create or replace function public.investment_by_asset(p_from date, p_to date)
 returns table (asset text, accounts text, value_start numeric, value_end numeric,
@@ -92,12 +93,37 @@ begin
     where w.invested <> 0 or w.income <> 0
 
     union all
-    -- ...and is the cost of the transfer, not a loss on the coin: its own row
-    select w.account, 'Network fees', (-w.invested * r.rate)::numeric, 0::numeric
-    from wal_money w
-    cross join lateral (select coalesce(case when w.sym in (select s from stable) then 1 end,
-      (select p.price_usd from price_history p where p.ticker = w.sym and p.day <= w.day order by p.day desc limit 1), 0) as rate) r
-    where w.kind = 'fee' and w.invested <> 0
+    -- ...and is a cost of what the transfer was for: the coin it moved, or --
+    -- dollars moved (USDT over TRON to an exchange) -- the first coin bought on
+    -- an exchange after it (BTC on Bybit three days later)
+    select w.account, tg.asset,
+           (-x.amount * coalesce((select p.price_usd from price_history p where p.ticker = upper(x.symbol)
+                                  and p.day <= x.tx_time::date order by p.day desc limit 1), 0))::numeric,
+           0::numeric
+    from wallet_transactions x
+    join crypto_wallets w on w.id = x.wallet_id
+    cross join lateral (
+      select (select case when upper(o.symbol) in ('STETH', 'WSTETH') then 'ETH' else upper(o.symbol) end
+              from wallet_transactions o
+              where o.wallet_id = x.wallet_id and o.tx_hash = x.tx_hash and o.kind in ('native', 'token', 'internal')
+                and o.amount < 0 and o.symbol is not null
+              order by (o.kind = 'token') desc limit 1) as moved
+    ) mv
+    cross join lateral (
+      select case
+        when mv.moved is null then upper(x.symbol)
+        when mv.moved in (select s from stable) then coalesce(
+          (select case when upper(b.symbol) in ('STETH', 'WSTETH') then 'ETH' else upper(b.symbol) end
+           from wallet_transactions b
+           where b.user_id = u and b.chain in ('binance', 'bybit', 'cryptocom', 'telegram') and b.kind = 'trade'
+             and b.amount > 0 and upper(b.symbol) not in (select s from stable) and b.tx_time >= x.tx_time
+           order by b.tx_time limit 1),
+          'USD stablecoins')
+        else mv.moved
+      end as asset
+    ) tg
+    where x.user_id = u and x.kind = 'fee' and x.amount <> 0
+      and x.tx_time::date > p_from and x.tx_time::date <= d1
     union all
     -- Telegram Wallet doesn't say how many dollars an exchange took
     -- ('trade_out_unknown', amount 0): as many as the coins it bought were worth
@@ -139,7 +165,7 @@ begin
   select p.asset, string_agg(distinct p.account, ', ' order by p.account),
          round(sum(p.v0), 2), round(sum(p.v1), 2), round(sum(p.put_in), 2), round(sum(p.taken_out), 2), round(sum(p.income), 2),
          round(sum(p.v1 - p.v0 - p.put_in + p.taken_out), 2),
-         case when p.asset <> 'Network fees' and sum(p.v0 + p.put_in) > 0
+         case when sum(p.v0 + p.put_in) > 0
               then round(sum(p.v1 - p.v0 - p.put_in + p.taken_out) / sum(p.v0 + p.put_in) * 100, 2) end
   from per p
   group by p.asset
