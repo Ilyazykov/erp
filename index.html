@@ -346,7 +346,8 @@
       savings less withdrawals, money and coins brought onto the crypto exchanges / wallets less taken out -- each at that day's
       rate (interest and dividends that stayed invested count as put in). <b>Value</b>: what it was worth that day. <b>Income</b>:
       dividends, coupons, interest and rewards. Earned (in the hover) = value − invested + income: price growth and exchange
-      rates plus all the income. Worked out in the database with every capital rebuild.</p>
+      rates plus all the income. With a period chosen, invested starts from the value on its first day and adds what was put in during
+      it, so the gap is what that period earned. Worked out in the database with every capital rebuild.</p>
     <div class="form-row"><label>in <select id="invested_ccy"><option value="USD">USD $</option><option value="RUB">RUB ₽</option></select></label></div>
     <div id="invested_status" class="empty-note"></div>
     <div id="plot_capital_invested" style="height:560px"></div>
@@ -5153,6 +5154,27 @@ async function mpRenderInvested() {
       line: { color: '#3fb950', width: 1.5 }, hovertemplate: `${money}<extra>Income</extra>` },
   ];
   await Plotly.react(el, traces, mpCapitalLayout(ccy, { hovermode: 'x unified' }), CONFIG);
+  // A chosen period starts "invested" where the value stood on its first day,
+  // adding only what was put in during it -- the gap is then what the period
+  // earned, not losses from before it (FinEx funds frozen in 2022, ...).
+  const rebase = (from) => {
+    let i0 = from ? days.findIndex(d => d >= from) : 0;
+    if (i0 < 0) i0 = 0;
+    const off = from ? invested[i0] - value[i0] : 0;
+    const inv = invested.map(v => v - off);
+    const inc = income.map(v => v - (from ? income[i0] : 0));
+    const earn = value.map((v, i) => v - inv[i] + inc[i]);
+    Plotly.restyle(el, { y: [inv, value, inc], customdata: [null, earn, null] }, [0, 1, 2]);
+  };
+  el.mpInvestedRebase = rebase;
+  if (!el.mpInvestedBound) {
+    el.mpInvestedBound = true;
+    el.on('plotly_relayout', ev => {
+      const a = ev['xaxis.range[0]'] ?? ev['xaxis.range']?.[0];
+      if (a) el.mpInvestedRebase(String(a).slice(0, 10));
+      else if (ev['xaxis.autorange']) el.mpInvestedRebase(null);
+    });
+  }
 }
 try { const v = localStorage.getItem('mp_invested_ccy'); if (v) document.getElementById('invested_ccy').value = v; } catch { /* no storage */ }
 document.getElementById('invested_ccy').addEventListener('change', e => {
