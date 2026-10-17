@@ -5450,10 +5450,12 @@ async function mpRenderInvestedAssets() {
       + 'value %{customdata[3]} → %{customdata[4]}<br>put in %{customdata[5]}, taken out %{customdata[6]}<br>'
       + 'of which dividends / coupons / interest %{customdata[7]}<extra></extra>',
   };
-  el.style.height = `${Math.max(300, rows.length * 22 + 90)}px`;
+  // the height follows the rows: a few groups get a short chart, not fat bars
+  const height = Math.max(160, rows.length * 24 + 90);
+  el.style.height = `${height}px`;
   await Plotly.react(el, [trace], Object.assign({}, LAYOUT_BASE, {
     title: { text: `earned in all: ${signed(total, fmtMoney)}`, font: { size: 13 } },
-    margin: { l: 230, r: 70, t: 40, b: 40 }, showlegend: false, bargap: 0.35, hovermode: 'closest',
+    height, margin: { l: 230, r: 70, t: 40, b: 40 }, showlegend: false, bargap: 0.35, hovermode: 'closest',
     xaxis: Object.assign({}, LAYOUT_BASE.xaxis, { type: 'linear', dtick: undefined, tickformat: undefined, tickangle: 0, zeroline: true, zerolinecolor: '#30363d',
       ticksuffix: mode === 'money' ? '' : '%', tickprefix: mode === 'money' && ccy === 'USD' ? '$' : '' }),
     yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { type: 'category', automargin: true, tickfont: { size: 11 }, dtick: 1 }),
