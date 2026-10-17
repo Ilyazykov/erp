@@ -5267,16 +5267,17 @@ async function mpRenderInvestedAssets() {
   const ccy = document.getElementById('invested_ccy').value === 'RUB' ? 'RUB' : 'USD';
   const mode = document.getElementById('invested_by_mode').value === 'money' ? 'money' : 'pct';
   document.getElementById('invested_by_period').textContent = `${from} → ${to}`;
-  const key = `${from}|${to}`;
+  const key = `${from}|${to}|${ccy}`;
   if (key !== mpInvestedAssetsKey) {
     status.textContent = 'Loading…';
-    const { data, error } = await sb.rpc('investment_by_asset', { p_from: from, p_to: to });
+    const { data, error } = await sb.rpc('investment_by_asset', { p_from: from, p_to: to, p_ccy: ccy });
     if (error) { status.textContent = error.message; return; }
     mpInvestedAssetsKey = key;
     mpInvestedAssetsRows = data;
   }
   status.textContent = '';
-  const conv = mpCapitalConverter(ccy);
+  // amounts come in the currency shown, each at its own day's rate (migration 070)
+  const conv = (_day, v) => v;
   const fmtMoney = v => (ccy === 'RUB' ? `${Math.round(v).toLocaleString('en-US')} ₽` : `$${Math.round(v).toLocaleString('en-US')}`);
   const signed = (v, f) => (v > 0 ? '+' : v < 0 ? '−' : '') + f(Math.abs(v));
   const rows = mpInvestedAssetsRows
