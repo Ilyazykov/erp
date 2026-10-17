@@ -357,6 +357,11 @@
     </div>
     <div id="invested_status" class="empty-note"></div>
     <div id="plot_capital_invested" style="height:560px"></div>
+    <div class="section-title" style="margin-top:24px">Earned over time</div>
+    <p class="note">The gap between the two lines above: what the investments had earned by each day, from the same day counted
+      from to the zoom's end. <b>%</b> is that over the capital that worked on average (Modified Dietz: the value at the start plus
+      each put-in / taken-out weighted by how much of the period was left after it).</p>
+    <div id="plot_invested_earned" style="height:360px"></div>
     <div class="section-title" style="margin-top:24px">Earned by asset</div>
     <p class="note">Over the same period as the chart above (from the day counted from, or the zoom's start, to its end): each
       asset's value at the end less its value at the start and the money put in between -- dividends, coupons and interest count as
@@ -5058,6 +5063,7 @@ function mpUpdateAuthUi(session) {
     mpInvestedAssetsKey = '';
     Plotly.purge('plot_capital');
     Plotly.purge('plot_capital_types');
+    Plotly.purge('plot_invested_earned');
     document.getElementById('mp_charts_grid').innerHTML = '';
     document.getElementById('mp_lookthrough_wrap').innerHTML = '';
     ['plot_mp_pie_us_stocks', 'plot_mp_pie_ru_stocks', 'plot_mp_pie_stocksbonds', 'plot_mp_pie_deposits']
@@ -5186,8 +5192,42 @@ async function mpRenderInvested() {
     const inv = invested.map(v => v - off);
     const earn = value.map((v, i) => v - inv[i]);
     Plotly.restyle(el, { y: [inv, value], customdata: [null, earn] }, [0, 1]);
+    el.mpInvestedLast = { inv, i0 };
+    drawEarned();
     mpInvestedAssetsSoon();
   };
+  // What was earned by each day of the period (value less invested, from 0 on
+  // its first day), and its % over the average capital (Modified Dietz).
+  const drawEarned = () => {
+    const { inv, i0 } = el.mpInvestedLast;
+    const range = el.layout?.xaxis?.range;
+    const toDay = range ? String(range[1]).slice(0, 10) : days[days.length - 1];
+    let i1 = days.length - 1;
+    while (i1 > i0 && days[i1] > toDay) i1--;
+    const gap = value.map((v, i) => v - inv[i]);
+    const x = days.slice(i0, i1 + 1);
+    const y = gap.slice(i0, i1 + 1).map(v => v - gap[i0]);
+    const span = Math.max(i1 - i0, 1);
+    let base = value[i0];
+    for (let i = i0 + 1; i <= i1; i++) base += (inv[i] - inv[i - 1]) * (i1 - i) / span;
+    const total = y[y.length - 1] ?? 0;
+    const pct = base > 0 ? total / base * 100 : null;
+    const fmt = v => (v < 0 ? '−' : '+') + (ccy === 'RUB' ? `${Math.round(Math.abs(v)).toLocaleString('en-US')} ₽` : `$${Math.round(Math.abs(v)).toLocaleString('en-US')}`);
+    const up = total >= 0;
+    Plotly.react('plot_invested_earned', [{
+      x, y, type: 'scatter', mode: 'lines', line: { color: up ? '#3fb950' : '#f85149', width: 2 },
+      fill: 'tozeroy', fillcolor: up ? 'rgba(63,185,80,0.12)' : 'rgba(248,81,73,0.12)',
+      hovertemplate: `${money}<extra>earned</extra>`,
+    }], Object.assign({}, LAYOUT_BASE, {
+      title: { text: `${x[0] ?? ''} → ${x[x.length - 1] ?? ''}: ${fmt(total)}${pct == null ? '' : ` (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`}`, font: { size: 13 } },
+      showlegend: false, hovermode: 'x unified', margin: { t: 40, r: 20, b: 50, l: 70 },
+      xaxis: Object.assign({}, LAYOUT_BASE.xaxis, { type: 'date', dtick: undefined, tickformat: undefined }),
+      yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { zeroline: true, zerolinecolor: '#6e7681', tickprefix: ccy === 'USD' ? '$' : '',
+        ticksuffix: ccy === 'RUB' ? ' ₽' : '' }),
+    }), CONFIG);
+  };
+  el.mpInvestedEarned = drawEarned;
+  el.mpInvestedLast = { inv: invested, i0: 0 };
   el.mpInvestedRebase = rebase;
   // the day counted from, marked by a vertical line
   const mark = d => Plotly.relayout(el, { shapes: d ? [{ type: 'line', xref: 'x', yref: 'paper', x0: d, x1: d, y0: 0, y1: 1,
@@ -5199,7 +5239,7 @@ async function mpRenderInvested() {
     rebase(fixedFrom);
     await Plotly.relayout(el, { 'xaxis.range': [fixedFrom, days[days.length - 1]] });
     await mark(fixedFrom);
-  }
+  } else drawEarned();
   mpInvestedAssetsSoon();
   if (!el.mpInvestedBound) {
     el.mpInvestedBound = true;
@@ -5215,6 +5255,7 @@ async function mpRenderInvested() {
     el.on('plotly_relayout', ev => {
       if (ev.shapes) return;
       mpInvestedAssetsSoon();   // a new end of the period
+      el.mpInvestedEarned();
       if (document.getElementById('invested_from').value) return;
       const a = ev['xaxis.range[0]'] ?? ev['xaxis.range']?.[0];
       if (a) el.mpInvestedRebase(String(a).slice(0, 10));
