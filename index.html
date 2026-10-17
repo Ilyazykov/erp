@@ -352,6 +352,7 @@
       <label>in <select id="invested_ccy"><option value="USD">USD $</option><option value="RUB">RUB ₽</option></select></label>
       <label title="Counted from this day: invested starts at the value that day and adds only what was put in after">count from <input type="date" id="invested_from"></label>
       <button class="btn" id="invested_from_clear" type="button">from the period start</button>
+      <button class="btn" id="invested_from_snowball" type="button" title="The day the Snowball portfolio starts (its first deal), to compare with its profit">as in Snowball</button>
     </div>
     <div id="invested_status" class="empty-note"></div>
     <div id="plot_capital_invested" style="height:560px"></div>
@@ -5329,6 +5330,13 @@ document.getElementById('invested_from').addEventListener('change', e => {
 document.getElementById('invested_from_clear').addEventListener('click', () => {
   document.getElementById('invested_from').value = '';
   try { localStorage.removeItem('mp_invested_from'); } catch { /* no storage */ }
+  if (mpIsSignedIn) mpRenderInvested();
+});
+// The Snowball portfolio's first deal: its "all time" profit counts from here.
+const MP_SNOWBALL_START = '2025-08-28';
+document.getElementById('invested_from_snowball').addEventListener('click', () => {
+  document.getElementById('invested_from').value = MP_SNOWBALL_START;
+  try { localStorage.setItem('mp_invested_from', MP_SNOWBALL_START); } catch { /* no storage */ }
   if (mpIsSignedIn) mpRenderInvested();
 });
 try { const v = localStorage.getItem('mp_invested_ccy'); if (v) document.getElementById('invested_ccy').value = v; } catch { /* no storage */ }
