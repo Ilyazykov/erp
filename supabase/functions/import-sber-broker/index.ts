@@ -43,9 +43,11 @@
 // 'broker_csv', account 'Sber', external_id '<agreement>:...') and
 // sber_broker_screenshots_cash.csv (bank_transactions
 // 'sber_csv:<agreement>-app', a running balance from 0 on top of the
-// report's) -- are dropped once a report of the agreement covers their day
-// (dated up to its period end); the app cash rows left get their running
-// balance again from 0. Reports are expected without gaps after the last one.
+// report's) -- give way to a report of the agreement, whatever its period:
+// a payout row inside the report's period goes (the report lists it; one
+// outside stays, the report doesn't); an app cash row up to the report's
+// period end goes (the report's closing balance already holds it), and the
+// app cash rows after it get their running balance again from 0.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { removeCoveredSnowball, removeSnowballInPeriod } from '../_shared/statement_priority.ts';
@@ -54,10 +56,10 @@ const ACCOUNT = 'Sber';
 const SOURCE = 'sber_broker_html';
 
 // deno-lint-ignore no-explicit-any
-async function removeAppRows(db: any, userId: string, agreement: string, periodEnd: string): Promise<number> {
+async function removeAppRows(db: any, userId: string, agreement: string, periodStart: string, periodEnd: string): Promise<number> {
   const { count: t, error: e1 } = await db.from('trades').delete({ count: 'exact' })
     .eq('user_id', userId).eq('external_source', 'broker_csv').eq('account', ACCOUNT)
-    .like('external_id', `${agreement}:%`).lte('trade_date', periodEnd);
+    .like('external_id', `${agreement}:%`).gte('trade_date', periodStart).lte('trade_date', periodEnd);
   if (e1) throw new Error(e1.message);
   const src = `sber_csv:${agreement}-app`;
   const { count: b, error: e2 } = await db.from('bank_transactions').delete({ count: 'exact' })
@@ -276,7 +278,7 @@ Deno.serve(async (req) => {
     let removedSnowball = 0;
     for (const [from, to] of periods) removedSnowball += await removeSnowballInPeriod(supabase, user.id, ACCOUNT, tickers, from, to);
     removedSnowball += await removeCoveredSnowball(supabase, user.id, parsed.trades);
-    const removedApp = await removeAppRows(supabase, user.id, parsed.agreement, parsed.periodEnd);
+    const removedApp = await removeAppRows(supabase, user.id, parsed.agreement, parsed.periodStart, parsed.periodEnd);
     return json({
       agreement: parsed.agreement, period_start: parsed.periodStart,
       period_end: parsed.periodEnd,

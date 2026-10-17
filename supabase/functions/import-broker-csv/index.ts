@@ -25,6 +25,7 @@
 // (_shared/statement_priority.ts), and import-trades-csv leaves them out of
 // later uploads. Upserted by content -- safe to re-upload.
 
+import { sberReportPeriods } from '../_shared/app_rows.ts';
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { removeCoveredSnowball } from '../_shared/statement_priority.ts';
 
@@ -83,6 +84,16 @@ Deno.serve(async (req) => {
       return json({ error: 'Unrecognized CSV header' }, 400);
     }
 
+    // Sber payouts taken from the app give way to a broker report covering
+    // their day (_shared/app_rows.ts)
+    const sberPeriods = new Map<string, [string, string][]>();
+    for (const line of lines.slice(1)) {
+      const c = parseCsvLine(line);
+      const agr = (c[idx.account_number] ?? '').trim();
+      if ((c[idx.broker] ?? '').trim() === 'Sber' && agr && !sberPeriods.has(agr)) sberPeriods.set(agr, await sberReportPeriods(supabase, user.id, agr));
+    }
+    let coveredByReport = 0;
+
     const rows = [];
     const occ = new Map<string, number>();
     const holdings: Record<string, number> = {};
@@ -96,6 +107,7 @@ Deno.serve(async (req) => {
       const quantity = num(get('quantity'));
       const price = num(get('price'));
       if (!SIDES.has(side) || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !ticker || quantity === null || price === null) { skipped++; continue; }
+      if (get('broker') === 'Sber' && (sberPeriods.get(get('account_number')) ?? []).some(([f, t]) => date >= f && date <= t)) { coveredByReport++; continue; }
       const recordDate = get('record_date');
       const sig = `${get('account_number')}:${date}:${side}:${ticker}:${quantity}:${price}`;
       const n = occ.get(sig) ?? 0;
@@ -109,6 +121,7 @@ Deno.serve(async (req) => {
         external_source: SOURCE, external_id: n ? `${sig}:dup${n}` : sig,
       });
     }
+    if (!rows.length && coveredByReport) return json({ imported: 0, skipped, trades: 0, payouts: 0, covered_by_report: coveredByReport, removed_snowball_duplicates: 0, holdings: {} });
     if (!rows.length) return json({ error: 'No importable rows found', skipped }, 400);
 
     for (let i = 0; i < rows.length; i += 500) {
@@ -121,7 +134,7 @@ Deno.serve(async (req) => {
       imported: rows.length, skipped,
       trades: rows.filter(r => r.side === 'buy' || r.side === 'sell').length,
       payouts: rows.filter(r => r.side !== 'buy' && r.side !== 'sell').length,
-      removed_snowball_duplicates: removedSnowball,
+      removed_snowball_duplicates: removedSnowball, covered_by_report: coveredByReport,
       holdings: Object.fromEntries(Object.entries(holdings).map(([t, q]) => [t, round(q)]).filter(([, q]) => q)),
     });
   } catch (err) {

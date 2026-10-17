@@ -82,6 +82,7 @@
 // Every other row keeps its CSV `product` in bank_transactions.product, so
 // the cash view can put a credit card's balance in its own 'credit' column.
 
+import { sberReportPeriods } from '../_shared/app_rows.ts';
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 interface BankRow {
@@ -237,10 +238,30 @@ Deno.serve(async (req) => {
     }
 
     const csvText = await req.text();
-    const csvRows = parseRows(csvText);
+    let csvRows = parseRows(csvText);
     if (!csvRows.length) {
       return new Response(JSON.stringify({ error: 'No parseable rows found (unrecognized CSV header?)' }),
         { status: 400, headers: corsHeaders });
+    }
+
+    // Sber broker money taken from the app ('<agreement>-app') gives way to the
+    // broker reports: the rows up to the latest report's end are left out (its
+    // closing balance holds them), the rest counted again from 0
+    // (_shared/app_rows.ts).
+    let coveredByReport = 0;
+    for (const acc of new Set(csvRows.filter(r => r.bank === 'Sber' && r.accountNumber.endsWith('-app')).map(r => r.accountNumber))) {
+      const ends = (await sberReportPeriods(supabase, user.id, acc.slice(0, -4))).map(([, t]) => t).sort();
+      const lastEnd = ends[ends.length - 1];
+      if (!lastEnd) continue;
+      const before = csvRows.length;
+      csvRows = csvRows.filter(r => r.accountNumber !== acc || r.date > lastEnd);
+      coveredByReport += before - csvRows.length;
+      const bal: Record<string, number> = {};
+      for (const r of csvRows) {
+        if (r.accountNumber !== acc) continue;
+        bal[r.currency] = Math.round(((bal[r.currency] ?? 0) + r.amount) * 100) / 100;
+        r.balance = bal[r.currency];
+      }
     }
 
     // Untimed rows (Yandex Save) -> 00:00:SS by in-day order.
@@ -347,6 +368,7 @@ Deno.serve(async (req) => {
       imported,
       imported_deposit: importedDeposit,
       removed_snowball_duplicates: removedSnowball,
+      covered_by_report: coveredByReport,
       total_rows: csvRows.length,
     }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (err) {

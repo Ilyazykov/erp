@@ -2214,7 +2214,8 @@ async function mpImportOneFile(file, statusEl, session) {
     } else if (kind === 'broker_csv') {
       const h = Object.entries(result.holdings || {}).map(([c, q]) => `${c} ${q}`).join(', ') || 'nothing';
       statusEl.textContent = `Detected: ${label}. Imported ${result.trades} trades and ${result.payouts} payouts`
-        + `${result.removed_snowball_duplicates ? ` (replacing ${result.removed_snowball_duplicates} Snowball rows)` : ''}. `
+        + `${result.removed_snowball_duplicates ? ` (replacing ${result.removed_snowball_duplicates} Snowball rows)` : ''}`
+        + `${result.covered_by_report ? `; ${result.covered_by_report} left out, a broker report already has them` : ''}. `
         + `Holdings from these operations: ${h}.`;
       mpRenderPortfolioPies();
       mpRenderBrokerCurrency();
@@ -2261,7 +2262,8 @@ async function mpImportOneFile(file, statusEl, session) {
     } else if (kind === 'bank_csv') {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} transactions and `
         + `${result.imported_deposit} savings-account / deposit trades (${result.total_rows} parsed)`
-        + `${result.removed_snowball_duplicates ? `, replacing ${result.removed_snowball_duplicates} Snowball rows` : ''}.`;
+        + `${result.removed_snowball_duplicates ? `, replacing ${result.removed_snowball_duplicates} Snowball rows` : ''}`
+        + `${result.covered_by_report ? `; ${result.covered_by_report} left out, a broker report already has them` : ''}.`;
       if (result.imported_deposit) {
         mpRenderPortfolioPies();
         mpRenderBondByType();
