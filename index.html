@@ -1850,45 +1850,18 @@ const MP_ACCOUNT_SOURCE = {
 async function mpRenderLatestSources() {
   const wrap = document.getElementById('mp_latest_sources');
   try {
-    const { data: accs, error: e1 } = await sb.from('bank_latest_balances').select('account, external_source');
+    // the dates come worked out by the database (latest_data_per_account, 057)
+    const { data: lat, error: e1 } = await sb.rpc('latest_data_per_account');
     if (e1) throw e1;
     const acc = new Map();
-    const note = (account, day, kind) => {
-      const a = acc.get(account) || { day: '', bankDay: '', broker: false };
-      if (day > a.day) a.day = day;
-      if (kind === 'bank' && day > a.bankDay) a.bankDay = day;
-      if (kind === 'trades') a.broker = true;
-      acc.set(account, a);
-    };
-    const srcs = [...new Set((accs || []).map(r => r.external_source))];
-    await Promise.all(srcs.map(async src => {
-      const { data, error } = await sb.from('bank_transactions').select('account, tx_date')
-        .eq('external_source', src).is('synthetic_kind', null).order('tx_date', { ascending: false }).limit(1);
-      if (error) throw error;
-      if (data && data.length) note(data[0].account, data[0].tx_date.slice(0, 10), 'bank');
-    }));
-    // broker trades and payouts from the broker's own reports (Snowball is no statement)
-    for (let from = 0; ; from += 1000) {
-      const { data, error } = await sb.from('trades').select('account, external_source, trade_date')
-        .neq('external_source', 'snowball_csv').not('account', 'is', null)
-        .order('trade_date', { ascending: false }).range(from, from + 999);
-      if (error) throw error;
-      for (const r of data) note(r.account, r.trade_date, 'trades');
-      if (data.length < 1000) break;
-    }
-    // crypto: exchange exports (Bybit, Crypto.com, Binance, Telegram Wallet) by
-    // their newest movement; on-chain wallets sync by themselves -- dated by
-    // the last sync, no reminder
-    const { data: wallets } = await sb.from('crypto_wallets').select('id, chain, account, last_synced_at');
-    for (const w of wallets || []) {
-      if (MP_EXCHANGE_CHAINS.has(w.chain)) {
-        const { data: t } = await sb.from('wallet_transactions').select('tx_time').eq('wallet_id', w.id)
-          .order('tx_time', { ascending: false }).limit(1);
-        if (t && t.length) note(w.account, t[0].tx_time.slice(0, 10), 'trades');
-      } else if (w.last_synced_at) {
-        note(w.account, w.last_synced_at.slice(0, 10), 'bank');
-        acc.get(w.account).auto = true;
-      }
+    for (const r of lat || []) {
+      const days = [r.bank_day, r.trade_day, r.exchange_day, r.synced_day].filter(Boolean).sort();
+      if (!days.length) continue;
+      acc.set(r.account, {
+        day: days[days.length - 1], bankDay: r.bank_day || '', bankRows90: r.bank_rows_90d || 0,
+        // an on-chain wallet syncs by itself -- dated by the last sync, no reminder
+        auto: !r.bank_day && !r.trade_day && !r.exchange_day && !!r.synced_day,
+      });
     }
     // the latest upload of a statement for the account counts too
     // -- by the end of the period it covers where that's known (an old
@@ -1921,20 +1894,12 @@ async function mpRenderLatestSources() {
     for (const a of acc.values()) a.record = a.day, a.day = a.uploaded && a.uploaded > a.day ? a.uploaded : a.day;
     if (!acc.size) { wrap.innerHTML = '<div class="empty-note">Nothing imported yet.</div>'; return; }
     const dayMs = 86400000;
-    const iso = t => new Date(t).toISOString().slice(0, 10);
-    await Promise.all([...acc].map(async ([name, a]) => {
-      if (a.auto) { a.every = 'auto'; return; }
+    for (const [name, a] of acc) {
       const fixed = MP_ACCOUNT_SCHEDULE[name];
-      if (fixed !== undefined) { a.every = fixed; return; }
-      a.every = 30;   // a broker, or a bank in little use
-      if (!a.bankDay) return;
-      const to = Date.parse(a.bankDay + 'T00:00:00Z');
-      const { count, error } = await sb.from('bank_transactions').select('id', { count: 'exact', head: true })
-        .eq('account', name).is('synthetic_kind', null)
-        .gte('tx_date', iso(to - 90 * dayMs)).lte('tx_date', a.bankDay + 'T23:59:59Z');
-      if (error) throw error;
-      if ((count || 0) >= 12) a.every = 7;
-    }));
+      a.every = a.auto ? 'auto' : fixed !== undefined ? fixed
+        : a.bankDay && a.bankRows90 >= 12 ? 7   // a bank in active use
+        : 30;                                     // a broker, or a bank in little use
+    }
     const today = Date.parse(new Date().toISOString().slice(0, 10) + 'T00:00:00Z');
     const rank = a => ({ rarely: 1, auto: 2, closed: 3 })[a.every] ?? 0;
     const ago = a => Math.round((today - Date.parse(a.day + 'T00:00:00Z')) / dayMs);
@@ -2554,22 +2519,7 @@ async function mpEverHeld(field) {
       rows.push(...data);
       if (data.length < 1000) break;
     }
-    // coins that ever moved in a wallet / on an exchange count too: the history
-    // leaves out a coin with a movement of unknown size (Telegram Wallet's USDT
-    // spent on purchases), but it was held
-    const { data: wallets } = await sb.from('crypto_wallets').select('id, account');
-    const walletAccount = new Map((wallets || []).map(w => [w.id, w.account]));
-    const seen = new Set();
-    for (let from = 0; ; from += 1000) {
-      const { data, error } = await sb.from('wallet_transactions').select('wallet_id, symbol').not('symbol', 'is', null)
-        .order('wallet_id').order('tx_hash').order('kind').order('seq').range(from, from + 999);
-      if (error || !data) break;
-      for (const t of data) {
-        const key = `${walletAccount.get(t.wallet_id)} ${t.symbol}`;
-        if (walletAccount.has(t.wallet_id) && !seen.has(key)) { seen.add(key); rows.push({ account: walletAccount.get(t.wallet_id), ticker: t.symbol, currency: null, instrument_type: 'crypto' }); }
-      }
-      if (data.length < 1000) break;
-    }
+    // (wallet / exchange coins that ever moved are in the cache too -- 057)
     const tickers = [...new Set(rows.map(r => r.ticker).filter(t => t && !/^(CASH|REAL_ESTATE):/.test(t)))];
     const info = new Map();
     for (let i = 0; i < tickers.length; i += 200) {
