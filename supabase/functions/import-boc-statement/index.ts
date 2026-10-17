@@ -145,8 +145,11 @@ const CATEGORY_RULES: [RegExp, string][] = [
 // 2025-11-27 2000.00 EUR ..." booked 01.12.2025). A top-up of Revolut is on
 // Revolut that same day, so capital history counts it from then
 // (bank_transactions.authorized_on, migration 036). Only an earlier day.
+// A cash machine names it before the card ("ATM Cash Withdrawal 2026-10-03
+// Card 4***7924 ..." booked 05.10.2026) -- the cash was in hand that day.
 function madeOn(description: string, booked: string): string | null {
-  const m = description.match(/\bCard \S+ (\d{4}-\d{2}-\d{2})\b/);
+  const m = description.match(/\bCard \S+ (\d{4}-\d{2}-\d{2})\b/)
+    ?? description.match(/\bATM Cash (?:Withdrawal|Deposit) (\d{4}-\d{2}-\d{2})\b/);
   return m && m[1] < booked ? m[1] : null;
 }
 
