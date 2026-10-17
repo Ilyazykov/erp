@@ -5328,7 +5328,7 @@ async function mpBondNames(tickers) {
 function mpAssetXirr(r, from, to) {
   // dollars on the exchanges are money passing through (in for days, then into
   // a coin): a rouble's move over those days, made yearly, says nothing
-  if (r.asset === 'USD') return null;
+  if (r.asset === 'USD' || r.region === 'crypto' || r.asset === MP_KIND_REGION_LABELS['liquid|crypto']) return null;
   const cash = (r.cash || []).map(([d, v]) => [String(d).slice(0, 10), Number(v)]);
   const v0 = Number(r.value_start), v1 = Number(r.value_end);
   const flows = [];
@@ -5357,10 +5357,24 @@ function mpAssetXirr(r, from, to) {
 // crypto): money summed, the money flows merged by day, and the % worked out
 // the way investment_by_asset does it -- over the capital at work averaged
 // over the days something was held, but never less than what's in at the end.
+// Groups: shares and liquid assets Russian / foreign, bonds in roubles /
+// yuan, an exchange's dollars as liquid crypto; deposits, gold, crypto whole.
+const MP_KIND_REGION_LABELS = {
+  'stock|ru': 'stock 📈 Russian', 'stock|foreign': 'stock 📈 foreign',
+  'bond|ru': 'bond 🏛️ Russian', 'bond|cny': 'bond 🏛️ Chinese (yuan)',
+  'liquid|ru': 'liquid assets 💧 Russian', 'liquid|foreign': 'liquid assets 💧 foreign', 'liquid|crypto': 'liquid assets 💧 crypto (stablecoins)',
+};
+function mpKindKey(r) {
+  const k = r.kind || 'stock';
+  if (k === 'stock') return `stock|${r.region === 'ru' ? 'ru' : 'foreign'}`;
+  if (k === 'bond') return `bond|${r.region === 'cny' ? 'cny' : 'ru'}`;
+  if (k === 'liquid') return `liquid|${r.region === 'crypto' ? 'crypto' : r.region === 'foreign' ? 'foreign' : 'ru'}`;
+  return k;
+}
 function mpGroupAssetsByKind(rows, from, to) {
   const groups = new Map();
   for (const r of rows) {
-    const k = r.kind || 'stock';
+    const k = mpKindKey(r);
     const g = groups.get(k) || { kind: k, assets: [], value_start: 0, value_end: 0, put_in: 0, taken_out: 0, income: 0, earned: 0, flows: new Map() };
     g.assets.push(r.asset);
     for (const c of ['value_start', 'value_end', 'put_in', 'taken_out', 'income', 'earned']) g[c] += Number(r[c]) || 0;
@@ -5385,9 +5399,9 @@ function mpGroupAssetsByKind(rows, from, to) {
     const finalIn = g.value_start + cash.reduce((t, [, v]) => t + v, 0);
     const base = Math.max(len > 0 ? w / len : putIn, finalIn);
     return {
-      asset: MP_ASSET_CLASS_LABELS[g.kind] || g.kind, accounts: `${g.assets.length} assets`,
+      asset: MP_KIND_REGION_LABELS[g.kind] || MP_ASSET_CLASS_LABELS[g.kind] || g.kind, accounts: `${g.assets.length} assets`,
       value_start: g.value_start, value_end: g.value_end, put_in: g.put_in, taken_out: g.taken_out, income: g.income,
-      earned: g.earned, pct: base > 0 ? g.earned / base * 100 : null, cash, kind: g.kind,
+      earned: g.earned, pct: base > 0 ? g.earned / base * 100 : null, cash, kind: g.kind.split('|')[0],
     };
   });
 }
