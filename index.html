@@ -5445,10 +5445,11 @@ async function mpRenderInvestedAssets() {
     customdata: rows.map(r => [r.accounts, signed(r.money, fmtMoney), r.pctv == null ? '—' : pctText(r.pctv),
       fmtMoney(conv(from, Number(r.value_start))), fmtMoney(conv(to, Number(r.value_end))),
       fmtMoney(conv(to, Number(r.put_in))), fmtMoney(conv(to, Number(r.taken_out))), fmtMoney(conv(to, Number(r.income))),
-      names[r.asset] ? ` · ${r.asset}` : '', r.xirr == null ? '—' : `${pctText(r.xirr)} a year`]),
+      names[r.asset] ? ` · ${r.asset}` : '', r.xirr == null ? '—' : `${pctText(r.xirr)} a year`,
+      r.pctv ? fmtMoney(r.money / (r.pctv / 100)) : '—']),
     hovertemplate: '<b>%{y}</b>%{customdata[8]} (%{customdata[0]})<br>earned %{customdata[1]} · %{customdata[2]} · XIRR %{customdata[9]}<br>'
       + 'value %{customdata[3]} → %{customdata[4]}<br>put in %{customdata[5]}, taken out %{customdata[6]}<br>'
-      + 'of which dividends / coupons / interest %{customdata[7]}<extra></extra>',
+      + 'of which dividends / coupons / interest %{customdata[7]}<br>% is over the capital at work on average: %{customdata[10]}<extra></extra>',
   };
   // the height follows the rows: a few groups get a short chart, not fat bars
   const height = Math.max(160, rows.length * 24 + 90);
