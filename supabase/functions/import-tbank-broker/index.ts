@@ -278,7 +278,7 @@ function parse(bytes: Uint8Array, splits: Map<string, Split[]>) {
   const cashCheck = Object.fromEntries(Object.entries(cashSummary).map(([c, s]) =>
     [c, { computed: balance[c] ?? s.open, reported: s.close, unlisted: snapshots.find(x => x.currency === c)?.amount ?? 0 }]));
   const holdings = Object.fromEntries([...closing].filter(([, q]) => q).map(([isin, q]) => [heldTicker(isin), q]));
-  return { blocked: blockedAgreement, agreement: agr, periodEnd, trades, adjustments, staleAdjustIds, bank, cashCheck, holdings };
+  return { blocked: blockedAgreement, agreement: agr, periodStart, periodEnd, trades, adjustments, staleAdjustIds, bank, cashCheck, holdings };
 }
 
 Deno.serve(async (req) => {
@@ -330,7 +330,7 @@ Deno.serve(async (req) => {
     const removedSnowball = await removeCoveredSnowball(supabase, user.id, parsed.trades);
 
     return json({
-      agreement: parsed.agreement,
+      agreement: parsed.agreement, period_start: parsed.periodStart, period_end: parsed.periodEnd,
       deals: parsed.trades.filter(t => t.side === 'buy' || t.side === 'sell').length,
       payouts: parsed.trades.filter(t => !['buy', 'sell'].includes(t.side)).length,
       adjustments: parsed.adjustments.length,

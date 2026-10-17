@@ -286,7 +286,7 @@
     <div class="section-title">Latest data per account</div>
     <p class="note">The date of the newest real record of each bank / broker account (bank rows and broker
       trades or payouts from any of its sources; synthetic rows -- extrapolated, data gaps, snapshots -- left out),
-      to see when a fresh statement is due: a broker monthly, a bank in active use weekly, one in little use monthly;
+      to see when a fresh statement is due -- dated by the later of the newest record and the end of the latest statement uploaded for it (an account with no movements stays fresh once its statement is in); holes of more than 3 days between the periods of the uploaded statements listed: a broker monthly, a bank in active use weekly, one in little use monthly;
       cash and Wise without a reminder; closed accounts greyed out. Overdue in orange.</p>
     <div id="mp_latest_sources"><div class="empty-note">Loading…</div></div>
   </div>
@@ -1844,6 +1844,35 @@ async function mpRenderLatestSources() {
       for (const r of data) note(r.account, r.trade_date, 'trades');
       if (data.length < 1000) break;
     }
+    // the latest upload of a statement for the account counts too
+    // -- by the end of the period it covers where that's known (an old
+    // statement uploaded today doesn't make the account fresh); the periods
+    // merged, the holes of more than 3 days between them listed
+    const { data: ups } = await sb.from('statement_uploads').select('account, uploaded_at, period_from, period_to')
+      .order('uploaded_at', { ascending: false }).limit(5000);
+    const spans = new Map();
+    for (const u of ups || []) {
+      const a = acc.get(u.account);
+      if (!a) continue;
+      const day = u.period_to || u.uploaded_at.slice(0, 10);
+      if (!a.uploaded || day > a.uploaded) a.uploaded = day;
+      if (u.period_from && u.period_to) {
+        if (!spans.has(u.account)) spans.set(u.account, []);
+        spans.get(u.account).push([u.period_from, u.period_to]);
+      }
+    }
+    const plus = (d, n) => new Date(Date.parse(d + 'T00:00:00Z') + n * 86400000).toISOString().slice(0, 10);
+    for (const [name, ss] of spans) {
+      ss.sort((p, q) => p[0].localeCompare(q[0]));
+      const gaps = [];
+      let end = ss[0][1];
+      for (const [f, t] of ss.slice(1)) {
+        if (f > plus(end, 3)) gaps.push(`${plus(end, 1)} – ${plus(f, -1)}`);
+        if (t > end) end = t;
+      }
+      acc.get(name).gaps = gaps;
+    }
+    for (const a of acc.values()) a.record = a.day, a.day = a.uploaded && a.uploaded > a.day ? a.uploaded : a.day;
     if (!acc.size) { wrap.innerHTML = '<div class="empty-note">Nothing imported yet.</div>'; return; }
     const dayMs = 86400000;
     const iso = t => new Date(t).toISOString().slice(0, 10);
@@ -1867,16 +1896,77 @@ async function mpRenderLatestSources() {
       || (typeof b.every === 'number' ? ago(b) - b.every : 0) - (typeof a.every === 'number' ? ago(a) - a.every : 0) || an.localeCompare(bn));
     const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     const label = e => (e === 7 ? 'weekly' : e === 30 ? 'monthly' : e);
-    wrap.innerHTML = `<table class="data-table"><thead><tr><th>Account</th><th>Update</th><th>Latest</th><th>Days ago</th></tr></thead><tbody>${
+    wrap.innerHTML = `<table class="data-table"><thead><tr><th>Account</th><th>Update</th><th>Latest record</th><th>Statements to</th><th>Days ago</th><th>Holes between statements</th></tr></thead><tbody>${
       rows.map(([name, a]) => {
         const d = ago(a);
         const style = a.every === 'closed' ? ' style="color:#6a7381"' : typeof a.every === 'number' && d > a.every ? ' style="color:#ff9500"' : '';
-        return `<tr${style}><td>${esc(name)}</td><td>${label(a.every)}</td><td>${a.day}</td><td>${d}</td></tr>`;
+        return `<tr${style}><td>${esc(name)}</td><td>${label(a.every)}</td><td>${a.record}</td><td>${a.uploaded || '—'}</td><td>${d}</td><td${a.gaps?.length ? ' style="color:#ff9500"' : ''}>${(a.gaps || []).join('<br>') || ''}</td></tr>`;
       }).join('')}</tbody></table>`;
   } catch (error) {
     wrap.innerHTML = '';
     const d = document.createElement('div'); d.className = 'empty-note'; d.textContent = error.message; wrap.appendChild(d);
   }
+}
+
+// Which account a successful upload refreshed -- kept in statement_uploads
+// for the "Latest data per account" table (an account with no movements is
+// still up to date once its statement is in). Snowball is no statement.
+const MP_UPLOAD_ACCOUNT = {
+  revolut_account: 'Revolut', revolut_fund: 'Revolut', revolut_deposit: 'Revolut', revolut_crypto: 'Revolut',
+  revolut_invest: 'Revolut', boc_account: 'Bank of Cyprus', ziraat_xlsx: 'Ziraat Bank', raiffeisen_account: 'Raiffeisen',
+  bybit_log: 'Bybit', cryptocom: 'Crypto.com', telegram_wallet: 'Telegram', binance: 'Binance', sber_broker: 'Sber',
+  wise: 'Wise', ibkr: 'IBKR', freedom24_xlsx: 'Freedom24', freedom24_json: 'Freedom24', tbank_broker_xlsx: 'T-Bank',
+  atomyze_xlsx: 'T-Bank',
+};
+// The period a statement covers: what the importer reports (Sber, T-Bank
+// broker reports), else two dates in the file name (Revolut
+// account-statement_2026-09-01_2026-10-06, Freedom24 <id>_2026-04-28 ..._2026-09-26
+// ..._all.json, T-Bank broker-report-2026-09-01-2026-10-01, Sber
+// 422XX2Y_01092026_30092026 or one day 422XX2Y_24092026), else the first and
+// last date of the file's rows (yyyy-mm-dd, dd/mm/yyyy, dd.mm.yyyy).
+function mpUploadPeriod(fileName, text, result) {
+  const ok = d => /^\d{4}-\d{2}-\d{2}$/.test(d || '');
+  if (ok(result?.period_start) && ok(result?.period_end)) return [result.period_start, result.period_end];
+  const iso = [...fileName.matchAll(/(\d{4}-\d{2}-\d{2})/g)].map(m => m[1]);
+  if (iso.length >= 2) return [iso[0], iso[iso.length - 1]];
+  const dmy = [...fileName.matchAll(/(?:^|[_ -])(\d{2})(\d{2})(\d{4})(?=[_. -]|$)/g)].map(m => `${m[3]}-${m[2]}-${m[1]}`);
+  if (dmy.length) return [dmy[0], dmy[dmy.length - 1]];
+  if (!text) return null;
+  const days = [];
+  for (const m of text.matchAll(/\b(\d{4})-(\d{2})-(\d{2})\b|\b(\d{2})[/.](\d{2})[/.](\d{4})\b/g)) {
+    const d = m[1] ? `${m[1]}-${m[2]}-${m[3]}` : `${m[6]}-${m[5]}-${m[4]}`;
+    if (d >= '2000-01-01' && d <= '2099-12-31') days.push(d);
+  }
+  if (!days.length) return null;
+  days.sort();
+  return [days[0], days[days.length - 1]];
+}
+async function mpLogUpload(kind, fileName, csvText, result) {
+  let accounts = MP_UPLOAD_ACCOUNT[kind] ? [MP_UPLOAD_ACCOUNT[kind]] : [];
+  const period = mpUploadPeriod(fileName, csvText, result);
+  const rows = [];
+  // this project's own CSVs name the account in their first column (bank /
+  // broker) and can hold several -- each gets its own rows' period
+  if ((kind === 'bank_csv' || kind === 'broker_csv') && csvText) {
+    const lines = csvText.split(/\r?\n/).slice(1).filter(Boolean);
+    const by = new Map();
+    for (const l of lines) {
+      const a = l.split(',')[0].trim();
+      if (!a) continue;
+      if (!by.has(a)) by.set(a, []);
+      by.get(a).push(l);
+    }
+    for (const [a, ls] of by) {
+      const p = mpUploadPeriod('', ls.join('\n'), null);
+      rows.push({ account: a, kind, file_name: fileName, period_from: p?.[0] ?? null, period_to: p?.[1] ?? null });
+    }
+  } else {
+    for (const a of accounts) rows.push({ account: a, kind, file_name: fileName, period_from: period?.[0] ?? null, period_to: period?.[1] ?? null });
+  }
+  if (!rows.length) return;
+  try {
+    await sb.from('statement_uploads').insert(rows);
+  } catch { /* the log is a convenience -- an import stays done without it */ }
 }
 
 async function mpImportOneFile(file, statusEl, session) {
@@ -1965,6 +2055,7 @@ async function mpImportOneFile(file, statusEl, session) {
       return;
     }
     mpImportedSinceRefresh = true;
+    mpLogUpload(kind, file.name, csvText, result);
 
     if (kind === 'snowball') {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} rows, removed `
