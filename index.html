@@ -342,13 +342,17 @@
   <div id="invested_signed_in" style="display:none">
     <div class="section-title">Invested vs earned</div>
     <p class="note">The investments only -- shares, bonds, funds, deposits, savings accounts, gold, ЦФА and crypto (money on cards,
-      cash and real estate stay out). <b>Invested</b>: what was put in -- buys less sells and redemptions, top-ups of deposits and
+      cash and real estate stay out). <b>Invested</b>: your own money put in -- buys less sells and redemptions, top-ups of deposits and
       savings less withdrawals, money and coins brought onto the crypto exchanges / wallets less taken out -- each at that day's
-      rate (interest and dividends that stayed invested count as put in). <b>Value</b>: what it was worth that day. <b>Income</b>:
-      dividends, coupons, interest and rewards. Earned (in the hover) = value − invested + income: price growth and exchange
-      rates plus all the income. With a period chosen, invested starts from the value on its first day and adds what was put in during
-      it, so the gap is what that period earned. Worked out in the database with every capital rebuild.</p>
-    <div class="form-row"><label>in <select id="invested_ccy"><option value="USD">USD $</option><option value="RUB">RUB ₽</option></select></label></div>
+      rate; dividends, coupons and interest that were reinvested are not your money and stay out. <b>Value</b>: what it was worth
+      that day. The gap is what was earned: price growth, exchange rates, dividends, coupons, interest. With a period chosen -- or
+      a day set in "count from" -- invested starts from the value on that first day and adds only what was put in after it, so
+      the gap is what that period earned. Worked out in the database with every capital rebuild.</p>
+    <div class="form-row" style="gap:16px;flex-wrap:wrap">
+      <label>in <select id="invested_ccy"><option value="USD">USD $</option><option value="RUB">RUB ₽</option></select></label>
+      <label title="Counted from this day: invested starts at the value that day and adds only what was put in after">count from <input type="date" id="invested_from"></label>
+      <button class="btn" id="invested_from_clear" type="button">from the period start</button>
+    </div>
     <div id="invested_status" class="empty-note"></div>
     <div id="plot_capital_invested" style="height:560px"></div>
   </div>
@@ -5139,19 +5143,18 @@ async function mpRenderInvested() {
   if (!mpInvestedRows.length) { status.textContent = 'No history yet -- built with the next capital rebuild.'; return; }
   const days = mpInvestedRows.map(r => r.day);
   const value = mpInvestedRows.map(r => conv(r.day, r.value_usd));
-  const invested = mpInvestedRows.map(r => conv(r.day, r.invested_usd));
-  const income = mpInvestedRows.map(r => conv(r.day, r.income_usd));
+  // own money put in: what's invested less the income that stayed invested (a
+  // reinvested dividend, capitalised interest) -- the gap to the value is then
+  // all that was earned: price growth, exchange rates, dividends, coupons, interest
+  const invested = mpInvestedRows.map(r => conv(r.day, Number(r.invested_usd) - Number(r.income_usd)));
   const money = ccy === 'RUB' ? '%{y:,.0f} ₽' : '$%{y:,.0f}';
-  // earned = value - invested + income: what stayed invested is in both
-  const earned = value.map((v, i) => v - invested[i] + income[i]);
+  const earned = value.map((v, i) => v - invested[i]);
   const traces = [
-    { x: days, y: invested, name: 'Invested', type: 'scatter', mode: 'lines', line: { color: '#a371f7', width: 2, dash: 'dash' },
+    { x: days, y: invested, name: 'Invested (own money)', type: 'scatter', mode: 'lines', line: { color: '#a371f7', width: 2, dash: 'dash' },
       hovertemplate: `${money}<extra>Invested</extra>` },
     { x: days, y: value, name: 'Value', type: 'scatter', mode: 'lines', line: { color: '#58a6ff', width: 2 },
       fill: 'tonexty', fillcolor: 'rgba(88,166,255,0.12)', customdata: earned,
       hovertemplate: `${money}<br>earned ${ccy === 'RUB' ? '%{customdata:,.0f} ₽' : '$%{customdata:,.0f}'}<extra>Value</extra>` },
-    { x: days, y: income, name: 'Income (dividends, coupons, interest)', type: 'scatter', mode: 'lines',
-      line: { color: '#3fb950', width: 1.5 }, hovertemplate: `${money}<extra>Income</extra>` },
   ];
   await Plotly.react(el, traces, mpCapitalLayout(ccy, { hovermode: 'x unified' }), CONFIG);
   // A chosen period starts "invested" where the value stood on its first day,
@@ -5162,20 +5165,36 @@ async function mpRenderInvested() {
     if (i0 < 0) i0 = 0;
     const off = from ? invested[i0] - value[i0] : 0;
     const inv = invested.map(v => v - off);
-    const inc = income.map(v => v - (from ? income[i0] : 0));
-    const earn = value.map((v, i) => v - inv[i] + inc[i]);
-    Plotly.restyle(el, { y: [inv, value, inc], customdata: [null, earn, null] }, [0, 1, 2]);
+    const earn = value.map((v, i) => v - inv[i]);
+    Plotly.restyle(el, { y: [inv, value], customdata: [null, earn] }, [0, 1]);
   };
   el.mpInvestedRebase = rebase;
+  // a day chosen to count from wins over the zoom
+  const fixedFrom = document.getElementById('invested_from').value;
+  if (fixedFrom) {
+    rebase(fixedFrom);
+    await Plotly.relayout(el, { 'xaxis.range': [fixedFrom, days[days.length - 1]] });
+  }
   if (!el.mpInvestedBound) {
     el.mpInvestedBound = true;
     el.on('plotly_relayout', ev => {
+      if (document.getElementById('invested_from').value) return;
       const a = ev['xaxis.range[0]'] ?? ev['xaxis.range']?.[0];
       if (a) el.mpInvestedRebase(String(a).slice(0, 10));
       else if (ev['xaxis.autorange']) el.mpInvestedRebase(null);
     });
   }
 }
+try { const v = localStorage.getItem('mp_invested_from'); if (v) document.getElementById('invested_from').value = v; } catch { /* no storage */ }
+document.getElementById('invested_from').addEventListener('change', e => {
+  try { localStorage.setItem('mp_invested_from', e.target.value); } catch { /* no storage */ }
+  if (mpIsSignedIn) mpRenderInvested();
+});
+document.getElementById('invested_from_clear').addEventListener('click', () => {
+  document.getElementById('invested_from').value = '';
+  try { localStorage.removeItem('mp_invested_from'); } catch { /* no storage */ }
+  if (mpIsSignedIn) mpRenderInvested();
+});
 try { const v = localStorage.getItem('mp_invested_ccy'); if (v) document.getElementById('invested_ccy').value = v; } catch { /* no storage */ }
 document.getElementById('invested_ccy').addEventListener('change', e => {
   try { localStorage.setItem('mp_invested_ccy', e.target.value); } catch { /* no storage */ }
