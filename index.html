@@ -5376,7 +5376,7 @@ async function mpRenderInvestedAssets() {
   const trace = {
     type: 'bar', orientation: 'h', y: rows.map(label), x,
     marker: { color: x.map(v => (v >= 0 ? '#3fb950' : '#f85149')) },
-    text: rows.map(r => (mode === 'money' ? signed(r.money, fmtMoney) : mode === 'xirr' ? `${pctText(r.xirr)} a year` : pctText(r.pctv))),
+    text: rows.map(r => (mode === 'money' ? signed(r.money, fmtMoney) : mode === 'xirr' ? pctText(r.xirr) : pctText(r.pctv))),
     textposition: 'outside', cliponaxis: false,
     customdata: rows.map(r => [r.accounts, signed(r.money, fmtMoney), r.pctv == null ? '—' : pctText(r.pctv),
       fmtMoney(conv(from, Number(r.value_start))), fmtMoney(conv(to, Number(r.value_end))),
