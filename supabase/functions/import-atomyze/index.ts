@@ -24,6 +24,7 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { xlsxRows, type XlsxRow } from '../_shared/xlsx_rows.ts';
 import { removeCoveredSnowball } from '../_shared/statement_priority.ts';
+import { removeAppRows } from '../_shared/app_rows.ts';
 
 const ACCOUNT = 'T-Bank';
 const SOURCE = 'atomyze_xlsx';
@@ -37,6 +38,7 @@ function parse(bytes: Uint8Array) {
   const wallet = rows.find(r => /^по кошельку/.test(r.A || ''))?.E;
   const periodRow = rows.find(r => r.A === 'с' && r.C === 'по');
   const periodEnd = (periodRow?.D || '').split('.').reverse().join('-');
+  const periodStart = (periodRow?.B || '').split('.').reverse().join('-');
   if (!wallet || !/^\d{4}-\d{2}-\d{2}$/.test(periodEnd)) return null;
 
   let section = '';
@@ -122,7 +124,7 @@ function parse(bytes: Uint8Array) {
     };
   });
   const holdings = Object.fromEntries(positions.map(p => [p['Тикер'], num(p['Остаток на конец периода'])]));
-  return { wallet, trades, adjustments, bank, holdings, cash: { opening, closing, last: bank.at(-1)?.balance_after ?? opening } };
+  return { wallet, periodStart: /^\d{4}-\d{2}-\d{2}$/.test(periodStart) ? periodStart : '0000-01-01', periodEnd, trades, adjustments, bank, holdings, cash: { opening, closing, last: bank.at(-1)?.balance_after ?? opening } };
 }
 
 Deno.serve(async (req) => {
@@ -158,11 +160,13 @@ Deno.serve(async (req) => {
       if (error) return json({ error: error.message }, 500);
     }
     const removedSnowball = await removeCoveredSnowball(supabase, user.id, parsed.trades);
+    // rows taken from the app's history before this report (_shared/app_rows.ts)
+    const removedApp = await removeAppRows(supabase, user.id, ACCOUNT, parsed.wallet, parsed.periodStart, parsed.periodEnd);
     return json({
       deals: parsed.trades.filter(t => t.side === 'buy' || t.side === 'sell').length,
       payouts: parsed.trades.filter(t => !['buy', 'sell'].includes(t.side)).length,
       adjustments: parsed.adjustments.length, cash_rows: bank.length, removed_snowball_duplicates: removedSnowball,
-      holdings: parsed.holdings, cash: parsed.cash,
+      removed_app_rows: removedApp, holdings: parsed.holdings, cash: parsed.cash,
     });
   } catch (err) {
     return json({ error: String(err) }, 500);

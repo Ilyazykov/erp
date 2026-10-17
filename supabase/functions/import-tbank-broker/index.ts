@@ -60,6 +60,7 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { xlsxRows } from '../_shared/xlsx_rows.ts';
 import { removeCoveredSnowball } from '../_shared/statement_priority.ts';
+import { removeAppRows } from '../_shared/app_rows.ts';
 
 const ACCOUNT = 'T-Bank';
 const SOURCE = 'tbank_broker_xlsx';
@@ -328,6 +329,8 @@ Deno.serve(async (req) => {
       if (error) return json({ error: error.message }, 500);
     }
     const removedSnowball = await removeCoveredSnowball(supabase, user.id, parsed.trades);
+    // rows taken from the app's history before this report (_shared/app_rows.ts)
+    const removedApp = await removeAppRows(supabase, user.id, ACCOUNT, parsed.agreement, parsed.periodStart, parsed.periodEnd);
 
     return json({
       agreement: parsed.agreement, period_start: parsed.periodStart, period_end: parsed.periodEnd,
@@ -336,7 +339,7 @@ Deno.serve(async (req) => {
       adjustments: parsed.adjustments.length,
       splits: parsed.adjustments.filter(a => a.external_id.includes(':split:')).map(a => `${a.ticker} ${a.trade_date}: ${a.side} ${a.quantity}`),
       cash_rows: bank.length,
-      removed_snowball_duplicates: removedSnowball, holdings: parsed.holdings, cash: parsed.cashCheck,
+      removed_snowball_duplicates: removedSnowball, removed_app_rows: removedApp, holdings: parsed.holdings, cash: parsed.cashCheck,
     });
   } catch (err) {
     return json({ error: String(err) }, 500);

@@ -82,7 +82,7 @@
 // Every other row keeps its CSV `product` in bank_transactions.product, so
 // the cash view can put a credit card's balance in its own 'credit' column.
 
-import { sberReportPeriods } from '../_shared/app_rows.ts';
+import { reportPeriods } from '../_shared/app_rows.ts';
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 interface BankRow {
@@ -282,13 +282,15 @@ Deno.serve(async (req) => {
         { status: 400, headers: corsHeaders });
     }
 
-    // Sber broker money taken from the app ('<agreement>-app') gives way to the
+    // Sber / T-Bank broker money taken from the app ('<agreement>-app') gives way to the
     // broker reports: the rows up to the latest report's end are left out (its
     // closing balance holds them), the rest counted again from 0
     // (_shared/app_rows.ts).
     let coveredByReport = 0;
-    for (const acc of new Set(csvRows.filter(r => r.bank === 'Sber' && r.accountNumber.endsWith('-app')).map(r => r.accountNumber))) {
-      const ends = (await sberReportPeriods(supabase, user.id, acc.slice(0, -4))).map(([, t]) => t).sort();
+    const appAccounts = [...new Set(csvRows.filter(r => (r.bank === 'Sber' || r.bank === 'T-Bank') && r.accountNumber.endsWith('-app'))
+      .map(r => `${r.bank}|${r.accountNumber}`))].map(k => k.split('|'));
+    for (const [bank, acc] of appAccounts) {
+      const ends = (await reportPeriods(supabase, user.id, bank, acc.slice(0, -4))).map(([, t]) => t).sort();
       const lastEnd = ends[ends.length - 1];
       if (!lastEnd) continue;
       const before = csvRows.length;
