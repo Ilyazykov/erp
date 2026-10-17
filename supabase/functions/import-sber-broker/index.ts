@@ -38,12 +38,44 @@
 // that were 10 + 2) -- plus any matched row outside it. import-trades-csv
 // leaves such rows out of later uploads.
 // Upserted by content, so months can be uploaded in any order, repeatedly.
+// Payouts taken from the app's history before the report covering them was
+// out -- this project's own sber_broker_screenshots_trades.csv (trades
+// 'broker_csv', account 'Sber', external_id '<agreement>:...') and
+// sber_broker_screenshots_cash.csv (bank_transactions
+// 'sber_csv:<agreement>-app', a running balance from 0 on top of the
+// report's) -- are dropped once a report of the agreement covers their day
+// (dated up to its period end); the app cash rows left get their running
+// balance again from 0. Reports are expected without gaps after the last one.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { removeCoveredSnowball, removeSnowballInPeriod } from '../_shared/statement_priority.ts';
 
 const ACCOUNT = 'Sber';
 const SOURCE = 'sber_broker_html';
+
+// deno-lint-ignore no-explicit-any
+async function removeAppRows(db: any, userId: string, agreement: string, periodEnd: string): Promise<number> {
+  const { count: t, error: e1 } = await db.from('trades').delete({ count: 'exact' })
+    .eq('user_id', userId).eq('external_source', 'broker_csv').eq('account', ACCOUNT)
+    .like('external_id', `${agreement}:%`).lte('trade_date', periodEnd);
+  if (e1) throw new Error(e1.message);
+  const src = `sber_csv:${agreement}-app`;
+  const { count: b, error: e2 } = await db.from('bank_transactions').delete({ count: 'exact' })
+    .eq('user_id', userId).eq('external_source', src).lte('tx_date', `${periodEnd}T23:59:59Z`);
+  if (e2) throw new Error(e2.message);
+  if (b) {
+    const { data: rest, error: e3 } = await db.from('bank_transactions').select('id, currency, amount')
+      .eq('user_id', userId).eq('external_source', src).order('tx_date');
+    if (e3) throw new Error(e3.message);
+    const bal: Record<string, number> = {};
+    for (const r of rest ?? []) {
+      bal[r.currency] = Math.round(((bal[r.currency] ?? 0) + Number(r.amount)) * 100) / 100;
+      const { error } = await db.from('bank_transactions').update({ balance_after: bal[r.currency] }).eq('id', r.id);
+      if (error) throw new Error(error.message);
+    }
+  }
+  return (t ?? 0) + (b ?? 0);
+}
 
 const text = (s: string) => s.replace(/<[^>]+>/g, ' ')
   .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
@@ -244,12 +276,14 @@ Deno.serve(async (req) => {
     let removedSnowball = 0;
     for (const [from, to] of periods) removedSnowball += await removeSnowballInPeriod(supabase, user.id, ACCOUNT, tickers, from, to);
     removedSnowball += await removeCoveredSnowball(supabase, user.id, parsed.trades);
+    const removedApp = await removeAppRows(supabase, user.id, parsed.agreement, parsed.periodEnd);
     return json({
       agreement: parsed.agreement, period_start: parsed.periodStart,
       period_end: parsed.periodEnd,
       deals: parsed.trades.filter(t => t.side === 'buy' || t.side === 'sell').length,
       payouts: parsed.trades.filter(t => !['buy', 'sell'].includes(t.side)).length,
       adjustments: parsed.adjustments.length, cash_rows: bank.length, removed_snowball_duplicates: removedSnowball,
+      removed_app_rows: removedApp,
       holdings: parsed.holdings, cash: parsed.cash,
     });
   } catch (err) {

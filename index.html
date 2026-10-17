@@ -2204,7 +2204,8 @@ async function mpImportOneFile(file, statusEl, session) {
       statusEl.textContent = `Detected: ${label} (agreement ${result.agreement}, ${result.period_start}..${result.period_end}). `
         + `Imported ${result.deals} deals, ${result.payouts} payouts`
         + `${result.adjustments ? `, ${result.adjustments} movements without a deal` : ''} and ${result.cash_rows} cash rows`
-        + `${result.removed_snowball_duplicates ? ` (replacing ${result.removed_snowball_duplicates} Snowball rows)` : ''}. `
+        + `${result.removed_snowball_duplicates ? ` (replacing ${result.removed_snowball_duplicates} Snowball rows)` : ''}`
+        + `${result.removed_app_rows ? ` (replacing ${result.removed_app_rows} rows taken from the app's history)` : ''}. `
         + `Holdings at period end: ${h}. Cash: ${cash}.`;
       mpRenderPortfolioPies();
       mpRenderBrokerCurrency();
