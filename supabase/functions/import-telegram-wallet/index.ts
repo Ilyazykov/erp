@@ -11,7 +11,8 @@
 // section 'wallet' = the main wallet's history, 'earn' = an Earn product's
 // own history (deposits into it and rewards). Amounts signed. The
 // file is the whole history each time, so re-uploading it is harmless (rows
-// are upserted by their own content).
+// are upserted by their own content, and stored rows the file no longer has
+// are deleted).
 //
 // Stored like the exchanges (see _shared/exchange_balances.ts): a
 // crypto_wallets row (chain 'telegram', account 'Telegram'), every row in
@@ -28,8 +29,11 @@
 //   - Earn: for a coin with an Earn history in the file ('earn' rows),
 //     "Transfer to/from Earn" and "Deposited" are internal moves (the coins
 //     are still owned) and its rewards are income -- GRAM (the app's own
-//     Earn history) and XAUT (the app dropped it once withdrawn, so its
-//     monthly rewards were taken from Snowball when building the CSV). For
+//     Earn history) and XAUT (daily "Rewarded" and the Gold Earn "Bonus" of
+//     25.09-23.12.2025, from screenshots of its Earn history in
+//     statements/telegram/raw/xaut; the days between them follow the same
+//     amounts, which step up two days after each deposit, scaled so they add
+//     up to what the 24.07.2026 withdrawal shows was earned). For
 //     any other coin (USDT, BTC, FLR, XLM: withdrawn from Earn in full long
 //     ago) "Transfer to/from Earn" count as real moves out of / into the
 //     wallet, so its rewards still arrive inside "Transfer from Earn".
@@ -162,6 +166,22 @@ Deno.serve(async (req) => {
     for (let i = 0; i < rows.length; i += 500) {
       const { error } = await supabase.from('wallet_transactions')
         .upsert(rows.slice(i, i + 500), { onConflict: 'wallet_id,tx_hash,kind,seq' });
+      if (error) throw new Error(error.message);
+    }
+    // The file is the whole history: a stored row it no longer has was
+    // replaced (XAUT's monthly totals by its daily rewards) -- drop it.
+    const inFile = new Set(rows.map(r => r.tx_hash));
+    const stale: string[] = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabase.from('wallet_transactions').select('tx_hash')
+        .eq('wallet_id', wallet!.id).order('tx_hash').range(from, from + 999);
+      if (error) throw new Error(error.message);
+      for (const r of data ?? []) if (!inFile.has(r.tx_hash)) stale.push(r.tx_hash);
+      if (!data || data.length < 1000) break;
+    }
+    for (let i = 0; i < stale.length; i += 200) {
+      const { error } = await supabase.from('wallet_transactions').delete()
+        .eq('wallet_id', wallet!.id).in('tx_hash', stale.slice(i, i + 200));
       if (error) throw new Error(error.message);
     }
 
