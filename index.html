@@ -269,6 +269,20 @@
     </div>
     <p class="empty-note" id="mp_fund_snowball_status"></p>
 
+    <div class="section-title">Full export to Snowball</div>
+    <p class="note">Everything stored here as one Snowball CSV, laid out like Snowball's own export and starting,
+      like the Snowball portfolio, on its first deal (2025-08-28), without blocked assets: every
+      trade, dividend, coupon, amortisation and redemption (MOEX as MCX, Revolut funds as EUFUND). Snowball caps
+      the number of custom holdings (CUSTOM_HOLDING), so only the ones it already has are exported — BTC, ETH,
+      XAUT, XAU and the deposit ВКЛАД:Т16%13; other crypto, deposits, savings accounts and ЦФА are left out.
+      Crypto on exchanges and wallets becomes buys / sells / rewards from their transaction logs, plus one
+      reconciling row per coin dated today so its quantity matches the current balance (transfers between own
+      wallets and network fees aren't trades). Custom holdings also get a price for every day and their settings rows.</p>
+    <div class="form-row">
+      <button class="btn primary" id="mp_full_snowball_export">Download full Snowball CSV</button>
+    </div>
+    <p class="empty-note" id="mp_full_snowball_status"></p>
+
     <div class="section-title">Real estate</div>
     <p class="note">A property is valued by its city's average price per m² (ready housing):
       current value = purchase price × (latest price per m² ÷ price per m² in the purchase month).
@@ -2410,6 +2424,300 @@ document.getElementById('mp_fund_snowball_export').addEventListener('click', asy
     URL.revokeObjectURL(url);
 
     statusEl.textContent = `Downloaded ${lines.length - 1} rows.`;
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`;
+  }
+});
+
+// ---- Full export to Snowball ----
+// Mirrors Snowball's own export (statements/Snowball_Export_*.csv): every
+// field quoted, upper-case events, "YYYY-MM-DD 00:00:00" dates, comma
+// decimals; listed securities by exchange (MCX, NASDAQ, LSE, ...), the rest
+// as CUSTOM_HOLDING with CUSTOM_HOLDING_PRICE / CUSTOM_HOLDING_SETTINGS rows.
+const SNOWBALL_HEADER = ['Event', 'Date', 'Symbol', 'Price', 'Quantity', 'Currency', 'FeeTax', 'Exchange', 'NKD', 'FeeCurrency', 'DoNotAdjustCash', 'Note'];
+const SNOWBALL_EXCHANGE = { MOEX: 'MCX', MCX: 'MCX', ARCA: 'NYSE ARCA', NYSEARCA: 'NYSE ARCA', LSEETF: 'LSE', IBIS: 'XETRA' };
+// Snowball's CustomHoldingType codes, as seen in its export: 2 deposit, 3 metal, 8 crypto.
+const SNOWBALL_CUSTOM_TYPE = { deposit: [2, 'Cash'], gold: [3, 'Materials'], crypto: [8, 'Crypto'] };
+// Exchange log kinds (import-bybit / -binance / -crypto-com / -telegram-wallet)
+// that are a trade or a reward; deposits, withdrawals, transfers, Earn moves
+// and network fees are not -- the reconciling row covers what they change.
+const SNOWBALL_WALLET_TRADE_KINDS = new Set(['trade', 'convert', 'purchase', 'trade_out', 'card']);
+const SNOWBALL_WALLET_REWARD_KINDS = new Set(['interest', 'reward']);
+// Snowball caps the number of custom holdings, so only the ones it already
+// has are exported; other crypto, deposits, savings and ЦФА are left out.
+const SNOWBALL_CUSTOM_HOLDINGS = new Set(['BTC', 'ETH', 'XAUT', 'XAU', 'ВКЛАД:Т16%13']);
+const SNOWBALL_STABLECOINS = new Set(['USDT', 'USDC', 'DAI', 'USDS', 'USDE', 'FDUSD', 'PYUSD', 'TUSD', 'BUSD', 'USDP']);
+const SNOWBALL_FIAT = new Set(['EUR', 'USD', 'GBP', 'CHF', 'RUB', 'TRY', 'AUD', 'CAD', 'BRL', 'SGD']);
+
+// Plain decimal (never "1e-7"), at most 10 fraction digits, comma separator.
+function snowballNumber(v) {
+  if (v === null || v === undefined || v === '') return '';
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '';
+  return n.toFixed(10).replace(/\.?0+$/, '').replace('.', ',');
+}
+
+// Every row of a query, past PostgREST's 1000-row page cap.
+async function snowballFetchAll(build) {
+  const out = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await build().range(from, from + 999);
+    if (error) throw new Error(error.message);
+    out.push(...data);
+    if (data.length < 1000) return out;
+  }
+}
+
+// What kind of custom holding a ticker is, or null for a listed security.
+function snowballCustomKind(ticker, exchange, mp) {
+  if (/^(DEPOSIT|SAVINGS|ВКЛАД):/.test(ticker)) return 'deposit';
+  if (/^CFA:/.test(ticker) || exchange === 'Atomyze') return 'other';
+  if (/^TOKEN:/.test(ticker)) return 'crypto';
+  const type = mp?.instrument_type;
+  if (type === 'crypto' || type === 'gold' || type === 'deposit' || type === 'liquid') return type === 'liquid' ? 'deposit' : type;
+  if (mp?.asset_class === 'crypto') return 'crypto';
+  if (mp?.asset_class === 'gold') return 'gold';
+  return null;
+}
+
+// The name Snowball knows a custom holding by: a statement deposit that
+// replaced a Snowball one ("[replaces Snowball DEPOSIT:Т16%13]",
+// import-bank-csv) goes back to it, with Snowball's own "ВКЛАД:" prefix.
+function snowballCustomSymbol(ticker, note) {
+  const replaced = String(note || '').match(/\[replaces Snowball ([^\]]+)\]/)?.[1].trim() || ticker;
+  const legacy = replaced.replace(/^DEPOSIT:/, 'ВКЛАД:');
+  return SNOWBALL_CUSTOM_HOLDINGS.has(legacy) ? legacy : replaced;
+}
+
+function snowballListedExchange(exchange, mp) {
+  const e = (exchange || '').trim().toUpperCase();
+  if (e) return SNOWBALL_EXCHANGE[e] || (/МОСК|MOSCOW/.test(e) ? 'MCX' : e);
+  return (mp?.asset_class || '').startsWith('moex') ? 'MCX' : '';
+}
+
+document.getElementById('mp_full_snowball_export').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_full_snowball_status');
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) { statusEl.textContent = 'Sign in first.'; return; }
+
+  try {
+    statusEl.textContent = 'Loading trades, wallets and prices…';
+    const [trades, exclusions, wallets, balances, walletTxs, holdings] = await Promise.all([
+      snowballFetchAll(() => sb.from('trades')
+        .select('ticker, side, quantity, price, trade_date, currency, fee_tax, fee_currency, exchange, nkd, account, note, external_source, external_id')
+        .order('trade_date').order('id')),
+      snowballFetchAll(() => sb.from('holding_exclusions').select('external_source, external_id')),
+      snowballFetchAll(() => sb.from('crypto_wallets').select('id, chain, account')),
+      snowballFetchAll(() => sb.from('wallet_balances').select('wallet_id, contract, ticker')),
+      snowballFetchAll(() => sb.from('wallet_transactions')
+        .select('wallet_id, tx_time, kind, contract, symbol, amount').order('tx_time')),
+      snowballFetchAll(() => sb.from('portfolio_value_usd').select('ticker, quantity')),
+    ]);
+
+    const marketRows = await snowballFetchAll(() => sb.from('market_prices')
+      .select('ticker, price_usd, asset_class, instrument_type'));
+    const market = new Map(marketRows.map(m => [m.ticker, m]));
+
+    // Each ticker's custom-holding kind (null = listed) and quote currency.
+    const kindOf = new Map();
+    const currencyOf = new Map();
+    const noteCurrency = (ticker, cur) => { if (cur && !currencyOf.has(ticker)) currencyOf.set(ticker, cur); };
+
+    const rows = [];  // [date, ticker, cells[]]
+    const push = (event, date, ticker, price, quantity, currency, feeTax, exchange, nkd, feeCurrency, note) => {
+      rows.push([date, ticker, [event, `${date} 00:00:00`, ticker, snowballNumber(price), snowballNumber(quantity),
+        currency || '', snowballNumber(feeTax || 0), exchange, snowballNumber(nkd ?? 0), feeCurrency || '', 'False', note || '']]);
+    };
+    // Running quantity of every custom holding, to reconcile crypto at the end.
+    const customQty = new Map();
+    const addQty = (ticker, q) => customQty.set(ticker, (customQty.get(ticker) || 0) + q);
+
+    // 1. Trades table: brokers, funds, deposits, ЦФА, metals, Snowball's own rows.
+    const excluded = new Set(exclusions.map(e => `${e.external_source}|${e.external_id}`));
+    const leftOut = new Set();  // custom holdings Snowball doesn't have
+    let tradeRows = 0;
+    // Like Snowball's own portfolio, the export starts on its first deal.
+    let beforeStart = 0;
+    const blocked = new Set();
+    for (const t of trades) {
+      if (excluded.has(`${t.external_source}|${t.external_id}`)) continue;
+      const mp = market.get(t.ticker);
+      // Blocked assets (bought before the Snowball portfolio) aren't in it.
+      if (t.ticker.startsWith('BLOCKED:') || mp?.asset_class === 'blocked') { blocked.add(t.ticker); continue; }
+      if (t.trade_date < MP_SNOWBALL_START) { beforeStart++; continue; }
+      const event = MP_FUND_SNOWBALL_EVENT[t.side];
+      if (!event) continue;
+      if (mp?.instrument_type === 'cash' || mp?.instrument_type === 'fx_rate') continue;
+      const kind = snowballCustomKind(t.ticker, t.exchange, mp);
+      const symbol = kind ? snowballCustomSymbol(t.ticker, t.note) : t.ticker;
+      if (kind && !SNOWBALL_CUSTOM_HOLDINGS.has(symbol)) { leftOut.add(symbol); continue; }
+      kindOf.set(symbol, kind);
+      const exchange = kind ? 'CUSTOM_HOLDING' : snowballListedExchange(t.exchange, mp);
+      if (kind) {
+        noteCurrency(symbol, t.currency);
+        if (t.side === 'buy' || t.side === 'stock_as_dividend') addQty(symbol, Number(t.quantity));
+        if (t.side === 'sell') addQty(symbol, -Number(t.quantity));
+      }
+      push(event.toUpperCase(), t.trade_date, symbol, t.price, t.quantity, t.currency, t.fee_tax, exchange,
+        t.nkd, t.fee_currency || t.currency, t.account);
+      tradeRows++;
+    }
+
+    // 2. Crypto exchange logs: trades and rewards per coin. A trade's price
+    // comes from the stablecoin / fiat leg booked at the same moment, else
+    // from that day's price history.
+    const walletById = new Map(wallets.map(w => [w.id, w]));
+    const tokenTicker = new Map(balances.filter(b => b.contract).map(b => [`${b.wallet_id}|${b.contract}`, b.ticker]));
+    const coinOf = tx => (tx.contract ? tokenTicker.get(`${tx.wallet_id}|${tx.contract}`) : (tx.symbol || '').toUpperCase()) || null;
+    const isQuote = s => SNOWBALL_STABLECOINS.has(s) || SNOWBALL_FIAT.has(s);
+    const legs = new Map();  // wallet|time -> rows of one trade
+    for (const tx of walletTxs) {
+      if (!SNOWBALL_WALLET_TRADE_KINDS.has(tx.kind)) continue;
+      const key = `${tx.wallet_id}|${tx.tx_time}`;
+      if (!legs.has(key)) legs.set(key, []);
+      legs.get(key).push(tx);
+    }
+    const walletCoins = new Set();
+    const markWalletCoin = coin => {
+      if (!coin || isQuote(coin)) return false;
+      const kind = snowballCustomKind(coin, null, market.get(coin));
+      if (kind !== 'crypto' && kind !== 'gold') return false;
+      if (!SNOWBALL_CUSTOM_HOLDINGS.has(coin)) { leftOut.add(coin); return false; }
+      kindOf.set(coin, kind);
+      currencyOf.set(coin, 'USD');
+      walletCoins.add(coin);
+      return true;
+    };
+    // Coins only ever moved in (on-chain wallets) still get their reconciling row.
+    for (const b of balances) markWalletCoin(b.ticker);
+    const needHistory = [];  // rows waiting for a price from price_history
+    let walletRows = 0;
+    for (const tx of walletTxs) {
+      const isTrade = SNOWBALL_WALLET_TRADE_KINDS.has(tx.kind);
+      if (!isTrade && !SNOWBALL_WALLET_REWARD_KINDS.has(tx.kind)) continue;
+      const coin = coinOf(tx);
+      const amount = Number(tx.amount);
+      if (!amount || !markWalletCoin(coin)) continue;
+      if (tx.tx_time.slice(0, 10) < MP_SNOWBALL_START) { beforeStart++; continue; }
+      const event = !isTrade ? 'STOCK_AS_DIVIDEND' : amount > 0 ? 'BUY' : 'SELL';
+      if (event === 'STOCK_AS_DIVIDEND' && amount < 0) continue;
+      let price = null;
+      let currency = 'USD';
+      if (isTrade) {
+        // Several fills in the same second: the quote legs pay for all of them.
+        const group = legs.get(`${tx.wallet_id}|${tx.tx_time}`) || [];
+        const same = group.filter(g => coinOf(g) === coin && Math.sign(Number(g.amount)) === Math.sign(amount));
+        const others = group.filter(g => coinOf(g) !== coin);
+        const quotes = others.filter(g => isQuote(coinOf(g)) && Math.sign(Number(g.amount)) === -Math.sign(amount));
+        if (quotes.length && quotes.length === others.length && new Set(quotes.map(coinOf)).size === 1) {
+          const q = coinOf(quotes[0]);
+          currency = SNOWBALL_STABLECOINS.has(q) ? 'USD' : q;
+          price = quotes.reduce((s, g) => s + Math.abs(Number(g.amount)), 0)
+            / same.reduce((s, g) => s + Math.abs(Number(g.amount)), 0);
+        }
+      }
+      const date = tx.tx_time.slice(0, 10);
+      const account = walletById.get(tx.wallet_id)?.account || '';
+      push(event, date, coin, price, Math.abs(amount), currency, 0, 'CUSTOM_HOLDING', 0, currency, account);
+      if (price === null) needHistory.push(rows[rows.length - 1]);
+      walletRows++;
+      addQty(coin, event === 'SELL' ? -Math.abs(amount) : Math.abs(amount));
+    }
+
+    // 3. Price history for custom holdings (USD), converted to each one's currency.
+    statusEl.textContent = 'Loading price history…';
+    const customTickers = [...kindOf].filter(([, k]) => k && k !== 'deposit').map(([t]) => t);
+    const history = customTickers.length ? await snowballFetchAll(() => sb.from('price_history')
+      .select('ticker, day, price_usd').in('ticker', customTickers).order('ticker').order('day')) : [];
+    const fxCurrencies = [...new Set(customTickers.map(t => currencyOf.get(t) || 'USD'))].filter(c => c !== 'USD');
+    const fx = new Map();  // currency -> [[day, usdPerUnit]] ascending
+    for (const c of fxCurrencies) {
+      const r = await snowballFetchAll(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', c).order('day'));
+      fx.set(c, r.map(x => [x.day, Number(x.usd_per_unit)]));
+    }
+    // Last value on or before the day, from an ascending [[day, value]] list.
+    const asOf = (list, day) => {
+      let lo = 0, hi = (list?.length || 0) - 1, best = null;
+      while (lo <= hi) { const mid = (lo + hi) >> 1; if (list[mid][0] <= day) { best = list[mid][1]; lo = mid + 1; } else hi = mid - 1; }
+      return best;
+    };
+    const historyBy = new Map();
+    for (const h of history) {
+      if (!historyBy.has(h.ticker)) historyBy.set(h.ticker, []);
+      historyBy.get(h.ticker).push([h.day, Number(h.price_usd)]);
+    }
+    const inCurrency = (usd, cur, day) => {
+      if (usd === null || !cur || cur === 'USD') return usd;
+      const rate = asOf(fx.get(cur), day);
+      return rate ? usd / rate : null;
+    };
+    for (const row of needHistory) {
+      const [date, ticker, cells] = row;
+      const usd = asOf(historyBy.get(ticker), date) ?? market.get(ticker)?.price_usd ?? 0;
+      cells[3] = snowballNumber(usd);
+    }
+
+    // 4. Reconcile crypto with the current balances (transfers, network fees).
+    const today = new Date().toISOString().slice(0, 10);
+    const held = new Map(holdings.map(h => [h.ticker, Number(h.quantity)]));
+    let reconciled = 0;
+    for (const coin of walletCoins) {
+      const diff = (held.get(coin) || 0) - (customQty.get(coin) || 0);
+      if (Math.abs(diff) < 1e-9) continue;
+      const usd = historyBy.get(coin)?.at(-1)?.[1] ?? market.get(coin)?.price_usd ?? 0;
+      push(diff > 0 ? 'BUY' : 'SELL', today, coin, usd, Math.abs(diff), 'USD', 0, 'CUSTOM_HOLDING', 0, 'USD',
+        'reconciled with current balance (transfers, network fees)');
+      reconciled++;
+    }
+
+    // 5. Daily prices and settings.
+    let priceRows = 0;
+    for (const ticker of customTickers) {
+      const list = historyBy.get(ticker) || [];
+      const cur = currencyOf.get(ticker) || 'USD';
+      list.forEach(([day, usd]) => {
+        if (day < MP_SNOWBALL_START) return;
+        const price = inCurrency(usd, cur, day);
+        if (price === null) return;
+        rows.push([day, ticker, ['CUSTOM_HOLDING_PRICE', `${day} 00:00:00`, ticker, snowballNumber(price), '0', cur,
+          '0', 'CUSTOM_HOLDING', '0', '', '', '']]);
+        priceRows++;
+      });
+    }
+    for (const [ticker, kind] of kindOf) {
+      const known = SNOWBALL_CUSTOM_TYPE[kind];
+      if (!known) continue;
+      const settings = {
+        Holding: { Note: '', Currency: currencyOf.get(ticker) || 'USD', Description: ticker, DividendTax: null, Sector: known[1] },
+        Settings: { CustomHoldingType: known[0], IncomeType: 1, FirstIncomeDate: null, GenerateIncome: false,
+          IncomeAmount: 0, IncomeReinvestmentType: 0, IsIncomeReinvested: false, MaturityDate: null,
+          Period: 1, PeriodType: 3, NextIncomeDate: null },
+      };
+      // Snowball writes the JSON with @*@ for quotes and \uXXXX for non-ASCII.
+      const json = JSON.stringify(settings).replace(/[\u0080-￿]/g, c => `\\u${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`)
+        .replace(/"/g, '@*@');
+      rows.push([today, ticker, ['CUSTOM_HOLDING_SETTINGS', `${today} 00:00:00`, ticker, '0', '0', currencyOf.get(ticker) || 'USD',
+        '0', 'CUSTOM_HOLDING', '0', '', '', json]]);
+    }
+
+    rows.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    const quote = v => `"${String(v).replace(/"/g, '""')}"`;
+    const lines = [SNOWBALL_HEADER.join(','), ...rows.map(r => r[2].map(quote).join(','))];
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `snowball_full_export_${today}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+
+    statusEl.textContent = `Downloaded ${rows.length} rows: ${tradeRows} from trades, ${walletRows} from crypto exchange logs, `
+      + `${reconciled} reconciling, ${priceRows} custom-holding prices, from ${MP_SNOWBALL_START} (Snowball's first deal).`
+      + (blocked.size ? ` Blocked assets left out: ${[...blocked].sort().join(', ')}.` : '')
+      + (beforeStart ? ` ${beforeStart} other trades before ${MP_SNOWBALL_START} left out.` : '')
+      + (leftOut.size ? ` Left out (not a custom holding in Snowball): ${[...leftOut].sort().join(', ')}.` : '');
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}`;
   }
