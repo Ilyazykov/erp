@@ -80,7 +80,7 @@ const ACCOUNT = 'T-Bank';
 // DE0007664039 against +2 VOW3.
 // deno-lint-ignore no-explicit-any
 async function reconcileHoldings(db: any, userId: string, agr: string, periodEnd: string,
-  items: { isin: string; close: number; name: string; primary: string; tickers: string[] }[]): Promise<number> {
+  items: { isins: string[]; close: number; names: string[]; primary: string; tickers: string[] }[]): Promise<number> {
   const stored: { external_id: string; ticker: string; side: string; quantity: number; trade_date: string; note: string | null }[] = [];
   for (let from = 0; ; from += 1000) {
     const { data, error } = await db.from('trades').select('external_id, ticker, side, quantity, trade_date, note')
@@ -94,11 +94,16 @@ async function reconcileHoldings(db: any, userId: string, agr: string, periodEnd
   const rows = [];
   const drop: string[] = [];
   for (const it of items) {
-    const prefix = `${agr}:adjust:${it.isin}`;
-    const recon = stored.filter(r => r.external_id === prefix || r.external_id.startsWith(`${prefix}:`));
+    // One security under several ISINs (a code change) is one holding: its
+    // reconciling row goes on the first ISIN, the others' are dropped.
+    const prefix = `${agr}:adjust:${it.isins[0]}`;
+    const recon = stored.filter(r => it.isins.some(isin => {
+      const p = `${agr}:adjust:${isin}`;
+      return r.external_id === p || r.external_id.startsWith(`${p}:`);
+    }));
     if (recon.some(r => r.trade_date > periodEnd)) continue;   // a later report's
     const cand = new Set([it.primary, ...it.tickers, ...recon.map(r => r.ticker)]);
-    if (it.name) for (const r of stored) if ((r.note ?? '').startsWith(`${it.name} (`)) cand.add(r.ticker);
+    for (const name of it.names) for (const r of stored) if ((r.note ?? '').startsWith(`${name} (`)) cand.add(r.ticker);
     const qty = new Map<string, number>();
     for (const r of stored) {
       if (!cand.has(r.ticker) || recon.includes(r) || r.trade_date > periodEnd) continue;
@@ -110,11 +115,13 @@ async function reconcileHoldings(db: any, userId: string, agr: string, periodEnd
     // redeemed there.
     let redeemed: string | undefined;
     if (it.close === 0) {
-      const { data, error } = await db.from('trades').select('trade_date').eq('user_id', userId).eq('external_source', SOURCE)
-        .eq('side', 'repayment').like('external_id', `%:income:%:${it.isin}:%`).lte('trade_date', periodEnd)
-        .order('trade_date', { ascending: false }).limit(1);
-      if (error) throw new Error(error.message);
-      redeemed = data?.[0]?.trade_date;
+      for (const isin of it.isins) {
+        const { data, error } = await db.from('trades').select('trade_date').eq('user_id', userId).eq('external_source', SOURCE)
+          .eq('side', 'repayment').like('external_id', `%:income:%:${isin}:%`).lte('trade_date', periodEnd)
+          .order('trade_date', { ascending: false }).limit(1);
+        if (error) throw new Error(error.message);
+        if (data?.[0] && (!redeemed || data[0].trade_date > redeemed)) redeemed = data[0].trade_date;
+      }
     }
     const keep = new Set<string>();
     for (const t of cand) {
@@ -131,7 +138,7 @@ async function reconcileHoldings(db: any, userId: string, agr: string, periodEnd
           ? `Redeemed at maturity (the report's "Погашение в уст. срок" payout of ${redeemed}), holding brought to the report's closing 0`
           : t === it.primary
           ? `Movement without a deal per report section 3.1 (transfer between agreements / code change / redemption), holding brought to the report's closing ${it.close}; the report gives no date`
-          : `${it.name || it.isin} held under ${it.primary}: moved off this ticker`,
+          : `${it.names[0] || it.isins[0]} held under ${it.primary}: moved off this ticker`,
       });
     }
     for (const r of recon) if (!keep.has(r.external_id)) drop.push(r.external_id);
@@ -218,9 +225,12 @@ function parse(bytes: Uint8Array, splits: Map<string, Split[]>) {
     isinOf.set(code, isin);
     codes.set(isin, (codes.get(isin) ?? new Set()).add(code));
   }
+  // A code change to a new ISIN leaves the old one under "<code>old" (Momo ->
+  // Hello Group: MOMOold US60879B1070 -> MOMO US4234031049, with no
+  // operation for it in the report): the same ticker, one holding.
   const tickerOf = (isin: string) => {
     const cs = [...(codes.get(isin) ?? [])].filter(c => !ISIN.test(c));
-    return cs.length ? cs.sort((p, q) => p.length - q.length)[0].replace(/@.*$/, '') : isin;
+    return cs.length ? cs.sort((p, q) => p.length - q.length)[0].replace(/@.*$/, '').replace(/([A-Z0-9])old$/, '$1') : isin;
   };
   const isinOfCode = (code: string) => isinOf.get(code) ?? code;
 
@@ -317,10 +327,19 @@ function parse(bytes: Uint8Array, splits: Map<string, Split[]>) {
   }
   // Every security of section 3.1 is brought to the report's closing balance
   // against what's stored (reconcileHoldings, after the deals are in).
+  // ISINs on one ticker (a code change) are reconciled together.
   const nameOf = new Map(moves.map(m => [m['ISIN'], m['Наименование актива'] ?? '']));
-  const reconcile = [...closing].map(([isin, close]) => ({
-    isin, close: round(close), name: nameOf.get(isin) ?? '', primary: heldTicker(isin), tickers: [tickerOf(isin), isin],
-  }));
+  const byTicker = new Map<string, { isins: string[]; close: number; names: string[]; primary: string; tickers: string[] }>();
+  for (const [isin, close] of [...closing].sort(([p], [q]) => p.localeCompare(q))) {
+    const primary = heldTicker(isin);
+    const it = byTicker.get(primary) ?? { isins: [], close: 0, names: [], primary, tickers: [] };
+    it.isins.push(isin);
+    it.close = round(it.close + close);
+    if (nameOf.get(isin)) it.names.push(nameOf.get(isin)!);
+    it.tickers.push(tickerOf(isin), isin);
+    byTicker.set(primary, it);
+  }
+  const reconcile = [...byTicker.values()];
 
   // Cash, one running balance per currency.
   const balance: Record<string, number> = Object.fromEntries(Object.entries(cashSummary).map(([c, s]) => [c, s.open]));
