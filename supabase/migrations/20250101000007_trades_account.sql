@@ -6,7 +6,7 @@
 -- list they maintain manually today: Revolut, Wise, Freedom24, IBKR,
 -- Тинькофф, Сбер, Binance, Bybit, Cryptocom, ...), and every trade needs to
 -- be attributable to one of them for future per-account breakdowns (see
--- TODO.md section 2, "Full Net Worth" tables/donuts grouped by account).
+-- TODO.md section 3, "Full Net Worth" tables/donuts grouped by account).
 --
 -- Nullable: existing Snowball-imported trades (stocks and crypto alike)
 -- predate this column and have no account recorded -- left NULL rather

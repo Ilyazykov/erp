@@ -2493,7 +2493,7 @@ function snowballCustomSymbol(ticker, note) {
 // Snowball's exchange code; '' when unknown. A MOEX-priced security is MCX
 // whatever venue the broker booked it on (T-Bank: ММВБ, СПБ, ВНБ).
 function snowballListedExchange(exchange, mp) {
-  if ((mp?.asset_class || '').startsWith('moex')) return 'MCX';
+  if ((mp?.asset_class || '').startsWith('moex') || mp?.source === 'moex_iss') return 'MCX';
   const e = (exchange || '').trim().toUpperCase();
   if (/МОСК|MOSCOW|ММВБ/.test(e)) return 'MCX';
   if (!e || /СПБ|ВНБ/.test(e)) return '';
@@ -2519,7 +2519,7 @@ document.getElementById('mp_full_snowball_export').addEventListener('click', asy
     ]);
 
     const marketRows = await snowballFetchAll(() => sb.from('market_prices')
-      .select('ticker, price_usd, asset_class, instrument_type'));
+      .select('ticker, price_usd, asset_class, instrument_type, source'));
     const market = new Map(marketRows.map(m => [m.ticker, m]));
 
     // Each ticker's custom-holding kind (null = listed) and quote currency.

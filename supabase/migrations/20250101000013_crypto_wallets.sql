@@ -1,6 +1,6 @@
 -- Non-custodial crypto wallets (Trust Wallet, ...) synced straight from the
 -- blockchain by the `sync-crypto-wallets` Edge Function -- see TODO.md
--- section 8 for the reasoning (public address in, balances + full history
+-- section 9 for the reasoning (public address in, balances + full history
 -- out; exchange API keys are deliberately never stored).
 --
 -- The address is personal data (it links the owner to every transaction
