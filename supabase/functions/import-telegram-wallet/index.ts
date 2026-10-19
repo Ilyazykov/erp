@@ -30,10 +30,15 @@
 //     "Transfer to/from Earn" and "Deposited" are internal moves (the coins
 //     are still owned) and its rewards are income -- GRAM (the app's own
 //     Earn history) and XAUT (daily "Rewarded" and the Gold Earn "Bonus" of
-//     25.09-23.12.2025, from screenshots of its Earn history in
-//     statements/telegram/raw/xaut; the days between them follow the same
-//     amounts, which step up two days after each deposit, scaled so they add
-//     up to what the 24.07.2026 withdrawal shows was earned). For
+//     25.09-23.12.2025, 0.000045 a day). The app dropped XAUT's history once
+//     withdrawn. The days on screenshots of it (statements/telegram/raw/xaut)
+//     are as shown, 06.11.2025 with two bonuses (and 05.11 none). Every other
+//     day's -- titled "Rewarded (extrapolated)" / "Bonus (extrapolated)",
+//     like the bank rows of synthetic_kind 'extrapolated' -- is: the bonus
+//     0.000045 a day, the reward the Earn balance of two days before (rewards
+//     compounding) at 3.955844% a year -- the rate at which all of it adds
+//     up to exactly what the 24.07.2026 withdrawal shows was earned
+//     (0.012255). For
 //     any other coin (USDT, BTC, FLR, XLM: withdrawn from Earn in full long
 //     ago) "Transfer to/from Earn" count as real moves out of / into the
 //     wallet, so its rewards still arrive inside "Transfer from Earn".
