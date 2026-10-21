@@ -2534,8 +2534,10 @@ document.getElementById('mp_full_snowball_export').addEventListener('click', asy
     const noteCurrency = (ticker, cur) => { if (cur && !currencyOf.has(ticker)) currencyOf.set(ticker, cur); };
 
     const rows = [];  // [date, ticker, cells[]]
+    // Snowball's import refuses a ":" in Symbol, though its own export writes
+    // one (its deposit "ВКЛАД:Т16%13"): "ВКЛАД-Т16%13".
     const push = (event, date, ticker, price, quantity, currency, feeTax, exchange, nkd, feeCurrency, note) => {
-      rows.push([date, ticker, [event, `${date} 00:00:00`, ticker, snowballNumber(price), snowballNumber(quantity),
+      rows.push([date, ticker, [event, `${date} 00:00:00`, ticker.replace(/:/g, '-'), snowballNumber(price), snowballNumber(quantity),
         currency || '', snowballNumber(feeTax || 0), exchange, snowballNumber(nkd ?? 0), feeCurrency || '', 'False', note || '']]);
     };
     // Running quantity of every custom holding, to reconcile crypto at the end.
@@ -2779,7 +2781,7 @@ document.getElementById('mp_full_snowball_export').addEventListener('click', asy
         if (day < MP_SNOWBALL_START) return;
         const price = inCurrency(usd, cur, day);
         if (price === null) return;
-        rows.push([day, ticker, ['CUSTOM_HOLDING_PRICE', `${day} 00:00:00`, ticker, snowballNumber(price), '0', cur,
+        rows.push([day, ticker, ['CUSTOM_HOLDING_PRICE', `${day} 00:00:00`, ticker.replace(/:/g, '-'), snowballNumber(price), '0', cur,
           '0', 'CUSTOM_HOLDING', '0', '', '', '']]);
         priceRows++;
       });
@@ -2796,7 +2798,7 @@ document.getElementById('mp_full_snowball_export').addEventListener('click', asy
       // Snowball writes the JSON with @*@ for quotes and \uXXXX for non-ASCII.
       const json = JSON.stringify(settings).replace(/[\u0080-￿]/g, c => `\\u${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`)
         .replace(/"/g, '@*@');
-      rows.push([today, ticker, ['CUSTOM_HOLDING_SETTINGS', `${today} 00:00:00`, ticker, '0', '0', currencyOf.get(ticker) || 'USD',
+      rows.push([today, ticker, ['CUSTOM_HOLDING_SETTINGS', `${today} 00:00:00`, ticker.replace(/:/g, '-'), '0', '0', currencyOf.get(ticker) || 'USD',
         '0', 'CUSTOM_HOLDING', '0', '', '', json]]);
     }
 
