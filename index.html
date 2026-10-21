@@ -283,12 +283,12 @@
       <button class="btn primary" id="mp_full_snowball_export">Download full Snowball CSV</button>
     </div>
     <p class="empty-note" id="mp_full_snowball_status"></p>
-    <p class="note">The money on the bank and broker accounts (not credit cards, cash on hand, savings accounts or deposits)
-      as Snowball's CASH_IN / CASH_OUT, to import into the same portfolio after the full export: the balance the day before
-      its first deal, then each day's money in and out that the full export's deals and payouts don't already move
-      (salary, spending, transfers, conversions). Snowball's cash then ends at the accounts' balances today.</p>
+    <p class="note">The same full export with the money on the bank and broker accounts (not credit cards, cash on hand,
+      savings accounts or deposits) added as Snowball's CASH_IN / CASH_OUT: the balance the day before the first deal, then
+      each day's money in and out that the deals and payouts don't already move (salary, spending, transfers,
+      conversions). Snowball's cash then ends at the accounts' balances today.</p>
     <div class="form-row">
-      <button class="btn" id="mp_cash_snowball_export">Download Snowball cash CSV</button>
+      <button class="btn" id="mp_cash_snowball_export">Download full Snowball CSV with cash</button>
     </div>
     <p class="empty-note" id="mp_cash_snowball_status"></p>
 
@@ -2849,11 +2849,11 @@ document.getElementById('mp_full_snowball_export').addEventListener('click', asy
     statusEl.textContent = `Error: ${err.message}`;
   }
 });
-// ---- Cash to Snowball ----
-// The money on the bank and broker accounts (bank_transactions: every
-// account but credit cards, cash on hand and metal pockets) as Snowball's
-// CASH_IN / CASH_OUT rows, to import into the same portfolio after the full
-// export. Snowball moves its cash with every row of that export (buys, sells,
+// ---- Full export with cash ----
+// The full export plus the money on the bank and broker accounts
+// (bank_transactions: every account but credit cards, cash on hand and metal
+// pockets) as Snowball's CASH_IN / CASH_OUT rows. Snowball moves its cash with
+// every row of the full export (buys, sells,
 // payouts -- DoNotAdjustCash False), so the cash rows are what's left: each
 // day's change of the accounts' balances less what the export's rows of that
 // day do to the cash. One row per currency for the balance the day before the
@@ -2865,6 +2865,15 @@ document.getElementById('mp_full_snowball_export').addEventListener('click', asy
 // then ends where the accounts are today.
 const SNOWBALL_CASH_WINDOW_DAYS = 4;
 const SNOWBALL_METALS = new Set(['XAU', 'XAG', 'XPT', 'XPD']);
+// Bank rows with a kind of their own, by how the statements word them; the
+// rest is money in / out. A conversion is two rows of one bank a few minutes
+// apart, one currency out and another in, one of them worded as one (Revolut
+// "Exchanged to GBP", Raiffeisen "kupoprodaja efektive", Ziraat "Döviz
+// Satış"). A broker's commission for a deal is in the deal already.
+const SNOWBALL_CASH_FX = /exchang|конверт|обмен валют|döviz|kupoprodaja|currency exchange/i;
+const SNOWBALL_CASH_GAIN = /interest|процент|капитализац|cashback|кэшбэк|кешбэк|вознаграждение за операции покупок|\bfaiz\b|kamata/i;
+const SNOWBALL_CASH_EXPENSE = /\bfee\b|комисси|commission|provizij|odrzavanje|maintenance|обслуживан|ндфл|налог|\btax\b|ücret|masraf/i;
+const SNOWBALL_CASH_DEAL_FEE = /за сделк|по сделк/i;
 
 // What a row of the full export does to Snowball's cash, by currency.
 function snowballCashEffect(cells) {
@@ -2888,7 +2897,7 @@ document.getElementById('mp_cash_snowball_export').addEventListener('click', asy
     const { rows, today } = await snowballFullRows(statusEl);
     statusEl.textContent = 'Loading bank and broker accounts…';
     const bank = await snowballFetchAll(() => sb.from('bank_transactions')
-      .select('account, currency, external_source, product, balance_after, tx_date, booked_at')
+      .select('account, currency, external_source, product, balance_after, tx_date, booked_at, amount, description, synthetic_kind')
       .not('balance_after', 'is', null).order('id'));
 
     // Each account's (account, currency, source -- as bank_latest_balances
@@ -2934,15 +2943,66 @@ document.getElementById('mp_cash_snowball_export').addEventListener('click', asy
     const out = [];
     const push = (event, d, cur, amount, note) => out.push([d, cur, [event, `${d} 00:00:00`, cur, '1', snowballNumber(Math.round(amount * 100) / 100),
       cur, '0', '', '', '', 'False', note]]);
+    const r2 = v => snowballNumber(Math.round(v * 100) / 100);
+
+    // Conversions, interest and fees: rows of their own, their money taken
+    // off what's left to write as money in / out (typedEffect).
+    const typedEffect = new Map();
+    const pool = [...series.values()].flat().filter(r => !r.synthetic_kind && Number(r.amount));
+    const at = r => Date.parse(r.booked_at || r.tx_date);
+    const used = new Set();
+    const byBank = new Map();
+    for (const r of pool) {
+      if (!byBank.has(r.account)) byBank.set(r.account, []);
+      byBank.get(r.account).push(r);
+    }
+    let converts = 0, gains = 0, expenses = 0;
+    for (const list of byBank.values()) {
+      list.sort((a, b) => at(a) - at(b));
+      for (let i = 0; i < list.length; i++) {
+        const a = list[i];
+        if (used.has(a) || !(Number(a.amount) < 0)) continue;
+        const near = list.filter(b => !used.has(b) && b !== a && b.currency !== a.currency && Number(b.amount) > 0
+          && Math.abs(at(b) - at(a)) <= 5 * 60000
+          && (SNOWBALL_CASH_FX.test(a.description || '') || SNOWBALL_CASH_FX.test(b.description || '')));
+        if (!near.length) continue;
+        const b = near.sort((x, y) => Math.abs(at(x) - at(a)) - Math.abs(at(y) - at(a)))[0];
+        used.add(a); used.add(b);
+        const d = day(a.booked_at || a.tx_date);
+        if (d < MP_SNOWBALL_START || d > today) continue;
+        const paid = -Number(a.amount), got = Number(b.amount);
+        // Snowball's own: Symbol = the currency got, Price = the amount paid,
+        // Quantity = the amount got, Currency = the currency paid.
+        out.push([d, b.currency, ['CASH_CONVERT', `${d} 00:00:00`, b.currency, r2(paid), r2(got), a.currency, '0', '', '', '', 'False',
+          `${a.account}: ${a.description || ''}`.slice(0, 200)]]);
+        bump(typedEffect, a.currency, d, -paid);
+        bump(typedEffect, b.currency, day(b.booked_at || b.tx_date), got);
+        converts++;
+      }
+    }
+    for (const r of pool) {
+      if (used.has(r)) continue;
+      const d = day(r.booked_at || r.tx_date);
+      if (d < MP_SNOWBALL_START || d > today) continue;
+      const amount = Number(r.amount), text = r.description || '';
+      let event = null;
+      if (amount > 0 && SNOWBALL_CASH_GAIN.test(text)) event = 'CASH_GAIN';
+      else if (amount < 0 && SNOWBALL_CASH_EXPENSE.test(text) && !SNOWBALL_CASH_DEAL_FEE.test(text)) event = 'CASH_EXPENSE';
+      if (!event) continue;
+      push(event, d, r.currency, Math.abs(amount), `${r.account}: ${text}`.slice(0, 200));
+      bump(typedEffect, r.currency, d, amount);
+      if (event === 'CASH_GAIN') gains++; else expenses++;
+    }
     const finals = [];
-    const currencies = new Set([...balanceChange.keys(), ...exportEffect.keys(), ...opening.keys()]);
+    const currencies = new Set([...balanceChange.keys(), ...exportEffect.keys(), ...opening.keys(), ...typedEffect.keys()]);
     for (const cur of [...currencies].sort()) {
       const open = opening.get(cur) || 0;
       if (Math.abs(open) >= 0.005) push(open > 0 ? 'CASH_IN' : 'CASH_OUT', MP_SNOWBALL_START, cur, Math.abs(open),
         `balance on ${addDays(MP_SNOWBALL_START, -1)}`);
       const changes = balanceChange.get(cur) || new Map();
       const effects = exportEffect.get(cur) || new Map();
-      const days = [...new Set([...changes.keys(), ...effects.keys()])].sort();
+      const typed = typedEffect.get(cur) || new Map();
+      const days = [...new Set([...changes.keys(), ...effects.keys(), ...typed.keys()])].sort();
       let pending = 0, since = null;
       const flush = () => {
         if (since && Math.abs(pending) >= 0.005) push(pending > 0 ? 'CASH_IN' : 'CASH_OUT', since, cur, Math.abs(pending), '');
@@ -2950,7 +3010,7 @@ document.getElementById('mp_cash_snowball_export').addEventListener('click', asy
       };
       for (const d of days) {
         if (since && d > addDays(since, SNOWBALL_CASH_WINDOW_DAYS)) flush();
-        const rest = (changes.get(d) || 0) - (effects.get(d) || 0);
+        const rest = (changes.get(d) || 0) - (effects.get(d) || 0) - (typed.get(d) || 0);
         if (Math.abs(rest) < 0.005) continue;
         if (!since) since = d;
         pending += rest;
@@ -2960,9 +3020,10 @@ document.getElementById('mp_cash_snowball_export').addEventListener('click', asy
       const end = open + [...changes.values()].reduce((s, v) => s + v, 0);
       if (Math.abs(end) >= 0.005) finals.push(`${cur} ${end.toFixed(2)}`);
     }
-    out.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-    snowballDownload(out, `snowball_cash_export_${today}.csv`);
-    statusEl.textContent = `Downloaded ${out.length} cash rows from ${series.size} accounts. Import it into the portfolio after the full export; `
+    const all = [...rows, ...out].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    snowballDownload(all, `snowball_full_export_with_cash_${today}.csv`);
+    statusEl.textContent = `Downloaded ${all.length} rows: the full export (${rows.length}) and ${out.length} cash rows from ${series.size} accounts `
+      + `(${converts} conversions, ${gains} interest / cashback, ${expenses} fees / taxes, the rest money in / out). `
       + `Snowball's balances should then be: ${finals.join(', ')}.`;
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}`;
