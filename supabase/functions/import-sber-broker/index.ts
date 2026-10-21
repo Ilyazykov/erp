@@ -12,7 +12,8 @@
 //     ISIN -- the tickers Snowball uses) and ISIN.
 // Written, with account 'Sber':
 //   trades (external_source 'sber_broker_html')
-//     - deals: buy / sell, price as reported (a bond's in % of nominal), NKD,
+//     - deals: buy / sell, price as reported (a bond's in % of a 1000
+//       nominal, from the deal's amount -- right after an amortisation), NKD,
 //       fee_tax = broker + exchange commission;
 //     - payouts from the money table, matched to a security by the name in
 //       the description: "Выплата купонов <name>" / "Выплата дивидендов
@@ -95,11 +96,13 @@ function parse(doc: string) {
   const tbl = tables(doc);
   const find = (t: string) => tbl.filter(x => x.title.startsWith(t));
 
-  // Directory: name -> { code, isin }
+  // Directory: name -> { code, isin }; bonds by code and ISIN.
   const byName = new Map<string, { code: string; isin: string }>();
   const byIsin = new Map<string, string>();
+  const bonds = new Set<string>();
   for (const t of find('Справочник Ценных Бумаг')) for (const r of t.rows) {
     if (r.length >= 3 && /^[A-Z]{2}[A-Z0-9]{9}\d$/.test(r[2])) { byName.set(r[0], { code: r[1], isin: r[2] }); byIsin.set(r[2], r[1]); }
+    if (/облигац/i.test(r[4] ?? '')) { bonds.add(r[1]); bonds.add(r[2]); }
   }
 
   // Opening / closing cash per currency.
@@ -139,8 +142,13 @@ function parse(doc: string) {
       const isin = /^[A-Z]{2}[A-Z0-9]{9}\d$/.test(r[4]) && byIsin.has(r[4]) ? r[4] : isinOfCode(r[4]);
       netDeals.set(isin, (netDeals.get(isin) ?? 0) + (side === 'buy' ? qty : -qty));
     }
+    // A bond's price is read as % of a 1000 nominal (refresh_investment_daily,
+    // the Snowball export: price * 10). After an amortisation the nominal is
+    // less (НижгорОб16: 700 -- 93.62% is 655.34, not 936.20), so the price
+    // is the deal's own amount per bond in that same unit.
+    const price = bonds.has(r[4]) && num(r[9]) && qty ? round(num(r[9]) / qty / 10, 6) : num(r[8]);
     trades.push({
-      ticker: ticker(r[4]), side, quantity: qty, price: num(r[8]), trade_date: date, currency: r[5] || 'RUB',
+      ticker: ticker(r[4]), side, quantity: qty, price, trade_date: date, currency: r[5] || 'RUB',
       fee_tax: round(num(r[11]) + num(r[12]), 2), fee_currency: r[5] || 'RUB', nkd: num(r[10]) || null, exchange: 'MOEX',
       note: `${r[3]} (сделка ${r[13]}, ${r[2]})`, external_id: `${agreement}:deal:${r[13]}`,
     });
