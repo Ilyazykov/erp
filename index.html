@@ -2632,7 +2632,9 @@ document.getElementById('mp_full_snowball_export').addEventListener('click', asy
       // interest for the whole deal (the same reading as refresh_investment_daily).
       let nkd = t.nkd;
       if (event === 'Buy' || event === 'Sell') {
-        const bond = ['bond', 'moex_bond', 'moex_ofz'].includes(mp?.asset_class) || /^(SU|RU)\d/.test(t.ticker);
+        // (an RU... ISIN is a bond unless it's a fund's units: "паи БПИФ ...")
+        const bond = ['bond', 'moex_bond', 'moex_ofz'].includes(mp?.asset_class)
+          || (/^(SU|RU)\d/.test(t.ticker) && !/^паи /i.test(t.note || ''));
         if (bond && price < 300 && ['RUB', 'CNY'].includes((t.currency || 'RUB').toUpperCase())) price *= 10;
         if (bond && ['sber_broker_html', 'tbank_broker_xlsx'].includes(t.external_source) && q) nkd = Number(t.nkd || 0) / q;
       }
