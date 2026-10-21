@@ -283,6 +283,14 @@
       <button class="btn primary" id="mp_full_snowball_export">Download full Snowball CSV</button>
     </div>
     <p class="empty-note" id="mp_full_snowball_status"></p>
+    <p class="note">The money on the bank and broker accounts (not credit cards, cash on hand, savings accounts or deposits)
+      as Snowball's CASH_IN / CASH_OUT, to import into the same portfolio after the full export: the balance the day before
+      its first deal, then each day's money in and out that the full export's deals and payouts don't already move
+      (salary, spending, transfers, conversions). Snowball's cash then ends at the accounts' balances today.</p>
+    <div class="form-row">
+      <button class="btn" id="mp_cash_snowball_export">Download Snowball cash CSV</button>
+    </div>
+    <p class="empty-note" id="mp_cash_snowball_status"></p>
 
     <div class="section-title">Real estate</div>
     <p class="note">A property is valued by its city's average price per m² (ready housing):
@@ -2504,12 +2512,10 @@ function snowballListedExchange(exchange, mp) {
   return SNOWBALL_EXCHANGE[e] || e;
 }
 
-document.getElementById('mp_full_snowball_export').addEventListener('click', async () => {
-  const statusEl = document.getElementById('mp_full_snowball_status');
-  const { data: { session } } = await sb.auth.getSession();
-  if (!session) { statusEl.textContent = 'Sign in first.'; return; }
-
-  try {
+// The full export's rows ([date, ticker, cells]), sorted by date, and a
+// summary of what was left out -- for its own button and for the cash one.
+async function snowballFullRows(statusEl) {
+  {
     statusEl.textContent = 'Loading trades, wallets and prices…';
     const [trades, wallets, balances, walletTxs, holdings, cardBuys] = await Promise.all([
       snowballFetchAll(() => sb.from('trades')
@@ -2806,25 +2812,158 @@ document.getElementById('mp_full_snowball_export').addEventListener('click', asy
     }
 
     rows.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-    const quote = v => `"${String(v).replace(/"/g, '""')}"`;
-    const lines = [SNOWBALL_HEADER.join(','), ...rows.map(r => r[2].map(quote).join(','))];
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `snowball_full_export_${today}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-
-    statusEl.textContent = `Downloaded ${rows.length} rows: ${tradeRows} from trades, ${walletRows} from crypto exchange logs, `
+    const summary = `${tradeRows} from trades, ${walletRows} from crypto exchange logs, `
       + `${reconciled} reconciling, ${priceRows} custom-holding prices, from ${MP_SNOWBALL_START} (Snowball's first deal).`
       + (blocked.size ? ` Blocked assets left out: ${[...blocked].sort().join(', ')}.` : '')
       + (noPosition.size ? ` Sales of what was bought before ${MP_SNOWBALL_START} left out: ${[...noPosition].sort().join(', ')}.` : '')
       + (beforeStart ? ` ${beforeStart} other trades before ${MP_SNOWBALL_START} left out.` : '')
       + (movedWithoutDeal ? ` ${movedWithoutDeal} T-Bank moves without a deal (between agreements, code changes) left out.` : '')
       + (leftOut.size ? ` Left out (not a custom holding in Snowball): ${[...leftOut].sort().join(', ')}.` : '');
+    return { rows, today, summary };
+  }
+}
+
+function snowballDownload(rows, fileName) {
+  const quote = v => `"${String(v).replace(/"/g, '""')}"`;
+  const lines = [SNOWBALL_HEADER.join(','), ...rows.map(r => r[2].map(quote).join(','))];
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+document.getElementById('mp_full_snowball_export').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_full_snowball_status');
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) { statusEl.textContent = 'Sign in first.'; return; }
+  try {
+    const { rows, today, summary } = await snowballFullRows(statusEl);
+    snowballDownload(rows, `snowball_full_export_${today}.csv`);
+    statusEl.textContent = `Downloaded ${rows.length} rows: ${summary}`;
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`;
+  }
+});
+// ---- Cash to Snowball ----
+// The money on the bank and broker accounts (bank_transactions: every
+// account but credit cards, cash on hand and metal pockets) as Snowball's
+// CASH_IN / CASH_OUT rows, to import into the same portfolio after the full
+// export. Snowball moves its cash with every row of that export (buys, sells,
+// payouts -- DoNotAdjustCash False), so the cash rows are what's left: each
+// day's change of the accounts' balances less what the export's rows of that
+// day do to the cash. One row per currency for the balance the day before the
+// first deal, then the rest -- money coming in or going out (a salary, a card
+// payment, a transfer to a savings account, a conversion's two legs), and a
+// deal's money that lands in the account on settlement, days after Snowball
+// books the deal. A deal and its settlement cancel out, so what's left is
+// summed over a few days and written on the first of them. Snowball's balance
+// then ends where the accounts are today.
+const SNOWBALL_CASH_WINDOW_DAYS = 4;
+const SNOWBALL_METALS = new Set(['XAU', 'XAG', 'XPT', 'XPD']);
+
+// What a row of the full export does to Snowball's cash, by currency.
+function snowballCashEffect(cells) {
+  const [event, , , priceS, qtyS, currency, feeS, , nkdS, feeCurrency, doNotAdjust] = cells;
+  if (doNotAdjust === 'True') return [];
+  const n = s => Number(String(s || '0').replace(',', '.')) || 0;
+  const price = n(priceS), qty = n(qtyS), fee = n(feeS), nkd = n(nkdS);
+  const out = [];
+  const money = { BUY: -(price + nkd) * qty, SELL: (price + nkd) * qty, DIVIDEND: qty, AMORTISATION: qty, REPAYMENT: price * qty }[event];
+  if (money === undefined) return out;
+  out.push([currency, money]);
+  if (fee) out.push([feeCurrency || currency, -fee]);
+  return out;
+}
+
+document.getElementById('mp_cash_snowball_export').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_cash_snowball_status');
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) { statusEl.textContent = 'Sign in first.'; return; }
+  try {
+    const { rows, today } = await snowballFullRows(statusEl);
+    statusEl.textContent = 'Loading bank and broker accounts…';
+    const bank = await snowballFetchAll(() => sb.from('bank_transactions')
+      .select('account, currency, external_source, product, balance_after, tx_date, booked_at')
+      .not('balance_after', 'is', null).order('id'));
+
+    // Each account's (account, currency, source -- as bank_latest_balances
+    // takes them) balance at the end of every day it moved.
+    const series = new Map();
+    for (const r of bank) {
+      if (r.product === 'credit_card' || r.product === 'cash' || r.account === 'cash' || SNOWBALL_METALS.has(r.currency)) continue;
+      const key = `${r.account}|${r.currency}|${r.external_source}`;
+      if (!series.has(key)) series.set(key, []);
+      series.get(key).push(r);
+    }
+    const day = d => String(d).slice(0, 10);
+    const addDays = (d, k) => new Date(Date.parse(`${d}T00:00:00Z`) + k * 86400000).toISOString().slice(0, 10);
+    const balanceChange = new Map();  // currency -> day -> change of all its accounts
+    const bump = (m, cur, d, v) => {
+      if (!m.has(cur)) m.set(cur, new Map());
+      m.get(cur).set(d, (m.get(cur).get(d) || 0) + v);
+    };
+    const opening = new Map();  // currency -> balance the day before the first deal
+    for (const [key, list] of series) {
+      const cur = key.split('|')[1];
+      list.sort((a, b) => {
+        const ka = a.booked_at || a.tx_date, kb = b.booked_at || b.tx_date;
+        return ka < kb ? -1 : ka > kb ? 1 : (a.tx_date < b.tx_date ? -1 : a.tx_date > b.tx_date ? 1 : 0);
+      });
+      const endOfDay = new Map();
+      for (const r of list) endOfDay.set(day(r.booked_at || r.tx_date), Number(r.balance_after));
+      let prev = 0;
+      for (const [d, bal] of [...endOfDay].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+        if (d < MP_SNOWBALL_START) { prev = bal; continue; }
+        if (d > today) break;
+        bump(balanceChange, cur, d, bal - prev);
+        prev = bal;
+      }
+      const open = [...endOfDay].filter(([d]) => d < MP_SNOWBALL_START).sort((a, b) => (a[0] < b[0] ? -1 : 1)).pop();
+      if (open) opening.set(cur, (opening.get(cur) || 0) + open[1]);
+    }
+
+    // What the full export's rows do to the cash, by currency and day.
+    const exportEffect = new Map();
+    for (const [d, , cells] of rows) for (const [cur, v] of snowballCashEffect(cells)) bump(exportEffect, cur, d, v);
+
+    const out = [];
+    const push = (event, d, cur, amount, note) => out.push([d, cur, [event, `${d} 00:00:00`, cur, '1', snowballNumber(Math.round(amount * 100) / 100),
+      cur, '0', '', '', '', 'False', note]]);
+    const finals = [];
+    const currencies = new Set([...balanceChange.keys(), ...exportEffect.keys(), ...opening.keys()]);
+    for (const cur of [...currencies].sort()) {
+      const open = opening.get(cur) || 0;
+      if (Math.abs(open) >= 0.005) push(open > 0 ? 'CASH_IN' : 'CASH_OUT', MP_SNOWBALL_START, cur, Math.abs(open),
+        `balance on ${addDays(MP_SNOWBALL_START, -1)}`);
+      const changes = balanceChange.get(cur) || new Map();
+      const effects = exportEffect.get(cur) || new Map();
+      const days = [...new Set([...changes.keys(), ...effects.keys()])].sort();
+      let pending = 0, since = null;
+      const flush = () => {
+        if (since && Math.abs(pending) >= 0.005) push(pending > 0 ? 'CASH_IN' : 'CASH_OUT', since, cur, Math.abs(pending), '');
+        pending = 0; since = null;
+      };
+      for (const d of days) {
+        if (since && d > addDays(since, SNOWBALL_CASH_WINDOW_DAYS)) flush();
+        const rest = (changes.get(d) || 0) - (effects.get(d) || 0);
+        if (Math.abs(rest) < 0.005) continue;
+        if (!since) since = d;
+        pending += rest;
+        if (Math.abs(pending) < 0.005) { pending = 0; since = null; }
+      }
+      flush();
+      const end = open + [...changes.values()].reduce((s, v) => s + v, 0);
+      if (Math.abs(end) >= 0.005) finals.push(`${cur} ${end.toFixed(2)}`);
+    }
+    out.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    snowballDownload(out, `snowball_cash_export_${today}.csv`);
+    statusEl.textContent = `Downloaded ${out.length} cash rows from ${series.size} accounts. Import it into the portfolio after the full export; `
+      + `Snowball's balances should then be: ${finals.join(', ')}.`;
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}`;
   }
