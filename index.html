@@ -283,10 +283,13 @@
       <button class="btn primary" id="mp_full_snowball_export">Download full Snowball CSV</button>
     </div>
     <p class="empty-note" id="mp_full_snowball_status"></p>
-    <p class="note">The same full export with the money on the bank and broker accounts (not credit cards, cash on hand,
-      savings accounts or deposits) added as Snowball's CASH_IN / CASH_OUT: the balance the day before the first deal, then
-      each day's money in and out that the deals and payouts don't already move (salary, spending, transfers,
-      conversions). Snowball's cash then ends at the accounts' balances today.</p>
+    <p class="note">The full export with fewer custom holdings and the money added. XAUT goes into XAU; every rouble deposit
+      and savings account is one holding, ВКЛАДЫ (each row's Note names the original, so an upload of Snowball's export
+      splits them again). The money -- bank and broker accounts, cash on hand, savings in other currencies and the
+      dollars on the crypto exchanges (today's balance only), not credit cards -- is Snowball's cash: the balance the
+      day before the first deal, then conversions (CASH_CONVERT), interest and cashback (CASH_GAIN), fees and taxes
+      (CASH_EXPENSE), and the rest of each day's money in and out (CASH_IN / CASH_OUT) that the deals and payouts
+      don't already move. Snowball's cash then ends at the accounts' balances today.</p>
     <div class="form-row">
       <button class="btn" id="mp_cash_snowball_export">Download full Snowball CSV with cash</button>
     </div>
@@ -2892,13 +2895,89 @@ function snowballCashEffect(cells) {
   return out;
 }
 
+// The full export as this button gives it -- fewer custom holdings, each
+// row's Note saying what it was, so an upload of Snowball's export can split
+// them again:
+//  - XAUT is XAU (both troy ounces of gold): its rows go to XAU, Note
+//    "XAUT: <account>";
+//  - every rouble deposit and savings account (DEPOSIT: / SAVINGS: / ВКЛАД:,
+//    not an exchange's Earn) is one holding "ВКЛАДЫ", Note "<ticker>:
+//    <account>", priced 1 rouble a unit: money put in is a buy, taken out a
+//    sale, interest stock as a dividend, and what one held before the first
+//    deal a buy that day not moving the cash (DoNotAdjustCash);
+//  - deposits / savings in another currency are cash: their balances by day
+//    (foreignSavings) join the bank accounts' in the cash rows.
+const SNOWBALL_DEPOSITS = 'ВКЛАДЫ';
+async function snowballMergedRows(fullRows, today) {
+  const savingsPattern = /^(DEPOSIT|SAVINGS|ВКЛАД):/i;
+  const rows = [];
+  for (const r of fullRows) {
+    const [d, ticker, cells] = r;
+    if (savingsPattern.test(ticker)) continue;
+    if (ticker === 'XAUT') {
+      if (cells[0] === 'CUSTOM_HOLDING_PRICE' || cells[0] === 'CUSTOM_HOLDING_SETTINGS') continue;
+      const c = [...cells];
+      c[2] = 'XAU';
+      c[11] = `XAUT: ${cells[11] || ''}`;
+      rows.push([d, 'XAU', c]);
+      continue;
+    }
+    rows.push(r);
+  }
+  const wallets = await snowballFetchAll(() => sb.from('crypto_wallets').select('account'));
+  const cryptoAccounts = new Set(wallets.map(w => w.account));
+  const trades = (await snowballFetchAll(() => sb.from('trades')
+    .select('ticker, side, quantity, price, trade_date, currency, note, account')
+    .or('ticker.like.DEPOSIT:%,ticker.like.SAVINGS:%,ticker.like.ВКЛАД:%').order('trade_date').order('id')))
+    .filter(t => !cryptoAccounts.has(t.account) && (t.side === 'buy' || t.side === 'sell'));
+  const foreignSavings = new Map();  // currency -> day -> change
+  const foreignOpening = new Map();  // currency -> balance the day before the first deal
+  const held = new Map();            // rouble ticker -> balance before the first deal
+  const n = v => Number(v) || 0;
+  for (const t of trades) {
+    const cur = (t.currency || 'RUB').toUpperCase();
+    const money = n(t.quantity) * (n(t.price) || 1) * (t.side === 'sell' ? -1 : 1);
+    if (cur !== 'RUB') {
+      if (t.trade_date < MP_SNOWBALL_START) foreignOpening.set(cur, (foreignOpening.get(cur) || 0) + money);
+      else if (t.trade_date <= today) {
+        if (!foreignSavings.has(cur)) foreignSavings.set(cur, new Map());
+        foreignSavings.get(cur).set(t.trade_date, (foreignSavings.get(cur).get(t.trade_date) || 0) + money);
+      }
+      continue;
+    }
+    if (t.trade_date < MP_SNOWBALL_START) { held.set(t.ticker, (held.get(t.ticker) || 0) + money); continue; }
+    if (t.trade_date > today) continue;
+    const interest = t.side === 'buy' && /interest|капитализац|процент/i.test(t.note || '');
+    const event = interest ? 'STOCK_AS_DIVIDEND' : t.side === 'buy' ? 'BUY' : 'SELL';
+    rows.push([t.trade_date, SNOWBALL_DEPOSITS, [event, `${t.trade_date} 00:00:00`, SNOWBALL_DEPOSITS, '1', snowballNumber(Math.abs(money)),
+      'RUB', '0', 'CUSTOM_HOLDING', '0', 'RUB', 'False', `${t.ticker}: ${t.account || ''}`]]);
+  }
+  for (const [ticker, bal] of held) {
+    if (bal < 0.005) continue;
+    rows.push([MP_SNOWBALL_START, SNOWBALL_DEPOSITS, ['BUY', `${MP_SNOWBALL_START} 00:00:00`, SNOWBALL_DEPOSITS, '1', snowballNumber(Math.round(bal * 100) / 100),
+      'RUB', '0', 'CUSTOM_HOLDING', '0', 'RUB', 'True', `${ticker}: balance before ${MP_SNOWBALL_START}`]]);
+  }
+  const settings = {
+    Holding: { Note: '', Currency: 'RUB', Description: 'Вклады и накопительные счета', DividendTax: null, Sector: 'Cash' },
+    Settings: { CustomHoldingType: 2, IncomeType: 1, FirstIncomeDate: null, GenerateIncome: false, IncomeAmount: 0,
+      IncomeReinvestmentType: 0, IsIncomeReinvested: false, MaturityDate: null, Period: 1, PeriodType: 3, NextIncomeDate: null },
+  };
+  const json = JSON.stringify(settings).replace(/[\u0080-￿]/g, c => `\\u${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`)
+    .replace(/"/g, '@*@');
+  rows.push([today, SNOWBALL_DEPOSITS, ['CUSTOM_HOLDING_SETTINGS', `${today} 00:00:00`, SNOWBALL_DEPOSITS, '0', '0', 'RUB',
+    '0', 'CUSTOM_HOLDING', '0', '', '', json]]);
+  rows.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  return { rows, foreignSavings, foreignOpening };
+}
+
 document.getElementById('mp_cash_snowball_export').addEventListener('click', async () => {
   const statusEl = document.getElementById('mp_cash_snowball_status');
   const { data: { session } } = await sb.auth.getSession();
   if (!session) { statusEl.textContent = 'Sign in first.'; return; }
   try {
-    const { rows, today } = await snowballFullRows(statusEl);
+    const { rows: fullRows, today } = await snowballFullRows(statusEl);
     statusEl.textContent = 'Loading bank and broker accounts…';
+    const { rows, foreignSavings, foreignOpening } = await snowballMergedRows(fullRows, today);
     const bank = await snowballFetchAll(() => sb.from('bank_transactions')
       .select('account, currency, external_source, product, balance_after, tx_date, booked_at, amount, description, synthetic_kind')
       .not('balance_after', 'is', null).order('id'));
@@ -2907,7 +2986,7 @@ document.getElementById('mp_cash_snowball_export').addEventListener('click', asy
     // takes them) balance at the end of every day it moved.
     const series = new Map();
     for (const r of bank) {
-      if (r.product === 'credit_card' || r.product === 'cash' || r.account === 'cash' || SNOWBALL_METALS.has(r.currency)) continue;
+      if (r.product === 'credit_card' || SNOWBALL_METALS.has(r.currency)) continue;
       const key = `${r.account}|${r.currency}|${r.external_source}`;
       if (!series.has(key)) series.set(key, []);
       series.get(key).push(r);
@@ -2938,6 +3017,17 @@ document.getElementById('mp_cash_snowball_export').addEventListener('click', asy
       const open = [...endOfDay].filter(([d]) => d < MP_SNOWBALL_START).sort((a, b) => (a[0] < b[0] ? -1 : 1)).pop();
       if (open) opening.set(cur, (opening.get(cur) || 0) + open[1]);
     }
+
+    // Savings / deposits in another currency, and the dollars on the crypto
+    // exchanges and wallets (stablecoins -- their history isn't reliable:
+    // Telegram Wallet doesn't say how many it spent, so only today's balance,
+    // as money that arrived today).
+    for (const [cur, byDay] of foreignSavings) for (const [d, v] of byDay) bump(balanceChange, cur, d, v);
+    for (const [cur, v] of foreignOpening) opening.set(cur, (opening.get(cur) || 0) + v);
+    const coins = await snowballFetchAll(() => sb.from('wallet_balances').select('ticker, symbol, quantity'));
+    const stable = coins.filter(c => SNOWBALL_STABLECOINS.has(String(c.ticker || c.symbol || '').toUpperCase()))
+      .reduce((s, c) => s + (Number(c.quantity) || 0), 0);
+    if (stable >= 0.005) bump(balanceChange, 'USD', today, stable);
 
     // What the full export's rows do to the cash, by currency and day.
     const exportEffect = new Map();

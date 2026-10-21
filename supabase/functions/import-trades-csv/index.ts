@@ -191,6 +191,19 @@ Deno.serve(async (req) => {
       if (SKIPPED_EVENTS.has(event)) { skipped++; continue; }
       const side = EVENT_TO_SIDE[event];
       if (!side) { skipped++; continue; }
+      // This project's export with cash (index.html, snowballMergedRows) folds
+      // holdings together and names the original in Note: a "ВКЛАДЫ" row
+      // "<ticker>: <account>", an XAU row that was XAUT "XAUT: <account>".
+      // Split them again; a deposit's "balance before ..." is that export's
+      // own opening row, not an operation.
+      const folded = (cells[idx.note] || '').trim();
+      if ((cells[idx.symbol] || '').trim() === 'ВКЛАДЫ') {
+        const original = folded.match(/^(.+?): /)?.[1];
+        if (!original || /: balance before /.test(folded)) { skipped++; continue; }
+        cells[idx.symbol] = original;
+      } else if ((cells[idx.symbol] || '').trim() === 'XAU' && folded.startsWith('XAUT:')) {
+        cells[idx.symbol] = 'XAUT';
+      }
       if (SKIPPED_NOTES.has((cells[idx.note] || '').trim().toLowerCase())) { skippedTrust++; continue; }
       if (isSnowballEthInterest(event, cells[idx.symbol] || '')) { skippedTrust++; continue; }
       if (SKIPPED_SYMBOLS.has((cells[idx.symbol] || '').trim().toUpperCase())) { skippedTrust++; continue; }
