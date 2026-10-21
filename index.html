@@ -275,7 +275,8 @@
       trade, dividend, coupon, amortisation and redemption (MOEX as MCX, Revolut funds as EUFUND). Snowball caps
       the number of custom holdings (CUSTOM_HOLDING), so only the ones it already has are exported — BTC, ETH,
       XAUT, XAU and the deposit ВКЛАД:Т16%13; other crypto, deposits, savings accounts and ЦФА are left out.
-      Crypto on exchanges and wallets becomes buys / sells / rewards from their transaction logs, plus one
+      Crypto on exchanges and wallets becomes buys / sells / rewards from their transaction logs (coins bought
+      by card through Mercuryo / Transak at what the card paid, on the day they arrived), plus one
       reconciling row per coin dated today so its quantity matches the current balance (transfers between own
       wallets and network fees aren't trades). Custom holdings also get a price for every day and their settings rows.</p>
     <div class="form-row">
@@ -2507,15 +2508,17 @@ document.getElementById('mp_full_snowball_export').addEventListener('click', asy
 
   try {
     statusEl.textContent = 'Loading trades, wallets and prices…';
-    const [trades, wallets, balances, walletTxs, holdings] = await Promise.all([
+    const [trades, wallets, balances, walletTxs, holdings, cardBuys] = await Promise.all([
       snowballFetchAll(() => sb.from('trades')
         .select('ticker, side, quantity, price, trade_date, currency, fee_tax, fee_currency, exchange, nkd, account, note, external_source, external_id')
         .order('trade_date').order('id')),
       snowballFetchAll(() => sb.from('crypto_wallets').select('id, chain, account')),
       snowballFetchAll(() => sb.from('wallet_balances').select('wallet_id, contract, ticker')),
       snowballFetchAll(() => sb.from('wallet_transactions')
-        .select('wallet_id, tx_time, kind, contract, symbol, amount').order('tx_time')),
+        .select('wallet_id, tx_hash, seq, tx_time, kind, contract, symbol, amount').order('tx_time')),
       snowballFetchAll(() => sb.from('portfolio_value_usd').select('ticker, quantity')),
+      snowballFetchAll(() => sb.from('card_crypto_purchases')
+        .select('wallet_id, tx_hash, kind, seq, paid, currency').in('matched_by', ['auto', 'manual'])),
     ]);
 
     const marketRows = await snowballFetchAll(() => sb.from('market_prices')
@@ -2642,9 +2645,14 @@ document.getElementById('mp_full_snowball_export').addEventListener('click', asy
     // Coins only ever moved in (on-chain wallets) still get their reconciling row.
     for (const b of balances) markWalletCoin(b.ticker);
     const needHistory = [];  // rows waiting for a price from price_history
+    // Coins bought by card through an on-ramp (card_crypto_purchases): a buy
+    // at what the card paid, even when the wallet booked a plain arrival
+    // (Trust's ETH on-chain).
+    const cardBuyOf = new Map(cardBuys.map(c => [`${c.wallet_id}|${c.tx_hash}|${c.kind}|${c.seq}`, c]));
     let walletRows = 0;
     for (const tx of walletTxs) {
-      const isTrade = SNOWBALL_WALLET_TRADE_KINDS.has(tx.kind);
+      const cardBuy = cardBuyOf.get(`${tx.wallet_id}|${tx.tx_hash}|${tx.kind}|${tx.seq}`);
+      const isTrade = SNOWBALL_WALLET_TRADE_KINDS.has(tx.kind) || !!cardBuy;
       if (!isTrade && !SNOWBALL_WALLET_REWARD_KINDS.has(tx.kind)) continue;
       const coin = coinOf(tx);
       const amount = Number(tx.amount);
@@ -2654,7 +2662,10 @@ document.getElementById('mp_full_snowball_export').addEventListener('click', asy
       if (event === 'STOCK_AS_DIVIDEND' && amount < 0) continue;
       let price = null;
       let currency = 'USD';
-      if (isTrade) {
+      if (cardBuy && amount > 0) {
+        price = Number(cardBuy.paid) / amount;
+        currency = cardBuy.currency;
+      } else if (isTrade) {
         // Several fills in the same second: the quote legs pay for all of them.
         const group = legs.get(`${tx.wallet_id}|${tx.tx_time}`) || [];
         const same = group.filter(g => coinOf(g) === coin && Math.sign(Number(g.amount)) === Math.sign(amount));
