@@ -2535,7 +2535,8 @@ document.getElementById('mp_full_snowball_export').addEventListener('click', asy
 
     const rows = [];  // [date, ticker, cells[]]
     // Snowball's import refuses a ":" in Symbol, though its own export writes
-    // one (its deposit "ВКЛАД:Т16%13"): "ВКЛАД-Т16%13".
+    // one (its deposit "ВКЛАД:Т16%13"): "ВКЛАД-Т16%13" -- import-trades-csv
+    // reads it back as "ВКЛАД:".
     const push = (event, date, ticker, price, quantity, currency, feeTax, exchange, nkd, feeCurrency, note) => {
       rows.push([date, ticker, [event, `${date} 00:00:00`, ticker.replace(/:/g, '-'), snowballNumber(price), snowballNumber(quantity),
         currency || '', snowballNumber(feeTax || 0), exchange, snowballNumber(nkd ?? 0), feeCurrency || '', 'False', note || '']]);

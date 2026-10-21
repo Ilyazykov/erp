@@ -99,8 +99,11 @@ function parseDate(s: string): string | null {
 // itself to the new prefix, so newly-imported deposit rows read the same
 // way as the Revolut deposit importer's own tickers, instead of having
 // two different-looking prefixes for the same concept going forward.
+// Snowball's import refuses a ":" in Symbol, so this project's export sends
+// it "ВКЛАД-Т16%13" -- the same deposit.
 function normalizeDepositTicker(ticker: string): string {
-  return ticker.startsWith('ВКЛАД:') ? `DEPOSIT:${ticker.slice('ВКЛАД:'.length)}` : ticker;
+  const m = ticker.match(/^ВКЛАД[:-]/);
+  return m ? `DEPOSIT:${ticker.slice(m[0].length)}` : ticker;
 }
 
 Deno.serve(async (req) => {
