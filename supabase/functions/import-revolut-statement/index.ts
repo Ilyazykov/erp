@@ -99,12 +99,63 @@ function parseCsvLine(line: string): string[] {
 }
 
 // "2025-10-11 01:16:36" -> "2025-10-11T01:16:36Z". Revolut's CSV export
-// gives naive local-ish timestamps with no timezone marker; treated as UTC
-// here (Revolut's own statements are UTC-based) so Postgres parses them as
-// an unambiguous instant rather than guessing the session timezone.
+// gives the time on the clock of the device it was exported on, with no
+// timezone marker; labelled UTC here so Postgres stores it as is rather than
+// guessing the session timezone. An export from another timezone is moved
+// onto the stored rows' clock first (detectShift below).
 function toIsoTimestamp(s: string): string | null {
   const m = s.trim().match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})$/);
   return m ? `${m[1]}T${m[2]}Z` : null;
+}
+
+const HOUR = 3600_000;
+
+// "2025-10-11 01:16:36" moved by ms, in the same format.
+function shiftLocal(s: string, ms: number): string {
+  const iso = toIsoTimestamp(s);
+  if (!iso || !ms) return s;
+  return new Date(Date.parse(iso) + ms).toISOString().slice(0, 19).replace('T', ' ');
+}
+
+interface StoredRow { amount: unknown; currency: string; balance_after: unknown; tx_date: string; booked_at: string | null }
+
+// The whole hours this export's clock is off from the rows already stored.
+// The export of 22.09.2026 (Cyprus time) and those of 06.10 / 17.10 (an hour
+// west) gave every shared row two different Started Dates, so two
+// external_ids, and the upload added the whole history a second time
+// (migrations/20250101000087_revolut_timezone_duplicates.sql). A row stored
+// before: same currency, amount and running balance, Started and Completed
+// Date both off by the same whole number of hours (up to 14) -- two
+// different transactions don't line up like that. The offset most rows
+// agree on wins, if more rows agree on it than sit at no offset at all.
+function detectShift(rows: CsvRow[], stored: StoredRow[]): number {
+  const byKey = new Map<string, StoredRow[]>();
+  for (const s of stored) {
+    if (s.balance_after === null) continue;
+    const key = `${s.currency}|${Number(s.amount)}|${Number(s.balance_after)}`;
+    byKey.set(key, [...(byKey.get(key) ?? []), s]);
+  }
+  const votes = new Map<number, number>();
+  for (const r of rows) {
+    if (!r.balance) continue;
+    const started = Date.parse(toIsoTimestamp(r.startedDate) ?? '');
+    const completedIso = toIsoTimestamp(r.completedDate);
+    const completed = completedIso ? Date.parse(completedIso) : null;
+    if (Number.isNaN(started)) continue;
+    const key = `${r.currency}|${r.amount}|${parseFloat(r.balance.replace(/,/g, ''))}`;
+    const offsets = new Set<number>();
+    for (const s of byKey.get(key) ?? []) {
+      const d = Date.parse(s.tx_date) - started;
+      if (d % HOUR !== 0 || Math.abs(d) > 14 * HOUR) continue;
+      if (completed !== null && s.booked_at
+          && Math.floor(Date.parse(s.booked_at) / 1000) * 1000 - completed !== d) continue;
+      offsets.add(d);
+    }
+    for (const d of offsets) votes.set(d, (votes.get(d) ?? 0) + 1);
+  }
+  let best = 0;
+  for (const [d, n] of votes) if (d !== 0 && n > (votes.get(best) ?? 0)) best = d;
+  return best;
 }
 
 function parseRows(text: string): CsvRow[] {
@@ -204,6 +255,30 @@ Deno.serve(async (req) => {
         { status: 400, headers: corsHeaders });
     }
 
+    // Onto the stored rows' clock (detectShift), before any key is built.
+    const completedRows = csvRows.filter(r => r.state === 'COMPLETED' && toIsoTimestamp(r.startedDate));
+    let shift = 0;
+    if (completedRows.length) {
+      const times = completedRows.map(r => Date.parse(toIsoTimestamp(r.startedDate)!));
+      const from = new Date(Math.min(...times) - 14 * HOUR).toISOString();
+      const to = new Date(Math.max(...times) + 14 * HOUR).toISOString();
+      const stored: StoredRow[] = [];
+      for (let page = 0; ; page++) {
+        const { data, error } = await supabase.from('bank_transactions')
+          .select('amount, currency, balance_after, tx_date, booked_at')
+          .eq('external_source', 'revolut_csv').gte('tx_date', from).lte('tx_date', to)
+          .order('id').range(page * 1000, page * 1000 + 999);
+        if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: corsHeaders });
+        stored.push(...(data ?? []));
+        if (!data || data.length < 1000) break;
+      }
+      shift = detectShift(completedRows, stored);
+      if (shift) for (const r of csvRows) {
+        r.startedDate = shiftLocal(r.startedDate, shift);
+        r.completedDate = shiftLocal(r.completedDate, shift);
+      }
+    }
+
     const account = 'Revolut';
     let skippedNotCompleted = 0;
     let skippedDeposit = 0;
@@ -291,10 +366,20 @@ Deno.serve(async (req) => {
       let fiat: { amount: number; currency: string } | undefined = (byStarted.get(r.startedDate) ?? [])
         .find(p => p !== r && p.state === 'COMPLETED' && !METALS.has(p.currency) && Math.sign(p.amount) === -Math.sign(r.amount));
       if (!fiat) {
-        const { data: stored } = await supabase.from('bank_transactions').select('amount, currency')
-          .eq('external_source', 'revolut_csv').eq('tx_date', toIsoTimestamp(r.startedDate));
-        fiat = (stored ?? []).map((p: { amount: unknown; currency: string }) => ({ amount: Number(p.amount), currency: p.currency }))
-          .find((p: { amount: number; currency: string }) => !METALS.has(p.currency) && Math.sign(p.amount) === -Math.sign(r.amount));
+        // The fiat leg may have come in an export from another timezone (the
+        // metal pocket's statement is its own file): the nearest one a whole
+        // number of hours away counts too.
+        const t = Date.parse(toIsoTimestamp(r.startedDate) ?? '');
+        if (!Number.isNaN(t)) {
+          const { data: stored } = await supabase.from('bank_transactions').select('amount, currency, tx_date')
+            .eq('external_source', 'revolut_csv')
+            .gte('tx_date', new Date(t - 14 * HOUR).toISOString()).lte('tx_date', new Date(t + 14 * HOUR).toISOString());
+          fiat = (stored ?? [])
+            .map((p: { amount: unknown; currency: string; tx_date: string }) =>
+              ({ amount: Number(p.amount), currency: p.currency, d: Date.parse(p.tx_date) - t }))
+            .filter(p => p.d % HOUR === 0 && !METALS.has(p.currency) && Math.sign(p.amount) === -Math.sign(r.amount))
+            .sort((a, b) => Math.abs(a.d) - Math.abs(b.d))[0];
+        }
       }
       if (!fiat) { metalWithoutPrice++; continue; }
       const price = Math.abs(fiat.amount) / Math.abs(r.amount);
@@ -334,6 +419,7 @@ Deno.serve(async (req) => {
       imported_metal_trades: metalTrades.length,
       metal_rows_without_price: metalWithoutPrice,
       removed_snowball_duplicates: removedSnowball,
+      time_shift_hours: shift / HOUR,
       total_rows: csvRows.length,
       skipped_not_completed: skippedNotCompleted,
       skipped_deposit: skippedDeposit,
