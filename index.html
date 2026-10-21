@@ -2867,13 +2867,16 @@ const SNOWBALL_CASH_WINDOW_DAYS = 4;
 const SNOWBALL_METALS = new Set(['XAU', 'XAG', 'XPT', 'XPD']);
 // Bank rows with a kind of their own, by how the statements word them; the
 // rest is money in / out. A conversion is two rows of one bank a few minutes
-// apart, one currency out and another in, one of them worded as one (Revolut
-// "Exchanged to GBP", Raiffeisen "kupoprodaja efektive", Ziraat "Döviz
-// Satış"). A broker's commission for a deal is in the deal already.
+// apart, one currency out and another in: worded the same (Ziraat's "Döviz
+// Satış" with its Ref, Revolut's "Exchanged to GBP", Raiffeisen's
+// "kupoprodaja efektive" with its number), or else both worded as one. A
+// broker's commission for a deal (Sber's "Комиссия Биржи / Брокера",
+// Freedom24's "Комиссия за сделки") is in the deal already, and a payment that
+// merely includes a commission (a utility bill) is a payment.
 const SNOWBALL_CASH_FX = /exchang|конверт|обмен валют|döviz|kupoprodaja|currency exchange/i;
 const SNOWBALL_CASH_GAIN = /interest|процент|капитализац|cashback|кэшбэк|кешбэк|вознаграждение за операции покупок|\bfaiz\b|kamata/i;
 const SNOWBALL_CASH_EXPENSE = /\bfee\b|комисси|commission|provizij|odrzavanje|maintenance|обслуживан|ндфл|налог|\btax\b|ücret|masraf/i;
-const SNOWBALL_CASH_DEAL_FEE = /за сделк|по сделк/i;
+const SNOWBALL_CASH_DEAL_FEE = /за сделк|по сделк|комиссия биржи|комиссия брокера|includes a commission|включая комисси/i;
 
 // What a row of the full export does to Snowball's cash, by currency.
 function snowballCashEffect(cells) {
@@ -2963,10 +2966,14 @@ document.getElementById('mp_cash_snowball_export').addEventListener('click', asy
         const a = list[i];
         if (used.has(a) || !(Number(a.amount) < 0)) continue;
         const near = list.filter(b => !used.has(b) && b !== a && b.currency !== a.currency && Number(b.amount) > 0
-          && Math.abs(at(b) - at(a)) <= 5 * 60000
-          && (SNOWBALL_CASH_FX.test(a.description || '') || SNOWBALL_CASH_FX.test(b.description || '')));
-        if (!near.length) continue;
-        const b = near.sort((x, y) => Math.abs(at(x) - at(a)) - Math.abs(at(y) - at(a)))[0];
+          && Math.abs(at(b) - at(a)) <= 5 * 60000);
+        // (Ziraat's two legs differ in spaces only: "Satış ; ... USD 21,02" / "Satış; ... USD21,02")
+        const plain = r => (r.description || '').replace(/\s+/g, '');
+        const same = near.filter(b => plain(b) === plain(a) && SNOWBALL_CASH_FX.test(a.description || ''));
+        const both = near.filter(b => SNOWBALL_CASH_FX.test(a.description || '') && SNOWBALL_CASH_FX.test(b.description || ''));
+        const pick = same.length ? same : both;
+        if (!pick.length) continue;
+        const b = pick.sort((x, y) => Math.abs(at(x) - at(a)) - Math.abs(at(y) - at(a)))[0];
         used.add(a); used.add(b);
         const d = day(a.booked_at || a.tx_date);
         if (d < MP_SNOWBALL_START || d > today) continue;
