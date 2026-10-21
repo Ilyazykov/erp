@@ -286,7 +286,7 @@
     <p class="note">The full export with fewer custom holdings and the money added. XAUT goes into XAU; every rouble deposit
       and savings account is one holding, ВКЛАДЫ (each row's Note names the original, so an upload of Snowball's export
       splits them again). The money -- bank and broker accounts, cash on hand, savings in other currencies and the
-      dollars on the crypto exchanges (today's balance only), not credit cards -- is Snowball's cash: the balance the
+      dollars on the crypto exchanges (today's balance only), less what's owed on the credit cards -- is Snowball's cash: the balance the
       day before the first deal, then conversions (CASH_CONVERT), interest and cashback (CASH_GAIN), fees and taxes
       (CASH_EXPENSE), and the rest of each day's money in and out (CASH_IN / CASH_OUT) that the deals and payouts
       don't already move. Snowball's cash then ends at the accounts' balances today.</p>
@@ -2854,8 +2854,8 @@ document.getElementById('mp_full_snowball_export').addEventListener('click', asy
 });
 // ---- Full export with cash ----
 // The full export plus the money on the bank and broker accounts
-// (bank_transactions: every account but credit cards, cash on hand and metal
-// pockets) as Snowball's CASH_IN / CASH_OUT rows. Snowball moves its cash with
+// (bank_transactions: every account, credit cards and cash on hand too, but
+// metal pockets) as Snowball's CASH_IN / CASH_OUT rows. Snowball moves its cash with
 // every row of the full export (buys, sells,
 // payouts -- DoNotAdjustCash False), so the cash rows are what's left: each
 // day's change of the accounts' balances less what the export's rows of that
@@ -2904,7 +2904,8 @@ function snowballCashEffect(cells) {
 //    not an exchange's Earn) is one holding "ВКЛАДЫ", Note "<ticker>:
 //    <account>", priced 1 rouble a unit: money put in is a buy, taken out a
 //    sale, interest stock as a dividend, and what one held before the first
-//    deal a buy that day not moving the cash (DoNotAdjustCash);
+//    deal a buy that day (Snowball moves the cash for a custom holding's buy
+//    whatever DoNotAdjustCash says, so the cash rows bring that money in);
 //  - deposits / savings in another currency are cash: their balances by day
 //    (foreignSavings) join the bank accounts' in the cash rows.
 const SNOWBALL_DEPOSITS = 'ВКЛАДЫ';
@@ -2955,7 +2956,7 @@ async function snowballMergedRows(fullRows, today) {
   for (const [ticker, bal] of held) {
     if (bal < 0.005) continue;
     rows.push([MP_SNOWBALL_START, SNOWBALL_DEPOSITS, ['BUY', `${MP_SNOWBALL_START} 00:00:00`, SNOWBALL_DEPOSITS, '1', snowballNumber(Math.round(bal * 100) / 100),
-      'RUB', '0', 'CUSTOM_HOLDING', '0', 'RUB', 'True', `${ticker}: balance before ${MP_SNOWBALL_START}`]]);
+      'RUB', '0', 'CUSTOM_HOLDING', '0', 'RUB', 'False', `${ticker}: balance before ${MP_SNOWBALL_START}`]]);
   }
   const settings = {
     Holding: { Note: '', Currency: 'RUB', Description: 'Вклады и накопительные счета', DividendTax: null, Sector: 'Cash' },
@@ -2986,7 +2987,8 @@ document.getElementById('mp_cash_snowball_export').addEventListener('click', asy
     // takes them) balance at the end of every day it moved.
     const series = new Map();
     for (const r of bank) {
-      if (r.product === 'credit_card' || SNOWBALL_METALS.has(r.currency)) continue;
+      // a credit card too: its debt is what the savings it paid into owe
+      if (SNOWBALL_METALS.has(r.currency)) continue;
       const key = `${r.account}|${r.currency}|${r.external_source}`;
       if (!series.has(key)) series.set(key, []);
       series.get(key).push(r);
