@@ -2437,6 +2437,9 @@ document.getElementById('mp_fund_snowball_export').addEventListener('click', asy
 // as CUSTOM_HOLDING with CUSTOM_HOLDING_PRICE / CUSTOM_HOLDING_SETTINGS rows.
 const SNOWBALL_HEADER = ['Event', 'Date', 'Symbol', 'Price', 'Quantity', 'Currency', 'FeeTax', 'Exchange', 'NKD', 'FeeCurrency', 'DoNotAdjustCash', 'Note'];
 const SNOWBALL_EXCHANGE = { MOEX: 'MCX', MCX: 'MCX', ARCA: 'NYSE ARCA', NYSEARCA: 'NYSE ARCA', LSEETF: 'LSE', IBIS: 'XETRA' };
+// Where Snowball lists a US share the broker gives no exchange for
+// (Freedom24's "MU.US"), as its own export has them.
+const SNOWBALL_US_LISTING = { MU: 'NASDAQ', TSEM: 'NASDAQ', SNAP: 'NYSE', WMT: 'NYSE', SPCX: 'NYSE ARCA' };
 // Snowball's CustomHoldingType codes, as seen in its export: 2 deposit, 3 metal, 8 crypto.
 const SNOWBALL_CUSTOM_TYPE = { deposit: [2, 'Cash'], gold: [3, 'Materials'], crypto: [8, 'Crypto'] };
 // Exchange log kinds (import-bybit / -binance / -crypto-com / -telegram-wallet)
@@ -2564,14 +2567,17 @@ document.getElementById('mp_full_snowball_export').addEventListener('click', asy
     const lastPrincipal = new Map();
     for (const t of trades) if (t.side === 'amortisation' || t.side === 'repayment') lastPrincipal.set(t.ticker, t.trade_date);
     const position = new Map();  // position over all trades, the start's earlier ones too
+    const accountPosition = new Map();  // the same per account: a payout is for the shares held there
     const exported = new Map();  // position in the export (from the start)
     const redeemed = new Set();
     for (const t of trades) {
       const mp = market.get(t.ticker);
       const before = position.get(t.ticker) || 0;
+      const accountKey = `${t.account}|${t.ticker}`;
+      const held = accountPosition.get(accountKey) || 0;
       const q = Number(t.quantity);
-      if (t.side === 'buy' || t.side === 'stock_as_dividend') position.set(t.ticker, before + q);
-      if (t.side === 'sell') position.set(t.ticker, before - q);
+      if (t.side === 'buy' || t.side === 'stock_as_dividend') { position.set(t.ticker, before + q); accountPosition.set(accountKey, held + q); }
+      if (t.side === 'sell') { position.set(t.ticker, before - q); accountPosition.set(accountKey, held - q); }
       // Securities moved between T-Bank's agreements (or under a new code)
       // with no deal: import-tbank-broker's zero-price reconciling rows, dated
       // the report's end as it gives no date. Not deals in the portfolio.
@@ -2604,7 +2610,7 @@ document.getElementById('mp_full_snowball_export').addEventListener('click', asy
       let price = Number(t.price);
       let quantity = q;
       if (event === 'Repayment' && t.trade_date < lastPrincipal.get(t.ticker)) event = 'Amortisation';
-      if ((event === 'Dividend' || event === 'Amortisation') && price === quantity && before > 0) price = quantity / before;
+      if ((event === 'Dividend' || event === 'Amortisation') && price === quantity && (held > 0 || before > 0)) price = quantity / (held > 0 ? held : before);
       if (event === 'Repayment') {
         if (before > 0 && Math.abs(quantity - before) > 1e-9) { price = quantity / before; quantity = before; }
         redeemed.add(t.ticker);
@@ -2627,8 +2633,12 @@ document.getElementById('mp_full_snowball_export').addEventListener('click', asy
         if (bond && price < 300 && ['RUB', 'CNY'].includes((t.currency || 'RUB').toUpperCase())) price *= 10;
         if (bond && ['sber_broker_html', 'tbank_broker_xlsx'].includes(t.external_source) && q) nkd = Number(t.nkd || 0) / q;
       }
+      // No exchange anywhere: a US share as Snowball lists it; a rouble / yuan
+      // one (T-Bank's own funds booked on ВНБ) trades on MOEX.
       push(event.toUpperCase(), t.trade_date, symbol, price, quantity, t.currency, t.fee_tax,
-        snowballListedExchange(t.exchange, mp) || exchangeOf.get(t.ticker) || '', nkd, t.fee_currency || t.currency, t.account);
+        snowballListedExchange(t.exchange, mp) || exchangeOf.get(t.ticker) || SNOWBALL_US_LISTING[t.ticker]
+          || (['RUB', 'CNY'].includes((t.currency || '').toUpperCase()) ? 'MCX' : ''),
+        nkd, t.fee_currency || t.currency, t.account);
       // Shares given (Freedom24's SNAP, WMT): the report has no price -- the
       // day's market price, and no money taken for them (DoNotAdjustCash).
       if (event === 'Stock_As_Dividend' && !price) {

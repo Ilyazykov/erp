@@ -160,6 +160,65 @@ function parseFundStatement(text: string): FundRow[] {
   return rows;
 }
 
+const HOUR = 3_600_000;
+
+// An external_id is "<Date>:<rest>" with Date as the CSV gives it
+// ("Sep 9, 2026, 3:43:32 AM") -- split into that moment and the rest.
+function splitExternalId(id: string): { at: number; rest: string } | null {
+  const m = id.match(/^([A-Za-z]{3} \d{1,2}, \d{4}, \d{1,2}:\d{2}:\d{2}\D*?(?:AM|PM)):(.*)$/);
+  const iso = m ? toIsoTimestamp(m[1]) : null;
+  return iso ? { at: Date.parse(iso), rest: m![2] } : null;
+}
+
+interface TradeRow { ticker: string; side: string; trade_date: string; external_id: string }
+
+// The Date is in the timezone of the device the statement was exported on:
+// the export of 22.09.2026 (Cyprus time) and those of 06.10 / 17.10 (an hour
+// west) gave every shared row two external_ids, and the upload added the
+// overlap a second time (migrations/20250101000093_revolut_fund_timezone_duplicates.sql).
+// A row stored before: same ticker, side and external_id after the Date, the
+// Date off by a whole number of hours (up to 14). The offset most rows agree
+// on wins, if more rows agree on it than sit at no offset at all; the rows
+// then take the stored rows' external_id and date, so the upsert matches them.
+async function matchShiftedRows(supabase: any, rows: TradeRow[]): Promise<number> {
+  const days = rows.map(r => r.trade_date).sort();
+  const day = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 24 * HOUR).toISOString().slice(0, 10);
+  const stored: TradeRow[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase.from('trades').select('ticker, side, trade_date, external_id')
+      .eq('external_source', 'revolut_fund_csv')
+      .gte('trade_date', day(days[0], -1)).lte('trade_date', day(days[days.length - 1], 1))
+      .order('id').range(from, from + 999);
+    if (error) throw new Error(error.message);
+    stored.push(...(data ?? []));
+    if (!data || data.length < 1000) break;
+  }
+  const byKey = new Map<string, { at: number; row: TradeRow }[]>();
+  for (const s of stored) {
+    const p = splitExternalId(s.external_id);
+    if (!p) continue;
+    const key = `${s.ticker}|${s.side}|${p.rest}`;
+    byKey.set(key, [...(byKey.get(key) ?? []), { at: p.at, row: s }]);
+  }
+  const candidates = (r: TradeRow) => {
+    const p = splitExternalId(r.external_id);
+    return p ? (byKey.get(`${r.ticker}|${r.side}|${p.rest}`) ?? []).map(s => ({ d: s.at - p.at, row: s.row })) : [];
+  };
+  const votes = new Map<number, number>();
+  for (const r of rows) {
+    const offsets = new Set(candidates(r).map(c => c.d).filter(d => d % HOUR === 0 && Math.abs(d) <= 14 * HOUR));
+    for (const d of offsets) votes.set(d, (votes.get(d) ?? 0) + 1);
+  }
+  let best = 0;
+  for (const [d, n] of votes) if (d !== 0 && n > (votes.get(best) ?? 0)) best = d;
+  if (!best) return 0;
+  for (const r of rows) {
+    const twin = candidates(r).find(c => c.d === best);
+    if (twin) { r.external_id = twin.row.external_id; r.trade_date = twin.row.trade_date; }
+  }
+  return best;
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -275,6 +334,8 @@ Deno.serve(async (req) => {
       }), { status: 400, headers: corsHeaders });
     }
 
+    const shift = await matchShiftedRows(supabase, rows);
+
     const { error: upsertErr, count } = await supabase
       .from('trades')
       .upsert(rows, { onConflict: 'user_id,external_source,external_id', count: 'exact' });
@@ -290,6 +351,7 @@ Deno.serve(async (req) => {
       interest_rows: interestRows,
       skipped_no_quantity_no_value: skippedNoQuantityNoValue,
       skipped_bad_date: skippedBadDate,
+      time_shift_hours: shift / HOUR,
     }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (err) {
     return new Response(JSON.stringify({ error: String(err) }),
