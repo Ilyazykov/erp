@@ -359,7 +359,7 @@
     <p class="note">The investments only -- shares, bonds, funds, deposits, savings accounts, gold, ЦФА and crypto (money on cards,
       cash and real estate stay out). <b>Invested</b>: your own money put in -- buys less sells and redemptions, top-ups of deposits and
       savings less withdrawals, money and coins brought onto the crypto exchanges / wallets less taken out -- each at that day's
-      rate; dividends, coupons and interest that were reinvested are not your money and stay out. <b>Value</b>: what it was worth
+      rate; dividends, coupons, interest and a bank's payouts for investing (Alfa's promotions) that were reinvested are not your money and stay out. <b>Value</b>: what it was worth
       that day. Both less what's owed on the credit cards that day (money borrowed, much of it moved onto savings accounts), so
       they're own money; the gap is untouched. The gap is what was earned: price growth, exchange rates, dividends, coupons, interest. With a period chosen -- or
       a day set in "count from" (or clicked on the chart) -- invested starts from the value on that first day and adds only what was put in after it, so
@@ -2547,6 +2547,8 @@ document.getElementById('mp_full_snowball_export').addEventListener('click', asy
     let tradeRows = 0;
     // Like Snowball's own portfolio, the export starts on its first deal.
     let beforeStart = 0;
+    let movedWithoutDeal = 0;
+    const gifts = [];  // shares credited at price 0, waiting for the day's price
     const blocked = new Set();
     const noPosition = new Set();  // sales of what was bought before the start
     // Buys before sales on a day, so a same-day round trip has its position.
@@ -2570,6 +2572,10 @@ document.getElementById('mp_full_snowball_export').addEventListener('click', asy
       const q = Number(t.quantity);
       if (t.side === 'buy' || t.side === 'stock_as_dividend') position.set(t.ticker, before + q);
       if (t.side === 'sell') position.set(t.ticker, before - q);
+      // Securities moved between T-Bank's agreements (or under a new code)
+      // with no deal: import-tbank-broker's zero-price reconciling rows, dated
+      // the report's end as it gives no date. Not deals in the portfolio.
+      if (t.external_source === 'tbank_broker_xlsx' && (t.external_id || '').includes(':adjust:')) { movedWithoutDeal++; continue; }
       // Blocked assets (bought before the Snowball portfolio) aren't in it.
       if (t.ticker.startsWith('BLOCKED:') || mp?.asset_class === 'blocked') { blocked.add(t.ticker); continue; }
       if (t.trade_date < MP_SNOWBALL_START) { beforeStart++; continue; }
@@ -2612,8 +2618,24 @@ document.getElementById('mp_full_snowball_export').addEventListener('click', asy
       }
       if (event === 'Buy' || event === 'Stock_As_Dividend') exported.set(t.ticker, have + quantity);
       if (event === 'Sell' || event === 'Repayment') exported.set(t.ticker, have - quantity);
+      // Snowball takes a bond's price in money and its accrued interest per
+      // bond. Sber and T-Bank give the price in % of a 1000 nominal and the
+      // interest for the whole deal (the same reading as refresh_investment_daily).
+      let nkd = t.nkd;
+      if (event === 'Buy' || event === 'Sell') {
+        const bond = ['bond', 'moex_bond', 'moex_ofz'].includes(mp?.asset_class) || /^(SU|RU)\d/.test(t.ticker);
+        if (bond && price < 300 && ['RUB', 'CNY'].includes((t.currency || 'RUB').toUpperCase())) price *= 10;
+        if (bond && ['sber_broker_html', 'tbank_broker_xlsx'].includes(t.external_source) && q) nkd = Number(t.nkd || 0) / q;
+      }
       push(event.toUpperCase(), t.trade_date, symbol, price, quantity, t.currency, t.fee_tax,
-        snowballListedExchange(t.exchange, mp) || exchangeOf.get(t.ticker) || '', t.nkd, t.fee_currency || t.currency, t.account);
+        snowballListedExchange(t.exchange, mp) || exchangeOf.get(t.ticker) || '', nkd, t.fee_currency || t.currency, t.account);
+      // Shares given (Freedom24's SNAP, WMT): the report has no price -- the
+      // day's market price, and no money taken for them (DoNotAdjustCash).
+      if (event === 'Stock_As_Dividend' && !price) {
+        const cells = rows[rows.length - 1][2];
+        cells[10] = 'True';
+        gifts.push([t.trade_date, t.ticker, (t.currency || 'USD').toUpperCase(), cells]);
+      }
       tradeRows++;
     }
 
@@ -2689,9 +2711,11 @@ document.getElementById('mp_full_snowball_export').addEventListener('click', asy
     // 3. Price history for custom holdings (USD), converted to each one's currency.
     statusEl.textContent = 'Loading price history…';
     const customTickers = [...kindOf].filter(([, k]) => k && k !== 'deposit').map(([t]) => t);
-    const history = customTickers.length ? await snowballFetchAll(() => sb.from('price_history')
-      .select('ticker, day, price_usd').in('ticker', customTickers).order('ticker').order('day')) : [];
-    const fxCurrencies = [...new Set(customTickers.map(t => currencyOf.get(t) || 'USD'))].filter(c => c !== 'USD');
+    const historyTickers = [...new Set([...customTickers, ...gifts.map(g => g[1])])];
+    const history = historyTickers.length ? await snowballFetchAll(() => sb.from('price_history')
+      .select('ticker, day, price_usd').in('ticker', historyTickers).order('ticker').order('day')) : [];
+    const fxCurrencies = [...new Set([...customTickers.map(t => currencyOf.get(t) || 'USD'), ...gifts.map(g => g[2])])]
+      .filter(c => c !== 'USD');
     const fx = new Map();  // currency -> [[day, usdPerUnit]] ascending
     for (const c of fxCurrencies) {
       const r = await snowballFetchAll(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', c).order('day'));
@@ -2717,6 +2741,10 @@ document.getElementById('mp_full_snowball_export').addEventListener('click', asy
       const [date, ticker, cells] = row;
       const usd = asOf(historyBy.get(ticker), date) ?? market.get(ticker)?.price_usd ?? 0;
       cells[3] = snowballNumber(usd);
+    }
+    for (const [date, ticker, cur, cells] of gifts) {
+      const price = inCurrency(asOf(historyBy.get(ticker), date), cur, date);
+      if (price) cells[3] = snowballNumber(price);
     }
 
     // 4. Reconcile crypto with the current balances (transfers, network fees).
@@ -2780,6 +2808,7 @@ document.getElementById('mp_full_snowball_export').addEventListener('click', asy
       + (blocked.size ? ` Blocked assets left out: ${[...blocked].sort().join(', ')}.` : '')
       + (noPosition.size ? ` Sales of what was bought before ${MP_SNOWBALL_START} left out: ${[...noPosition].sort().join(', ')}.` : '')
       + (beforeStart ? ` ${beforeStart} other trades before ${MP_SNOWBALL_START} left out.` : '')
+      + (movedWithoutDeal ? ` ${movedWithoutDeal} T-Bank moves without a deal (between agreements, code changes) left out.` : '')
       + (leftOut.size ? ` Left out (not a custom holding in Snowball): ${[...leftOut].sort().join(', ')}.` : '');
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}`;
