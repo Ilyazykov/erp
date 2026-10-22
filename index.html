@@ -288,8 +288,9 @@
       splits them again). The money -- bank and broker accounts, cash on hand, savings in other currencies and the
       dollars on the crypto exchanges (today's balance only), less what's owed on the credit cards -- is Snowball's cash: the balance the
       day before the first deal, then conversions (CASH_CONVERT), interest and cashback (CASH_GAIN), fees and taxes
-      (CASH_EXPENSE), and the rest of each day's money in and out (CASH_IN / CASH_OUT) that the deals and payouts
-      don't already move. Snowball's cash then ends at the accounts' balances today.</p>
+      (CASH_EXPENSE) and every other money row (CASH_IN / CASH_OUT) the deals and payouts don't already move, each
+      with its bank, product and account in the Note; a few reconciling rows take what's left (a deal settling days
+      after Snowball books it). Snowball's cash then ends at the accounts' balances today.</p>
     <div class="form-row">
       <button class="btn" id="mp_cash_snowball_export">Download full Snowball CSV with cash</button>
     </div>
@@ -2880,6 +2881,14 @@ const SNOWBALL_CASH_FX = /exchang|конверт|обмен валют|döviz|ku
 const SNOWBALL_CASH_GAIN = /interest|процент|капитализац|cashback|кэшбэк|кешбэк|вознаграждение за операции покупок|\bfaiz\b|kamata/i;
 const SNOWBALL_CASH_EXPENSE = /\bfee\b|комисси|commission|provizij|odrzavanje|maintenance|обслуживан|ндфл|налог|\btax\b|ücret|masraf/i;
 const SNOWBALL_CASH_DEAL_FEE = /за сделк|по сделк|комиссия биржи|комиссия брокера|includes a commission|включая комисси/i;
+// A broker's own money rows (its report or app): only top-ups / withdrawals
+// are rows of their own -- deals and payouts are the full export's.
+const SNOWBALL_CASH_BROKER_SOURCE = /^(sber_broker_html|tbank_broker_xlsx|ibkr_csv|freedom24_xlsx|revolut_invest_csv|atomyze_xlsx)|-app$/;
+const SNOWBALL_CASH_BROKER_MOVE = /пополнен|вывод|withdraw|deposit|top-up|bank transfer|перевод|^зачисление д\/с$/i;
+// A bank row moving money into what the export holds (a fund, a metal, a
+// savings account or deposit): the export's buy is that row.
+const SNOWBALL_CASH_HELD_MOVE = /flexible cash funds|instant access savings|exchanged to (xau|xag|xpt|xpd)|накопительн|вклад|savings account/i;
+const SNOWBALL_CASH_RECONCILE = 'reconciling: deals settling on other days, rows not itemised';
 
 // What a row of the full export does to Snowball's cash, by currency.
 function snowballCashEffect(cells) {
@@ -2912,10 +2921,22 @@ const SNOWBALL_DEPOSITS = 'ВКЛАДЫ';
 async function snowballMergedRows(fullRows, today) {
   const savingsPattern = /^(DEPOSIT|SAVINGS|ВКЛАД):/i;
   const rows = [];
+  // XAU's price starts with its own first deal (Revolut, 06.10.2025), XAUT's
+  // earlier (23.09): those days get XAUT's dollar price in euros, else
+  // Snowball prices the gold at 0 there.
+  const xauPriced = new Set(fullRows.filter(([, t, c]) => t === 'XAU' && c[0] === 'CUSTOM_HOLDING_PRICE').map(([d]) => d));
+  const eur = (await snowballFetchAll(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', 'EUR').order('day')))
+    .map(f => [f.day, Number(f.usd_per_unit)]);
+  const eurOn = d => { let v = null; for (const [day, k] of eur) { if (day > d) break; v = k; } return v; };
   for (const r of fullRows) {
     const [d, ticker, cells] = r;
     if (savingsPattern.test(ticker)) continue;
     if (ticker === 'XAUT') {
+      if (cells[0] === 'CUSTOM_HOLDING_PRICE' && !xauPriced.has(d) && eurOn(d)) {
+        const usd = Number(String(cells[3]).replace(',', '.'));
+        rows.push([d, 'XAU', ['CUSTOM_HOLDING_PRICE', cells[1], 'XAU', snowballNumber(usd / eurOn(d)), '0', 'EUR', '0', 'CUSTOM_HOLDING', '0', '', '', '']]);
+        continue;
+      }
       if (cells[0] === 'CUSTOM_HOLDING_PRICE' || cells[0] === 'CUSTOM_HOLDING_SETTINGS') continue;
       const c = [...cells];
       c[2] = 'XAU';
@@ -3045,6 +3066,9 @@ document.getElementById('mp_cash_snowball_export').addEventListener('click', asy
     const typedEffect = new Map();
     const pool = [...series.values()].flat().filter(r => !r.synthetic_kind && Number(r.amount));
     const at = r => Date.parse(r.booked_at || r.tx_date);
+    // Where a row comes from, in its Note -- bank, product and source (the
+    // source names the account) -- so the rows can be told apart again.
+    const tag = r => `${r.account} · ${r.product || ''} · ${r.external_source}`;
     const used = new Set();
     const byBank = new Map();
     for (const r of pool) {
@@ -3073,7 +3097,7 @@ document.getElementById('mp_cash_snowball_export').addEventListener('click', asy
         // Snowball's own: Symbol = the currency got, Price = the amount paid,
         // Quantity = the amount got, Currency = the currency paid.
         out.push([d, b.currency, ['CASH_CONVERT', `${d} 00:00:00`, b.currency, r2(paid), r2(got), a.currency, '0', '', '', '', 'False',
-          `${a.account}: ${a.description || ''}`.slice(0, 200)]]);
+          `${tag(a)} -> ${tag(b)}: ${a.description || ''}`.slice(0, 300)]]);
         bump(typedEffect, a.currency, d, -paid);
         bump(typedEffect, b.currency, day(b.booked_at || b.tx_date), got);
         converts++;
@@ -3088,9 +3112,29 @@ document.getElementById('mp_cash_snowball_export').addEventListener('click', asy
       if (amount > 0 && SNOWBALL_CASH_GAIN.test(text)) event = 'CASH_GAIN';
       else if (amount < 0 && SNOWBALL_CASH_EXPENSE.test(text) && !SNOWBALL_CASH_DEAL_FEE.test(text)) event = 'CASH_EXPENSE';
       if (!event) continue;
-      push(event, d, r.currency, Math.abs(amount), `${r.account}: ${text}`.slice(0, 200));
+      push(event, d, r.currency, Math.abs(amount), `${tag(r)}: ${text}`.slice(0, 300));
       bump(typedEffect, r.currency, d, amount);
+      used.add(r);
       if (event === 'CASH_GAIN') gains++; else expenses++;
+    }
+    // Every other money row on its own, but those the full export already
+    // books: a broker's deals, payouts and fees (only its top-ups and
+    // withdrawals are rows here), and money moved into a fund, a metal or a
+    // savings account / deposit the export holds. What's left over -- a deal
+    // settling days after Snowball books it, a row worded otherwise -- the
+    // reconciling rows below take, summed over a few days.
+    let itemised = 0;
+    for (const r of pool) {
+      if (used.has(r)) continue;
+      const d = day(r.booked_at || r.tx_date);
+      if (d < MP_SNOWBALL_START || d > today) continue;
+      const text = r.description || '';
+      if (SNOWBALL_CASH_BROKER_SOURCE.test(r.external_source || '') || r.product === 'brokerage_cash'
+        ? !SNOWBALL_CASH_BROKER_MOVE.test(text) : SNOWBALL_CASH_HELD_MOVE.test(text)) continue;
+      const amount = Number(r.amount);
+      push(amount > 0 ? 'CASH_IN' : 'CASH_OUT', d, r.currency, Math.abs(amount), `${tag(r)}: ${text}`.slice(0, 300));
+      bump(typedEffect, r.currency, d, amount);
+      itemised++;
     }
     const finals = [];
     const currencies = new Set([...balanceChange.keys(), ...exportEffect.keys(), ...opening.keys(), ...typedEffect.keys()]);
@@ -3104,7 +3148,7 @@ document.getElementById('mp_cash_snowball_export').addEventListener('click', asy
       const days = [...new Set([...changes.keys(), ...effects.keys(), ...typed.keys()])].sort();
       let pending = 0, since = null;
       const flush = () => {
-        if (since && Math.abs(pending) >= 0.005) push(pending > 0 ? 'CASH_IN' : 'CASH_OUT', since, cur, Math.abs(pending), '');
+        if (since && Math.abs(pending) >= 0.005) push(pending > 0 ? 'CASH_IN' : 'CASH_OUT', since, cur, Math.abs(pending), SNOWBALL_CASH_RECONCILE);
         pending = 0; since = null;
       };
       for (const d of days) {
@@ -3122,7 +3166,7 @@ document.getElementById('mp_cash_snowball_export').addEventListener('click', asy
     const all = [...rows, ...out].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
     snowballDownload(all, `snowball_full_export_with_cash_${today}.csv`);
     statusEl.textContent = `Downloaded ${all.length} rows: the full export (${rows.length}) and ${out.length} cash rows from ${series.size} accounts `
-      + `(${converts} conversions, ${gains} interest / cashback, ${expenses} fees / taxes, the rest money in / out). `
+      + `(${converts} conversions, ${gains} interest / cashback, ${expenses} fees / taxes, ${itemised} money in / out, the rest reconciling). `
       + `Snowball's balances should then be: ${finals.join(', ')}.`;
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}`;
