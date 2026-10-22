@@ -3123,6 +3123,26 @@ document.getElementById('mp_cash_snowball_export').addEventListener('click', asy
     // savings account / deposit the export holds. What's left over -- a deal
     // settling days after Snowball books it, a row worded otherwise -- the
     // reconciling rows below take, summed over a few days.
+    // The money of a buy / sale of what the export holds outside a broker
+    // (ВКЛАДЫ, a Revolut fund, gold, coins bought by card) is a bank row of
+    // the same amount within a few days -- worded any way ("SBERBANK ONL@IN
+    // CARD-VKLAD", "Internal transfer to contract ...", "External bank
+    // transfer AO Yandex Bank"): that row is the deal's, not one of its own.
+    const held = [];
+    for (const [d, , c] of rows) {
+      if ((c[0] !== 'BUY' && c[0] !== 'SELL') || !['CUSTOM_HOLDING', 'EUFUND'].includes(c[7])) continue;
+      const money = Number(String(c[3]).replace(',', '.')) * Number(String(c[4]).replace(',', '.'));
+      held.push({ d, cur: c[5], money: c[0] === 'BUY' ? -money : money, taken: false });
+    }
+    const daysApart = (a, b) => Math.abs(Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 86400000;
+    const heldDeal = (r, d) => {
+      const amount = Number(r.amount);
+      const h = held.filter(x => !x.taken && x.cur === r.currency && daysApart(x.d, d) <= 5
+        && Math.abs(x.money - amount) <= Math.max(0.01, Math.abs(amount) * 0.002))
+        .sort((x, y) => daysApart(x.d, d) - daysApart(y.d, d))[0];
+      if (h) h.taken = true;
+      return !!h;
+    };
     let itemised = 0;
     for (const r of pool) {
       if (used.has(r)) continue;
@@ -3130,7 +3150,7 @@ document.getElementById('mp_cash_snowball_export').addEventListener('click', asy
       if (d < MP_SNOWBALL_START || d > today) continue;
       const text = r.description || '';
       if (SNOWBALL_CASH_BROKER_SOURCE.test(r.external_source || '') || r.product === 'brokerage_cash'
-        ? !SNOWBALL_CASH_BROKER_MOVE.test(text) : SNOWBALL_CASH_HELD_MOVE.test(text)) continue;
+        ? !SNOWBALL_CASH_BROKER_MOVE.test(text) : heldDeal(r, d) || SNOWBALL_CASH_HELD_MOVE.test(text)) continue;
       const amount = Number(r.amount);
       push(amount > 0 ? 'CASH_IN' : 'CASH_OUT', d, r.currency, Math.abs(amount), `${tag(r)}: ${text}`.slice(0, 300));
       bump(typedEffect, r.currency, d, amount);

@@ -191,6 +191,9 @@ Deno.serve(async (req) => {
       if (SKIPPED_EVENTS.has(event)) { skipped++; continue; }
       const side = EVENT_TO_SIDE[event];
       if (!side) { skipped++; continue; }
+      // Snowball's export writes a Note's double quotes as "@*@" (as in its
+      // settings JSON): JSC @*@TEPLOENERGO@*@ is JSC "TEPLOENERGO".
+      if (idx.note >= 0 && cells[idx.note]) cells[idx.note] = cells[idx.note].replace(/@\*@/g, '"');
       // This project's export with cash (index.html, snowballMergedRows) folds
       // holdings together and names the original in Note: a "ВКЛАДЫ" row
       // "<ticker>: <account>", an XAU row that was XAUT "XAUT: <account>".
