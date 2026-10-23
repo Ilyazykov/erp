@@ -279,6 +279,21 @@
     </div>
     <div class="empty-note" id="mp_ibkr_status"></div>
 
+    <div class="section-title">Bybit automatic sync</div>
+    <p class="note">Instead of uploading the Data Export logs: a Bybit API key (API Management → Create New Key →
+      System-generated, API Transaction, <b>Read-Only</b>, no IP). Pulled every morning, the last 30 days; each run replaces
+      Bybit's rows of those days. A key that can trade or withdraw is refused. The secret stays on the server — once saved,
+      this page can't show it again; leave it empty to keep the one saved. The key's end date comes from Bybit by itself.</p>
+    <div class="form-row">
+      <label>API key <input type="text" id="mp_bybit_key" autocomplete="off"></label>
+      <label>API secret <input type="password" id="mp_bybit_secret" autocomplete="off"></label>
+      <button class="btn primary" id="mp_bybit_save">Save</button>
+      <button class="btn" id="mp_bybit_sync">Sync now</button>
+      <a class="btn" href="https://www.bybit.com/app/user/api-management" target="_blank" rel="noopener"
+        title="Create New Key -> System-generated API Keys -> API Transaction, Read-Only, no IP restriction">Get a key at Bybit</a>
+    </div>
+    <div class="empty-note" id="mp_bybit_status"></div>
+
     <div class="section-title">Export Revolut fund trades to Snowball</div>
     <p class="note">Generates a Snowball-importable CSV from the trades already stored here for the
       Revolut Flexible Cash Funds money-market fund share classes (IE0002RUHW32, IE000AZVL3K0, IE000H9J0QX4).</p>
@@ -1923,6 +1938,7 @@ const MP_ACCOUNT_SOURCE = {
   Revolut: 'Revolut app → Profile → Statements → Account statement → CSV; also the Flexible Cash Funds and savings statements. Upload as is.',
   'Bank of Cyprus': '1Bank → Accounts → Transaction history → Export (CSV). Upload as is.',
   IBKR: 'Synced every morning through the Flex Web Service (IBKR automatic sync, below the uploads); or the IBKR Activity Statement, CSV, for the period since the last one, uploaded as is.',
+  Bybit: 'Synced every morning through a read-only API key (Bybit automatic sync, below the uploads); or Bybit → Data Export → Transaction Log → Account Change Details: the Funding and the Unified Trading file, uploaded as is.',
   Freedom24: 'Freedom24 web cabinet → Отчёты брокера → JSON, from 28.04.2026 to today. Or the cash-movement table (tradernet_table.xlsx) without a filter -- it must keep the «Сделка» rows. Upload as is.',
   'Ziraat Bank': 'Ziraat internet banking → account activity (Hesap Hareketleri) → Excel (.xlsx). Upload as is.',
   Raiffeisen: 'Raiffeisen statements (PDF) → to Claude, who adds them to the combined Raiffeisen CSV.',
@@ -1932,7 +1948,6 @@ const MP_ACCOUNT_SOURCE = {
   'Yandex Bank': 'Yandex Bank app → statement for each contract (current account, «Сейв») (PDF) → to Claude.',
   'Ozon Bank': 'Ozon Bank → statement of movements (PDF) → to Claude.',
   Wise: 'Wise → balance statement, CSV, one per currency. Upload as is.',
-  Bybit: 'Bybit → Data Export → Transaction Log → Account Change Details: the Funding and the Unified Trading file. Upload as is.',
   'Crypto.com': 'Crypto.com App → Accounts → History → Export → Crypto Wallet. Upload as is.',
   Binance: 'Binance → Orders → Assets History → Export → Export Transaction Records; keep the file name (its time zone). Upload as is.',
   Telegram: 'Telegram Wallet history → to Claude, who builds the Telegram Wallet CSV.',
@@ -1995,6 +2010,17 @@ async function mpRenderLatestSources() {
       if (to && (!a.uploaded || to > a.uploaded)) a.uploaded = to;
       a.flex = { expires: ibkrFlex.token_expires, error: last.error || '' };
     }
+    // Bybit likewise (sync-bybit): its key's end date comes from Bybit
+    const { data: bst } = await sb.rpc('bybit_api_status');
+    const bybitApi = (bst || [])[0];
+    if (bybitApi?.secret_set && acc.has('Bybit')) {
+      const a = acc.get('Bybit');
+      let last = {};
+      try { last = JSON.parse(bybitApi.last_sync_result || '{}'); } catch { /* not JSON */ }
+      const to = (last.period || '').split('..')[1];
+      if (to && (!a.uploaded || to > a.uploaded)) a.uploaded = to;
+      a.flex = { expires: bybitApi.key_expires, error: last.error || '', label: 'key' };
+    }
     for (const a of acc.values()) a.record = a.day, a.day = a.uploaded && a.uploaded > a.day ? a.uploaded : a.day;
     if (!acc.size) { wrap.innerHTML = '<div class="empty-note">Nothing imported yet.</div>'; return; }
     const dayMs = 86400000;
@@ -2025,7 +2051,7 @@ async function mpRenderLatestSources() {
         if (a.flex) {
           const left = a.flex.expires ? Math.round((Date.parse(a.flex.expires + 'T00:00:00Z') - today) / dayMs) : null;
           const warn = a.flex.error || (left !== null && left <= 30);
-          const text = `auto · token to ${a.flex.expires || '?'}${a.flex.error ? ' · last sync failed' : ''}`;
+          const text = `auto · ${a.flex.label || 'token'} to ${a.flex.expires || '?'}${a.flex.error ? ' · last sync failed' : ''}`;
           update = `<span${warn ? ' style="color:#ff9500"' : ''}${a.flex.error ? ` title="${esc(a.flex.error)}"` : ''}>${esc(text)}</span>`;
         }
         return `<tr${style}><td>${src ? `<span class="mp-src" data-src="${esc(src)}">${esc(name)}</span>` : esc(name)}</td><td>${update}</td><td>${a.record}</td><td>${a.uploaded || '—'}</td><td>${d}</td><td${a.gaps?.length ? ' style="color:#ff9500"' : ''}>${(a.gaps || []).join('<br>') || ''}</td></tr>`;
@@ -5835,6 +5861,73 @@ document.getElementById('mp_ibkr_sync').addEventListener('click', async () => {
   }
 });
 
+// ---- Bybit automatic sync (supabase/functions/sync-bybit) ----
+// The key shows by its last characters, the secret only as "saved" (bybit_api_status, migration ...098).
+async function mpBybitApiLoad() {
+  const statusEl = document.getElementById('mp_bybit_status');
+  const { data, error } = await sb.rpc('bybit_api_status');
+  if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
+  const s = (data || [])[0];
+  const keyEl = document.getElementById('mp_bybit_key');
+  keyEl.value = '';
+  keyEl.placeholder = s?.key_tail ? `saved …${s.key_tail} — leave empty to keep` : 'not set';
+  document.getElementById('mp_bybit_secret').placeholder = s?.secret_set ? 'saved — leave empty to keep' : 'not set';
+  statusEl.style.color = '';
+  if (!s) { statusEl.textContent = 'Not set up.'; return; }
+  let last = 'never synced';
+  if (s.last_sync_at) {
+    let r = {};
+    try { r = JSON.parse(s.last_sync_result || '{}'); } catch { /* not JSON */ }
+    last = `last synced ${new Date(s.last_sync_at).toLocaleString()}: `
+      + (r.error ? `error — ${r.error}` : `${r.funding_rows} Funding and ${r.unified_rows} Unified Trading rows for ${r.period}`);
+    if (r.error) statusEl.style.color = 'var(--red, #f85149)';
+  }
+  // Days the key has left, red within a month of its end.
+  let expiry = s.key_expires ? '' : ' (its end date comes with the first sync)';
+  if (s.key_expires) {
+    const days = Math.ceil((Date.parse(`${s.key_expires}T00:00:00Z`) - Date.now()) / 86400000);
+    expiry = days < 0 ? ` (expired ${s.key_expires} — create a new one)` : ` until ${s.key_expires} (${days} days left)`;
+    if (days <= 30) statusEl.style.color = 'var(--red, #f85149)';
+  }
+  statusEl.textContent = `API key …${s.key_tail || '—'}, secret ${s.secret_set ? 'saved' : 'not set'}${expiry}; ${last}.`;
+}
+
+document.getElementById('mp_bybit_save').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_bybit_status');
+  const keyEl = document.getElementById('mp_bybit_key'), secretEl = document.getElementById('mp_bybit_secret');
+  if (!keyEl.value.trim() && !keyEl.placeholder.startsWith('saved')) { statusEl.textContent = 'Enter the API key.'; return; }
+  // An empty key or secret keeps the saved one (set_bybit_api).
+  const { error } = await sb.rpc('set_bybit_api', { p_key: keyEl.value, p_secret: secretEl.value });
+  if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
+  secretEl.value = '';
+  await mpBybitApiLoad();
+  mpRenderLatestSources();
+});
+
+document.getElementById('mp_bybit_sync').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_bybit_status');
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) { statusEl.textContent = 'Sign in first.'; return; }
+  statusEl.style.color = '';
+  statusEl.textContent = 'Pulling the last 30 days from Bybit…';
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/sync-bybit`, {
+      method: 'POST',
+      // Bybit refuses US addresses: the function runs in the project's region
+      headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json', 'x-region': 'eu-west-1' },
+      body: '{}',
+    });
+    const r = await res.json();
+    if (!res.ok) { statusEl.textContent = `Error: ${r.error || res.statusText}`; return; }
+    const fmt = o => Object.entries(o || {}).map(([c, v]) => `${c} ${v}`).join(', ') || 'none';
+    statusEl.textContent = `Synced ${r.period}: ${r.funding_rows} Funding and ${r.unified_rows} Unified Trading rows. `
+      + `Balances: ${fmt(r.balances)}. Key valid until ${r.key_expires || '?'}. Capital is being rebuilt.`;
+    mpRenderLatestSources();
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`;
+  }
+});
+
 async function mpSyncWallets(prefix = '') {
   const statusEl = document.getElementById('mp_wallet_status');
   const { data: { session } } = await sb.auth.getSession();
@@ -5935,6 +6028,7 @@ function mpUpdateAuthUi(session) {
     mpRenderBondByType();
     mpRenderWallets();
     mpIbkrFlexLoad();
+    mpBybitApiLoad();
     mpRenderRealEstate();
     mpRenderLookThrough();
     mpRenderCharts();

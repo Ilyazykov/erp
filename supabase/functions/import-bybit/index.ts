@@ -53,13 +53,12 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { dec, recomputeExchange, type ExchangeWallet } from '../_shared/exchange_balances.ts';
+import { fundKind, RULES } from '../_shared/bybit_rules.ts';
 
 interface Row {
   tx_hash: string; seq: number; kind: string; tx_time: string; symbol: string;
   amount: string; status: string;
 }
-
-const INTERNAL_KINDS = new Set(['transfer_internal', 'earn_internal', 'card_usd']);
 
 function parseCsvLine(line: string): string[] {
   const cells: string[] = [];
@@ -81,21 +80,6 @@ function parseCsvLine(line: string): string[] {
   }
   cells.push(cur);
   return cells;
-}
-
-function fundKind(desc: string, type: string, coin: string): string {
-  const d = desc.toLowerCase();
-  if (coin === 'USD') return 'card_usd';
-  if (/subscription|redemption|auto-earn/.test(d)) return 'earn_internal';
-  if (/transfer (to|from) unified trading/.test(d)) return 'transfer_internal';
-  if (/interest distribution|rewards distribution/.test(d)) return 'interest';
-  if (type === 'Deposit') return 'deposit';
-  if (type === 'Withdraw' || type === 'Withdrawal') return 'withdrawal';
-  if (type === 'Bybit Card') return 'card';
-  if (type === 'Convert') return 'convert';
-  if (type === 'Airdrop' || type === 'Rewards') return 'reward';
-  if (type === 'Transfer in' || type === 'Transfer out') return 'transfer';
-  return 'other';
 }
 
 function parse(text: string): { uid: string; source: 'fund' | 'uta'; rows: Row[] } | null {
@@ -149,11 +133,6 @@ function parse(text: string): { uid: string; source: 'fund' | 'uta'; rows: Row[]
   return null;
 }
 
-const RULES = {
-  internalKinds: INTERNAL_KINDS,
-  earnKinds: new Set(['earn_internal']),
-  savingsTicker: 'SAVINGS:Bybit USD',
-};
 const recompute = (db: any, w: ExchangeWallet) => recomputeExchange(db, w, RULES);
 
 Deno.serve(async (req) => {
