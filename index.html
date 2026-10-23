@@ -372,7 +372,8 @@
     <div class="section-title">Latest data per account</div>
     <p class="note">The date of the newest real record of each bank / broker account (bank rows and broker
       trades or payouts from any of its sources; synthetic rows -- extrapolated, data gaps, snapshots -- left out),
-      to see when a fresh statement is due -- dated by the later of the newest record and the end of the latest statement uploaded for it (an account with no movements stays fresh once its statement is in); holes of more than 3 days between the periods of the uploaded statements listed: a broker monthly, a bank in active use weekly, one in little use monthly;
+      to see when a fresh statement is due -- dated by the later of the newest record and the end of the latest statement uploaded for it (an account with no movements stays fresh once its statement is in): a broker monthly, a bank in active use weekly, one in little use monthly;
+      an account synced by itself "auto", with its key's end date (orange within a week of it); one that could be but isn't yet "TODO auto";
       cash and Wise without a reminder, crypto exchanges monthly (Binance rarely), on-chain wallets (synced by themselves) dated by their last sync; closed accounts greyed out. Overdue in orange. Hover an account's name for where its statements come from.</p>
     <div id="mp_latest_sources"><div class="empty-note">Loading…</div></div>
   </div>
@@ -1977,6 +1978,10 @@ const MP_ACCOUNT_SOURCE = {
 const MP_SPLIT_ACCOUNTS = new Set(['T-Bank', 'Sber', 'Alfa', 'Yandex Bank', 'Ozon Bank', 'Finuslugi', 'Revolut']);
 const MP_PART_ORDER = ['Broker', 'ЦФА (Atomyze)', 'Flexible Cash Funds', 'Crypto', 'Metals', 'Cards & current accounts', 'Credit card', 'Deposits & savings'];
 const mpOpenAccounts = new Set();
+// Accounts that could sync by themselves but don't yet (TODO.md, section 17):
+// the part it would be, or '' for the whole account.
+const MP_TODO_AUTO = { 'T-Bank': 'Broker', Revolut: '', 'Bank of Cyprus': '', Wise: '', Binance: '' };
+const todoAuto = '<span style="color:#8b949e">TODO auto</span>';
 async function mpRenderLatestSources() {
   const wrap = document.getElementById('mp_latest_sources');
   try {
@@ -1995,31 +2000,14 @@ async function mpRenderLatestSources() {
     }
     // the latest upload of a statement for the account counts too
     // -- by the end of the period it covers where that's known (an old
-    // statement uploaded today doesn't make the account fresh); the periods
-    // merged, the holes of more than 3 days between them listed
+    // statement uploaded today doesn't make the account fresh)
     const { data: ups } = await sb.from('statement_uploads').select('account, kind, file_name, uploaded_at, period_from, period_to')
       .order('uploaded_at', { ascending: false }).limit(5000);
-    const spans = new Map();
     for (const u of ups || []) {
       const a = acc.get(u.account);
       if (!a) continue;
       const day = u.period_to || u.uploaded_at.slice(0, 10);
       if (!a.uploaded || day > a.uploaded) a.uploaded = day;
-      if (u.period_from && u.period_to) {
-        if (!spans.has(u.account)) spans.set(u.account, []);
-        spans.get(u.account).push([u.period_from, u.period_to]);
-      }
-    }
-    const plus = (d, n) => new Date(Date.parse(d + 'T00:00:00Z') + n * 86400000).toISOString().slice(0, 10);
-    for (const [name, ss] of spans) {
-      ss.sort((p, q) => p[0].localeCompare(q[0]));
-      const gaps = [];
-      let end = ss[0][1];
-      for (const [f, t] of ss.slice(1)) {
-        if (f > plus(end, 3)) gaps.push(`${plus(end, 1)} – ${plus(f, -1)}`);
-        if (t > end) end = t;
-      }
-      acc.get(name).gaps = gaps;
     }
     // IBKR synced by itself (sync-ibkr): its last good run's period end counts
     // as a statement's, and the row tells when the token runs out
@@ -2116,28 +2104,34 @@ async function mpRenderLatestSources() {
       const contracts = (p.contracts || []).filter(Boolean);
       const what = `${p.row_count} records${contracts.length ? ` · ${contracts.length === 1 ? 'contract' : 'contracts'} ${contracts.join(', ')}` : ''}`;
       return `<tr class="mp-part" data-acc="${esc(name)}"${mpOpenAccounts.has(name) ? '' : ' hidden'} style="color:#8b949e${closed ? ';opacity:.7' : ''}">`
-        + `<td style="padding-left:28px"><span class="mp-src" data-src="${esc(what)}">${esc(p.label || p.part)}</span></td><td></td><td>${p.last_day}</td><td>${up || '—'}</td><td>${d}</td><td></td></tr>`;
+        + `<td><span style="display:inline-block;width:32px"></span><span class="mp-src" data-src="${esc(what)}">${esc(p.label || p.part)}</span></td>`
+        + `<td>${MP_TODO_AUTO[name] === p.part ? todoAuto : ''}</td><td></td><td>${p.last_day}</td><td>${up || '—'}</td><td>${d}</td></tr>`;
     }).join('');
-    wrap.innerHTML = `<table class="data-table"><thead><tr><th>Account</th><th>Update</th><th>Latest record</th><th>Statements to</th><th>Days ago</th><th>Holes between statements</th></tr></thead><tbody>${
+    wrap.innerHTML = `<table class="data-table"><thead><tr><th>Account</th><th>Update</th><th>Key valid until</th><th>Latest record</th><th>Statements to</th><th>Days ago</th></tr></thead><tbody>${
       rows.map(([name, a]) => {
         const d = ago(a);
         const style = a.every === 'closed' ? ' style="color:#6a7381"' : typeof a.every === 'number' && d > a.every ? ' style="color:#ff9500"' : '';
         // where the statements come from: a popup drawn by the page on hover
         // (the browser's own title tooltip didn't show)
         const src = MP_ACCOUNT_SOURCE[name];
-        // a synced account's token: orange within a month of its end, past it,
-        // or after a failed run
-        let update = esc(label(a.every));
+        // a synced account: "auto" (orange after a failed run) and its key's
+        // end in a column of its own -- orange within a week of it or past it;
+        // one that could sync by itself but doesn't yet: "TODO auto"
+        let update = esc(label(a.every)), expires = '';
         if (a.flex) {
           const left = a.flex.expires ? Math.round((Date.parse(a.flex.expires + 'T00:00:00Z') - today) / dayMs) : null;
-          const warn = a.flex.error || (left !== null && left <= 7);
-          const text = `auto · ${a.flex.label || 'token'} ${a.flex.perpetual ? 'without end' : `to ${a.flex.expires || '?'}`}${a.flex.error ? ' · last sync failed' : ''}`;
-          update = `<span${warn ? ' style="color:#ff9500"' : ''}${a.flex.error ? ` title="${esc(a.flex.error)}"` : ''}>${esc(text)}</span>`;
+          update = a.flex.error ? `<span style="color:#ff9500" title="${esc(a.flex.error)}">auto · last sync failed</span>` : 'auto';
+          expires = a.flex.perpetual ? 'no end' : a.flex.expires
+            ? `<span${left <= 7 ? ' style="color:#ff9500"' : ''}>${a.flex.expires}</span>` : '?';
+        } else if (name in MP_TODO_AUTO) {
+          update += ` · ${MP_TODO_AUTO[name] ? `${todoAuto}: ${esc(MP_TODO_AUTO[name].toLowerCase())}` : todoAuto}`;
         }
         // a split account: a toggle before its name opens its parts
         const split = (parts.get(name) || []).length > 1;
-        const toggle = split ? `<span class="mp-toggle" data-acc="${esc(name)}" style="cursor:pointer;display:inline-block;width:16px;user-select:none">${mpOpenAccounts.has(name) ? '▾' : '▸'}</span>` : '';
-        return `<tr${style}><td>${toggle}${src ? `<span class="mp-src" data-src="${esc(src)}">${esc(name)}</span>` : esc(name)}</td><td>${update}</td><td>${a.record}</td><td>${a.uploaded || '—'}</td><td>${d}</td><td${a.gaps?.length ? ' style="color:#ff9500"' : ''}>${(a.gaps || []).join('<br>') || ''}</td></tr>`
+        // (the others keep its place empty, so every name starts in one line)
+        const toggle = split ? `<span class="mp-toggle" data-acc="${esc(name)}" style="cursor:pointer;display:inline-block;width:16px;user-select:none">${mpOpenAccounts.has(name) ? '▾' : '▸'}</span>`
+          : '<span style="display:inline-block;width:16px"></span>';
+        return `<tr${style}><td>${toggle}${src ? `<span class="mp-src" data-src="${esc(src)}">${esc(name)}</span>` : esc(name)}</td><td>${update}</td><td>${expires}</td><td>${a.record}</td><td>${a.uploaded || '—'}</td><td>${d}</td></tr>`
           + (split ? partRowsHtml(name, a.every === 'closed') : '');
       }).join('')}</tbody></table>`;
     for (const t of wrap.querySelectorAll('.mp-toggle')) {
