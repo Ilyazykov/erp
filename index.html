@@ -2053,11 +2053,15 @@ async function mpRenderLatestSources() {
         : 30;                                     // a broker, or a bank in little use
     }
     const today = Date.parse(new Date().toISOString().slice(0, 10) + 'T00:00:00Z');
-    const rank = a => ({ rarely: 1, auto: 2, closed: 3 })[a.every] ?? 0;
     const ago = a => Math.round((today - Date.parse(a.day + 'T00:00:00Z')) / dayMs);
-    // due ones first, the most overdue at the top; then rarely-updated; closed at the end
-    const rows = [...acc].sort(([an, a], [bn, b]) => rank(a) - rank(b)
-      || (typeof b.every === 'number' ? ago(b) - b.every : 0) - (typeof a.every === 'number' ? ago(a) - a.every : 0) || an.localeCompare(bn));
+    // Days until the user has to act: a statement due (its period less the
+    // days since the newest record / statement end; below 0 overdue), a key's
+    // end, at once after a failed sync; none for "rarely", a key without an
+    // end, an on-chain wallet -- after the rest; closed accounts at the bottom.
+    const actIn = a => a.every === 'closed' ? 2e9
+      : a.flex ? (a.flex.error ? 0 : a.flex.expires ? Math.round((Date.parse(a.flex.expires + 'T00:00:00Z') - today) / dayMs) : 1e9)
+      : typeof a.every === 'number' ? a.every - ago(a) : 1e9;
+    const rows = [...acc].sort(([an, a], [bn, b]) => actIn(a) - actIn(b) || an.localeCompare(bn));
     const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     const label = e => (e === 7 ? 'weekly' : e === 30 ? 'monthly' : e);
     // the split accounts' parts, in a fixed order
