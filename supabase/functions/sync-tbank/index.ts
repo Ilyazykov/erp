@@ -131,7 +131,6 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
   const allTrades: TradeRow[] = [];
   // notes on accounts left out (a ЦФА account with more than one Atomyze wallet)
   const dfa: string[] = [];
-  const today = msk(new Date().toISOString()).slice(0, 10);
   for (const acc of list) {
     const isDfa = acc.type === 'DFA';
     if (!(['TINKOFF', 'TINKOFF_IIS', 'INVEST_BOX'].includes(acc.type) || isDfa) || acc.status !== 'OPEN' || acc.access !== 'READ_ONLY') continue;
@@ -194,8 +193,10 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
         const { data, error } = await db.from('trades').select('external_source, external_id, side, quantity, trade_date')
           .eq('user_id', userId).eq('account', ACCOUNT).eq('ticker', ticker).in('external_source', ['tbank_broker_xlsx', 'broker_csv', 'atomyze_xlsx']);
         if (error) throw new Error(error.message);
-        storedOf.set(ticker, (data ?? []).filter((r: { external_source: string; external_id: string }) =>
-          r.external_id.startsWith(`${agr}:`) || (isDfa && r.external_source === 'atomyze_xlsx')));
+        // (not the app rows these replace)
+        storedOf.set(ticker, (data ?? []).filter((r: { external_source: string; external_id: string; trade_date: string }) =>
+          (r.external_id.startsWith(`${agr}:`) || (isDfa && r.external_source === 'atomyze_xlsx'))
+          && !(r.external_source === 'broker_csv' && r.trade_date >= from)));
       }
       let q = 0;
       for (const r of [...storedOf.get(ticker)!, ...trades.filter(x => x.ticker === ticker)]) {
@@ -352,7 +353,8 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
   const removedSnowball = await removeCoveredSnowball(db, userId, allTrades);
   const { error: rq } = await db.rpc('request_capital_refresh', { p_user: userId });
   if (rq) throw new Error(rq.message);
-  return { period_to: today, accounts: list, synced: summary, removed_snowball_duplicates: removedSnowball, ...(dfa.length ? { dfa } : {}) };
+  // the day of the run as the page counts days (UTC), not the Moscow one
+  return { period_to: new Date().toISOString().slice(0, 10), accounts: list, synced: summary, removed_snowball_duplicates: removedSnowball, ...(dfa.length ? { dfa } : {}) };
 }
 
 Deno.serve(async (req) => {
