@@ -32,12 +32,8 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import * as XLSX from 'npm:xlsx@0.18.5';
 import { removeCoveredSnowball } from '../_shared/statement_priority.ts';
+import { ACCOUNT, buildFromCashRows, EXCHANGE_BY_MARKET, SOURCE } from '../_shared/freedom24.ts';
 
-const ACCOUNT = 'Freedom24';
-const SOURCE = 'freedom24_xlsx';
-const EXCHANGE_BY_MARKET: Record<string, string> = { EU: 'XETRA' };
-
-const round = (x: number, d = 8) => Math.round(x * 10 ** d) / 10 ** d;
 // Excel serial (days since 1899-12-30) -> "2026-05-04T21:47:27.000Z".
 const fromSerial = (v: unknown) => {
   const n = Number(v);
@@ -81,47 +77,7 @@ function parse(bytes: Uint8Array) {
     comment: String(r[cComment] ?? '').trim(), amount: Number(r[cAmount]), currency: String(r[cCcy] ?? '').trim(),
   })).filter(r => r.id && r.time && Number.isFinite(r.amount) && r.currency);
   rows.reverse();   // oldest first (the sheet is newest first; same-second rows keep their order)
-
-  const commission = new Map<string, number>();   // trade id -> EUR commission
-  for (const r of rows) {
-    const id = /Комиссия/i.test(r.op) ? r.comment.match(/\(Trade (\d+) /)?.[1] : undefined;
-    if (id) commission.set(id, (commission.get(id) ?? 0) + Math.abs(r.amount));
-  }
-
-  const balance: Record<string, number> = {};
-  const seenTime = new Map<string, number>();
-  const bank = rows.map(r => {
-    balance[r.currency] = round((balance[r.currency] ?? 0) + r.amount);
-    const n = seenTime.get(r.time!) ?? 0; seenTime.set(r.time!, n + 1);
-    return {
-      tx_date: new Date(Date.parse(r.time!) + n).toISOString(), currency: r.currency, amount: r.amount,
-      description: `${r.op}: ${r.comment}`.slice(0, 500), balance_after: balance[r.currency], external_id: r.id,
-    };
-  });
-
-  const trades = [];
-  for (const r of rows) {
-    const date = r.time!.slice(0, 10);
-    const t = r.op === 'Сделка' ? r.comment.match(/(Купить|Продать) ([\d.]+) ([A-Z0-9.\-]+?)\.([A-Z]+) \(сделка [№#](\d+)\)/) : null;
-    if (t) {
-      const qty = Number(t[2]);
-      trades.push({
-        ticker: t[3], side: t[1] === 'Купить' ? 'buy' : 'sell', quantity: qty, price: round(Math.abs(r.amount) / qty, 6),
-        trade_date: date, currency: r.currency, fee_tax: commission.get(t[5]) ?? null, fee_currency: 'EUR',
-        exchange: EXCHANGE_BY_MARKET[t[4]] ?? null, note: r.comment, external_id: `trade:${t[5]}`,
-      });
-    }
-    const d = r.op === 'Дивиденды' ? r.comment.match(/\(([A-Z0-9.\-]+?)\.[A-Z]+\)\)/) : null;
-    if (d) {
-      const per = r.comment.match(/Per security ([\d.]+)/)?.[1];
-      trades.push({
-        ticker: d[1], side: 'dividend', quantity: r.amount, price: per ? Number(per) : r.amount,
-        trade_date: date, currency: r.currency, fee_tax: null, fee_currency: null,
-        exchange: null, note: r.comment, external_id: `dividend:${r.id}`,
-      });
-    }
-  }
-  return { bank, trades, balance };
+  return buildFromCashRows(rows as { id: string; time: string; op: string; comment: string; amount: number; currency: string }[]);
 }
 
 Deno.serve(async (req) => {

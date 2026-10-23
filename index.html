@@ -294,6 +294,22 @@
     </div>
     <div class="empty-note" id="mp_bybit_status"></div>
 
+    <div class="section-title">Freedom24 automatic sync</div>
+    <p class="note">Instead of uploading the cash-movement table: a Tradernet API key pair (freedom24.com → Tradernet API →
+      API key → Generate a new key pair). Freedom24 has no read-only keys — a pair can place orders (not withdraw); this
+      site only reads the cash movements with it. Pulled every morning, the whole history; each run replaces Freedom24's
+      rows (the shares credited as gifts still come from the broker report JSON, uploaded by hand). The private key stays
+      on the server — once saved, this page can't show it again; leave it empty to keep the one saved.</p>
+    <div class="form-row">
+      <label>Public key <input type="text" id="mp_f24_public" autocomplete="off"></label>
+      <label>Private key <input type="password" id="mp_f24_private" autocomplete="off"></label>
+      <button class="btn primary" id="mp_f24_save">Save</button>
+      <button class="btn" id="mp_f24_sync">Sync now</button>
+      <a class="btn" href="https://freedom24.com/tradernet-api/auth-api" target="_blank" rel="noopener"
+        title="Tradernet API -> API key -> Generate a new key pair">Get keys at Freedom24</a>
+    </div>
+    <div class="empty-note" id="mp_f24_status"></div>
+
     <div class="section-title">Export Revolut fund trades to Snowball</div>
     <p class="note">Generates a Snowball-importable CSV from the trades already stored here for the
       Revolut Flexible Cash Funds money-market fund share classes (IE0002RUHW32, IE000AZVL3K0, IE000H9J0QX4).</p>
@@ -1939,7 +1955,7 @@ const MP_ACCOUNT_SOURCE = {
   'Bank of Cyprus': '1Bank → Accounts → Transaction history → Export (CSV). Upload as is.',
   IBKR: 'Synced every morning through the Flex Web Service (IBKR automatic sync, below the uploads); or the IBKR Activity Statement, CSV, for the period since the last one, uploaded as is.',
   Bybit: 'Synced every morning through a read-only API key (Bybit automatic sync, below the uploads); or Bybit → Data Export → Transaction Log → Account Change Details: the Funding and the Unified Trading file, uploaded as is.',
-  Freedom24: 'Freedom24 web cabinet → Отчёты брокера → JSON, from 28.04.2026 to today. Or the cash-movement table (tradernet_table.xlsx) without a filter -- it must keep the «Сделка» rows. Upload as is.',
+  Freedom24: 'Cash movements synced every morning through the Tradernet API (Freedom24 automatic sync, below the uploads); or the cash-movement table (tradernet_table.xlsx) without a filter -- it must keep the «Сделка» rows. Shares credited as gifts: web cabinet → Отчёты брокера → JSON, from 28.04.2026 to today. Upload as is.',
   'Ziraat Bank': 'Ziraat internet banking → account activity (Hesap Hareketleri) → Excel (.xlsx). Upload as is.',
   Raiffeisen: 'Raiffeisen statements (PDF) → to Claude, who adds them to the combined Raiffeisen CSV.',
   'T-Bank': 'Broker: T-Investments → reports → broker report (.xlsx), upload as is. Cards, credit card, deposit, metal account: «Справка о движении средств» (PDF) for each contract → to Claude.',
@@ -2021,6 +2037,17 @@ async function mpRenderLatestSources() {
       if (to && (!a.uploaded || to > a.uploaded)) a.uploaded = to;
       a.flex = { expires: bybitApi.key_expires, error: last.error || '', label: 'key' };
     }
+    // Freedom24 likewise (sync-freedom24): its keys don't end
+    const { data: fst } = await sb.rpc('freedom24_api_status');
+    const f24Api = (fst || [])[0];
+    if (f24Api?.secret_set && acc.has('Freedom24')) {
+      const a = acc.get('Freedom24');
+      let last = {};
+      try { last = JSON.parse(f24Api.last_sync_result || '{}'); } catch { /* not JSON */ }
+      const to = (last.period || '').split('..')[1];
+      if (to && (!a.uploaded || to > a.uploaded)) a.uploaded = to;
+      a.flex = { expires: null, error: last.error || '', label: 'key', perpetual: true };
+    }
     for (const a of acc.values()) a.record = a.day, a.day = a.uploaded && a.uploaded > a.day ? a.uploaded : a.day;
     if (!acc.size) { wrap.innerHTML = '<div class="empty-note">Nothing imported yet.</div>'; return; }
     const dayMs = 86400000;
@@ -2051,7 +2078,7 @@ async function mpRenderLatestSources() {
         if (a.flex) {
           const left = a.flex.expires ? Math.round((Date.parse(a.flex.expires + 'T00:00:00Z') - today) / dayMs) : null;
           const warn = a.flex.error || (left !== null && left <= 7);
-          const text = `auto · ${a.flex.label || 'token'} to ${a.flex.expires || '?'}${a.flex.error ? ' · last sync failed' : ''}`;
+          const text = `auto · ${a.flex.label || 'token'} ${a.flex.perpetual ? 'without end' : `to ${a.flex.expires || '?'}`}${a.flex.error ? ' · last sync failed' : ''}`;
           update = `<span${warn ? ' style="color:#ff9500"' : ''}${a.flex.error ? ` title="${esc(a.flex.error)}"` : ''}>${esc(text)}</span>`;
         }
         return `<tr${style}><td>${src ? `<span class="mp-src" data-src="${esc(src)}">${esc(name)}</span>` : esc(name)}</td><td>${update}</td><td>${a.record}</td><td>${a.uploaded || '—'}</td><td>${d}</td><td${a.gaps?.length ? ' style="color:#ff9500"' : ''}>${(a.gaps || []).join('<br>') || ''}</td></tr>`;
@@ -5948,6 +5975,82 @@ document.getElementById('mp_bybit_sync').addEventListener('click', async () => {
   }
 });
 
+// ---- Freedom24 automatic sync (supabase/functions/sync-freedom24) ----
+// The public key shows by its last characters, the private one only as "saved" (freedom24_api_status, migration ...099).
+async function mpF24ApiLoad() {
+  const statusEl = document.getElementById('mp_f24_status');
+  const { data, error } = await sb.rpc('freedom24_api_status');
+  if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
+  const s = (data || [])[0];
+  const pubEl = document.getElementById('mp_f24_public');
+  pubEl.value = '';
+  pubEl.placeholder = s?.key_tail ? `saved …${s.key_tail} — leave empty to keep` : 'not set';
+  document.getElementById('mp_f24_private').placeholder = s?.secret_set ? 'saved — leave empty to keep' : 'not set';
+  statusEl.style.color = '';
+  if (!s) { statusEl.textContent = 'Not set up.'; return; }
+  let last = 'never synced';
+  if (s.last_sync_at) {
+    let r = {};
+    try { r = JSON.parse(s.last_sync_result || '{}'); } catch { /* not JSON */ }
+    last = `last synced ${new Date(s.last_sync_at).toLocaleString()}: `
+      + (r.error ? `error — ${r.error}` : `${r.trades} trades, ${r.dividends} dividends, ${r.cash_rows} cash rows for ${r.period}`);
+    if (r.error) statusEl.style.color = 'var(--red, #f85149)';
+  }
+  statusEl.textContent = `Public key …${s.key_tail || '—'}, private key ${s.secret_set ? 'saved' : 'not set'} (no end date); ${last}.`;
+}
+
+async function mpF24Call(body) {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) throw new Error('Sign in first.');
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/sync-freedom24`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const r = await res.json();
+  if (!res.ok) throw new Error(r.error || res.statusText);
+  return r;
+}
+
+document.getElementById('mp_f24_save').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_f24_status');
+  const pubEl = document.getElementById('mp_f24_public'), privEl = document.getElementById('mp_f24_private');
+  if (!pubEl.value.trim() && !pubEl.placeholder.startsWith('saved')) { statusEl.textContent = 'Enter the public key.'; return; }
+  // An empty public or private key keeps the saved one (set_freedom24_api).
+  const { error } = await sb.rpc('set_freedom24_api', { p_public: pubEl.value, p_private: privEl.value });
+  if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
+  privEl.value = '';
+  // Checked with Freedom24 at once: do the keys work.
+  statusEl.style.color = '';
+  statusEl.textContent = 'Saved; checking the keys with Freedom24…';
+  let problem = '', ops = null;
+  try { ops = (await mpF24Call({ check: true })).operations; } catch (err) { problem = err.message; }
+  await mpF24ApiLoad();
+  if (problem) {
+    statusEl.style.color = 'var(--red, #f85149)';
+    statusEl.textContent = `Saved, but Freedom24 refuses the keys: ${problem}`;
+  } else {
+    statusEl.textContent += ` Keys work: ${ops} operations on the account.`;
+  }
+  mpRenderLatestSources();
+});
+
+document.getElementById('mp_f24_sync').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_f24_status');
+  statusEl.style.color = '';
+  statusEl.textContent = 'Pulling the cash movements from Freedom24…';
+  try {
+    const r = await mpF24Call({});
+    const fmt = o => Object.entries(o || {}).map(([c, v]) => `${c} ${Number(v).toFixed(2)}`).join(', ') || 'none';
+    statusEl.textContent = `Synced ${r.period}: ${r.trades} trades, ${r.dividends} dividends, ${r.cash_rows} cash rows `
+      + `(the last on ${r.last_operation}). Freedom24 cash: ${fmt(r.cash)}. Capital is being rebuilt.`;
+    mpRenderLatestSources();
+  } catch (err) {
+    statusEl.style.color = 'var(--red, #f85149)';
+    statusEl.textContent = `Error: ${err.message}`;
+  }
+});
+
 async function mpSyncWallets(prefix = '') {
   const statusEl = document.getElementById('mp_wallet_status');
   const { data: { session } } = await sb.auth.getSession();
@@ -6049,6 +6152,7 @@ function mpUpdateAuthUi(session) {
     mpRenderWallets();
     mpIbkrFlexLoad();
     mpBybitApiLoad();
+    mpF24ApiLoad();
     mpRenderRealEstate();
     mpRenderLookThrough();
     mpRenderCharts();
