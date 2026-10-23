@@ -34,6 +34,7 @@
 // run). Each run's result is kept in broker_credentials.last_sync_*.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { fromCron, notFromCron } from '../_shared/cron_auth.ts';
 import { dec, recomputeExchange, type ExchangeWallet } from '../_shared/exchange_balances.ts';
 import { fundKind, RULES, utaKind } from '../_shared/bybit_rules.ts';
 
@@ -198,6 +199,8 @@ Deno.serve(async (req) => {
       const asUser = createClient(url, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: authHeader } } });
       userId = (await asUser.auth.getUser()).data.user?.id ?? null;
     }
+    // Without a user: only the daily job, with the cron secret.
+    if (!userId && !(await fromCron(req))) return notFromCron();
 
     let q = db.rpc('bybit_api_credentials');
     if (userId) q = q.eq('user_id', userId);

@@ -26,6 +26,7 @@
 // own history, with the service role.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { fromCron, notFromCron } from '../_shared/cron_auth.ts';
 
 // Price fetching stops here (the function has ~150 s in all).
 const TIME_BUDGET_MS = 100_000;
@@ -172,7 +173,9 @@ async function selectAll(q: () => any) {
   return out;
 }
 
-Deno.serve(async () => {
+Deno.serve(async (req) => {
+  // Only the daily job, with the cron secret.
+  if (!(await fromCron(req))) return notFromCron();
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
   const db = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
   const report: Record<string, unknown> = {};

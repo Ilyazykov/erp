@@ -15,6 +15,7 @@
 // only ever writes public data, with the service role).
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { fromCron, notFromCron } from '../_shared/cron_auth.ts';
 
 const SOURCES: Record<string, { page: string; source: string }> = {
   nizhny_novgorod: { page: 'https://www.gipernn.ru/analitika-gotovogo-zhilya', source: 'gipernn.ru' },
@@ -41,7 +42,9 @@ async function gipernnSeries(page: string) {
   });
 }
 
-Deno.serve(async () => {
+Deno.serve(async (req) => {
+  // Only the daily job, with the cron secret.
+  if (!(await fromCron(req))) return notFromCron();
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
   try {

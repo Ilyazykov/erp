@@ -80,6 +80,7 @@
 // RLS policy).
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { fromCron, notFromCron } from '../_shared/cron_auth.ts';
 
 const MOEX_ISS_BASE = 'https://iss.moex.com/iss';
 const YAHOO_CHART_BASE = 'https://query1.finance.yahoo.com/v8/finance/chart';
@@ -1251,6 +1252,8 @@ Deno.serve(async (req: Request) => {
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   };
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  // Only the daily job, with the cron secret.
+  if (!(await fromCron(req))) return notFromCron();
 
   try {
     const summary = await runUpdate();

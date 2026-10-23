@@ -35,6 +35,7 @@
 // carries counts and cash totals only; the daily job's, counts of users.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { fromCron, notFromCron } from '../_shared/cron_auth.ts';
 import { removeCoveredSnowball } from '../_shared/statement_priority.ts';
 
 const ACCOUNT = 'IBKR';
@@ -255,6 +256,8 @@ Deno.serve(async (req) => {
       const asUser = createClient(url, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: authHeader } } });
       userId = (await asUser.auth.getUser()).data.user?.id ?? null;
     }
+    // Without a user: only the daily job, with the cron secret.
+    if (!userId && !(await fromCron(req))) return notFromCron();
 
     // Who to sync with what: the Query ID / token entered on the page
     // (broker_credentials), else the function's secrets IBKR_FLEX_TOKEN /

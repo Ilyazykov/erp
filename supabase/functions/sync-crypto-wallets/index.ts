@@ -44,6 +44,7 @@
 // for the record, never valued.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { fromCron, notFromCron } from '../_shared/cron_auth.ts';
 
 const BLOCKSCOUT = 'https://eth.blockscout.com/api/v2';
 // Keyless public Ethereum JSON-RPC nodes, tried in order. Balances are read
@@ -593,6 +594,8 @@ Deno.serve(async (req) => {
       const { data: { user } } = await asUser.auth.getUser();
       if (user) userId = user.id;
     }
+    // Without a user: only the daily job, with the cron secret.
+    if (!userId && !(await fromCron(req))) return notFromCron();
 
     // On-chain wallets only -- a custodial account like Bybit (chain 'bybit')
     // comes from its own CSV import, there's no blockchain to read.

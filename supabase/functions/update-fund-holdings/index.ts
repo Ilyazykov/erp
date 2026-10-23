@@ -53,6 +53,7 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { xlsxRows } from '../_shared/xlsx_rows.ts';
+import { fromCron, notFromCron } from '../_shared/cron_auth.ts';
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36';
 
@@ -329,7 +330,9 @@ const blank = (isin: string, name: string): Security => ({
 // country nor currency): iShares MSCI ACWI, Core MSCI World, Core MSCI EM IMI.
 const REFERENCE_ISHARES = ['251850', '251882', '264659'];
 
-Deno.serve(async () => {
+Deno.serve(async (req) => {
+  // Only the daily job, with the cron secret.
+  if (!(await fromCron(req))) return notFromCron();
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
   try {

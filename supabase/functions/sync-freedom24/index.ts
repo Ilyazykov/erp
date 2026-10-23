@@ -27,6 +27,7 @@
 // broker_credentials.last_sync_*.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { fromCron, notFromCron } from '../_shared/cron_auth.ts';
 import { removeCoveredSnowball } from '../_shared/statement_priority.ts';
 import { ACCOUNT, buildFromCashRows, type CashRow, SOURCE } from '../_shared/freedom24.ts';
 
@@ -172,6 +173,8 @@ Deno.serve(async (req) => {
       const asUser = createClient(url, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: authHeader } } });
       userId = (await asUser.auth.getUser()).data.user?.id ?? null;
     }
+    // Without a user: only the daily job, with the cron secret.
+    if (!userId && !(await fromCron(req))) return notFromCron();
 
     let q = db.rpc('freedom24_api_credentials');
     if (userId) q = q.eq('user_id', userId);
