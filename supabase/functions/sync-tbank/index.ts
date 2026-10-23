@@ -28,6 +28,10 @@
 //     of the report's -- as the app rows had it.
 // The app rows of those days go; a report uploaded later takes its period
 // back from these (removeAppRows). Every run rebuilds the account's rows.
+// The ЦФА account ("Цифровой счет", type DFA) the same way, under the Atomyze
+// wallet the ЦФА are already kept by (its reports, the app rows), "CFA:<code>"
+// tickers; a redemption closes the holding (a sell at 0 next to the
+// repayment), as the app rows did.
 //
 // Before anything is written the API is checked against the latest report:
 // the month before its end, every deal of the report must come back by its
@@ -117,35 +121,33 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
     return inst;
   };
   // the report's ticker: the exchange code without "@...", the ISIN where the code is one (bonds)
-  const tickerOf = (i: Inst) => { const c = i.ticker.replace(/@.*$/, ''); return !c || ISIN.test(c) ? (i.isin || c) : c; };
+  // (a ЦФА: "CFA:" + its code, as the Atomyze reports have it)
+  const tickerOf = (i: Inst) => {
+    if (/dfa/i.test(i.type)) return `CFA:${i.ticker}`;
+    const c = i.ticker.replace(/@.*$/, ''); return !c || ISIN.test(c) ? (i.isin || c) : c;
+  };
 
   const results = [];
   const allTrades: TradeRow[] = [];
-  // The ЦФА account ("Цифровой счет", type DFA): read, not written yet -- the
-  // ЦФА in the database are keyed by the Atomyze wallet, not this account; a
-  // look at what the API gives comes back in the result.
+  // notes on accounts left out (a ЦФА account with more than one Atomyze wallet)
   const dfa: string[] = [];
   const today = msk(new Date().toISOString()).slice(0, 10);
   for (const acc of list) {
-    if (acc.type === 'DFA' && acc.access === 'READ_ONLY') {
-      try {
-        const r = await tinvest(token, 'OperationsService/GetOperationsByCursor', { accountId: acc.id, limit: 200, state: 'OPERATION_STATE_EXECUTED' });
-        const items: Op[] = r.items ?? [];
-        dfa.push(`${acc.id}: ${items.length}${r.hasNext ? '+' : ''} operations, types ${[...new Set(items.map(o => String(o.type).replace('OPERATION_TYPE_', '')))].join(',')}`);
-        for (const o of items.slice(0, 10)) {
-          let inst = '';
-          if (o.instrumentUid) {
-            try { const i = await instOf(o.instrumentUid); inst = `${i.ticker}|${i.isin}|${i.type}|${i.name}`; } catch (err) { inst = `instrument: ${String(err).slice(0, 60)}`; }
-          }
-          dfa.push(`${msk(o.date).slice(0, 16)} ${String(o.type).replace('OPERATION_TYPE_', '')} ${money(o.payment)} ${o.payment?.currency ?? ''} q${o.quantity ?? ''} ${o.ticker ?? ''} [${inst}] ${String(o.description || o.name || '').slice(0, 50)}`);
-        }
-      } catch (err) { dfa.push(`${acc.id}: ${String(err).slice(0, 200)}`); }
-      continue;
+    const isDfa = acc.type === 'DFA';
+    if (!(['TINKOFF', 'TINKOFF_IIS', 'INVEST_BOX'].includes(acc.type) || isDfa) || acc.status !== 'OPEN' || acc.access !== 'READ_ONLY') continue;
+    // The key the rows go under: the agreement -- for the ЦФА account ("Цифровой
+    // счет"), the Atomyze wallet the ЦФА are kept by (its reports, the app rows).
+    let agr = acc.id;
+    if (isDfa) {
+      const { data: w, error: wErr } = await db.from('bank_transactions').select('external_source')
+        .eq('user_id', userId).like('external_source', 'atomyze_xlsx:%').limit(5000);
+      if (wErr) throw new Error(wErr.message);
+      const wallets = [...new Set((w ?? []).map((r: { external_source: string }) => r.external_source.slice('atomyze_xlsx:'.length)))] as string[];
+      if (wallets.length > 1) { dfa.push(`${acc.id}: ${wallets.length} Atomyze wallets -- which one it is isn't known, not synced`); continue; }
+      if (wallets.length === 1) agr = wallets[0];
     }
-    if (!['TINKOFF', 'TINKOFF_IIS', 'INVEST_BOX'].includes(acc.type) || acc.status !== 'OPEN' || acc.access !== 'READ_ONLY') continue;
-    const agr = acc.id;
     const lastEnd = (await reportPeriods(db, userId, ACCOUNT, agr)).map(([, t]) => t).sort().pop() ?? null;
-    const opened = accounts.find((a: { id: string }) => a.id === agr)?.openedDate;
+    const opened = accounts.find((a: { id: string }) => a.id === acc.id)?.openedDate;
     const from = lastEnd ? addDays(lastEnd, 1) : msk(opened ?? new Date().toISOString()).slice(0, 10);
     const checkFrom = lastEnd ? addDays(lastEnd, -CHECK_DAYS) : null;
     // The name a security already goes by on this agreement: the report keeps a
@@ -163,7 +165,7 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
     let cursor = '';
     for (let page = 0; page < 100; page++) {
       const r = await tinvest(token, 'OperationsService/GetOperationsByCursor', {
-        accountId: agr, from: new Date(Date.parse(`${pullFrom}T00:00:00Z`) - 3 * 3600000).toISOString(), to: new Date().toISOString(),
+        accountId: acc.id, from: new Date(Date.parse(`${pullFrom}T00:00:00Z`) - 3 * 3600000).toISOString(), to: new Date().toISOString(),
         limit: 1000, state: 'OPERATION_STATE_EXECUTED', withoutCommissions: false, withoutTrades: false, withoutOvernights: false,
         ...(cursor ? { cursor } : {}),
       });
@@ -183,6 +185,25 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
 
     const cash: CashRow[] = [];
     const trades: TradeRow[] = [];
+    // A security's holding on this agreement before a day -- the stored rows
+    // (the reports', the app's) and this run's: a payout's amount per security
+    // and a redemption's quantity, where the API leaves them out.
+    const storedOf = new Map<string, { side: string; quantity: number; trade_date: string }[]>();
+    const heldBefore = async (ticker: string, day: string) => {
+      if (!storedOf.has(ticker)) {
+        const { data, error } = await db.from('trades').select('external_source, external_id, side, quantity, trade_date')
+          .eq('user_id', userId).eq('account', ACCOUNT).eq('ticker', ticker).in('external_source', ['tbank_broker_xlsx', 'broker_csv', 'atomyze_xlsx']);
+        if (error) throw new Error(error.message);
+        storedOf.set(ticker, (data ?? []).filter((r: { external_source: string; external_id: string }) =>
+          r.external_id.startsWith(`${agr}:`) || (isDfa && r.external_source === 'atomyze_xlsx')));
+      }
+      let q = 0;
+      for (const r of [...storedOf.get(ticker)!, ...trades.filter(x => x.ticker === ticker)]) {
+        if (r.trade_date >= day) continue;
+        q += r.side === 'buy' || r.side === 'stock_as_dividend' ? Number(r.quantity) : r.side === 'sell' ? -Number(r.quantity) : 0;
+      }
+      return round(q);
+    };
     const odd: string[] = [];
     // securities moved in / out (between agreements, to the blocked-assets one):
     // no money moves -- the payment the API shows is the securities' value --
@@ -232,12 +253,20 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
         : t === 'OPERATION_TYPE_BOND_REPAYMENT' ? 'amortisation' : t === 'OPERATION_TYPE_BOND_REPAYMENT_FULL' ? 'repayment' : null;
       if (payout && uid && amount) {
         const inst = await instOf(uid);
-        const q = Number(op.quantity || 0);
+        const ticker = tickerFor(inst);
+        const q = Number(op.quantity || 0) || await heldBefore(ticker, addDays(day, 1));
         trades.push({
-          ticker: tickerFor(inst), side: payout, quantity: amount, price: q ? round(amount / q, 6) : amount, trade_date: day, settle_date: null,
+          ticker, side: payout, quantity: amount, price: q > 0 ? round(amount / q, 6) : amount, trade_date: day, settle_date: null,
           currency: ccy, fee_tax: null, fee_currency: null, nkd: null, exchange: null,
           note: `${op.name || t}: ${inst.name}${op.description ? ` -- ${op.description}` : ''}`.slice(0, 500),
-          external_id: uniq(`${agr}:income:${day}:${inst.isin || tickerFor(inst)}:${amount}`),
+          external_id: uniq(`${agr}:income:${day}:${inst.isin || ticker}:${amount}`),
+        });
+        // redeemed at maturity: the holding goes (the money is the repayment row)
+        if (payout === 'repayment' && q > 0) trades.push({
+          ticker, side: 'sell', quantity: q, price: 0, trade_date: day, settle_date: null,
+          currency: ccy, fee_tax: null, fee_currency: null, nkd: null, exchange: null,
+          note: `${inst.name} redeemed at maturity: position closed (the money is in the repayment row)`,
+          external_id: uniq(`${agr}:redeemed:${day}:${inst.isin || ticker}`),
         });
         continue;
       }
@@ -246,14 +275,18 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
     // The check against the latest report (the month before its end).
     const checked: Record<string, unknown> = {};
     if (lastEnd && checkFrom) {
-      const { data: stored, error } = await db.from('trades').select('external_id, ticker, side, quantity, price, trade_date')
-        .eq('user_id', userId).eq('external_source', 'tbank_broker_xlsx').like('external_id', `${agr}:%`)
+      // the agreement's broker report, or the ЦФА wallet's Atomyze report
+      let sq = db.from('trades').select('external_id, ticker, side, quantity, price, trade_date')
+        .eq('user_id', userId).eq('external_source', isDfa ? 'atomyze_xlsx' : 'tbank_broker_xlsx')
         .gte('trade_date', checkFrom).lte('trade_date', lastEnd);
+      if (!isDfa) sq = sq.like('external_id', `${agr}:%`);
+      const { data: stored, error } = await sq;
       if (error) throw new Error(error.message);
       const diffs: string[] = [];
       const inWindow = trades.filter(r => r.trade_date >= checkFrom && r.trade_date <= lastEnd);
       const apiDeals = new Map(inWindow.filter(r => r.external_id.includes(':deal:')).map(r => [r.external_id.split(':')[2], r]));
-      const storedDeals = (stored ?? []).filter((s: { external_id: string }) => s.external_id.includes(':deal:'));
+      const storedDeals = (stored ?? []).filter((s: { external_id: string; side: string; price: number }) =>
+        (s.side === 'buy' || s.side === 'sell') && Number(s.price) > 0 && /(^|:)deal:/.test(s.external_id));
       // by the deal's number; a deal off the exchange (the report's number isn't
       // the API's) by its day, side, quantity and security
       const matchedNums = new Set<string>();
@@ -270,8 +303,9 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
       }
       const storedNums = new Set(storedDeals.map((s: { external_id: string }) => s.external_id.split(':')[2]));
       for (const [num, a] of apiDeals) if (!storedNums.has(num) && !matchedNums.has(num)) diffs.push(`API deal ${num} (${a.trade_date} ${a.ticker} ${a.side} ${a.quantity}) not in the report`);
-      const storedIncome = (stored ?? []).filter((s: { external_id: string }) => s.external_id.includes(':income:'));
-      const apiIncome = inWindow.filter(r => r.external_id.includes(':income:'));
+      const isPayout = (side: string) => side === 'dividend' || side === 'amortisation' || side === 'repayment';
+      const storedIncome = (stored ?? []).filter((s: { side: string }) => isPayout(s.side));
+      const apiIncome = inWindow.filter(r => isPayout(r.side));
       for (const s of storedIncome) {
         const ok = apiIncome.some(a => Math.abs(a.quantity - Number(s.quantity)) < 0.011
           && Math.abs(Date.parse(a.trade_date) - Date.parse(s.trade_date)) <= 4 * 86400000);

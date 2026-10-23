@@ -314,8 +314,8 @@
     <p class="note">Instead of uploading the weekly broker report: a T-Invest API token (T-Investments → settings →
       T-Invest API tokens → <b>read-only</b>, all accounts). A token that can trade is refused. Pulled every morning: the days
       after each agreement's latest report, checked first against the month before that report's end — nothing is
-      replaced unless the API agrees with it. A report uploaded later takes its period back. Cards, credit card,
-      deposits and ЦФА aren't in the API — still statements. The token stays on the server; it lives three months from
+      replaced unless the API agrees with it (ЦФА: against the Atomyze report). A report uploaded later takes its
+      period back. Cards, credit card and deposits aren't in the API — still statements. The token stays on the server; it lives three months from
       its last use, which the daily sync keeps renewing. T-Bank's certificate chains to the Russian Trusted Root CA,
       trusted only for this connection.</p>
     <div class="form-row">
@@ -1976,7 +1976,7 @@ const MP_ACCOUNT_SOURCE = {
   Freedom24: 'Cash movements synced every morning through the Tradernet API (Freedom24 automatic sync, below the uploads); or the cash-movement table (tradernet_table.xlsx) without a filter -- it must keep the «Сделка» rows. Shares credited as gifts: web cabinet → Отчёты брокера → JSON, from 28.04.2026 to today. Upload as is.',
   'Ziraat Bank': 'Ziraat internet banking → account activity (Hesap Hareketleri) → Excel (.xlsx). Upload as is.',
   Raiffeisen: 'Raiffeisen statements (PDF) → to Claude, who adds them to the combined Raiffeisen CSV.',
-  'T-Bank': 'Broker: synced every morning through the T-Invest API (T-Bank broker automatic sync, below the uploads); or T-Investments → reports → broker report (.xlsx), upload as is. Cards, credit card, deposit, metal account: «Справка о движении средств» (PDF) for each contract → to Claude.',
+  'T-Bank': 'Broker and ЦФА: synced every morning through the T-Invest API (T-Bank broker automatic sync, below the uploads); or T-Investments → reports → broker report (.xlsx) / the Atomyze report, upload as is. Cards, credit card, deposit, metal account: «Справка о движении средств» (PDF) for each contract → to Claude.',
   Sber: 'Broker: SberBank Online → Инвестиции → account → Отчёты и справки → broker report (.html, one per month), upload as is. Card and savings account: Выписки и справки → PDF → to Claude.',
   Alfa: 'Alfa-Online → statements of the current, salary and Alfa-Account (PDF); broker account: screenshots of Alfa-Investments → History → to Claude.',
   'Yandex Bank': 'Yandex Bank app → statement for each contract (current account, «Сейв») (PDF) → to Claude.',
@@ -2070,6 +2070,7 @@ async function mpRenderLatestSources() {
       let last = {};
       try { last = JSON.parse(tbankApi.last_sync_result || '{}'); } catch { /* not JSON */ }
       partAuto.set('T-Bank|Broker', { error: last.error || '', to: last.period_to || '' });
+      partAuto.set('T-Bank|ЦФА (Atomyze)', { error: last.error || '', to: last.period_to || '' });
     }
     for (const a of acc.values()) a.record = a.day, a.day = a.uploaded && a.uploaded > a.day ? a.uploaded : a.day;
     if (!acc.size) { wrap.innerHTML = '<div class="empty-note">Nothing imported yet.</div>'; return; }
