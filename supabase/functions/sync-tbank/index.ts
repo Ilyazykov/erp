@@ -20,7 +20,9 @@
 //     a bond's price in % of its face, the broker's fee on the first fill),
 //     payouts ('<agreement>:income:<day>:<isin>:<amount>': coupon / dividend
 //     -> 'dividend', partial redemption -> 'amortisation', full ->
-//     'repayment'), securities moved in / out without money ('<agreement>:move:');
+//     'repayment'); securities moved in / out (between agreements, to the
+//     blocked-assets one) aren't written -- within T-Bank the two sides cancel
+//     out, a blocked one is the report's to book -- just listed in the result;
 //   - money 'tbank_api:<agreement>', one row per operation (a currency deal
 //     also gets its other currency's leg), the running balance from 0 on top
 //     of the report's -- as the app rows had it.
@@ -119,8 +121,27 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
 
   const results = [];
   const allTrades: TradeRow[] = [];
+  // The ЦФА account ("Цифровой счет", type DFA): read, not written yet -- the
+  // ЦФА in the database are keyed by the Atomyze wallet, not this account; a
+  // look at what the API gives comes back in the result.
+  const dfa: string[] = [];
   const today = msk(new Date().toISOString()).slice(0, 10);
   for (const acc of list) {
+    if (acc.type === 'DFA' && acc.access === 'READ_ONLY') {
+      try {
+        const r = await tinvest(token, 'OperationsService/GetOperationsByCursor', { accountId: acc.id, limit: 200, state: 'OPERATION_STATE_EXECUTED' });
+        const items: Op[] = r.items ?? [];
+        dfa.push(`${acc.id}: ${items.length}${r.hasNext ? '+' : ''} operations, types ${[...new Set(items.map(o => String(o.type).replace('OPERATION_TYPE_', '')))].join(',')}`);
+        for (const o of items.slice(0, 10)) {
+          let inst = '';
+          if (o.instrumentUid) {
+            try { const i = await instOf(o.instrumentUid); inst = `${i.ticker}|${i.isin}|${i.type}|${i.name}`; } catch (err) { inst = `instrument: ${String(err).slice(0, 60)}`; }
+          }
+          dfa.push(`${msk(o.date).slice(0, 16)} ${String(o.type).replace('OPERATION_TYPE_', '')} ${money(o.payment)} ${o.payment?.currency ?? ''} q${o.quantity ?? ''} ${o.ticker ?? ''} [${inst}] ${String(o.description || o.name || '').slice(0, 50)}`);
+        }
+      } catch (err) { dfa.push(`${acc.id}: ${String(err).slice(0, 200)}`); }
+      continue;
+    }
     if (!['TINKOFF', 'TINKOFF_IIS', 'INVEST_BOX'].includes(acc.type) || acc.status !== 'OPEN' || acc.access !== 'READ_ONLY') continue;
     const agr = acc.id;
     const lastEnd = (await reportPeriods(db, userId, ACCOUNT, agr)).map(([, t]) => t).sort().pop() ?? null;
@@ -163,6 +184,13 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
     const cash: CashRow[] = [];
     const trades: TradeRow[] = [];
     const odd: string[] = [];
+    // securities moved in / out (between agreements, to the blocked-assets one):
+    // no money moves -- the payment the API shows is the securities' value --
+    // and no holding change written: within T-Bank the two sides cancel out,
+    // and a move to the blocked-assets agreement is the report's to book
+    // (BLOCKED:<ticker>); listed in the result
+    const moves: string[] = [];
+    const isMove = (op: Op, t: string) => /SECURITIES/.test(t) || /^Перевод \d+ (акци|лот|облигац|па[яиё]|бумаг|ценн)/i.test(String(op.description || op.name || ''));
     const seen = new Map<string, number>();
     const uniq = (s: string) => { const n = seen.get(s) ?? 0; seen.set(s, n + 1); return n ? `${s}:dup${n}` : s; };
     for (const op of ops) {
@@ -171,6 +199,7 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
       const day = at.slice(0, 10);
       const amount = round(money(op.payment), 2);
       const ccy = String(op.payment?.currency ?? '').toUpperCase();
+      if (isMove(op, t)) { moves.push(`${day} ${op.description || op.name || t}`); continue; }
       if (amount && ccy) cash.push({ tx_date: at, currency: ccy, amount, external_id: uniq(`${agr}:op:${op.id}`),
         description: `${op.name || t}${op.description ? `: ${op.description}` : ''}`.slice(0, 500) });
       const uid = op.instrumentUid;
@@ -211,16 +240,6 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
           external_id: uniq(`${agr}:income:${day}:${inst.isin || tickerFor(inst)}:${amount}`),
         });
         continue;
-      }
-      if ((t === 'OPERATION_TYPE_INPUT_SECURITIES' || t === 'OPERATION_TYPE_OUTPUT_SECURITIES') && uid) {
-        const inst = await instOf(uid);
-        const q = Number(op.quantityDone || op.quantity || 0);
-        if (q) trades.push({
-          ticker: tickerFor(inst), side: t.endsWith('INPUT_SECURITIES') ? 'buy' : 'sell', quantity: q, price: 0, trade_date: day, settle_date: null,
-          currency: 'RUB', fee_tax: null, fee_currency: null, nkd: null, exchange: null,
-          note: `${op.name || t}: ${inst.name} -- moved without money (transfer between depositaries / agreements)`,
-          external_id: uniq(`${agr}:move:${op.id}`),
-        });
       }
     }
 
@@ -263,7 +282,8 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
     }
     if (odd.length) throw new Error(`Not understood on ${agr} -- nothing replaced: ${odd.slice(0, 8).join('; ')}`);
 
-    results.push({ agr, from, lastEnd, cash: cash.filter(c => c.tx_date.slice(0, 10) >= from), trades: trades.filter(r => r.trade_date >= from), checked });
+    results.push({ agr, from, lastEnd, cash: cash.filter(c => c.tx_date.slice(0, 10) >= from), trades: trades.filter(r => r.trade_date >= from), checked,
+      moves: moves.filter(m => m.slice(0, 10) >= from) });
   }
 
   // All accounts understood: replace.
@@ -292,12 +312,13 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
     }
     allTrades.push(...r.trades);
     summary.push({ agreement: r.agr, from: r.from, after_report: r.lastEnd, deals: r.trades.filter(t => t.external_id.includes(':deal:')).length,
-      payouts: r.trades.filter(t => t.external_id.includes(':income:')).length, cash_rows: bank.length, cash_change: bal, checked: r.checked });
+      payouts: r.trades.filter(t => t.external_id.includes(':income:')).length, cash_rows: bank.length, cash_change: bal, checked: r.checked,
+      ...(r.moves.length ? { securities_moved: r.moves } : {}) });
   }
   const removedSnowball = await removeCoveredSnowball(db, userId, allTrades);
   const { error: rq } = await db.rpc('request_capital_refresh', { p_user: userId });
   if (rq) throw new Error(rq.message);
-  return { period_to: today, accounts: list, synced: summary, removed_snowball_duplicates: removedSnowball };
+  return { period_to: today, accounts: list, synced: summary, removed_snowball_duplicates: removedSnowball, ...(dfa.length ? { dfa } : {}) };
 }
 
 Deno.serve(async (req) => {
