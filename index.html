@@ -1972,10 +1972,10 @@ const MP_ACCOUNT_SOURCE = {
 };
 // The accounts whose row opens, on a click, into its parts -- broker, cards
 // and current accounts, credit card, deposits and savings, ЦФА -- each with
-// its newest record (latest_data_per_part, migration ...101): Russian banks,
-// one statement each part.
-const MP_SPLIT_ACCOUNTS = new Set(['T-Bank', 'Sber', 'Alfa', 'Yandex Bank', 'Ozon Bank', 'Finuslugi']);
-const MP_PART_ORDER = ['Broker', 'ЦФА (Atomyze)', 'Cards & current accounts', 'Credit card', 'Deposits & savings'];
+// its newest record (latest_data_per_part, migrations ...101, ...102):
+// Russian banks and Revolut, one statement each part.
+const MP_SPLIT_ACCOUNTS = new Set(['T-Bank', 'Sber', 'Alfa', 'Yandex Bank', 'Ozon Bank', 'Finuslugi', 'Revolut']);
+const MP_PART_ORDER = ['Broker', 'ЦФА (Atomyze)', 'Flexible Cash Funds', 'Crypto', 'Metals', 'Cards & current accounts', 'Credit card', 'Deposits & savings'];
 const mpOpenAccounts = new Set();
 async function mpRenderLatestSources() {
   const wrap = document.getElementById('mp_latest_sources');
@@ -1997,7 +1997,7 @@ async function mpRenderLatestSources() {
     // -- by the end of the period it covers where that's known (an old
     // statement uploaded today doesn't make the account fresh); the periods
     // merged, the holes of more than 3 days between them listed
-    const { data: ups } = await sb.from('statement_uploads').select('account, uploaded_at, period_from, period_to')
+    const { data: ups } = await sb.from('statement_uploads').select('account, kind, file_name, uploaded_at, period_from, period_to')
       .order('uploaded_at', { ascending: false }).limit(5000);
     const spans = new Map();
     for (const u of ups || []) {
@@ -2081,12 +2081,42 @@ async function mpRenderLatestSources() {
       parts.get(p.account).push(p);
     }
     for (const ps of parts.values()) ps.sort((x, y) => MP_PART_ORDER.indexOf(x.part) - MP_PART_ORDER.indexOf(y.part));
+    // Each part's statements: the upload's kind and file name tell the part
+    // (tbank_credit_card_*.csv, revolut_fund, *broker*, ...); a file naming
+    // none (yandex_combined.csv) covers them all.
+    const partOfUpload = u => {
+      const k = u.kind || '', f = (u.file_name || '').toLowerCase();
+      if (k === 'revolut_account') return 'Cards & current accounts';
+      if (k === 'revolut_fund') return 'Flexible Cash Funds';
+      if (k === 'revolut_deposit') return 'Deposits & savings';
+      if (/crypto/.test(k + f)) return 'Crypto';
+      if (/metal/.test(k + f)) return 'Metals';
+      if (/atomyze/.test(k + f)) return 'ЦФА (Atomyze)';
+      if (/broker|invest/.test(k + f)) return 'Broker';
+      if (/credit/.test(f)) return 'Credit card';
+      if (/saving|deposit|вклад/.test(f)) return 'Deposits & savings';
+      if (/debit|card|salary|current|account/.test(f)) return 'Cards & current accounts';
+      return null;
+    };
+    const partUploaded = new Map();   // "account|part" -> the latest period end
+    for (const u of ups || []) {
+      if (!parts.has(u.account)) continue;
+      const day = u.period_to || u.uploaded_at.slice(0, 10);
+      const one = partOfUpload(u);
+      for (const p of parts.get(u.account)) {
+        if (one && one !== p.part) continue;
+        const key = `${u.account}|${p.part}`;
+        if (!partUploaded.has(key) || day > partUploaded.get(key)) partUploaded.set(key, day);
+      }
+    }
     const partRowsHtml = (name, closed) => (parts.get(name) || []).map(p => {
-      const d = Math.round((today - Date.parse(p.last_day + 'T00:00:00Z')) / dayMs);
+      const up = partUploaded.get(`${name}|${p.part}`) || '';
+      const day = up > p.last_day ? up : p.last_day;
+      const d = Math.round((today - Date.parse(day + 'T00:00:00Z')) / dayMs);
       const contracts = (p.contracts || []).filter(Boolean);
       const what = `${p.row_count} records${contracts.length ? ` · ${contracts.length === 1 ? 'contract' : 'contracts'} ${contracts.join(', ')}` : ''}`;
       return `<tr class="mp-part" data-acc="${esc(name)}"${mpOpenAccounts.has(name) ? '' : ' hidden'} style="color:#8b949e${closed ? ';opacity:.7' : ''}">`
-        + `<td style="padding-left:28px"><span class="mp-src" data-src="${esc(what)}">${esc(p.part)}</span></td><td></td><td>${p.last_day}</td><td></td><td>${d}</td><td></td></tr>`;
+        + `<td style="padding-left:28px"><span class="mp-src" data-src="${esc(what)}">${esc(p.part)}</span></td><td></td><td>${p.last_day}</td><td>${up || '—'}</td><td>${d}</td><td></td></tr>`;
     }).join('');
     wrap.innerHTML = `<table class="data-table"><thead><tr><th>Account</th><th>Update</th><th>Latest record</th><th>Statements to</th><th>Days ago</th><th>Holes between statements</th></tr></thead><tbody>${
       rows.map(([name, a]) => {
