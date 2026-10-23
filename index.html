@@ -2050,7 +2050,7 @@ async function mpRenderLatestSources() {
         let update = esc(label(a.every));
         if (a.flex) {
           const left = a.flex.expires ? Math.round((Date.parse(a.flex.expires + 'T00:00:00Z') - today) / dayMs) : null;
-          const warn = a.flex.error || (left !== null && left <= 30);
+          const warn = a.flex.error || (left !== null && left <= 7);
           const text = `auto · ${a.flex.label || 'token'} to ${a.flex.expires || '?'}${a.flex.error ? ' · last sync failed' : ''}`;
           update = `<span${warn ? ' style="color:#ff9500"' : ''}${a.flex.error ? ` title="${esc(a.flex.error)}"` : ''}>${esc(text)}</span>`;
         }
@@ -5796,13 +5796,13 @@ async function mpIbkrFlexLoad() {
     last = `last synced ${new Date(s.last_sync_at).toLocaleString()}: `
       + (r.error ? `error — ${r.error}` : `${r.trades} trades, ${r.dividends} dividends, ${r.cash_rows} cash rows for ${r.period}`);
   }
-  // Days the token has left, red within a month of its end.
+  // Days the token has left, red within a week of its end.
   let expiry = '';
   statusEl.style.color = '';
   if (s.token_set && s.token_expires) {
     const days = Math.ceil((Date.parse(`${s.token_expires}T00:00:00Z`) - Date.now()) / 86400000);
     expiry = days < 0 ? ` (expired ${s.token_expires} — generate a new one)` : ` until ${s.token_expires} (${days} days left)`;
-    if (days <= 30) statusEl.style.color = 'var(--red, #f85149)';
+    if (days <= 7) statusEl.style.color = 'var(--red, #f85149)';
   }
   statusEl.textContent = `Query ID ${s.query_id || '—'}, token ${s.token_set ? 'saved' : 'not set'}${expiry}; ${last}.`;
 }
@@ -5882,12 +5882,12 @@ async function mpBybitApiLoad() {
       + (r.error ? `error — ${r.error}` : `${r.funding_rows} Funding and ${r.unified_rows} Unified Trading rows for ${r.period}`);
     if (r.error) statusEl.style.color = 'var(--red, #f85149)';
   }
-  // Days the key has left, red within a month of its end.
+  // Days the key has left, red within a week of its end.
   let expiry = s.key_expires ? '' : ' (its end date comes with the first sync)';
   if (s.key_expires) {
     const days = Math.ceil((Date.parse(`${s.key_expires}T00:00:00Z`) - Date.now()) / 86400000);
     expiry = days < 0 ? ` (expired ${s.key_expires} — create a new one)` : ` until ${s.key_expires} (${days} days left)`;
-    if (days <= 30) statusEl.style.color = 'var(--red, #f85149)';
+    if (days <= 7) statusEl.style.color = 'var(--red, #f85149)';
   }
   statusEl.textContent = `API key …${s.key_tail || '—'}, secret ${s.secret_set ? 'saved' : 'not set'}${expiry}; ${last}.`;
 }
@@ -5900,7 +5900,27 @@ document.getElementById('mp_bybit_save').addEventListener('click', async () => {
   const { error } = await sb.rpc('set_bybit_api', { p_key: keyEl.value, p_secret: secretEl.value });
   if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
   secretEl.value = '';
+  // Checked with Bybit at once: its end date, or why it won't do.
+  statusEl.style.color = '';
+  statusEl.textContent = 'Saved; checking the key with Bybit…';
+  let problem = '';
+  try {
+    const { data: { session } } = await sb.auth.getSession();
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/sync-bybit`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json', 'x-region': 'eu-west-1' },
+      body: JSON.stringify({ check: true }),
+    });
+    const r = await res.json();
+    if (!res.ok) problem = r.error || res.statusText;
+  } catch (err) {
+    problem = err.message;
+  }
   await mpBybitApiLoad();
+  if (problem) {
+    statusEl.style.color = 'var(--red, #f85149)';
+    statusEl.textContent = `Saved, but Bybit refuses the key: ${problem}`;
+  }
   mpRenderLatestSources();
 });
 

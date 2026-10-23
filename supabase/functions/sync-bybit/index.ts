@@ -22,7 +22,8 @@
 //
 // Every run first asks Bybit about the key itself (GET /v5/user/query-api):
 // it must be read-only (anything else is refused, nothing is pulled), and its
-// end date goes to broker_credentials.token_expires for the page.
+// end date goes to broker_credentials.token_expires for the page. The page's
+// Save asks only that ({"check": true}), so a bad key shows at once.
 //
 // Bybit refuses US addresses: the page and the daily job ask for the
 // project's own region (x-region: eu-west-1).
@@ -92,14 +93,19 @@ const signed = (amount: string, out: boolean) => {
   return out && a !== '0' ? `-${a}` : a;
 };
 
+// The key itself: read-only, its UID, until when (kept for the page).
 // deno-lint-ignore no-explicit-any
-async function syncUser(db: any, userId: string, key: string, secret: string) {
-  // The key itself: read-only, its UID, until when.
+async function checkKey(db: any, userId: string, key: string, secret: string) {
   const me = await bybitGet(key, secret, '/v5/user/query-api', {});
   const expires = me.expiredAt ? String(me.expiredAt).slice(0, 10) : null;
   await db.from('broker_credentials').update({ token_expires: expires }).eq('user_id', userId).eq('broker', 'bybit');
   if (Number(me.readOnly) !== 1) throw new Error('The API key is not read-only -- create a Read-Only one; nothing was pulled');
-  const uid = String(me.userID);
+  return { uid: String(me.userID), expires };
+}
+
+// deno-lint-ignore no-explicit-any
+async function syncUser(db: any, userId: string, key: string, secret: string) {
+  const { uid, expires } = await checkKey(db, userId, key, secret);
 
   // Both logs, week by week back from now. Fetched in full before anything
   // is replaced.
@@ -202,6 +208,16 @@ Deno.serve(async (req) => {
     if (!picked.length) {
       if (!userId) return json({ users: 0 });
       return json({ error: 'No Bybit API key: enter it on the page (My portfolio -> Bybit automatic sync)' }, 400);
+    }
+    // The page's Save: the key checked with Bybit, nothing pulled.
+    const body = await req.json().catch(() => ({}));
+    if (userId && body.check) {
+      try {
+        const { uid, expires } = await checkKey(db, userId, picked[0].api_key, picked[0].api_secret);
+        return json({ uid, key_expires: expires });
+      } catch (err) {
+        return json({ error: String(err) }, 400);
+      }
     }
     // The daily job: users whose slot has come and who aren't synced today; a
     // failed run is retried by the next, but not a key Bybit refuses.
