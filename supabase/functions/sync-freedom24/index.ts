@@ -86,7 +86,9 @@ async function cashFlows(pub: string, secret: string, take = PAGE): Promise<{ to
   const list = [];
   let total = 0;
   for (let skip = 0; skip < 20000; skip += take) {
-    const r = await tradernet(pub, secret, 'getUserCashFlows', { take, skip, sort: [{ field: 'date', dir: 'ASC' }] });
+    // sort: one { field, dir } -- an array, as the broker's docs show it, is
+    // refused ("Incorrect request parameters")
+    const r = await tradernet(pub, secret, 'getUserCashFlows', { take, skip, sort: { field: 'date', dir: 'ASC' } });
     const page = Array.isArray(r.cashflow) ? r.cashflow : Object.values(r.cashflow ?? {});
     total = Number(r.total ?? page.length);
     list.push(...page);
