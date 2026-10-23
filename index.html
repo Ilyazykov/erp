@@ -1944,7 +1944,7 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', () => {
 // 4 real transactions per 30 days over the 90 days before its newest record --
 // else monthly.
 const MP_ACCOUNT_SCHEDULE = {
-  UniCredit: 'closed', Finuslugi: 'closed', cash: 'rarely', Wise: 'rarely',
+  UniCredit: 'closed', Finuslugi: 'closed', cash: 'rarely', Wise: 'rarely', 'Credo Bank': 'rarely',
   IBKR: 30, Freedom24: 30, Raiffeisen: 30, 'Ziraat Bank': 30, 'Yandex Bank': 30,
   Bybit: 30, 'Crypto.com': 30, Telegram: 30, Binance: 'rarely',
 };
@@ -1964,6 +1964,7 @@ const MP_ACCOUNT_SOURCE = {
   Alfa: 'Alfa-Online → statements of the current, salary and Alfa-Account (PDF); broker account: screenshots of Alfa-Investments → History → to Claude.',
   'Yandex Bank': 'Yandex Bank app → statement for each contract (current account, «Сейв») (PDF) → to Claude.',
   'Ozon Bank': 'Ozon Bank → statement of movements (PDF) → to Claude.',
+  'Credo Bank': 'mycredo.ge → Transactions (screenshots or the statement) → to Claude, who builds the Credo Bank CSV (import-bank-csv).',
   Wise: 'Wise → balance statement, CSV, one per currency. Upload as is.',
   'Crypto.com': 'Crypto.com App → Accounts → History → Export → Crypto Wallet. Upload as is.',
   Binance: 'Binance → Orders → Assets History → Export → Export Transaction Records; keep the file name (its time zone). Upload as is.',
@@ -3463,7 +3464,7 @@ const MP_CURRENCY_FLAGS = {
 // Any account not listed here falls back after these, alphabetically.
 const MP_BROKER_ROW_ORDER = [
   '(unspecified)', 'Revolut', 'Wise', 'Bank of Cyprus', 'IBKR', 'Freedom24',
-  'Ziraat Bank', 'Raiffeisen', 'UniCredit', 'Sber', 'T-Bank', 'Alfa', 'Ozon Bank', 'Yandex Bank', 'Finuslugi', 'Binance', 'Bybit', 'Crypto.com', 'Telegram', 'Trust',
+  'Ziraat Bank', 'Raiffeisen', 'UniCredit', 'Credo Bank', 'Sber', 'T-Bank', 'Alfa', 'Ozon Bank', 'Yandex Bank', 'Finuslugi', 'Binance', 'Bybit', 'Crypto.com', 'Telegram', 'Trust',
   'cash', 'real estate',
 ];
 
@@ -3472,7 +3473,7 @@ const MP_BROKER_ROW_ORDER = [
 // '(unspecified)', no flag since it names no actual broker).
 const MP_BROKER_FLAGS = {
   Revolut: '🇪🇺', Wise: '🇪🇺', 'Bank of Cyprus': '🇨🇾', IBKR: '🇺🇸',
-  Freedom24: '🇰🇿', 'Ziraat Bank': '🇹🇷', Raiffeisen: '🇷🇸', UniCredit: '🇷🇸',
+  Freedom24: '🇰🇿', 'Ziraat Bank': '🇹🇷', Raiffeisen: '🇷🇸', UniCredit: '🇷🇸', 'Credo Bank': '🇬🇪',
   Sber: '🇷🇺', 'T-Bank': '🇷🇺', Finuslugi: '🇷🇺', Alfa: '🇷🇺', 'Ozon Bank': '🇷🇺', 'Yandex Bank': '🇷🇺',
   cash: '💵', 'real estate': '🏠',
 };
@@ -3481,7 +3482,7 @@ const MP_BROKER_FLAGS = {
 // database stay as the importers write them).
 const MP_BROKER_SHORT_NAMES = {
   'Bank of Cyprus': 'BoC', Freedom24: 'Freedom', 'Ziraat Bank': 'Ziraat', Raiffeisen: 'Raif',
-  'Ozon Bank': 'Ozon', 'Yandex Bank': 'Yandex',
+  'Ozon Bank': 'Ozon', 'Yandex Bank': 'Yandex', 'Credo Bank': 'Credo',
 };
 
 // "<account> <category>" pairs that ever held a value (capital_ever_held), for
@@ -3914,7 +3915,7 @@ const MP_COLORS = {
   },
   broker: {
     Freedom24: '#00d1b2', 'Bank of Cyprus': '#4fc3f7', Revolut: '#8e8e93', Wise: '#9fe870', Raiffeisen: '#c9a400',
-    UniCredit: '#8c1c28', 'Ziraat Bank': '#ff1f2d', IBKR: '#a64dff', Sber: '#4fd05b', 'T-Bank': '#ffdd2d',
+    UniCredit: '#8c1c28', 'Credo Bank': '#e8562a', 'Ziraat Bank': '#ff1f2d', IBKR: '#a64dff', Sber: '#4fd05b', 'T-Bank': '#ffdd2d',
     'Ozon Bank': '#1f6bff', Alfa: '#ff2d2d', 'Yandex Bank': '#ff6a1f', Finuslugi: '#00b4ff', Telegram: '#29b6f6',
     Binance: '#b5651d', Bybit: '#ff9500', 'Crypto.com': '#1a5fb4', Trust: '#3b8cff', cash: '#86e04a',
     '(unspecified)': '#7b8494',
@@ -4570,7 +4571,7 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   const currencyOrder = ['EUR', 'USD', 'RUB', 'GBP', 'CNY', 'JPY', 'TRY', 'RSD', MP_OTHER_CURRENCIES_COLUMN,
     'XAU', 'BTC', 'ETH', 'SOL', 'TAO', 'GRAM', MP_ALTCOINS_COLUMN]
     .map(c => (c === 'JPY' ? `JPY ${mpFlagOf('JP')}` : currencyLabel(c)));
-  const brokerOrder = ['Freedom24', 'Bank of Cyprus', 'Revolut', 'Wise', 'Raiffeisen', 'UniCredit', 'Ziraat Bank', 'IBKR',
+  const brokerOrder = ['Freedom24', 'Bank of Cyprus', 'Revolut', 'Wise', 'Raiffeisen', 'UniCredit', 'Credo Bank', 'Ziraat Bank', 'IBKR',
     'Sber', 'T-Bank', 'Ozon Bank', 'Alfa', 'Yandex Bank', 'Finuslugi', 'Telegram', 'Binance', 'Bybit', 'Crypto.com', 'Trust', 'cash',
     '(unspecified)'].map(brokerName);
   const typeOrder = ['bond', 'cash', 'deposit', 'liquid', 'gold', 'crypto', 'stock', 'real_estate'].map(t => MP_ASSET_CLASS_LABELS[t]);

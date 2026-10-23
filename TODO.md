@@ -1486,7 +1486,8 @@ Vault, функция `sync-<источник>` запускается кажд�
 
 Нельзя — публичного API нет, остаются файлы / PDF / скриншоты:
 - **Sber, Alfa, Yandex Bank, Ozon Bank** (и брокерские счета Сбера и Альфы);
-- **Raiffeisen (Сербия), Ziraat (Турция)** — PSD2 там не действует;
+- **Raiffeisen (Сербия), Ziraat (Турция), Credo Bank (Грузия)** — PSD2 там не
+  действует (Credo: mycredo.ge, скриншоты / выписка → CSV для import-bank-csv);
 - **Crypto.com App** (API есть только у биржи Crypto.com, не у приложения),
   **Telegram Wallet**;
 - **cash** — ведётся вручную.
