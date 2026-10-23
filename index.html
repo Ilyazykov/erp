@@ -327,6 +327,23 @@
     </div>
     <div class="empty-note" id="mp_tbank_status"></div>
 
+    <div class="section-title">Binance automatic check</div>
+    <p class="note">Binance's history still comes from its export (Upload); this checks it every morning: a read-only API
+      key (API Management → Create API → System generated, only <b>Enable Reading</b>, no IP) lets the server read the coins
+      on the account — Spot, Funding, Simple Earn — and set them against the balances stored from the export. If they
+      differ, the account was used since the last export: the row in "Latest data per account" turns orange — upload a new
+      export. A key that can trade, withdraw or transfer is refused. The secret stays on the server; leave it empty to keep
+      the one saved.</p>
+    <div class="form-row">
+      <label>API key <input type="text" id="mp_binance_key" autocomplete="off"></label>
+      <label>Secret key <input type="password" id="mp_binance_secret" autocomplete="off"></label>
+      <button class="btn primary" id="mp_binance_save">Save</button>
+      <button class="btn" id="mp_binance_sync">Check now</button>
+      <a class="btn" href="https://www.binance.com/en/my/settings/api-management" target="_blank" rel="noopener"
+        title="Create API -> System generated -> only Enable Reading, unrestricted IP">Get a key at Binance</a>
+    </div>
+    <div class="empty-note" id="mp_binance_status"></div>
+
     <div class="section-title">Export Revolut fund trades to Snowball</div>
     <p class="note">Generates a Snowball-importable CSV from the trades already stored here for the
       Revolut Flexible Cash Funds money-market fund share classes (IE0002RUHW32, IE000AZVL3K0, IE000H9J0QX4).</p>
@@ -1984,7 +2001,7 @@ const MP_ACCOUNT_SOURCE = {
   'Credo Bank': 'mycredo.ge → Transactions (screenshots or the statement) → to Claude, who builds the Credo Bank CSV (import-bank-csv).',
   Wise: 'Wise → balance statement, CSV, one per currency. Upload as is.',
   'Crypto.com': 'Crypto.com App → Accounts → History → Export → Crypto Wallet. Upload as is.',
-  Binance: 'Binance → Orders → Assets History → Export → Export Transaction Records; keep the file name (its time zone). Upload as is.',
+  Binance: 'Checked every morning through a read-only API key (Binance automatic check, below the uploads) -- when the balances differ: Binance → Orders → Assets History → Export → Export Transaction Records; keep the file name (its time zone). Upload as is.',
   Telegram: 'Telegram Wallet history → to Claude, who builds the Telegram Wallet CSV.',
   Trust: 'On-chain wallet: synced from the blockchain by itself (Crypto tab), nothing to upload.',
   cash: 'statements/cash: cash.csv (exact), cash_estimated.csv, cash_extrapolated.csv -- kept by hand with Claude; the counts of cash on hand.',
@@ -2072,6 +2089,20 @@ async function mpRenderLatestSources() {
       partAuto.set('T-Bank|Broker', { error: last.error || '', to: last.period_to || '' });
       partAuto.set('T-Bank|ЦФА (Atomyze)', { error: last.error || '', to: last.period_to || '' });
     }
+    // Binance checked by itself (sync-binance): balances only -- the history is
+    // current (dated by the check) while they agree with the stored export;
+    // when they don't, the export is due (orange)
+    const { data: bst2 } = await sb.rpc('binance_api_status');
+    const binanceApi = (bst2 || [])[0];
+    if (binanceApi?.secret_set && binanceApi.last_sync_at && acc.has('Binance')) {
+      const a = acc.get('Binance');
+      let last = {};
+      try { last = JSON.parse(binanceApi.last_sync_result || '{}'); } catch { /* not JSON */ }
+      const differ = last.differences || [];
+      if (!last.error && !differ.length && last.checked_at && (!a.uploaded || last.checked_at > a.uploaded)) a.uploaded = last.checked_at;
+      a.flex = { expires: null, error: last.error || '', label: 'key', perpetual: true,
+        warning: differ.length ? `balances differ: ${differ.join('; ')} -- upload a new export` : '' };
+    }
     for (const a of acc.values()) a.record = a.day, a.day = a.uploaded && a.uploaded > a.day ? a.uploaded : a.day;
     if (!acc.size) { wrap.innerHTML = '<div class="empty-note">Nothing imported yet.</div>'; return; }
     const dayMs = 86400000;
@@ -2088,7 +2119,7 @@ async function mpRenderLatestSources() {
     // end, at once after a failed sync; none for "rarely", a key without an
     // end, an on-chain wallet -- after the rest; closed accounts at the bottom.
     const actIn = a => a.every === 'closed' ? 2e9
-      : a.flex ? (a.flex.error ? 0 : a.flex.expires ? Math.round((Date.parse(a.flex.expires + 'T00:00:00Z') - today) / dayMs) : 1e9)
+      : a.flex ? (a.flex.error || a.flex.warning ? 0 : a.flex.expires ? Math.round((Date.parse(a.flex.expires + 'T00:00:00Z') - today) / dayMs) : 1e9)
       : typeof a.every === 'number' ? a.every - ago(a) : 1e9;
     const rows = [...acc].sort(([an, a], [bn, b]) => actIn(a) - actIn(b) || an.localeCompare(bn));
     const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -2157,7 +2188,8 @@ async function mpRenderLatestSources() {
         let update = esc(label(a.every)), expires = '';
         if (a.flex) {
           const left = a.flex.expires ? Math.round((Date.parse(a.flex.expires + 'T00:00:00Z') - today) / dayMs) : null;
-          update = a.flex.error ? `<span style="color:#ff9500" title="${esc(a.flex.error)}">auto · last sync failed</span>` : 'auto';
+          update = a.flex.error ? `<span style="color:#ff9500" title="${esc(a.flex.error)}">auto · last sync failed</span>`
+            : a.flex.warning ? `<span style="color:#ff9500" title="${esc(a.flex.warning)}">auto · export due</span>` : 'auto';
           expires = a.flex.perpetual ? 'no end' : a.flex.expires
             ? `<span${left <= 7 ? ' style="color:#ff9500"' : ''}>${a.flex.expires}</span>` : '?';
         } else if (name in MP_TODO_AUTO && !partAuto.has(`${name}|${MP_TODO_AUTO[name]}`)) {
@@ -6147,6 +6179,88 @@ document.getElementById('mp_f24_sync').addEventListener('click', async () => {
   }
 });
 
+// ---- Binance automatic check (supabase/functions/sync-binance) ----
+// The key shows by its last characters, the secret only as "saved" (binance_api_status, migration ...106).
+async function mpBinanceApiLoad() {
+  const statusEl = document.getElementById('mp_binance_status');
+  const { data, error } = await sb.rpc('binance_api_status');
+  if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
+  const s = (data || [])[0];
+  const keyEl = document.getElementById('mp_binance_key');
+  keyEl.value = '';
+  keyEl.placeholder = s?.key_tail ? `saved …${s.key_tail} — leave empty to keep` : 'not set';
+  document.getElementById('mp_binance_secret').placeholder = s?.secret_set ? 'saved — leave empty to keep' : 'not set';
+  statusEl.style.color = '';
+  if (!s) { statusEl.textContent = 'Not set up.'; return; }
+  let last = 'never checked';
+  if (s.last_sync_at) {
+    let r = {};
+    try { r = JSON.parse(s.last_sync_result || '{}'); } catch { /* not JSON */ }
+    last = `last checked ${new Date(s.last_sync_at).toLocaleString()}: ` + mpBinanceSummary(r);
+    if (r.error || r.differences?.length) statusEl.style.color = 'var(--red, #f85149)';
+  }
+  statusEl.textContent = `API key …${s.key_tail || '—'}, secret ${s.secret_set ? 'saved' : 'not set'} (no end date); ${last}.`;
+}
+
+function mpBinanceSummary(r) {
+  if (r.error) return `error — ${r.error}`;
+  const coins = Object.entries(r.balances || {}).map(([c, v]) => `${c} ${v}`).join(', ') || 'nothing';
+  return r.differences?.length
+    ? `the account differs from the stored export (${r.differences.join('; ')}) — upload a new Binance export`
+    : `matches the stored export (${coins})`;
+}
+
+async function mpBinanceCall(body) {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) throw new Error('Sign in first.');
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/sync-binance`, {
+    method: 'POST',
+    // Binance refuses US addresses: the function runs in the project's region
+    headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json', 'x-region': 'eu-west-1' },
+    body: JSON.stringify(body),
+  });
+  const r = await res.json();
+  if (!res.ok) throw new Error(r.error || res.statusText);
+  return r;
+}
+
+document.getElementById('mp_binance_save').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_binance_status');
+  const keyEl = document.getElementById('mp_binance_key'), secretEl = document.getElementById('mp_binance_secret');
+  if (!keyEl.value.trim() && !keyEl.placeholder.startsWith('saved')) { statusEl.textContent = 'Enter the API key.'; return; }
+  // An empty key or secret keeps the saved one (set_binance_api).
+  const { error } = await sb.rpc('set_binance_api', { p_key: keyEl.value, p_secret: secretEl.value });
+  if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
+  secretEl.value = '';
+  statusEl.style.color = '';
+  statusEl.textContent = 'Saved; checking the key with Binance…';
+  let problem = '';
+  try { await mpBinanceCall({ check: true }); } catch (err) { problem = err.message; }
+  await mpBinanceApiLoad();
+  if (problem) {
+    statusEl.style.color = 'var(--red, #f85149)';
+    statusEl.textContent = `Saved, but Binance refuses the key: ${problem}`;
+  } else {
+    statusEl.textContent += ' The key is read-only.';
+  }
+  mpRenderLatestSources();
+});
+
+document.getElementById('mp_binance_sync').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_binance_status');
+  statusEl.style.color = '';
+  statusEl.textContent = 'Reading the balances from Binance…';
+  try {
+    const r = await mpBinanceCall({});
+    if (r.differences?.length) statusEl.style.color = 'var(--red, #f85149)';
+    statusEl.textContent = `Checked: ${mpBinanceSummary(r)}.`;
+    mpRenderLatestSources();
+  } catch (err) {
+    statusEl.style.color = 'var(--red, #f85149)';
+    statusEl.textContent = `Error: ${err.message}`;
+  }
+});
+
 // ---- T-Bank broker automatic sync (supabase/functions/sync-tbank) ----
 // The token only as "saved" (tbank_api_status, migration ...104).
 async function mpTbankApiLoad() {
@@ -6325,6 +6439,7 @@ function mpUpdateAuthUi(session) {
     mpBybitApiLoad();
     mpF24ApiLoad();
     mpTbankApiLoad();
+    mpBinanceApiLoad();
     mpRenderRealEstate();
     mpRenderLookThrough();
     mpRenderCharts();
