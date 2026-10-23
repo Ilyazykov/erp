@@ -310,6 +310,23 @@
     </div>
     <div class="empty-note" id="mp_f24_status"></div>
 
+    <div class="section-title">T-Bank broker automatic sync</div>
+    <p class="note">Instead of uploading the weekly broker report: a T-Invest API token (T-Investments → settings →
+      T-Invest API tokens → <b>read-only</b>, all accounts). A token that can trade is refused. Pulled every morning: the days
+      after each agreement's latest report, checked first against the month before that report's end — nothing is
+      replaced unless the API agrees with it. A report uploaded later takes its period back. Cards, credit card,
+      deposits and ЦФА aren't in the API — still statements. The token stays on the server; it lives three months from
+      its last use, which the daily sync keeps renewing. T-Bank's certificate chains to the Russian Trusted Root CA,
+      trusted only for this connection.</p>
+    <div class="form-row">
+      <label>Token <input type="password" id="mp_tbank_token" autocomplete="off"></label>
+      <button class="btn primary" id="mp_tbank_save">Save</button>
+      <button class="btn" id="mp_tbank_sync">Sync now</button>
+      <a class="btn" href="https://www.tbank.ru/invest/settings/api/" target="_blank" rel="noopener"
+        title="T-Invest API tokens -> Create token -> read-only, all accounts">Get a token at T-Bank</a>
+    </div>
+    <div class="empty-note" id="mp_tbank_status"></div>
+
     <div class="section-title">Export Revolut fund trades to Snowball</div>
     <p class="note">Generates a Snowball-importable CSV from the trades already stored here for the
       Revolut Flexible Cash Funds money-market fund share classes (IE0002RUHW32, IE000AZVL3K0, IE000H9J0QX4).</p>
@@ -1959,7 +1976,7 @@ const MP_ACCOUNT_SOURCE = {
   Freedom24: 'Cash movements synced every morning through the Tradernet API (Freedom24 automatic sync, below the uploads); or the cash-movement table (tradernet_table.xlsx) without a filter -- it must keep the «Сделка» rows. Shares credited as gifts: web cabinet → Отчёты брокера → JSON, from 28.04.2026 to today. Upload as is.',
   'Ziraat Bank': 'Ziraat internet banking → account activity (Hesap Hareketleri) → Excel (.xlsx). Upload as is.',
   Raiffeisen: 'Raiffeisen statements (PDF) → to Claude, who adds them to the combined Raiffeisen CSV.',
-  'T-Bank': 'Broker: T-Investments → reports → broker report (.xlsx), upload as is. Cards, credit card, deposit, metal account: «Справка о движении средств» (PDF) for each contract → to Claude.',
+  'T-Bank': 'Broker: synced every morning through the T-Invest API (T-Bank broker automatic sync, below the uploads); or T-Investments → reports → broker report (.xlsx), upload as is. Cards, credit card, deposit, metal account: «Справка о движении средств» (PDF) for each contract → to Claude.',
   Sber: 'Broker: SberBank Online → Инвестиции → account → Отчёты и справки → broker report (.html, one per month), upload as is. Card and savings account: Выписки и справки → PDF → to Claude.',
   Alfa: 'Alfa-Online → statements of the current, salary and Alfa-Account (PDF); broker account: screenshots of Alfa-Investments → History → to Claude.',
   'Yandex Bank': 'Yandex Bank app → statement for each contract (current account, «Сейв») (PDF) → to Claude.',
@@ -2044,6 +2061,16 @@ async function mpRenderLatestSources() {
       if (to && (!a.uploaded || to > a.uploaded)) a.uploaded = to;
       a.flex = { expires: null, error: last.error || '', label: 'key', perpetual: true };
     }
+    // T-Bank's broker part synced by itself (sync-tbank): "auto" on that part
+    // only -- the cards and deposits are still statements
+    const { data: tst } = await sb.rpc('tbank_api_status');
+    const tbankApi = (tst || [])[0];
+    const partAuto = new Map();   // "account|part" -> { error, to }
+    if (tbankApi?.token_set && tbankApi.last_sync_at) {
+      let last = {};
+      try { last = JSON.parse(tbankApi.last_sync_result || '{}'); } catch { /* not JSON */ }
+      partAuto.set('T-Bank|Broker', { error: last.error || '', to: last.period_to || '' });
+    }
     for (const a of acc.values()) a.record = a.day, a.day = a.uploaded && a.uploaded > a.day ? a.uploaded : a.day;
     if (!acc.size) { wrap.innerHTML = '<div class="empty-note">Nothing imported yet.</div>'; return; }
     const dayMs = 86400000;
@@ -2103,14 +2130,18 @@ async function mpRenderLatestSources() {
       }
     }
     const partRowsHtml = (name, closed) => (parts.get(name) || []).map(p => {
-      const up = partUploaded.get(`${name}|${p.part}`) || '';
+      const auto = partAuto.get(`${name}|${p.part}`);
+      let up = partUploaded.get(`${name}|${p.part}`) || '';
+      if (auto && !auto.error && auto.to > up) up = auto.to;
       const day = up > p.last_day ? up : p.last_day;
       const d = Math.round((today - Date.parse(day + 'T00:00:00Z')) / dayMs);
       const contracts = (p.contracts || []).filter(Boolean);
       const what = `${p.row_count} records${contracts.length ? ` · ${contracts.length === 1 ? 'contract' : 'contracts'} ${contracts.join(', ')}` : ''}`;
+      const update = auto ? (auto.error ? `<span style="color:#ff9500" title="${esc(auto.error)}">auto · last sync failed</span>` : 'auto')
+        : MP_TODO_AUTO[name] === p.part ? todoAuto : '';
       return `<tr class="mp-part" data-acc="${esc(name)}"${mpOpenAccounts.has(name) ? '' : ' hidden'} style="color:#8b949e${closed ? ';opacity:.7' : ''}">`
         + `<td><span style="display:inline-block;width:32px"></span><span class="mp-src" data-src="${esc(what)}">${esc(p.label || p.part)}</span></td>`
-        + `<td>${MP_TODO_AUTO[name] === p.part ? todoAuto : ''}</td><td></td><td>${p.last_day}</td><td>${up || '—'}</td><td>${d}</td></tr>`;
+        + `<td>${update}</td><td>${auto ? 'renews' : ''}</td><td>${p.last_day}</td><td>${up || '—'}</td><td>${d}</td></tr>`;
     }).join('');
     wrap.innerHTML = `<table class="data-table"><thead><tr><th>Account</th><th>Update</th><th>Key valid until</th><th>Latest record</th><th>Statements to</th><th>Days ago</th></tr></thead><tbody>${
       rows.map(([name, a]) => {
@@ -2128,7 +2159,7 @@ async function mpRenderLatestSources() {
           update = a.flex.error ? `<span style="color:#ff9500" title="${esc(a.flex.error)}">auto · last sync failed</span>` : 'auto';
           expires = a.flex.perpetual ? 'no end' : a.flex.expires
             ? `<span${left <= 7 ? ' style="color:#ff9500"' : ''}>${a.flex.expires}</span>` : '?';
-        } else if (name in MP_TODO_AUTO) {
+        } else if (name in MP_TODO_AUTO && !partAuto.has(`${name}|${MP_TODO_AUTO[name]}`)) {
           update += ` · ${MP_TODO_AUTO[name] ? `${todoAuto}: ${esc(MP_TODO_AUTO[name].toLowerCase())}` : todoAuto}`;
         }
         // a split account: a toggle before its name opens its parts
@@ -6115,6 +6146,81 @@ document.getElementById('mp_f24_sync').addEventListener('click', async () => {
   }
 });
 
+// ---- T-Bank broker automatic sync (supabase/functions/sync-tbank) ----
+// The token only as "saved" (tbank_api_status, migration ...104).
+async function mpTbankApiLoad() {
+  const statusEl = document.getElementById('mp_tbank_status');
+  const { data, error } = await sb.rpc('tbank_api_status');
+  if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
+  const s = (data || [])[0];
+  document.getElementById('mp_tbank_token').placeholder = s?.token_set ? 'saved — leave empty to keep' : 'not set';
+  statusEl.style.color = '';
+  if (!s) { statusEl.textContent = 'Not set up.'; return; }
+  let last = 'never synced';
+  if (s.last_sync_at) {
+    let r = {};
+    try { r = JSON.parse(s.last_sync_result || '{}'); } catch { /* not JSON */ }
+    last = `last synced ${new Date(s.last_sync_at).toLocaleString()}: ` + (r.error ? `error — ${r.error}` : mpTbankSummary(r));
+    if (r.error) statusEl.style.color = 'var(--red, #f85149)';
+  }
+  statusEl.textContent = `Token ${s.token_set ? 'saved' : 'not set'} (renewed by every sync); ${last}.`;
+}
+
+function mpTbankSummary(r) {
+  if (!Array.isArray(r.synced)) return `up to ${r.period_to || '?'}`;
+  return r.synced.map(a => `${a.agreement}: ${a.deals} deals, ${a.payouts} payouts, ${a.cash_rows} cash rows from ${a.from}`
+    + (a.checked?.window ? ` (checked against the report ${a.checked.window}: ${a.checked.deals} deals, ${a.checked.payouts} payouts)` : ' (no report to check against)')).join('; ') || 'no open broker accounts';
+}
+
+async function mpTbankCall(body) {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) throw new Error('Sign in first.');
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/sync-tbank`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const r = await res.json();
+  if (!res.ok) throw new Error(r.error || res.statusText);
+  return r;
+}
+
+document.getElementById('mp_tbank_save').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_tbank_status');
+  const tokenEl = document.getElementById('mp_tbank_token');
+  if (!tokenEl.value.trim() && !tokenEl.placeholder.startsWith('saved')) { statusEl.textContent = 'Enter the token.'; return; }
+  // An empty token keeps the saved one (set_tbank_api).
+  const { error } = await sb.rpc('set_tbank_api', { p_token: tokenEl.value });
+  if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
+  tokenEl.value = '';
+  statusEl.style.color = '';
+  statusEl.textContent = 'Saved; checking the token with T-Bank…';
+  let problem = '', accounts = [];
+  try { accounts = (await mpTbankCall({ check: true })).accounts || []; } catch (err) { problem = err.message; }
+  await mpTbankApiLoad();
+  if (problem) {
+    statusEl.style.color = 'var(--red, #f85149)';
+    statusEl.textContent = `Saved, but T-Bank refuses the token: ${problem}`;
+  } else {
+    statusEl.textContent += ` Accounts: ${accounts.map(a => `${a.id} ${a.name || ''} (${a.type}, ${a.status}, ${a.access})`).join('; ') || 'none'}.`;
+  }
+  mpRenderLatestSources();
+});
+
+document.getElementById('mp_tbank_sync').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_tbank_status');
+  statusEl.style.color = '';
+  statusEl.textContent = 'Pulling the broker accounts from T-Bank…';
+  try {
+    const r = await mpTbankCall({});
+    statusEl.textContent = `Synced up to ${r.period_to}: ${mpTbankSummary(r)}. Capital is being rebuilt.`;
+    mpRenderLatestSources();
+  } catch (err) {
+    statusEl.style.color = 'var(--red, #f85149)';
+    statusEl.textContent = `Error: ${err.message}`;
+  }
+});
+
 async function mpSyncWallets(prefix = '') {
   const statusEl = document.getElementById('mp_wallet_status');
   const { data: { session } } = await sb.auth.getSession();
@@ -6217,6 +6323,7 @@ function mpUpdateAuthUi(session) {
     mpIbkrFlexLoad();
     mpBybitApiLoad();
     mpF24ApiLoad();
+    mpTbankApiLoad();
     mpRenderRealEstate();
     mpRenderLookThrough();
     mpRenderCharts();
