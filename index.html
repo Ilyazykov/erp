@@ -264,15 +264,18 @@
     <div class="section-title">IBKR automatic sync</div>
     <p class="note">Instead of uploading the Activity Statement: an Activity Flex Query (Performance &amp; Reports → Flex Queries;
       sections Trades, Cash Transactions, Cash Report; XML; Last 365 Calendar Days) and the Flex Web Service token
-      (Flex Web Service Configuration), with the date it's valid until (the end of its Activation Period there — a year at
-      most). Pulled every morning; each run replaces IBKR's rows of the statement's period. The token is read-only on IBKR's
+      (Flex Web Service Configuration), with its Activation Period pasted as IBKR shows it (or just the date it ends — a
+      year at most). Pulled every morning; each run replaces IBKR's rows of the statement's period. The token is read-only on IBKR's
       side and stays on the server — once saved, this page can't show it again. Leave the token empty to keep the one saved.</p>
     <div class="form-row">
       <label>Query ID <input type="text" id="mp_ibkr_query_id" inputmode="numeric" autocomplete="off"></label>
       <label>Token <input type="password" id="mp_ibkr_token" autocomplete="off"></label>
-      <label title="The end of the token's Activation Period, as IBKR shows it -- its Flex Web Service doesn't tell">Token valid until <input type="date" id="mp_ibkr_token_expires"></label>
+      <label title="Paste the token's Activation Period as IBKR shows it (2026-10-22, 20:18:28 EDT — 2027-09-23, 20:18:28 EDT) -- or just its end date">Activation Period / valid until
+        <input type="text" id="mp_ibkr_token_expires" size="34" placeholder="2026-10-22, 20:18:28 EDT — 2027-09-23, 20:18:28 EDT" autocomplete="off"></label>
       <button class="btn primary" id="mp_ibkr_save">Save</button>
       <button class="btn" id="mp_ibkr_sync">Sync now</button>
+      <a class="btn" href="https://www.interactivebrokers.com/AccountManagement/AmAuthentication?action=FlexQueries" target="_blank" rel="noopener"
+        title="Client Portal -> Flex Queries: Flex Web Service Configuration (the gear) -> Generate New Token, 1 Year, no IP">Get a new token at IBKR</a>
     </div>
     <div class="empty-note" id="mp_ibkr_status"></div>
 
@@ -5736,7 +5739,8 @@ async function mpIbkrFlexLoad() {
   const s = (data || [])[0];
   document.getElementById('mp_ibkr_query_id').value = s?.query_id || '';
   document.getElementById('mp_ibkr_token').placeholder = s?.token_set ? 'saved — leave empty to keep' : 'not set';
-  document.getElementById('mp_ibkr_token_expires').value = s?.token_expires || '';
+  const expEl = document.getElementById('mp_ibkr_token_expires');
+  expEl.value = expEl.dataset.saved = s?.token_expires || '';
   if (!s) { statusEl.textContent = 'Not set up.'; return; }
   let last = 'never synced';
   if (s.last_sync_at) {
@@ -5756,12 +5760,31 @@ async function mpIbkrFlexLoad() {
   statusEl.textContent = `Query ID ${s.query_id || '—'}, token ${s.token_set ? 'saved' : 'not set'}${expiry}; ${last}.`;
 }
 
+// The token's end date from its Activation Period as IBKR shows it --
+// "2026-10-22, 20:18:28 EDT — 2027-09-23, 20:18:28 EDT": the last date in it
+// (so a bare "2027-09-23" works too); null without one.
+function mpIbkrExpiry(text) {
+  const dates = String(text || '').match(/\d{4}-\d{2}-\d{2}/g);
+  return dates ? dates[dates.length - 1] : null;
+}
+
+// A new token: a year from today, IBKR's longest, unless a date is typed in
+// already -- to correct to its Activation Period when that says otherwise.
+document.getElementById('mp_ibkr_token').addEventListener('input', e => {
+  const exp = document.getElementById('mp_ibkr_token_expires');
+  if (e.target.value && (!exp.value || exp.value === exp.dataset.saved)) {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() + 1);
+    exp.value = d.toISOString().slice(0, 10);
+  }
+});
+
 document.getElementById('mp_ibkr_save').addEventListener('click', async () => {
   const statusEl = document.getElementById('mp_ibkr_status');
   const tokenEl = document.getElementById('mp_ibkr_token');
   const { error } = await sb.rpc('set_ibkr_flex', {
     p_query_id: document.getElementById('mp_ibkr_query_id').value, p_token: tokenEl.value,
-    p_token_expires: document.getElementById('mp_ibkr_token_expires').value || null,
+    p_token_expires: mpIbkrExpiry(document.getElementById('mp_ibkr_token_expires').value),
   });
   if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
   tokenEl.value = '';

@@ -259,8 +259,8 @@ Deno.serve(async (req) => {
     // Who to sync with what: the Query ID / token entered on the page
     // (broker_credentials), else the function's secrets IBKR_FLEX_TOKEN /
     // IBKR_FLEX_QUERY_ID for IBKR_USER_ID or the one user with IBKR rows.
-    let q = db.from('broker_credentials').select('user_id, query_id, token, last_sync_at, last_sync_result').eq('broker', 'ibkr')
-      .not('token', 'is', null).not('query_id', 'is', null);
+    // (the token decrypted from Vault, migration ...096)
+    let q = db.rpc('ibkr_flex_credentials');
     if (userId) q = q.eq('user_id', userId);
     const { data: creds, error: cErr } = await q;
     if (cErr) throw new Error(cErr.message);
