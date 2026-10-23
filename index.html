@@ -1922,7 +1922,7 @@ const MP_ACCOUNT_SCHEDULE = {
 const MP_ACCOUNT_SOURCE = {
   Revolut: 'Revolut app → Profile → Statements → Account statement → CSV; also the Flexible Cash Funds and savings statements. Upload as is.',
   'Bank of Cyprus': '1Bank → Accounts → Transaction history → Export (CSV). Upload as is.',
-  IBKR: 'IBKR Activity Statement, CSV, for the period since the last one. Upload as is.',
+  IBKR: 'Synced every morning through the Flex Web Service (IBKR automatic sync, below the uploads); or the IBKR Activity Statement, CSV, for the period since the last one, uploaded as is.',
   Freedom24: 'Freedom24 web cabinet → Отчёты брокера → JSON, from 28.04.2026 to today. Or the cash-movement table (tradernet_table.xlsx) without a filter -- it must keep the «Сделка» rows. Upload as is.',
   'Ziraat Bank': 'Ziraat internet banking → account activity (Hesap Hareketleri) → Excel (.xlsx). Upload as is.',
   Raiffeisen: 'Raiffeisen statements (PDF) → to Claude, who adds them to the combined Raiffeisen CSV.',
@@ -1983,12 +1983,24 @@ async function mpRenderLatestSources() {
       }
       acc.get(name).gaps = gaps;
     }
+    // IBKR synced by itself (sync-ibkr): its last good run's period end counts
+    // as a statement's, and the row tells when the token runs out
+    const { data: flex } = await sb.rpc('ibkr_flex_status');
+    const ibkrFlex = (flex || [])[0];
+    if (ibkrFlex?.token_set && acc.has('IBKR')) {
+      const a = acc.get('IBKR');
+      let last = {};
+      try { last = JSON.parse(ibkrFlex.last_sync_result || '{}'); } catch { /* not JSON */ }
+      const to = (last.period || '').split('..')[1];
+      if (to && (!a.uploaded || to > a.uploaded)) a.uploaded = to;
+      a.flex = { expires: ibkrFlex.token_expires, error: last.error || '' };
+    }
     for (const a of acc.values()) a.record = a.day, a.day = a.uploaded && a.uploaded > a.day ? a.uploaded : a.day;
     if (!acc.size) { wrap.innerHTML = '<div class="empty-note">Nothing imported yet.</div>'; return; }
     const dayMs = 86400000;
     for (const [name, a] of acc) {
       const fixed = MP_ACCOUNT_SCHEDULE[name];
-      a.every = a.auto ? 'auto' : fixed !== undefined ? fixed
+      a.every = a.auto || a.flex ? 'auto' : fixed !== undefined ? fixed
         : a.bankDay && a.bankRows90 >= 12 ? 7   // a bank in active use
         : 30;                                     // a broker, or a bank in little use
     }
@@ -2007,7 +2019,16 @@ async function mpRenderLatestSources() {
         // where the statements come from: a popup drawn by the page on hover
         // (the browser's own title tooltip didn't show)
         const src = MP_ACCOUNT_SOURCE[name];
-        return `<tr${style}><td>${src ? `<span class="mp-src" data-src="${esc(src)}">${esc(name)}</span>` : esc(name)}</td><td>${label(a.every)}</td><td>${a.record}</td><td>${a.uploaded || '—'}</td><td>${d}</td><td${a.gaps?.length ? ' style="color:#ff9500"' : ''}>${(a.gaps || []).join('<br>') || ''}</td></tr>`;
+        // a synced account's token: orange within a month of its end, past it,
+        // or after a failed run
+        let update = esc(label(a.every));
+        if (a.flex) {
+          const left = a.flex.expires ? Math.round((Date.parse(a.flex.expires + 'T00:00:00Z') - today) / dayMs) : null;
+          const warn = a.flex.error || (left !== null && left <= 30);
+          const text = `auto · token to ${a.flex.expires || '?'}${a.flex.error ? ' · last sync failed' : ''}`;
+          update = `<span${warn ? ' style="color:#ff9500"' : ''}${a.flex.error ? ` title="${esc(a.flex.error)}"` : ''}>${esc(text)}</span>`;
+        }
+        return `<tr${style}><td>${src ? `<span class="mp-src" data-src="${esc(src)}">${esc(name)}</span>` : esc(name)}</td><td>${update}</td><td>${a.record}</td><td>${a.uploaded || '—'}</td><td>${d}</td><td${a.gaps?.length ? ' style="color:#ff9500"' : ''}>${(a.gaps || []).join('<br>') || ''}</td></tr>`;
       }).join('')}</tbody></table>`;
   } catch (error) {
     wrap.innerHTML = '';
@@ -5789,6 +5810,7 @@ document.getElementById('mp_ibkr_save').addEventListener('click', async () => {
   if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
   tokenEl.value = '';
   await mpIbkrFlexLoad();
+  mpRenderLatestSources();
 });
 
 document.getElementById('mp_ibkr_sync').addEventListener('click', async () => {
@@ -5807,6 +5829,7 @@ document.getElementById('mp_ibkr_sync').addEventListener('click', async () => {
     const fmt = o => Object.entries(o || {}).map(([c, v]) => `${c} ${Number(v).toFixed(2)}`).join(', ') || 'none';
     statusEl.textContent = `Synced ${r.period}: ${r.trades} trades, ${r.dividends} dividends, ${r.cash_rows} cash rows. `
       + `IBKR cash: ${fmt(r.cash)} (the statement's ending cash: ${fmt(r.statement_ending_cash)}). Capital is being rebuilt.`;
+    mpRenderLatestSources();
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}`;
   }
