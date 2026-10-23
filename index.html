@@ -264,12 +264,13 @@
     <div class="section-title">IBKR automatic sync</div>
     <p class="note">Instead of uploading the Activity Statement: an Activity Flex Query (Performance &amp; Reports → Flex Queries;
       sections Trades, Cash Transactions, Cash Report; XML; Last 365 Calendar Days) and the Flex Web Service token
-      (Flex Web Service Configuration). Pulled every morning; each run replaces IBKR's rows of the statement's period. The
-      token is read-only on IBKR's side and stays on the server — once saved, this page can't show it again. Leave the
-      token empty to keep the one saved.</p>
+      (Flex Web Service Configuration), with the date it's valid until (the end of its Activation Period there — a year at
+      most). Pulled every morning; each run replaces IBKR's rows of the statement's period. The token is read-only on IBKR's
+      side and stays on the server — once saved, this page can't show it again. Leave the token empty to keep the one saved.</p>
     <div class="form-row">
       <label>Query ID <input type="text" id="mp_ibkr_query_id" inputmode="numeric" autocomplete="off"></label>
       <label>Token <input type="password" id="mp_ibkr_token" autocomplete="off"></label>
+      <label title="The end of the token's Activation Period, as IBKR shows it -- its Flex Web Service doesn't tell">Token valid until <input type="date" id="mp_ibkr_token_expires"></label>
       <button class="btn primary" id="mp_ibkr_save">Save</button>
       <button class="btn" id="mp_ibkr_sync">Sync now</button>
     </div>
@@ -5735,6 +5736,7 @@ async function mpIbkrFlexLoad() {
   const s = (data || [])[0];
   document.getElementById('mp_ibkr_query_id').value = s?.query_id || '';
   document.getElementById('mp_ibkr_token').placeholder = s?.token_set ? 'saved — leave empty to keep' : 'not set';
+  document.getElementById('mp_ibkr_token_expires').value = s?.token_expires || '';
   if (!s) { statusEl.textContent = 'Not set up.'; return; }
   let last = 'never synced';
   if (s.last_sync_at) {
@@ -5743,7 +5745,15 @@ async function mpIbkrFlexLoad() {
     last = `last synced ${new Date(s.last_sync_at).toLocaleString()}: `
       + (r.error ? `error — ${r.error}` : `${r.trades} trades, ${r.dividends} dividends, ${r.cash_rows} cash rows for ${r.period}`);
   }
-  statusEl.textContent = `Query ID ${s.query_id || '—'}, token ${s.token_set ? 'saved' : 'not set'}; ${last}.`;
+  // Days the token has left, red within a month of its end.
+  let expiry = '';
+  statusEl.style.color = '';
+  if (s.token_set && s.token_expires) {
+    const days = Math.ceil((Date.parse(`${s.token_expires}T00:00:00Z`) - Date.now()) / 86400000);
+    expiry = days < 0 ? ` (expired ${s.token_expires} — generate a new one)` : ` until ${s.token_expires} (${days} days left)`;
+    if (days <= 30) statusEl.style.color = 'var(--red, #f85149)';
+  }
+  statusEl.textContent = `Query ID ${s.query_id || '—'}, token ${s.token_set ? 'saved' : 'not set'}${expiry}; ${last}.`;
 }
 
 document.getElementById('mp_ibkr_save').addEventListener('click', async () => {
@@ -5751,6 +5761,7 @@ document.getElementById('mp_ibkr_save').addEventListener('click', async () => {
   const tokenEl = document.getElementById('mp_ibkr_token');
   const { error } = await sb.rpc('set_ibkr_flex', {
     p_query_id: document.getElementById('mp_ibkr_query_id').value, p_token: tokenEl.value,
+    p_token_expires: document.getElementById('mp_ibkr_token_expires').value || null,
   });
   if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
   tokenEl.value = '';

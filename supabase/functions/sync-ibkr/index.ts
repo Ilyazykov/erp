@@ -41,6 +41,8 @@ const ACCOUNT = 'IBKR';
 const SOURCE = 'ibkr_csv';
 const EXCHANGE_NAMES: Record<string, string> = { LSEETF: 'LSE' };
 const FLEX = 'https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService';
+// IBKR's error codes for a token it won't take: 1012 expired, 1015 invalid.
+const TOKEN_REFUSED = /IBKR SendRequest: 101[25]\b/;
 const round = (x: number, d = 9) => Math.round(x * 10 ** d) / 10 ** d;
 // The daily job's slots (migration ...095): 24 runs, 10 minutes apart, from 04:00 UTC.
 const SLOT_START_MIN = 4 * 60, SLOT_MINUTES = 10, SLOTS = 24, RUN_USERS = 2;
@@ -76,7 +78,12 @@ function isoTime(s: string | undefined): string | null {
 async function fetchStatement(token: string, queryId: string): Promise<string> {
   const headers = { 'User-Agent': 'erp-sync-ibkr/1.0' };
   const sent = await (await fetch(`${FLEX}/SendRequest?t=${encodeURIComponent(token)}&q=${encodeURIComponent(queryId)}&v=3`, { headers })).text();
-  if (tagText(sent, 'Status') !== 'Success') throw new Error(`IBKR SendRequest: ${tagText(sent, 'ErrorCode')} ${tagText(sent, 'ErrorMessage')}`.trim());
+  if (tagText(sent, 'Status') !== 'Success') {
+    const code = tagText(sent, 'ErrorCode');
+    const hint = code === '1012' ? ' -- generate a new token (Flex Web Service Configuration) and save it on the page'
+      : code === '1015' ? ' -- check the token saved on the page' : '';
+    throw new Error(`IBKR SendRequest: ${code} ${tagText(sent, 'ErrorMessage')}${hint}`.trim());
+  }
   const ref = tagText(sent, 'ReferenceCode');
   const url = tagText(sent, 'Url') || `${FLEX}/GetStatement`;
   // The statement takes a few seconds to generate (ErrorCode 1019 meanwhile).
@@ -266,7 +273,10 @@ Deno.serve(async (req) => {
     const nowSlot = Math.floor((new Date().getUTCHours() * 60 + new Date().getUTCMinutes() - SLOT_START_MIN) / SLOT_MINUTES);
     if (!userId) {
       const today = new Date().toISOString().slice(0, 10);
-      const syncedToday = (c: Cred) => !!c.last_sync_at && c.last_sync_at.slice(0, 10) >= today && !(c.last_sync_result || '').startsWith('{"error"');
+      // a failed run is retried -- but not a token IBKR refuses (expired /
+      // invalid): that waits for a new one on the page
+      const syncedToday = (c: Cred) => !!c.last_sync_at && c.last_sync_at.slice(0, 10) >= today
+        && (!(c.last_sync_result || '').startsWith('{"error"') || TOKEN_REFUSED.test(c.last_sync_result || ''));
       picked = picked.filter(c => slotOf(c.user_id) <= nowSlot && !syncedToday(c))
         .sort((a, b) => slotOf(a.user_id) - slotOf(b.user_id)).slice(0, RUN_USERS);
     }
