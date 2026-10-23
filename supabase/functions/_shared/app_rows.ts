@@ -53,17 +53,25 @@ export async function reportPeriods(db: any, userId: string, account: string, ke
 // the app payouts inside its period go (it lists them; ones outside stay), the
 // app money up to its end goes (its closing balance holds it), and the app
 // money left is counted again from 0.
+// T-Bank's API sync (sync-tbank) is the same kind of layer -- trades
+// 'tbank_api' ('<agreement>:...'), money 'tbank_api:<agreement>' counted from
+// 0 after the latest report -- and gives way to a report the same way.
 // deno-lint-ignore no-explicit-any
 export async function removeAppRows(db: any, userId: string, account: string, key: string, periodStart: string, periodEnd: string): Promise<number> {
-  const { count: t, error: e1 } = await db.from('trades').delete({ count: 'exact' })
-    .eq('user_id', userId).eq('external_source', 'broker_csv').eq('account', account)
-    .like('external_id', `${key}:%`).gte('trade_date', periodStart).lte('trade_date', periodEnd);
-  if (e1) throw new Error(e1.message);
-  const src = `${APP_SOURCE[account]}:${key}-app`;
-  const { count: b, error: e2 } = await db.from('bank_transactions').delete({ count: 'exact' })
-    .eq('user_id', userId).eq('external_source', src).lte('tx_date', `${periodEnd}T23:59:59.999Z`);
-  if (e2) throw new Error(e2.message);
-  if (b) {
+  let n = 0;
+  for (const tradeSource of account === 'T-Bank' ? ['broker_csv', 'tbank_api'] : ['broker_csv']) {
+    const { count, error } = await db.from('trades').delete({ count: 'exact' })
+      .eq('user_id', userId).eq('external_source', tradeSource).eq('account', account)
+      .like('external_id', `${key}:%`).gte('trade_date', periodStart).lte('trade_date', periodEnd);
+    if (error) throw new Error(error.message);
+    n += count ?? 0;
+  }
+  for (const src of [`${APP_SOURCE[account]}:${key}-app`, ...(account === 'T-Bank' ? [`tbank_api:${key}`] : [])]) {
+    const { count: b, error: e2 } = await db.from('bank_transactions').delete({ count: 'exact' })
+      .eq('user_id', userId).eq('external_source', src).lte('tx_date', `${periodEnd}T23:59:59.999Z`);
+    if (e2) throw new Error(e2.message);
+    n += b ?? 0;
+    if (!b) continue;
     const { data: rest, error: e3 } = await db.from('bank_transactions').select('id, currency, amount')
       .eq('user_id', userId).eq('external_source', src).order('tx_date');
     if (e3) throw new Error(e3.message);
@@ -74,5 +82,5 @@ export async function removeAppRows(db: any, userId: string, account: string, ke
       if (error) throw new Error(error.message);
     }
   }
-  return (t ?? 0) + (b ?? 0);
+  return n;
 }
