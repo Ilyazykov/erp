@@ -10,7 +10,7 @@
 // and Flex Web Service turned on there (Flex Queries -> Flex Web Service
 // Configuration), which gives the token. Both are entered on the page
 // (My portfolio -> IBKR automatic sync) into broker_credentials (migration
-// ...096); the function's secrets IBKR_FLEX_TOKEN / IBKR_FLEX_QUERY_ID are
+// ...096, ...097); the function's secrets IBKR_FLEX_TOKEN / IBKR_FLEX_QUERY_ID are
 // the fallback when no one has entered them.
 //
 // Written as import-ibkr-statement writes the CSV, account 'IBKR', source
@@ -259,7 +259,7 @@ Deno.serve(async (req) => {
     // Who to sync with what: the Query ID / token entered on the page
     // (broker_credentials), else the function's secrets IBKR_FLEX_TOKEN /
     // IBKR_FLEX_QUERY_ID for IBKR_USER_ID or the one user with IBKR rows.
-    // (the token decrypted from Vault, migration ...096)
+    // (the token decrypted from Vault, migration ...097)
     let q = db.rpc('ibkr_flex_credentials');
     if (userId) q = q.eq('user_id', userId);
     const { data: creds, error: cErr } = await q;

@@ -5731,7 +5731,7 @@ function mpRefreshAfterWalletChange() {
 }
 
 // ---- IBKR automatic sync (supabase/functions/sync-ibkr) ----
-// The Query ID shows; the token only as "saved" (ibkr_flex_status, migration ...096).
+// The Query ID shows; the token only as "saved" (ibkr_flex_status, migrations ...096, ...097).
 async function mpIbkrFlexLoad() {
   const statusEl = document.getElementById('mp_ibkr_status');
   const { data, error } = await sb.rpc('ibkr_flex_status');
