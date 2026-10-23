@@ -127,6 +127,14 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
     const opened = accounts.find((a: { id: string }) => a.id === agr)?.openedDate;
     const from = lastEnd ? addDays(lastEnd, 1) : msk(opened ?? new Date().toISOString()).slice(0, 10);
     const checkFrom = lastEnd ? addDays(lastEnd, -CHECK_DAYS) : null;
+    // The name a security already goes by on this agreement: the report keeps a
+    // fund bought from its manager off the exchange by its ISIN (TMON as
+    // RU000A106DL2), so the API's rows stay on the same holding.
+    const { data: usedRows, error: uErr } = await db.from('trades').select('ticker').eq('user_id', userId).eq('account', ACCOUNT)
+      .in('external_source', ['tbank_broker_xlsx', 'broker_csv']).like('external_id', `${agr}:%`).limit(10000);
+    if (uErr) throw new Error(uErr.message);
+    const used = new Set((usedRows ?? []).map((r: { ticker: string }) => r.ticker));
+    const tickerFor = (i: Inst) => { const d = tickerOf(i); return !used.has(d) && i.isin && used.has(i.isin) ? i.isin : d; };
     const pullFrom = checkFrom ?? from;
 
     // Every executed operation since then (Moscow midnight = 21:00 UTC the day before).
@@ -182,7 +190,7 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
         fills.forEach((f: Op, i: number) => {
           const p = money(f.price);
           trades.push({
-            ticker: tickerOf(inst), side: buy ? 'buy' : 'sell', quantity: Number(f.quantity), settle_date: null,
+            ticker: tickerFor(inst), side: buy ? 'buy' : 'sell', quantity: Number(f.quantity), settle_date: null,
             price: round(inst.type === 'bond' && inst.nominal ? p / inst.nominal * 100 : p, 6), trade_date: msk(f.date ?? op.date).slice(0, 10),
             currency: ccy || 'RUB', fee_tax: i === 0 && fee ? fee.sum : null, fee_currency: i === 0 && fee ? fee.ccy : null,
             nkd: i === 0 ? (round(Math.abs(money(op.accruedInt)), 2) || null) : null, exchange: exchangeOf(inst.classCode || op.classCode || ''),
@@ -197,10 +205,10 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
         const inst = await instOf(uid);
         const q = Number(op.quantity || 0);
         trades.push({
-          ticker: tickerOf(inst), side: payout, quantity: amount, price: q ? round(amount / q, 6) : amount, trade_date: day, settle_date: null,
+          ticker: tickerFor(inst), side: payout, quantity: amount, price: q ? round(amount / q, 6) : amount, trade_date: day, settle_date: null,
           currency: ccy, fee_tax: null, fee_currency: null, nkd: null, exchange: null,
           note: `${op.name || t}: ${inst.name}${op.description ? ` -- ${op.description}` : ''}`.slice(0, 500),
-          external_id: uniq(`${agr}:income:${day}:${inst.isin || tickerOf(inst)}:${amount}`),
+          external_id: uniq(`${agr}:income:${day}:${inst.isin || tickerFor(inst)}:${amount}`),
         });
         continue;
       }
@@ -208,7 +216,7 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
         const inst = await instOf(uid);
         const q = Number(op.quantityDone || op.quantity || 0);
         if (q) trades.push({
-          ticker: tickerOf(inst), side: t.endsWith('INPUT_SECURITIES') ? 'buy' : 'sell', quantity: q, price: 0, trade_date: day, settle_date: null,
+          ticker: tickerFor(inst), side: t.endsWith('INPUT_SECURITIES') ? 'buy' : 'sell', quantity: q, price: 0, trade_date: day, settle_date: null,
           currency: 'RUB', fee_tax: null, fee_currency: null, nkd: null, exchange: null,
           note: `${op.name || t}: ${inst.name} -- moved without money (transfer between depositaries / agreements)`,
           external_id: uniq(`${agr}:move:${op.id}`),
@@ -227,14 +235,22 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
       const inWindow = trades.filter(r => r.trade_date >= checkFrom && r.trade_date <= lastEnd);
       const apiDeals = new Map(inWindow.filter(r => r.external_id.includes(':deal:')).map(r => [r.external_id.split(':')[2], r]));
       const storedDeals = (stored ?? []).filter((s: { external_id: string }) => s.external_id.includes(':deal:'));
+      // by the deal's number; a deal off the exchange (the report's number isn't
+      // the API's) by its day, side, quantity and security
+      const matchedNums = new Set<string>();
       for (const s of storedDeals) {
-        const a = apiDeals.get(s.external_id.split(':')[2]);
+        let a = apiDeals.get(s.external_id.split(':')[2]);
+        if (!a) {
+          const hit = [...apiDeals].find(([num, x]) => !matchedNums.has(num) && !storedDeals.some((z: { external_id: string }) => z.external_id.split(':')[2] === num)
+            && x.trade_date === s.trade_date && x.side === s.side && Math.abs(x.quantity - Number(s.quantity)) < 1e-9 && x.ticker === s.ticker);
+          if (hit) { matchedNums.add(hit[0]); a = hit[1]; }
+        }
         if (!a) { diffs.push(`deal ${s.external_id} (${s.ticker} ${s.side} ${s.quantity}) not in the API`); continue; }
         if (a.side !== s.side || Math.abs(a.quantity - Number(s.quantity)) > 1e-9 || Math.abs(a.price - Number(s.price)) > Math.max(0.011, Number(s.price) * 0.005))
           diffs.push(`deal ${s.external_id}: API ${a.ticker} ${a.side} ${a.quantity} @ ${a.price}, report ${s.ticker} ${s.side} ${s.quantity} @ ${s.price}`);
       }
       const storedNums = new Set(storedDeals.map((s: { external_id: string }) => s.external_id.split(':')[2]));
-      for (const [num, a] of apiDeals) if (!storedNums.has(num)) diffs.push(`API deal ${num} (${a.trade_date} ${a.ticker} ${a.side} ${a.quantity}) not in the report`);
+      for (const [num, a] of apiDeals) if (!storedNums.has(num) && !matchedNums.has(num)) diffs.push(`API deal ${num} (${a.trade_date} ${a.ticker} ${a.side} ${a.quantity}) not in the report`);
       const storedIncome = (stored ?? []).filter((s: { external_id: string }) => s.external_id.includes(':income:'));
       const apiIncome = inWindow.filter(r => r.external_id.includes(':income:'));
       for (const s of storedIncome) {
