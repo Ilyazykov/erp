@@ -261,6 +261,20 @@
     <div id="mp_any_csv_drop" class="drop-zone">…or drop any number of files here — they're queued and imported one by one</div>
     <div class="empty-note" id="mp_any_csv_status"></div>
 
+    <div class="section-title">IBKR automatic sync</div>
+    <p class="note">Instead of uploading the Activity Statement: an Activity Flex Query (Performance &amp; Reports → Flex Queries;
+      sections Trades, Cash Transactions, Cash Report; XML; Last 365 Calendar Days) and the Flex Web Service token
+      (Flex Web Service Configuration). Pulled every morning; each run replaces IBKR's rows of the statement's period. The
+      token is read-only on IBKR's side and stays on the server — once saved, this page can't show it again. Leave the
+      token empty to keep the one saved.</p>
+    <div class="form-row">
+      <label>Query ID <input type="text" id="mp_ibkr_query_id" inputmode="numeric" autocomplete="off"></label>
+      <label>Token <input type="password" id="mp_ibkr_token" autocomplete="off"></label>
+      <button class="btn primary" id="mp_ibkr_save">Save</button>
+      <button class="btn" id="mp_ibkr_sync">Sync now</button>
+    </div>
+    <div class="empty-note" id="mp_ibkr_status"></div>
+
     <div class="section-title">Export Revolut fund trades to Snowball</div>
     <p class="note">Generates a Snowball-importable CSV from the trades already stored here for the
       Revolut Flexible Cash Funds money-market fund share classes (IE0002RUHW32, IE000AZVL3K0, IE000H9J0QX4).</p>
@@ -5712,6 +5726,58 @@ function mpRefreshAfterWalletChange() {
   mpRenderBrokerAssetClass();
 }
 
+// ---- IBKR automatic sync (supabase/functions/sync-ibkr) ----
+// The Query ID shows; the token only as "saved" (ibkr_flex_status, migration ...096).
+async function mpIbkrFlexLoad() {
+  const statusEl = document.getElementById('mp_ibkr_status');
+  const { data, error } = await sb.rpc('ibkr_flex_status');
+  if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
+  const s = (data || [])[0];
+  document.getElementById('mp_ibkr_query_id').value = s?.query_id || '';
+  document.getElementById('mp_ibkr_token').placeholder = s?.token_set ? 'saved — leave empty to keep' : 'not set';
+  if (!s) { statusEl.textContent = 'Not set up.'; return; }
+  let last = 'never synced';
+  if (s.last_sync_at) {
+    let r = {};
+    try { r = JSON.parse(s.last_sync_result || '{}'); } catch { /* not JSON */ }
+    last = `last synced ${new Date(s.last_sync_at).toLocaleString()}: `
+      + (r.error ? `error — ${r.error}` : `${r.trades} trades, ${r.dividends} dividends, ${r.cash_rows} cash rows for ${r.period}`);
+  }
+  statusEl.textContent = `Query ID ${s.query_id || '—'}, token ${s.token_set ? 'saved' : 'not set'}; ${last}.`;
+}
+
+document.getElementById('mp_ibkr_save').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_ibkr_status');
+  const tokenEl = document.getElementById('mp_ibkr_token');
+  const { error } = await sb.rpc('set_ibkr_flex', {
+    p_query_id: document.getElementById('mp_ibkr_query_id').value, p_token: tokenEl.value,
+  });
+  if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
+  tokenEl.value = '';
+  await mpIbkrFlexLoad();
+});
+
+document.getElementById('mp_ibkr_sync').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_ibkr_status');
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) { statusEl.textContent = 'Sign in first.'; return; }
+  statusEl.textContent = 'Asking IBKR for the statement… (it takes IBKR up to a minute to build it)';
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/sync-ibkr`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    const r = await res.json();
+    if (!res.ok) { statusEl.textContent = `Error: ${r.error || res.statusText}`; return; }
+    const fmt = o => Object.entries(o || {}).map(([c, v]) => `${c} ${Number(v).toFixed(2)}`).join(', ') || 'none';
+    statusEl.textContent = `Synced ${r.period}: ${r.trades} trades, ${r.dividends} dividends, ${r.cash_rows} cash rows. `
+      + `IBKR cash: ${fmt(r.cash)} (the statement's ending cash: ${fmt(r.statement_ending_cash)}). Capital is being rebuilt.`;
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`;
+  }
+});
+
 async function mpSyncWallets(prefix = '') {
   const statusEl = document.getElementById('mp_wallet_status');
   const { data: { session } } = await sb.auth.getSession();
@@ -5811,6 +5877,7 @@ function mpUpdateAuthUi(session) {
     mpRenderBrokerAssetClass();
     mpRenderBondByType();
     mpRenderWallets();
+    mpIbkrFlexLoad();
     mpRenderRealEstate();
     mpRenderLookThrough();
     mpRenderCharts();
