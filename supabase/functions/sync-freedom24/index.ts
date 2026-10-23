@@ -8,7 +8,10 @@
 // ...099): the public key in the clear, the private one in Supabase Vault.
 //
 // Freedom24 has no read-only keys: a pair can trade (not withdraw -- that
-// takes an SMS-confirmed session). This function only reads: getUserCashFlows.
+// takes an SMS-confirmed session). This function only reads: getUserCashFlows
+// (deposits, commissions, dividends, taxes -- no trades) and getTradesHistory
+// (trades and currency conversions, made into the report's "Сделка" rows,
+// TRADE-<id>-<ccy>).
 //
 // The whole history every run (the account is young and small; the rows'
 // running balances start from zero, so they must cover it from its opening),
@@ -16,9 +19,9 @@
 // source, which they replace: Freedom24's bank rows and trades -- all but the
 // shares credited without money (in_out:..., from the broker report JSON,
 // which takes a login session the keys don't give: still uploaded by hand).
-// A pull that yields fewer trades than are stored is refused, nothing
-// replaced: the API answering differently from the xlsx shows up as an
-// error with samples, not as lost rows.
+// Every row stored from the report must come back with its id and amount,
+// else nothing is replaced: the API answering differently shows up as an
+// error with the differences, not as lost or changed rows.
 //
 // Two ways in, as sync-ibkr: the page's "Sync now" / Save ({"check": true}:
 // only whether the keys work), or the daily pg_cron job (no JWT, deployed
@@ -98,31 +101,100 @@ async function cashFlows(pub: string, secret: string, take = PAGE): Promise<{ to
   return { total, list };
 }
 
+// Every trade (getTradesHistory: the cash flows leave trades out), oldest first.
+// deno-lint-ignore no-explicit-any
+async function tradesHistory(pub: string, secret: string, from: string): Promise<any[]> {
+  const r = await tradernet(pub, secret, 'getTradesHistory', { beginDate: from, endDate: new Date().toISOString().slice(0, 10) });
+  const t = r?.trades?.trade ?? [];
+  return Array.isArray(t) ? t : [t];
+}
+
+// The cash-movement report's names of the cash flows' kinds (the API's own
+// come in English): the xlsx's descriptions kept.
+const OP_RU: Record<string, string> = {
+  bank: 'Банковский перевод', commission_for_trades: 'Комиссия за сделки', dividend: 'Дивиденды', tax: 'Налоги',
+};
+const num = (v: unknown) => Number(String(v ?? '').trim());
+
+// A trade as the cash-movement report shows it: one row in its currency --
+// "Купить 4 VWCE.EU (сделка №656470312)", id TRADE-<id>-<ccy> -- or, a
+// currency conversion (instrument "EUR/USD"), a row for each currency.
+// deno-lint-ignore no-explicit-any
+function tradeRows(t: any, time: string): CashRow[] | null {
+  const id = String(t.id ?? '').trim(), instr = String(t.instr_nm ?? '').trim(), ccy = String(t.curr_c ?? '').trim();
+  const buy = String(t.type) === '1', q = num(t.q), sum = Math.abs(num(t.summ ?? t.v));
+  if (!id || !Number.isFinite(q) || !Number.isFinite(sum)) return null;
+  const pair = instr.match(/^([A-Z]{3})\/?([A-Z]{3})$/);
+  if (pair) {
+    // buying the base currency for the quote one, or selling it
+    const [base, quote] = [pair[1], pair[2]];
+    const fx = (a: number, c: string) => ({ id: `TRADE-${id}-${c}`, time, op: 'Сделка', code: 'trade', amount: a, currency: c,
+      comment: buy ? `Конвертация валюты ${sum.toFixed(2)} ${quote} → ${Math.abs(q).toFixed(2)} ${base}, курс ${t.p} (сделка №${id})`
+        : `Конвертация валюты ${Math.abs(q).toFixed(2)} ${base} → ${sum.toFixed(2)} ${quote}, курс ${t.p} (сделка №${id})` });
+    return buy ? [fx(-sum, quote), fx(Math.abs(q), base)] : [fx(-Math.abs(q), base), fx(sum, quote)];
+  }
+  if (!/^[A-Z0-9.\-]+\.[A-Z]+$/.test(instr) || !ccy) return null;
+  return [{ id: `TRADE-${id}-${ccy}`, time, op: 'Сделка', code: 'trade', amount: buy ? -sum : sum, currency: ccy,
+    comment: `${buy ? 'Купить' : 'Продать'} ${Math.abs(q)} ${instr} (сделка №${id})` }];
+}
+
 // deno-lint-ignore no-explicit-any
 async function syncUser(db: any, userId: string, pub: string, secret: string) {
-  const { total, list } = await cashFlows(pub, secret);
-  const rows: CashRow[] = list.map(x => ({
-    id: String(x.id ?? '').trim(), time: isoOf(x.date) ?? '', op: String(x.type_code_name ?? '').trim(),
-    code: String(x.type_code ?? ''), comment: String(x.comment ?? '').trim(), amount: Number(x.sum), currency: String(x.currency ?? '').trim(),
-  })).filter(r => r.id && r.time && Number.isFinite(r.amount) && r.currency);
-  // oldest first; the same moment in the order the broker lists it
-  rows.sort((a, b) => a.time.localeCompare(b.time));
+  const { list } = await cashFlows(pub, secret);
+  const firstDay = list.map(x => String(x.date ?? '').slice(0, 10)).filter(Boolean).sort()[0] ?? '2000-01-01';
+  const tradeList = await tradesHistory(pub, secret, firstDay);
+
+  // The API's clock is a few hours off the report's: the rows the report
+  // already gave keep their time, the shift between the two (the commonest,
+  // in whole hours) is applied to the new ones.
+  const { data: stored, error: sErr } = await db.from('bank_transactions').select('external_id, tx_date, amount::text, currency')
+    .eq('user_id', userId).eq('account', ACCOUNT).eq('external_source', SOURCE);
+  if (sErr) throw new Error(sErr.message);
+  const storedById = new Map<string, { tx_date: string; amount: string; currency: string }>(
+    (stored ?? []).map((s: { external_id: string; tx_date: string; amount: string; currency: string }) => [s.external_id, s]));
+
+  const raw: CashRow[] = [];
+  const odd: unknown[] = [];
+  for (const x of list) {
+    const code = String(x.type_code ?? '');
+    raw.push({ id: String(x.id ?? '').trim(), time: isoOf(x.datetime || x.date) ?? '', op: OP_RU[code] ?? String(x.type_code_name ?? '').trim(),
+      code, comment: String(x.comment ?? '').trim(), amount: num(x.sum), currency: String(x.currency ?? '').trim() });
+  }
+  for (const t of tradeList) {
+    const rs = tradeRows(t, isoOf(t.date) ?? '');
+    if (rs) raw.push(...rs); else odd.push(t);
+  }
+  const shifts = new Map<number, number>();
+  for (const r of raw) {
+    const s = storedById.get(r.id);
+    if (!s || !r.time) continue;
+    const h = Math.round((Date.parse(s.tx_date) - Date.parse(r.time)) / 3600000);
+    shifts.set(h, (shifts.get(h) ?? 0) + 1);
+  }
+  const shiftH = [...shifts].sort((a, b) => b[1] - a[1])[0]?.[0] ?? -3;
+  const rows = raw.map(r => {
+    const s = storedById.get(r.id);
+    // the stored time to the second (the report's same-second rows are a ms apart)
+    const time = s ? new Date(Math.floor(Date.parse(s.tx_date) / 1000) * 1000).toISOString()
+      : r.time ? new Date(Date.parse(r.time) + shiftH * 3600000).toISOString() : '';
+    return { ...r, time };
+  }).filter(r => r.id && r.time && Number.isFinite(r.amount) && r.currency);
+  // oldest first; a trade's cash before its commission, as in the report
+  rows.sort((a, b) => a.time.localeCompare(b.time) || (a.code === 'trade' ? -1 : 0) - (b.code === 'trade' ? -1 : 0));
   const p = buildFromCashRows(rows);
 
-  // Not fewer trades / dividends / rows than stored: else the answer isn't
-  // understood -- nothing replaced, samples back for a look.
-  const count = async (table: string, extra: (q: any) => any) => {
-    const { count: n, error } = await extra(db.from(table).select('*', { count: 'exact', head: true })
-      .eq('user_id', userId).eq('account', ACCOUNT).eq('external_source', SOURCE));
-    if (error) throw new Error(error.message);
-    return n ?? 0;
-  };
-  const storedTrades = await count('trades', q => q.not('external_id', 'like', 'in_out:%'));
-  const storedBank = await count('bank_transactions', q => q);
-  if (p.trades.length < storedTrades || p.bank.length < storedBank) {
-    const kinds = [...new Set(list.map(x => `${x.type_code}=${x.type_code_name}`))].slice(0, 15);
-    throw new Error(`Not understood: ${p.trades.length} trades / ${p.bank.length} rows from the API, ${storedTrades} / ${storedBank} stored -- nothing replaced. `
-      + `Total ${total}, kinds ${kinds.join('; ')}; sample ${JSON.stringify(list.slice(-3)).slice(0, 900)}`);
+  // Every row the report gave must come back, same id, same amount: else the
+  // API isn't understood -- nothing replaced, the differences back for a look.
+  const built = new Map(p.bank.map(b => [b.external_id, b]));
+  const diffs: string[] = [];
+  for (const [id, s] of storedById) {
+    const b = built.get(id);
+    if (!b) diffs.push(`${id} missing (${s.amount} ${s.currency})`);
+    else if (Math.abs(b.amount - Number(s.amount)) > 0.005 || b.currency !== s.currency) diffs.push(`${id}: ${b.amount} ${b.currency} vs stored ${s.amount} ${s.currency}`);
+  }
+  if (diffs.length || odd.length) {
+    throw new Error(`Not understood -- nothing replaced. ${diffs.length} of ${storedById.size} stored rows differ: ${diffs.slice(0, 8).join('; ')}. `
+      + `${odd.length} trades not read. ${tradeList.length} trades, e.g. ${JSON.stringify((odd.length ? odd : tradeList).slice(0, 2)).slice(0, 900)}`);
   }
 
   // Replaced: Freedom24's rows, all but the gifted shares.
