@@ -2116,7 +2116,7 @@ async function mpRenderLatestSources() {
       const contracts = (p.contracts || []).filter(Boolean);
       const what = `${p.row_count} records${contracts.length ? ` · ${contracts.length === 1 ? 'contract' : 'contracts'} ${contracts.join(', ')}` : ''}`;
       return `<tr class="mp-part" data-acc="${esc(name)}"${mpOpenAccounts.has(name) ? '' : ' hidden'} style="color:#8b949e${closed ? ';opacity:.7' : ''}">`
-        + `<td style="padding-left:28px"><span class="mp-src" data-src="${esc(what)}">${esc(p.part)}</span></td><td></td><td>${p.last_day}</td><td>${up || '—'}</td><td>${d}</td><td></td></tr>`;
+        + `<td style="padding-left:28px"><span class="mp-src" data-src="${esc(what)}">${esc(p.label || p.part)}</span></td><td></td><td>${p.last_day}</td><td>${up || '—'}</td><td>${d}</td><td></td></tr>`;
     }).join('');
     wrap.innerHTML = `<table class="data-table"><thead><tr><th>Account</th><th>Update</th><th>Latest record</th><th>Statements to</th><th>Days ago</th><th>Holes between statements</th></tr></thead><tbody>${
       rows.map(([name, a]) => {
