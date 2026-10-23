@@ -161,6 +161,27 @@ async function cbrRubHistory(from: string): Promise<[string, number][]> {
     .map(m => [`${m[3]}-${m[2]}-${m[1]}`, 1 / parseFloat(m[4].replace(',', '.'))] as [string, number]);
 }
 
+// The lari: Yahoo has no history for GELUSD=X (today's price only), so the
+// National Bank of Georgia's official rate -- one day a request (it takes no
+// range), 25 at a time. The rate is GEL per USD.
+async function nbgGelHistory(from: string): Promise<[string, number][]> {
+  const days: string[] = [];
+  for (let d = from; d <= today(); d = addDays(d, 1)) days.push(d);
+  const out: [string, number][] = [];
+  for (let i = 0; i < days.length; i += 25) {
+    const got = await Promise.all(days.slice(i, i + 25).map(async day => {
+      try {
+        const res = await fetch(`https://nbg.gov.ge/gw/api/ct/monetarypolicy/currencies/en/json/?currencies=USD&date=${day}`, { headers: UA });
+        if (!res.ok) return null;
+        const rate = Number((await res.json())?.[0]?.currencies?.[0]?.rate);
+        return rate > 0 ? [day, 1 / rate] as [string, number] : null;
+      } catch { return null; }
+    }));
+    for (const g of got) if (g) out.push(g);
+  }
+  return out;
+}
+
 // deno-lint-ignore no-explicit-any
 async function selectAll(q: () => any) {
   const out: any[] = [];
@@ -212,10 +233,19 @@ Deno.serve(async (req) => {
     const fxDone: string[] = [];
     for (const ccy of ccys) {
       if (timeLeft() < 20000) break;
+      // GEL from its own source, back to its first day in the history (a
+      // Yahoo price of today alone doesn't count as having it)
       const { data: last } = await db.from('fx_history').select('day').eq('currency', ccy).order('day', { ascending: false }).limit(1);
-      const from = last?.[0] ? addDays(last[0].day, -OVERLAP_DAYS) : addDays(start, -7);
+      const { count: had } = ccy === 'GEL'
+        ? await db.from('fx_history').select('day', { count: 'exact', head: true }).eq('currency', ccy) : { count: 2 };
+      const from = last?.[0] && (had ?? 0) > 1 ? addDays(last[0].day, -OVERLAP_DAYS) : addDays(start, -7);
       let rows: [string, number][] = [];
       if (ccy === 'RUB') rows = await cbrRubHistory(from);
+      else if (ccy === 'GEL') {
+        const { data: first } = await db.from('bank_transactions').select('tx_date').eq('currency', 'GEL').order('tx_date').limit(1);
+        rows = await nbgGelHistory(first?.[0] && addDays(String(first[0].tx_date).slice(0, 10), -7) > from
+          ? addDays(String(first[0].tx_date).slice(0, 10), -7) : from);
+      }
       else {
         const h = await yahooHistory(`${ccy}USD=X`, from);
         rows = h ? h.closes : [];
