@@ -1,8 +1,8 @@
 // Supabase Edge Function: sync-openbanking
 //
 // Open Banking (PSD2) through Enable Banking for the banks without an API
-// of their own -- Revolut, Bank of Cyprus; Wise too, until its own API (with
-// precedence over this) is in. The user registers an application
+// of their own -- Revolut, Bank of Cyprus, and Wise (its own API can't read a
+// personal account's statements: migration ...121). The user registers an application
 // in the Enable Banking Control Panel (restricted mode: only the accounts the
 // user links there, free for personal use), and enters its id and private
 // key (.pem) on the page (My portfolio -> Revolut & Bank of Cyprus) into
@@ -49,7 +49,7 @@ const REDIRECT = 'https://ilyazykov.github.io/erp/';
 const BANKS: Record<string, { name: string; country: string; label: string; base: string; kind: string }> = {
   revolut: { name: 'Revolut', country: 'LT', label: 'Revolut', base: 'revolut_csv', kind: 'revolut_account' },
   boc: { name: 'Bank of Cyprus', country: 'CY', label: 'Bank of Cyprus', base: 'boc_csv', kind: 'boc_account' },
-  // until Wise's own API is in -- it'll take precedence over this
+  // (Wise's own API can't read a personal account's statements: migration ...121)
   wise: { name: 'Wise', country: 'BE', label: 'Wise', base: 'wise_csv', kind: 'wise' },
 };
 const MAX_CONSENT_S = 180 * 86400;
