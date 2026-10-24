@@ -344,6 +344,28 @@
     </div>
     <div class="empty-note" id="mp_binance_status"></div>
 
+    <div class="section-title">Revolut, Bank of Cyprus &amp; Wise (Open Banking)</div>
+    <p class="note">Through Enable Banking (enablebanking.com → Control Panel → API applications): an application
+      registered there in restricted mode — only your own accounts linked to it — with its id and the private key it
+      generated (the downloaded <code>&lt;id&gt;.pem</code>, pasted whole). The key stays on the server. Then connect each
+      bank: you're sent to its consent page and back here; the consent lasts up to 180 days, renewed the same way (the end
+      date shows below and in "Latest data per account", orange a week before). For now each run only looks at what the
+      banks give — accounts, balances, recent transactions; the statements are still uploaded.</p>
+    <div class="form-row">
+      <label>Application ID <input type="text" id="mp_eb_app" size="36" autocomplete="off"></label>
+      <label>Private key (.pem) <textarea id="mp_eb_key" rows="2" cols="34" autocomplete="off" spellcheck="false"
+        placeholder="-----BEGIN PRIVATE KEY----- …"></textarea></label>
+      <button class="btn primary" id="mp_eb_save">Save</button>
+    </div>
+    <div class="form-row">
+      <button class="btn" id="mp_eb_connect_revolut">Connect Revolut</button>
+      <button class="btn" id="mp_eb_connect_boc">Connect Bank of Cyprus</button>
+      <button class="btn" id="mp_eb_connect_wise">Connect Wise</button>
+      <button class="btn" id="mp_eb_sync">Sync now</button>
+      <a class="btn" href="https://enablebanking.com/cp/applications" target="_blank" rel="noopener">Enable Banking Control Panel</a>
+    </div>
+    <div class="empty-note" id="mp_eb_status"></div>
+
     <div class="section-title">Export Revolut fund trades to Snowball</div>
     <p class="note">Generates a Snowball-importable CSV from the trades already stored here for the
       Revolut Flexible Cash Funds money-market fund share classes (IE0002RUHW32, IE000AZVL3K0, IE000H9J0QX4).</p>
@@ -6181,6 +6203,130 @@ document.getElementById('mp_f24_sync').addEventListener('click', async () => {
   }
 });
 
+// ---- Revolut & Bank of Cyprus through Enable Banking (supabase/functions/sync-openbanking) ----
+// The application (key only as "set") and each bank's consent (enablebanking_status, migration ...107).
+const MP_EB_BANKS = { revolut: 'Revolut', boc: 'Bank of Cyprus', wise: 'Wise' };
+async function mpEbLoad() {
+  const statusEl = document.getElementById('mp_eb_status');
+  const { data, error } = await sb.rpc('enablebanking_status');
+  if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
+  const app = (data || []).find(r => r.broker === 'enablebanking');
+  const appEl = document.getElementById('mp_eb_app');
+  appEl.value = app?.app_id || '';
+  document.getElementById('mp_eb_key').placeholder = app?.key_set ? 'saved — leave empty to keep' : '-----BEGIN PRIVATE KEY----- …';
+  statusEl.style.color = '';
+  if (!app) { statusEl.textContent = 'Not set up.'; return; }
+  const lines = [`Application ${app.app_id || '—'}, key ${app.key_set ? 'saved' : 'not set'}.`];
+  for (const [bank, label] of Object.entries(MP_EB_BANKS)) {
+    const s = (data || []).find(r => r.broker === `eb:${bank}`);
+    if (!s?.session_set) { lines.push(`${label}: not connected.`); continue; }
+    const days = s.valid_until ? Math.ceil((Date.parse(`${s.valid_until}T00:00:00Z`) - Date.now()) / 86400000) : null;
+    let last = 'not looked at yet';
+    if (s.last_sync_at) {
+      let r = {};
+      try { r = JSON.parse(s.last_sync_result || '{}'); } catch { /* not JSON */ }
+      last = `looked at ${new Date(s.last_sync_at).toLocaleString()}: ` + mpEbSummary(r);
+    }
+    lines.push(`${label}: connected until ${s.valid_until || '?'}${days !== null ? ` (${days} days left)` : ''}; ${last}.`);
+    if (days !== null && days <= 7) statusEl.style.color = 'var(--red, #f85149)';
+  }
+  statusEl.innerHTML = lines.map(l => l.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))).join('<br>');
+}
+
+function mpEbSummary(r) {
+  if (r.error) return `error — ${r.error}`;
+  if (!Array.isArray(r.accounts)) return `${r.accounts ?? 0} accounts`;
+  return r.accounts.map(a => `${a.currency || '?'} ${a.type || ''}${a.product ? ` ${a.product}` : ''}: ${a.transactions ?? '?'} transactions`
+    + (Array.isArray(a.balances) && a.balances.length ? `, ${a.balances[0]}` : '')).join('; ') || 'no accounts';
+}
+
+async function mpEbCall(body) {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) throw new Error('Sign in first.');
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/sync-openbanking`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const r = await res.json();
+  if (!res.ok) throw new Error(r.error || res.statusText);
+  return r;
+}
+
+document.getElementById('mp_eb_save').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_eb_status');
+  const appEl = document.getElementById('mp_eb_app'), keyEl = document.getElementById('mp_eb_key');
+  if (!appEl.value.trim()) { statusEl.textContent = 'Enter the application ID.'; return; }
+  // An empty key keeps the saved one (set_enablebanking_app).
+  const { error } = await sb.rpc('set_enablebanking_app', { p_app_id: appEl.value, p_key: keyEl.value });
+  if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
+  keyEl.value = '';
+  statusEl.style.color = '';
+  statusEl.textContent = 'Saved; checking the application with Enable Banking…';
+  let problem = '', app = null;
+  try { app = await mpEbCall({ check: true }); } catch (err) { problem = err.message; }
+  await mpEbLoad();
+  if (problem) {
+    statusEl.style.color = 'var(--red, #f85149)';
+    statusEl.textContent = `Saved, but Enable Banking refuses it: ${problem}`;
+  } else {
+    statusEl.innerHTML += `<br>Enable Banking: application "${String(app.name || '').replace(/[&<>]/g, '')}" ${app.active ? 'active' : 'not active'} (${app.environment || ''}).`;
+  }
+});
+
+for (const bank of Object.keys(MP_EB_BANKS)) {
+  document.getElementById(`mp_eb_connect_${bank}`).addEventListener('click', async () => {
+    const statusEl = document.getElementById('mp_eb_status');
+    statusEl.style.color = '';
+    statusEl.textContent = `Asking Enable Banking for ${MP_EB_BANKS[bank]}'s consent page…`;
+    try {
+      const r = await mpEbCall({ action: 'connect', bank });
+      window.location.href = r.url;   // the bank's consent page; it sends you back here
+    } catch (err) {
+      statusEl.style.color = 'var(--red, #f85149)';
+      statusEl.textContent = `Error: ${err.message}`;
+    }
+  });
+}
+
+// Back from the bank (?code=...&state=<bank>): the code becomes the bank's
+// session; the address is cleaned so a reload doesn't use the code twice.
+async function mpEbReturn() {
+  const p = new URLSearchParams(window.location.search);
+  const state = p.get('state');
+  if (!state || !(state in MP_EB_BANKS)) return;
+  history.replaceState(null, '', window.location.pathname + window.location.hash);
+  const statusEl = document.getElementById('mp_eb_status');
+  if (p.get('error')) {
+    statusEl.style.color = 'var(--red, #f85149)';
+    statusEl.textContent = `${MP_EB_BANKS[state]} not connected: ${p.get('error_description') || p.get('error')}`;
+    return;
+  }
+  statusEl.textContent = `Connecting ${MP_EB_BANKS[state]}…`;
+  try {
+    const r = await mpEbCall({ action: 'session', code: p.get('code'), state });
+    await mpEbLoad();
+    statusEl.innerHTML += `<br>${r.bank} connected: ${r.accounts} accounts, until ${r.valid_until}.`;
+    document.getElementById('mp_eb_status').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  } catch (err) {
+    statusEl.style.color = 'var(--red, #f85149)';
+    statusEl.textContent = `${MP_EB_BANKS[state]} not connected: ${err.message}`;
+  }
+}
+
+document.getElementById('mp_eb_sync').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_eb_status');
+  statusEl.style.color = '';
+  statusEl.textContent = 'Looking at the connected banks…';
+  try {
+    await mpEbCall({});
+    await mpEbLoad();
+  } catch (err) {
+    statusEl.style.color = 'var(--red, #f85149)';
+    statusEl.textContent = `Error: ${err.message}`;
+  }
+});
+
 // ---- Binance automatic check (supabase/functions/sync-binance) ----
 // The key shows by its last characters, the secret only as "saved" (binance_api_status, migration ...106).
 async function mpBinanceApiLoad() {
@@ -6442,6 +6588,7 @@ function mpUpdateAuthUi(session) {
     mpF24ApiLoad();
     mpTbankApiLoad();
     mpBinanceApiLoad();
+    mpEbLoad().then(mpEbReturn);
     mpRenderRealEstate();
     mpRenderLookThrough();
     mpRenderCharts();
