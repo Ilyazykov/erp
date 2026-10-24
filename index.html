@@ -2322,12 +2322,14 @@ async function mpRenderLatestSources() {
         } else if (name in MP_TODO_AUTO && !partAuto.has(`${name}|${MP_TODO_AUTO[name]}`)) {
           update += ` · ${MP_TODO_AUTO[name] ? `${todoAuto}: ${esc(MP_TODO_AUTO[name].toLowerCase())}` : todoAuto}`;
         }
-        // a split account: a toggle before its name opens its parts
+        // a split account: a toggle before its name opens its parts; its own
+        // "Days ago" means nothing across parts on different periods -- only
+        // the parts have one (its "Days to check" is the least of theirs)
         const split = (parts.get(name) || []).length > 1;
         // (the others keep its place empty, so every name starts in one line)
         const toggle = split ? `<span class="mp-toggle" data-acc="${esc(name)}" style="cursor:pointer;display:inline-block;width:16px;user-select:none">${mpOpenAccounts.has(name) ? '▾' : '▸'}</span>`
           : '<span style="display:inline-block;width:16px"></span>';
-        return `<tr${style}><td>${toggle}${src ? `<span class="mp-src" data-src="${esc(src)}">${esc(name)}</span>` : esc(name)}</td><td>${update}</td><td>${expires}</td><td>${a.record}</td><td>${a.uploaded || '—'}</td><td>${d}</td>${toCheckCell(a.toCheck, !!a.flex)}</tr>`
+        return `<tr${style}><td>${toggle}${src ? `<span class="mp-src" data-src="${esc(src)}">${esc(name)}</span>` : esc(name)}</td><td>${update}</td><td>${expires}</td><td>${a.record}</td><td>${a.uploaded || '—'}</td><td>${split ? '' : d}</td>${toCheckCell(a.toCheck, !!a.flex)}</tr>`
           + (split ? partRowsHtml(name, a.every === 'closed') : '');
       }).join('')}</tbody></table>`;
     for (const t of wrap.querySelectorAll('.mp-toggle')) {
