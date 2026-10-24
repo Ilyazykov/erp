@@ -407,7 +407,7 @@
     <p class="note">The date of the newest real record of each bank / broker account (bank rows and broker
       trades or payouts from any of its sources; synthetic rows -- extrapolated, data gaps, snapshots -- left out),
       to see when a fresh statement is due -- dated by the later of the newest record and the end of the latest statement uploaded for it (an account with no movements stays fresh once its statement is in): a broker monthly, a bank in active use weekly, one in little use monthly;
-      an account synced by itself "auto", with its key's end date (orange within a week of it); one that could be but isn't yet "TODO auto";
+      an account synced by itself "auto", with its key's end date (orange within a week of it); Binance "auto check" -- only its balances checked every morning, set against the stored export, orange when they differ; one that could be synced but isn't yet "TODO auto";
       cash and Wise without a reminder, crypto exchanges monthly (Binance rarely), on-chain wallets (synced by themselves) dated by their last sync; closed accounts greyed out. Overdue in orange. Hover an account's name for where its statements come from.</p>
     <div id="mp_latest_sources"><div class="empty-note">Loading…</div></div>
   </div>
@@ -2100,7 +2100,7 @@ async function mpRenderLatestSources() {
       try { last = JSON.parse(binanceApi.last_sync_result || '{}'); } catch { /* not JSON */ }
       const differ = last.differences || [];
       if (!last.error && !differ.length && last.checked_at && (!a.uploaded || last.checked_at > a.uploaded)) a.uploaded = last.checked_at;
-      a.flex = { expires: null, error: last.error || '', label: 'key', perpetual: true,
+      a.flex = { expires: null, error: last.error || '', label: 'key', perpetual: true, check: true,
         warning: differ.length ? `balances differ: ${differ.join('; ')} -- upload a new export` : '' };
     }
     for (const a of acc.values()) a.record = a.day, a.day = a.uploaded && a.uploaded > a.day ? a.uploaded : a.day;
@@ -2188,8 +2188,10 @@ async function mpRenderLatestSources() {
         let update = esc(label(a.every)), expires = '';
         if (a.flex) {
           const left = a.flex.expires ? Math.round((Date.parse(a.flex.expires + 'T00:00:00Z') - today) / dayMs) : null;
-          update = a.flex.error ? `<span style="color:#ff9500" title="${esc(a.flex.error)}">auto · last sync failed</span>`
-            : a.flex.warning ? `<span style="color:#ff9500" title="${esc(a.flex.warning)}">auto · export due</span>` : 'auto';
+          // Binance's balances only checked, the history not pulled: "auto check"
+          const mode = a.flex.check ? 'auto check' : 'auto';
+          update = a.flex.error ? `<span style="color:#ff9500" title="${esc(a.flex.error)}">${mode} · last ${a.flex.check ? 'check' : 'sync'} failed</span>`
+            : a.flex.warning ? `<span style="color:#ff9500" title="${esc(a.flex.warning)}">${mode} · export due</span>` : mode;
           expires = a.flex.perpetual ? 'no end' : a.flex.expires
             ? `<span${left <= 7 ? ' style="color:#ff9500"' : ''}>${a.flex.expires}</span>` : '?';
         } else if (name in MP_TODO_AUTO && !partAuto.has(`${name}|${MP_TODO_AUTO[name]}`)) {
