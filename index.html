@@ -347,16 +347,16 @@
     <div class="section-title">Revolut, Bank of Cyprus &amp; Wise (Open Banking)</div>
     <p class="note">Through Enable Banking (enablebanking.com → Control Panel → API applications): an application
       registered there in restricted mode — only your own accounts linked to it — with its id and the private key it
-      generated (the downloaded <code>&lt;id&gt;.pem</code>, pasted whole). The key stays on the server. Then connect each
+      generated (drop the downloaded <code>&lt;id&gt;.pem</code> file below — the id is filled in from its name). The key stays on the server. Then connect each
       bank: you're sent to its consent page and back here; the consent lasts up to 180 days, renewed the same way (the end
       date shows below and in "Latest data per account", orange a week before). For now each run only looks at what the
       banks give — accounts, balances, recent transactions; the statements are still uploaded.</p>
     <div class="form-row">
       <label>Application ID <input type="text" id="mp_eb_app" size="36" autocomplete="off"></label>
-      <label>Private key (.pem) <textarea id="mp_eb_key" rows="2" cols="34" autocomplete="off" spellcheck="false"
-        placeholder="-----BEGIN PRIVATE KEY----- …"></textarea></label>
       <button class="btn primary" id="mp_eb_save">Save</button>
     </div>
+    <div id="mp_eb_drop" class="drop-zone" style="cursor:pointer">Drop the application's private key (<code>&lt;id&gt;.pem</code>) here, or click to choose it</div>
+    <input type="file" id="mp_eb_key" accept=".pem,.key,.txt" hidden>
     <div class="form-row">
       <button class="btn" id="mp_eb_connect_revolut">Connect Revolut</button>
       <button class="btn" id="mp_eb_connect_boc">Connect Bank of Cyprus</button>
@@ -6213,7 +6213,9 @@ async function mpEbLoad() {
   const app = (data || []).find(r => r.broker === 'enablebanking');
   const appEl = document.getElementById('mp_eb_app');
   appEl.value = app?.app_id || '';
-  document.getElementById('mp_eb_key').placeholder = app?.key_set ? 'saved — leave empty to keep' : '-----BEGIN PRIVATE KEY----- …';
+  if (!mpEbKeyFile) document.getElementById('mp_eb_drop').innerHTML = app?.key_set
+    ? 'Key saved — drop another <code>.pem</code> here (or click) only to replace it'
+    : 'Drop the application\'s private key (<code>&lt;id&gt;.pem</code>) here, or click to choose it';
   statusEl.style.color = '';
   if (!app) { statusEl.textContent = 'Not set up.'; return; }
   const lines = [`Application ${app.app_id || '—'}, key ${app.key_set ? 'saved' : 'not set'}.`];
@@ -6253,14 +6255,37 @@ async function mpEbCall(body) {
   return r;
 }
 
+// The key file, dropped or chosen: read in the browser, sent once with Save;
+// the application's id is the file's name (the Control Panel names it <id>.pem).
+let mpEbKeyFile = null;
+function mpEbTakeKeyFile(file) {
+  if (!file) return;
+  mpEbKeyFile = file;
+  const m = file.name.match(/^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+  if (m) document.getElementById('mp_eb_app').value = m[1];
+  document.getElementById('mp_eb_drop').textContent = `${file.name} — press Save`;
+}
+{
+  const drop = document.getElementById('mp_eb_drop'), input = document.getElementById('mp_eb_key');
+  drop.addEventListener('click', () => input.click());
+  input.addEventListener('change', () => mpEbTakeKeyFile(input.files[0]));
+  drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); mpEbTakeKeyFile(e.dataTransfer.files[0]); });
+}
+
 document.getElementById('mp_eb_save').addEventListener('click', async () => {
   const statusEl = document.getElementById('mp_eb_status');
   const appEl = document.getElementById('mp_eb_app'), keyEl = document.getElementById('mp_eb_key');
-  if (!appEl.value.trim()) { statusEl.textContent = 'Enter the application ID.'; return; }
-  // An empty key keeps the saved one (set_enablebanking_app).
-  const { error } = await sb.rpc('set_enablebanking_app', { p_app_id: appEl.value, p_key: keyEl.value });
+  if (!appEl.value.trim()) { statusEl.textContent = 'Enter the application ID (or choose the .pem file).'; return; }
+  const file = mpEbKeyFile;
+  const key = file ? await file.text() : '';
+  if (file && !/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(key)) { statusEl.textContent = "That file isn't a private key (.pem)."; return; }
+  // No file keeps the saved key (set_enablebanking_app).
+  const { error } = await sb.rpc('set_enablebanking_app', { p_app_id: appEl.value, p_key: key });
   if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
   keyEl.value = '';
+  mpEbKeyFile = null;
   statusEl.style.color = '';
   statusEl.textContent = 'Saved; checking the application with Enable Banking…';
   let problem = '', app = null;
