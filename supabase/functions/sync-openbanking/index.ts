@@ -375,6 +375,48 @@ Deno.serve(async (req) => {
           return json({ url: r.url });
         } catch (err) { return json({ error: String(err) }, 400); }
       }
+      // A look at one bank's raw transactions next to its statement's, the check
+      // window -- kept as broker_credentials 'eb:<bank>:debug' to compare by hand
+      // when the check fails.
+      if (body.action === 'debug') {
+        const bank = BANKS[body.bank];
+        if (!bank) return json({ error: `Unknown bank ${body.bank}` }, 400);
+        try {
+          const { data: sess } = await db.from('broker_credentials').select('query_id').eq('user_id', userId).eq('broker', `eb:${body.bank}`).maybeSingle();
+          if (!sess?.query_id) return json({ error: `${bank.label} isn't connected` }, 400);
+          const s = await eb(jwt, 'GET', `/sessions/${sess.query_id}`);
+          const { data: ups } = await db.from('statement_uploads').select('period_to').eq('user_id', userId).eq('account', bank.label)
+            .eq('kind', bank.kind).order('period_to', { ascending: false }).limit(1);
+          const lastEnd = ups?.[0]?.period_to ?? new Date().toISOString().slice(0, 10);
+          const from = addDays(lastEnd, -CHECK_DAYS);
+          const out = [];
+          for (const uid of s.accounts ?? []) {
+            const d = await eb(jwt, 'GET', `/accounts/${uid}/details`);
+            const ccy = String(d.currency ?? '').toUpperCase();
+            const api = [];
+            let key = '';
+            for (let page = 0; page < 50; page++) {
+              const r = await eb(jwt, 'GET', `/accounts/${uid}/transactions?date_from=${from}${key ? `&continuation_key=${encodeURIComponent(key)}` : ''}`);
+              // deno-lint-ignore no-explicit-any
+              for (const x of r.transactions ?? [] as any[]) api.push([x.booking_date, x.value_date, x.transaction_date, x.status, x.credit_debit_indicator,
+                x.transaction_amount?.amount, x.transaction_amount?.currency, String((x.remittance_information ?? []).join(' ') || x.creditor?.name || x.debtor?.name || '').slice(0, 40),
+                x.exchange_rate ? `fx ${x.exchange_rate.exchange_rate} ${x.exchange_rate.unit_currency ?? ''}` : '', x.bank_transaction_code?.code ?? '']);
+              key = r.continuation_key ?? '';
+              if (!key) break;
+            }
+            const { data: stored } = await db.from('bank_transactions').select('tx_date, booked_at, amount, description')
+              .eq('user_id', userId).eq('external_source', bank.base).eq('currency', ccy).gte('tx_date', `${from}T00:00:00Z`).order('tx_date');
+            if (!api.length && !stored?.length) continue;
+            out.push({ ccy, api, stored: (stored ?? []).map((r: { tx_date: string; booked_at: string | null; amount: number; description: string }) =>
+              [String(r.tx_date).slice(0, 10), r.booked_at ? String(r.booked_at).slice(0, 10) : null, r.amount, String(r.description ?? '').slice(0, 40)]) });
+          }
+          const kept = JSON.stringify({ window: `${from}..${lastEnd}`, accounts: out });
+          const { error } = await db.from('broker_credentials').upsert({ user_id: userId, broker: `eb:${body.bank}:debug`,
+            last_sync_at: new Date().toISOString(), last_sync_result: kept, updated_at: new Date().toISOString() }, { onConflict: 'user_id,broker' });
+          if (error) throw new Error(error.message);
+          return json({ bank: bank.label, accounts: out.length, api: out.reduce((a, x) => a + x.api.length, 0), stored: out.reduce((a, x) => a + x.stored.length, 0) });
+        } catch (err) { return json({ error: String(err) }, 400); }
+      }
       // Back from the bank: the code becomes the bank's session.
       if (body.action === 'session') {
         const bank = BANKS[body.state];

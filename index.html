@@ -365,6 +365,7 @@
       <button class="btn" id="mp_eb_connect_boc">Connect Bank of Cyprus</button>
       <button class="btn" id="mp_eb_connect_wise">Connect Wise</button>
       <button class="btn" id="mp_eb_sync">Sync now</button>
+      <button class="btn" id="mp_eb_debug" title="Keeps Revolut's raw transactions next to its statement's (the check window) for a look">Revolut details for Claude</button>
       <a class="btn" href="https://enablebanking.com/cp/applications" target="_blank" rel="noopener">Enable Banking Control Panel</a>
     </div>
     <div class="empty-note" id="mp_eb_status"></div>
@@ -6360,6 +6361,19 @@ async function mpEbReturn() {
     statusEl.textContent = `${MP_EB_BANKS[state]} not connected: ${err.message}`;
   }
 }
+
+document.getElementById('mp_eb_debug').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_eb_status');
+  statusEl.style.color = '';
+  statusEl.textContent = "Saving Revolut's raw transactions for a look…";
+  try {
+    const r = await mpEbCall({ action: 'debug', bank: 'revolut' });
+    statusEl.textContent = `Saved: ${r.accounts} accounts, ${r.api} API transactions, ${r.stored} statement rows -- tell Claude.`;
+  } catch (err) {
+    statusEl.style.color = 'var(--red, #f85149)';
+    statusEl.textContent = `Error: ${err.message}`;
+  }
+});
 
 document.getElementById('mp_eb_sync').addEventListener('click', async () => {
   const statusEl = document.getElementById('mp_eb_status');
