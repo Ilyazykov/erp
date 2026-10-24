@@ -56,6 +56,7 @@
 // leaves that metal out of later Snowball uploads.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { removeOpenBankingRows } from '../_shared/openbanking_rows.ts';
 import { orderWithinGroups } from '../_shared/day_order.ts';
 
 const METALS = new Set(['XAU', 'XAG', 'XPT', 'XPD']);
@@ -353,6 +354,9 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: upsertErr.message }),
         { status: 500, headers: corsHeaders });
     }
+    // the statement's days back from the Open Banking rows (_shared/openbanking_rows.ts)
+    const removedOpenBanking = await removeOpenBankingRows(supabase, user.id, 'Revolut',
+      rows.reduce((m, r) => ((r.booked_at ?? r.tx_date) > m ? (r.booked_at ?? r.tx_date) : m), ''));
 
     // Metal pockets -> trades (see module docstring).
     const byStarted = new Map<string, CsvRow[]>();
@@ -417,6 +421,7 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({
       imported: count ?? rows.length,
       imported_metal_trades: metalTrades.length,
+      removed_open_banking_rows: removedOpenBanking,
       metal_rows_without_price: metalWithoutPrice,
       removed_snowball_duplicates: removedSnowball,
       time_shift_hours: shift / HOUR,

@@ -24,6 +24,7 @@
 // CNY balance) is just a header -- accepted, nothing imported.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { removeOpenBankingRows } from '../_shared/openbanking_rows.ts';
 
 function parseCsvLine(line: string): string[] {
   const cells: string[] = [];
@@ -143,7 +144,9 @@ Deno.serve(async (req) => {
     if (upsertErr) return json({ error: upsertErr.message }, 500);
 
     const latest = rows.reduce((a, b) => (b.tx_date > a.tx_date ? b : a));
-    return json({ imported: count ?? rows.length, total_rows: rows.length, skipped_bad: skippedBad,
+    // the statement's days back from the Open Banking rows (_shared/openbanking_rows.ts)
+    const removedOpenBanking = await removeOpenBankingRows(supabase, user.id, 'Wise', latest.tx_date);
+    return json({ imported: count ?? rows.length, total_rows: rows.length, skipped_bad: skippedBad, removed_open_banking_rows: removedOpenBanking,
       currency: latest.currency, balance: latest.balance_after });
   } catch (err) {
     return json({ error: String(err) }, 500);

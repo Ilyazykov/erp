@@ -349,8 +349,10 @@
       registered there in restricted mode — only your own accounts linked to it — with its id and the private key it
       generated (drop the downloaded <code>&lt;id&gt;.pem</code> file below — the id is filled in from its name). The key stays on the server. Then connect each
       bank: you're sent to its consent page and back here; the consent lasts up to 180 days, renewed the same way (the end
-      date shows below and in "Latest data per account", orange a week before). For now each run only looks at what the
-      banks give — accounts, balances, recent transactions; the statements are still uploaded.</p>
+      date shows below and in "Latest data per account", orange a week before). Every morning the booked transactions after
+      each bank's latest statement are pulled in — checked first against that statement's last month and against the
+      bank's balance; nothing is replaced unless they agree. A statement uploaded later takes its period back. Revolut's
+      funds, savings, Invest and metals aren't in Open Banking — still statements.</p>
     <div class="form-row">
       <label>Application ID <input type="text" id="mp_eb_app" size="36" autocomplete="off"></label>
       <button class="btn primary" id="mp_eb_save">Save</button>
@@ -2037,7 +2039,7 @@ const MP_PART_ORDER = ['Broker', 'ЦФА (Atomyze)', 'Flexible Cash Funds', 'Cry
 const mpOpenAccounts = new Set();
 // Accounts that could sync by themselves but don't yet (TODO.md, section 17):
 // the part it would be, or '' for the whole account.
-const MP_TODO_AUTO = { 'T-Bank': 'Broker', Revolut: '', 'Bank of Cyprus': '', Wise: '', Binance: '' };
+const MP_TODO_AUTO = { 'T-Bank': 'Broker', Revolut: 'Cards & current accounts', 'Bank of Cyprus': '', Wise: '', Binance: '' };
 const todoAuto = '<span style="color:#8b949e">TODO auto</span>';
 async function mpRenderLatestSources() {
   const wrap = document.getElementById('mp_latest_sources');
@@ -2125,6 +2127,21 @@ async function mpRenderLatestSources() {
       a.flex = { expires: null, error: last.error || '', label: 'key', perpetual: true, check: true,
         warning: differ.length ? `balances differ: ${differ.join('; ')} -- upload a new export` : '' };
     }
+    // Revolut, Bank of Cyprus, Wise through Open Banking (sync-openbanking):
+    // the consent's end as the key's; Revolut on its accounts part only (its
+    // funds, savings, Invest, metals are statements)
+    const { data: ebRows } = await sb.rpc('enablebanking_status');
+    for (const [bank, name] of Object.entries(MP_EB_BANKS)) {
+      const s = (ebRows || []).find(r => r.broker === `eb:${bank}`);
+      if (!s?.session_set || !s.last_sync_at || !acc.has(name)) continue;
+      let last = {};
+      try { last = JSON.parse(s.last_sync_result || '{}'); } catch { /* not JSON */ }
+      const flex = { expires: s.valid_until, error: last.error || '', label: 'consent', to: last.period_to || '' };
+      if (bank === 'revolut') { partAuto.set('Revolut|Cards & current accounts', flex); continue; }
+      const a = acc.get(name);
+      if (!flex.error && flex.to && (!a.uploaded || flex.to > a.uploaded)) a.uploaded = flex.to;
+      a.flex = flex;
+    }
     for (const a of acc.values()) a.record = a.day, a.day = a.uploaded && a.uploaded > a.day ? a.uploaded : a.day;
     if (!acc.size) { wrap.innerHTML = '<div class="empty-note">Nothing imported yet.</div>'; return; }
     const dayMs = 86400000;
@@ -2195,7 +2212,7 @@ async function mpRenderLatestSources() {
         : MP_TODO_AUTO[name] === p.part ? todoAuto : '';
       return `<tr class="mp-part" data-acc="${esc(name)}"${mpOpenAccounts.has(name) ? '' : ' hidden'} style="color:#8b949e${closed ? ';opacity:.7' : ''}">`
         + `<td><span style="display:inline-block;width:32px"></span><span class="mp-src" data-src="${esc(what)}">${esc(p.label || p.part)}</span></td>`
-        + `<td>${update}</td><td>${auto ? 'renews' : ''}</td><td>${p.last_day}</td><td>${up || '—'}</td><td>${d}</td></tr>`;
+        + `<td>${update}</td><td>${!auto ? '' : auto.expires ? `<span${Math.round((Date.parse(auto.expires + 'T00:00:00Z') - today) / dayMs) <= 7 ? ' style="color:#ff9500"' : ''}>${auto.expires}</span>` : 'renews'}</td><td>${p.last_day}</td><td>${up || '—'}</td><td>${d}</td></tr>`;
     }).join('');
     wrap.innerHTML = `<table class="data-table"><thead><tr><th>Account</th><th>Update</th><th>Key valid until</th><th>Latest record</th><th>Statements to</th><th>Days ago</th></tr></thead><tbody>${
       rows.map(([name, a]) => {
@@ -6237,9 +6254,11 @@ async function mpEbLoad() {
 
 function mpEbSummary(r) {
   if (r.error) return `error — ${r.error}`;
-  if (!Array.isArray(r.accounts)) return `${r.accounts ?? 0} accounts`;
-  return r.accounts.map(a => `${a.currency || '?'} ${a.type || ''}${a.product ? ` ${a.product}` : ''}: ${a.transactions ?? '?'} transactions`
-    + (Array.isArray(a.balances) && a.balances.length ? `, ${a.balances[0]}` : '')).join('; ') || 'no accounts';
+  const bal = Object.entries(r.balances || {}).filter(([, b]) => b.bank || b.expected).map(([c, b]) => `${c} ${b.bank ?? b.expected}`).join(', ');
+  return `${r.written ?? 0} transactions after the statement of ${r.after_statement || '?'}`
+    + (r.pending ? ` (${r.pending} pending, not yet)` : '')
+    + (r.checked ? `; checked against the statement ${r.checked.window}: ${r.checked.matched} paired` : '')
+    + (bal ? `; balance ${bal} — agrees with the bank` : '');
 }
 
 async function mpEbCall(body) {

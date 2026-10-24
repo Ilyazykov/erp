@@ -39,6 +39,7 @@
 // legitimate same-day duplicates (e.g. two identical Wolt orders).
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { removeOpenBankingRows } from '../_shared/openbanking_rows.ts';
 import { clockFor, orderWithinGroups } from '../_shared/day_order.ts';
 
 interface BocRow {
@@ -252,9 +253,13 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: upsertErr.message }),
         { status: 500, headers: corsHeaders });
     }
+    // the statement's days back from the Open Banking rows (_shared/openbanking_rows.ts)
+    const removedOpenBanking = await removeOpenBankingRows(supabase, user.id, 'Bank of Cyprus',
+      rows.reduce((m, r) => (r.tx_date > m ? r.tx_date : m), ''));
 
     return new Response(JSON.stringify({
       imported: count ?? rows.length,
+      removed_open_banking_rows: removedOpenBanking,
       total_rows: csvRows.length,
       skipped_bad_date: skippedBadDate,
     }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
