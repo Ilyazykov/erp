@@ -464,9 +464,9 @@
     <div class="section-title">Latest data per account</div>
     <p class="note">The date of the newest real record of each bank / broker account (bank rows and broker
       trades or payouts from any of its sources; synthetic rows -- extrapolated, data gaps, snapshots -- left out),
-      to see when a fresh statement is due -- dated by the later of the newest record and the end of the latest statement uploaded for it (an account with no movements stays fresh once its statement is in): a broker monthly, a bank in active use weekly, one in little use monthly;
+      to see when a fresh statement is due -- dated by the later of the newest record and the end of the latest statement uploaded for it (an account with no movements stays fresh once its statement is in): a broker monthly, a bank in active use weekly, one in little use monthly; the Russian banks' and Revolut's parts each on their own period (a broker every 2 weeks, cards monthly, idle parts every 2 months or yearly), the account due with its most overdue part;
       an account synced by itself "auto", with its key's end date (orange within a week of it); Binance and Revolut's crypto "auto check" -- only their balances checked every morning, set against the stored export, orange when they differ; one that could be synced but isn't yet "TODO auto";
-      cash and Wise without a reminder, crypto exchanges monthly (Binance rarely), on-chain wallets (synced by themselves) dated by their last sync; closed accounts greyed out. Overdue in orange. Hover an account's name for where its statements come from.</p>
+      cash, Credo Bank and Binance yearly, crypto exchanges monthly, on-chain wallets (synced by themselves) dated by their last sync; closed accounts greyed out. Overdue in orange. Hover an account's name for where its statements come from.</p>
     <div id="mp_latest_sources"><div class="empty-note">Loading…</div></div>
   </div>
 </div>
@@ -2036,9 +2036,20 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', () => {
 // 4 real transactions per 30 days over the 90 days before its newest record --
 // else monthly.
 const MP_ACCOUNT_SCHEDULE = {
-  UniCredit: 'closed', Finuslugi: 'closed', cash: 'rarely', Wise: 'rarely', 'Credo Bank': 'rarely',
+  UniCredit: 'closed', Finuslugi: 'closed', cash: 365, Wise: 365, 'Credo Bank': 365,
   IBKR: 30, Freedom24: 30, Raiffeisen: 30, 'Ziraat Bank': 30, 'Yandex Bank': 30,
-  Bybit: 30, 'Crypto.com': 30, Telegram: 30, Binance: 'rarely',
+  Bybit: 30, 'Crypto.com': 30, Telegram: 30, Binance: 365,
+};
+// The split accounts' parts, each on its own period (days; the user's,
+// 25.10.2026); a split account is due when its most overdue part is. A part
+// synced by itself is "auto" whatever this says.
+const MP_PART_SCHEDULE = {
+  'Alfa|Broker': 14, 'Alfa|Cards & current accounts': 30, 'Alfa|Deposits & savings': 365,
+  'Sber|Broker': 14, 'Sber|Cards & current accounts': 30, 'Sber|Credit card': 365, 'Sber|Deposits & savings': 30,
+  'T-Bank|Cards & current accounts': 30, 'T-Bank|Credit card': 30, 'T-Bank|Deposits & savings': 30,
+  'Revolut|Broker': 60, 'Revolut|Flexible Cash Funds': 30, 'Revolut|Metals': 60, 'Revolut|Deposits & savings': 365,
+  'Ozon Bank|Cards & current accounts': 365, 'Ozon Bank|Credit card': 365, 'Ozon Bank|Deposits & savings': 365,
+  'Yandex Bank|Cards & current accounts': 365, 'Yandex Bank|Deposits & savings': 365,
 };
 // Where each account's statements come from (the row's tooltip). "As is":
 // the bank's own file goes straight into Upload; "to Claude": a PDF /
@@ -2199,16 +2210,6 @@ async function mpRenderLatestSources() {
     }
     const today = Date.parse(new Date().toISOString().slice(0, 10) + 'T00:00:00Z');
     const ago = a => Math.round((today - Date.parse(a.day + 'T00:00:00Z')) / dayMs);
-    // Days until the user has to act: a statement due (its period less the
-    // days since the newest record / statement end; below 0 overdue), a key's
-    // end, at once after a failed sync; none for "rarely", a key without an
-    // end, an on-chain wallet -- after the rest; closed accounts at the bottom.
-    const actIn = a => a.every === 'closed' ? 2e9
-      : a.flex ? (a.flex.error || a.flex.warning ? 0 : a.flex.expires ? Math.round((Date.parse(a.flex.expires + 'T00:00:00Z') - today) / dayMs) : 1e9)
-      : typeof a.every === 'number' ? a.every - ago(a) : 1e9;
-    const rows = [...acc].sort(([an, a], [bn, b]) => actIn(a) - actIn(b) || an.localeCompare(bn));
-    const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-    const label = e => (e === 7 ? 'weekly' : e === 30 ? 'monthly' : e);
     // the split accounts' parts, in a fixed order
     const { data: partRows } = await sb.rpc('latest_data_per_part');
     const parts = new Map();
@@ -2246,26 +2247,63 @@ async function mpRenderLatestSources() {
         if (!partUploaded.has(key) || day > partUploaded.get(key)) partUploaded.set(key, day);
       }
     }
+    // each part: its newest record / statement end, its period, its days left
+    const daysAgo = day => Math.round((today - Date.parse(day + 'T00:00:00Z')) / dayMs);
+    // a synced one's: its key's end less today, 0 after a failed run, none for a key without an end
+    const keyLeft = f => f.error || f.warning ? 0 : f.expires ? Math.round((Date.parse(f.expires + 'T00:00:00Z') - today) / dayMs) : null;
+    for (const [name, ps] of parts) for (const p of ps) {
+      p.auto = partAuto.get(`${name}|${p.part}`);
+      p.up = partUploaded.get(`${name}|${p.part}`) || '';
+      if (p.auto && !p.auto.error && p.auto.to > p.up) p.up = p.auto.to;
+      p.day = p.up > p.last_day ? p.up : p.last_day;
+      p.every = p.auto ? 'auto' : MP_PART_SCHEDULE[`${name}|${p.part}`] ?? acc.get(name)?.every;
+      p.left = p.auto ? keyLeft(p.auto) : typeof p.every === 'number' ? p.every - daysAgo(p.day) : null;
+    }
+    // a split account: labelled by its most frequent part
+    for (const [name, ps] of parts) {
+      const a = acc.get(name);
+      if (!a || a.every === 'closed' || ps.length < 2) continue;
+      const periods = ps.map(p => p.every).filter(x => typeof x === 'number');
+      if (periods.length && !a.flex) a.every = Math.min(...periods);
+    }
+    // "Days to check" of each account -- the days until the user has to act:
+    // a statement due (its period less the days since its newest record /
+    // statement end; below 0 overdue), a key's end, 0 after a failed run; a
+    // split account the least of its parts' and its own; none for a key
+    // without an end, an on-chain wallet, a closed account.
+    for (const [name, a] of acc) {
+      const ps = (parts.get(name) || []).length > 1 ? parts.get(name) : [];
+      const own = a.flex ? keyLeft(a.flex) : ps.length ? null : typeof a.every === 'number' ? a.every - ago(a) : null;
+      const all = [own, ...ps.map(p => p.left)].filter(x => x !== null && x !== undefined);
+      a.toCheck = a.every === 'closed' || !all.length ? null : Math.min(...all);
+    }
+    // sorted by it; without one after the rest, closed accounts at the bottom
+    const actIn = a => a.every === 'closed' ? 2e9 : a.toCheck ?? 1e9;
+    const rows = [...acc].sort(([an, a], [bn, b]) => actIn(a) - actIn(b) || an.localeCompare(bn));
+    const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const label = e => ({ 7: 'weekly', 14: 'every 2 weeks', 30: 'monthly', 60: 'every 2 months', 365: 'yearly' }[e] ?? (typeof e === 'number' ? `every ${e} days` : e));
+    // the "Days to check" cell: orange when overdue, or a key within a week of its end
+    const toCheckCell = (n, key) => n === null || n === undefined ? '<td></td>'
+      : `<td${n < 0 || (key && n <= 7) ? ' style="color:#ff9500"' : ''}>${n}</td>`;
     const partRowsHtml = (name, closed) => (parts.get(name) || []).map(p => {
-      const auto = partAuto.get(`${name}|${p.part}`);
-      let up = partUploaded.get(`${name}|${p.part}`) || '';
-      if (auto && !auto.error && auto.to > up) up = auto.to;
-      const day = up > p.last_day ? up : p.last_day;
-      const d = Math.round((today - Date.parse(day + 'T00:00:00Z')) / dayMs);
+      const auto = p.auto, up = p.up;
+      const d = daysAgo(p.day);
       const contracts = (p.contracts || []).filter(Boolean);
       const what = `${p.row_count} records${contracts.length ? ` · ${contracts.length === 1 ? 'contract' : 'contracts'} ${contracts.join(', ')}` : ''}`;
       const mode = auto?.check ? 'auto check' : 'auto';
       const update = auto ? (auto.error ? `<span style="color:#ff9500" title="${esc(auto.error)}">${mode} · last ${auto.check ? 'check' : 'sync'} failed</span>`
         : auto.warning ? `<span style="color:#ff9500" title="${esc(auto.warning)}">${mode} · statement due</span>` : mode)
-        : MP_TODO_AUTO[name] === p.part ? todoAuto : '';
-      return `<tr class="mp-part" data-acc="${esc(name)}"${mpOpenAccounts.has(name) ? '' : ' hidden'} style="color:#8b949e${closed ? ';opacity:.7' : ''}">`
+        : esc(label(p.every)) + (MP_TODO_AUTO[name] === p.part ? ` · ${todoAuto}` : '');
+      const late = !closed && p.left !== null && p.left < 0 && !auto;
+      return `<tr class="mp-part" data-acc="${esc(name)}"${mpOpenAccounts.has(name) ? '' : ' hidden'} style="color:${late ? '#ff9500' : '#8b949e'}${closed ? ';opacity:.7' : ''}">`
         + `<td><span style="display:inline-block;width:32px"></span><span class="mp-src" data-src="${esc(what)}">${esc(p.label || p.part)}</span></td>`
-        + `<td>${update}</td><td>${!auto ? '' : auto.perpetual ? 'no end' : auto.expires ? `<span${Math.round((Date.parse(auto.expires + 'T00:00:00Z') - today) / dayMs) <= 7 ? ' style="color:#ff9500"' : ''}>${auto.expires}</span>` : 'renews'}</td><td>${p.last_day}</td><td>${up || '—'}</td><td>${d}</td></tr>`;
+        + `<td>${update}</td><td>${!auto ? '' : auto.perpetual ? 'no end' : auto.expires ? `<span${Math.round((Date.parse(auto.expires + 'T00:00:00Z') - today) / dayMs) <= 7 ? ' style="color:#ff9500"' : ''}>${auto.expires}</span>` : 'renews'}</td><td>${p.last_day}</td><td>${up || '—'}</td><td>${d}</td>${closed ? '<td></td>' : toCheckCell(p.left, !!auto)}</tr>`;
     }).join('');
-    wrap.innerHTML = `<table class="data-table"><thead><tr><th>Account</th><th>Update</th><th>Key valid until</th><th>Latest record</th><th>Statements to</th><th>Days ago</th></tr></thead><tbody>${
+    wrap.innerHTML = `<table class="data-table"><thead><tr><th>Account</th><th>Update</th><th>Key valid until</th><th>Latest record</th><th>Statements to</th><th>Days ago</th><th>Days to check</th></tr></thead><tbody>${
       rows.map(([name, a]) => {
         const d = ago(a);
-        const style = a.every === 'closed' ? ' style="color:#6a7381"' : typeof a.every === 'number' && d > a.every ? ' style="color:#ff9500"' : '';
+        const late = a.toCheck !== null && a.toCheck < 0;
+        const style = a.every === 'closed' ? ' style="color:#6a7381"' : late ? ' style="color:#ff9500"' : '';
         // where the statements come from: a popup drawn by the page on hover
         // (the browser's own title tooltip didn't show)
         const src = MP_ACCOUNT_SOURCE[name];
@@ -2289,7 +2327,7 @@ async function mpRenderLatestSources() {
         // (the others keep its place empty, so every name starts in one line)
         const toggle = split ? `<span class="mp-toggle" data-acc="${esc(name)}" style="cursor:pointer;display:inline-block;width:16px;user-select:none">${mpOpenAccounts.has(name) ? '▾' : '▸'}</span>`
           : '<span style="display:inline-block;width:16px"></span>';
-        return `<tr${style}><td>${toggle}${src ? `<span class="mp-src" data-src="${esc(src)}">${esc(name)}</span>` : esc(name)}</td><td>${update}</td><td>${expires}</td><td>${a.record}</td><td>${a.uploaded || '—'}</td><td>${d}</td></tr>`
+        return `<tr${style}><td>${toggle}${src ? `<span class="mp-src" data-src="${esc(src)}">${esc(name)}</span>` : esc(name)}</td><td>${update}</td><td>${expires}</td><td>${a.record}</td><td>${a.uploaded || '—'}</td><td>${d}</td>${toCheckCell(a.toCheck, !!a.flex)}</tr>`
           + (split ? partRowsHtml(name, a.every === 'closed') : '');
       }).join('')}</tbody></table>`;
     for (const t of wrap.querySelectorAll('.mp-toggle')) {
