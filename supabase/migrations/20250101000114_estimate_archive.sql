@@ -5,8 +5,9 @@
 -- rebuild writes again (same key) leaves it again, so what stays is only what
 -- a statement covered, or what dropped out (a cancelled dividend).
 -- Estimated rows: trades.estimated, wallet_transactions.estimated, and the
--- money the estimates put on brokerage accounts, bank_transactions
--- 'estimate_broker:<contract>' / 'openbanking_revolut_invest'. Older than
+-- money the estimates put on or take off accounts, bank_transactions
+-- 'estimate_<what>:<where>' (brokerage cash, bank charges) and
+-- 'openbanking_revolut_invest'. Older than
 -- 90 days is dropped every night.
 
 create table if not exists public.estimate_archive (
@@ -81,11 +82,11 @@ create trigger wallet_unarchive_estimate after insert on public.wallet_transacti
 
 drop trigger if exists bank_archive_estimate on public.bank_transactions;
 create trigger bank_archive_estimate after delete on public.bank_transactions
-  for each row when (old.external_source like 'estimate_broker:%' or old.external_source = 'openbanking_revolut_invest')
+  for each row when (left(old.external_source, 9) = 'estimate_' or old.external_source = 'openbanking_revolut_invest')
   execute function public.archive_estimate();
 drop trigger if exists bank_unarchive_estimate on public.bank_transactions;
 create trigger bank_unarchive_estimate after insert on public.bank_transactions
-  for each row when (new.external_source like 'estimate_broker:%' or new.external_source = 'openbanking_revolut_invest')
+  for each row when (left(new.external_source, 9) = 'estimate_' or new.external_source = 'openbanking_revolut_invest')
   execute function public.unarchive_estimate();
 
 select cron.unschedule(jobid) from cron.job where jobname = 'estimate-archive-purge';

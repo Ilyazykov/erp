@@ -23,8 +23,12 @@
 //     imply -- every day when the bank pays daily (Ozon, Yandex), else monthly
 //     on the payment's day of the month (or the one set) -- trades
 //     'estimate_deposit';
-//   - Telegram Wallet's daily earn rewards (GRAM): the recent average every
-//     day -- wallet_transactions estimated = true.
+//   - Telegram Wallet's daily earn rewards (GRAM, XAUT -- whichever the
+//     latest export still shows paid daily): the recent average every day --
+//     wallet_transactions estimated = true;
+//   - banks' regular charges set in recurring_charges (migration ...115, e.g.
+//     Raiffeisen's package fee and insurance): on their day each month --
+//     bank_transactions 'estimate_fee:<account>'.
 
 import { recomputeExchange, type ExchangeWallet } from './exchange_balances.ts';
 import { money, tinvest } from './tinvest.ts';
@@ -36,7 +40,7 @@ export const TELEGRAM_RULES = {
   savingsTicker: 'SAVINGS:Telegram USD',
   unknownKinds: new Set(['trade_out_unknown']),
 };
-export const ESTIMATE_SOURCE = { bond: 'estimate_bond', dividend: 'estimate_dividend', deposit: 'estimate_deposit', brokerCash: 'estimate_broker:' };
+export const ESTIMATE_SOURCE = { bond: 'estimate_bond', dividend: 'estimate_dividend', deposit: 'estimate_deposit', brokerCash: 'estimate_broker:', fee: 'estimate_fee:' };
 
 const DAY = 86_400_000;
 const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00Z`) + n * DAY).toISOString().slice(0, 10);
@@ -46,7 +50,7 @@ const yearDays = (day: string) => { const y = Number(day.slice(0, 4)); return (y
 const monthEnd = (day: string) => new Date(Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)), 0)).toISOString().slice(0, 10);
 
 type Trade = { account: string; ticker: string; side: string; quantity: number; price: number; trade_date: string; currency: string; note: string | null; external_id: string | null };
-type Cash = { account: string; contract: string; currency: string; day: string; amount: number; desc: string };
+type Cash = { account: string; contract: string; currency: string; day: string; amount: number; desc: string; source?: string; product?: string | null };
 
 // deno-lint-ignore no-explicit-any
 async function statementEnd(db: any, userId: string, account: string, kinds: string[]): Promise<string> {
@@ -292,6 +296,32 @@ async function depositEstimates(db: any, userId: string, until: string) {
 }
 
 // deno-lint-ignore no-explicit-any
+async function feeEstimates(db: any, userId: string, until: string) {
+  const cash: Cash[] = [];
+  const { data: charges, error } = await db.from('recurring_charges')
+    .select('account, currency, amount, day_of_month, description, valid_from, valid_to').eq('user_id', userId);
+  if (error) throw new Error(error.message);
+  for (const account of new Set((charges ?? []).map((c: { account: string }) => c.account))) {
+    // after the account's latest statement, whatever its kind
+    const { data: ups, error: uErr } = await db.from('statement_uploads').select('period_to').eq('user_id', userId)
+      .eq('account', account).order('period_to', { ascending: false }).limit(1);
+    if (uErr) throw new Error(uErr.message);
+    const end: string = ups?.[0]?.period_to ?? '';
+    if (!end || end >= until) continue;
+    for (const c of (charges ?? []).filter((x: { account: string }) => x.account === account)) {
+      for (let m = `${end.slice(0, 7)}-01`; m <= until; m = addDays(monthEnd(m), 1)) {
+        const last = monthEnd(m);
+        const day = c.day_of_month ? `${m.slice(0, 8)}${String(Math.min(c.day_of_month, Number(last.slice(8, 10)))).padStart(2, '0')}` : last;
+        if (day <= end || day > until || day < c.valid_from || (c.valid_to && day > c.valid_to)) continue;
+        cash.push({ account, contract: '', currency: c.currency, day, amount: -Number(c.amount), desc: `ESTIMATED: ${c.description}`,
+          source: `${ESTIMATE_SOURCE.fee}${account}`, product: null });
+      }
+    }
+  }
+  return cash;
+}
+
+// deno-lint-ignore no-explicit-any
 async function telegramEstimates(db: any, userId: string, until: string) {
   const { data: wallets, error } = await db.from('crypto_wallets').select('id, user_id, account, chain').eq('user_id', userId).eq('chain', 'telegram');
   if (error) throw new Error(error.message);
@@ -334,11 +364,14 @@ export async function rebuildEstimates(db: any, userId: string, until = addDays(
   const bonds = await bondEstimates(db, userId, until);
   const dividends = await dividendEstimates(db, userId, until);
   const deposits = await depositEstimates(db, userId, until);
+  const fees = await feeEstimates(db, userId, until);
 
   const { error: tDel } = await db.from('trades').delete().eq('user_id', userId).in('external_source', [ESTIMATE_SOURCE.bond, ESTIMATE_SOURCE.dividend, ESTIMATE_SOURCE.deposit]);
   if (tDel) throw new Error(tDel.message);
-  const { error: cDel } = await db.from('bank_transactions').delete().eq('user_id', userId).like('external_source', `${ESTIMATE_SOURCE.brokerCash}%`);
-  if (cDel) throw new Error(cDel.message);
+  for (const prefix of [ESTIMATE_SOURCE.brokerCash, ESTIMATE_SOURCE.fee]) {
+    const { error: cDel } = await db.from('bank_transactions').delete().eq('user_id', userId).like('external_source', `${prefix}%`);
+    if (cDel) throw new Error(cDel.message);
+  }
 
   const trades = [
     ...bonds.trades.map(t => ({ ...t, external_source: ESTIMATE_SOURCE.bond })),
@@ -350,16 +383,18 @@ export async function rebuildEstimates(db: any, userId: string, until = addDays(
     if (error) throw new Error(error.message);
   }
 
-  // the coupons' / dividends' money on each brokerage account, a running balance per currency from 0
+  // the coupons' / dividends' money on each brokerage account and the banks'
+  // charges, a running balance per source and currency from 0
   const bal: Record<string, number> = {};
-  const cash = [...bonds.cash, ...dividends.cash].sort((p, q) => p.day.localeCompare(q.day)).map((c, i) => {
-    const src = `${ESTIMATE_SOURCE.brokerCash}${c.contract}`;
+  const cash = [...bonds.cash, ...dividends.cash, ...fees].sort((p, q) => p.day.localeCompare(q.day)).map((c, i) => {
+    const src = c.source ?? `${ESTIMATE_SOURCE.brokerCash}${c.contract}`;
     const k = `${src}|${c.currency}`;
     bal[k] = round2((bal[k] ?? 0) + c.amount);
     const at = new Date(Date.parse(`${c.day}T12:00:00Z`) + i).toISOString();
     return { user_id: userId, account: c.account, tx_date: at, booked_at: at, description: c.desc, counterparty: null,
       amount: c.amount, currency: c.currency, category: null, balance_after: bal[k], synthetic: false, synthetic_kind: null,
-      product: 'brokerage_cash', note: 'ESTIMATED: by the MOEX schedule / the declared dividend, until the broker report',
+      product: c.source ? (c.product ?? null) : 'brokerage_cash',
+      note: c.source ? 'ESTIMATED: a regular charge (recurring_charges), until the statement' : 'ESTIMATED: by the MOEX schedule / the declared dividend, until the broker report',
       external_source: src, external_id: `est:${c.day}:${c.currency}:${c.amount}:${c.desc}` };
   });
   if (cash.length) {
@@ -369,7 +404,7 @@ export async function rebuildEstimates(db: any, userId: string, until = addDays(
 
   const telegram = await telegramEstimates(db, userId, until);
   return {
-    until, bond_payments: bonds.cash.length, dividends: dividends.cash.length, deposit_interest: deposits.trades.length, telegram_rewards: telegram,
+    until, bond_payments: bonds.cash.length, dividends: dividends.cash.length, deposit_interest: deposits.trades.length, charges: fees.length, telegram_rewards: telegram,
     ...(bonds.skipped.length || dividends.skipped.length || deposits.skipped.length
       ? { skipped: [...bonds.skipped, ...dividends.skipped, ...deposits.skipped] } : {}),
   };
