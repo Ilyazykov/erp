@@ -6383,6 +6383,7 @@ document.getElementById('mp_eb_sync').addEventListener('click', async () => {
   try {
     await mpEbCall({});
     await mpEbLoad();
+    mpRenderLatestSources();
   } catch (err) {
     statusEl.style.color = 'var(--red, #f85149)';
     statusEl.textContent = `Error: ${err.message}`;

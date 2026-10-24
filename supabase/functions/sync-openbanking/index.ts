@@ -452,6 +452,7 @@ Deno.serve(async (req) => {
       let jwt = '';
       try { jwt = await jwtOf(app.app_id, app.private_key); } catch { /* reported per session below */ }
       for (const s of sessions ?? []) {
+        if (!BANKS[s.broker.slice(3)]) continue;   // e.g. 'eb:revolut:debug'
         let result: Record<string, unknown>;
         try {
           if (!jwt) throw new Error("The application's key doesn't load");
