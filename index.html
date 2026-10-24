@@ -464,7 +464,7 @@
     <div class="section-title">Latest data per account</div>
     <p class="note">The date of the newest real record of each bank / broker account (bank rows and broker
       trades or payouts from any of its sources; synthetic rows -- extrapolated, data gaps, snapshots -- left out),
-      to see when a fresh statement is due -- dated by the later of the newest record and the end of the latest statement uploaded for it (an account with no movements stays fresh once its statement is in): a broker monthly, a bank in active use weekly, one in little use monthly; the Russian banks' and Revolut's parts each on their own period (a broker every 2 weeks, cards monthly, idle parts every 2 months or yearly), the account due with its most overdue part;
+      to see when a fresh statement is due -- dated by the later of the newest record and the end of the latest statement uploaded for it (an account with no movements stays fresh once its statement is in): a broker monthly, a bank in active use weekly, one in little use monthly; the Russian banks' and Revolut's parts each on a period set by how active the part has been (over 40 records a month — a broker over 20 — every 2 weeks, 2+ monthly, any in half a year every 2 months, none yearly), the account due with its most overdue part;
       an account synced by itself "auto", with its key's end date (orange within a week of it); Binance and Revolut's crypto "auto check" -- only their balances checked every morning, set against the stored export, orange when they differ; one that could be synced but isn't yet "TODO auto";
       cash, Credo Bank and Binance yearly, crypto exchanges monthly, on-chain wallets (synced by themselves) dated by their last sync; closed accounts greyed out. Overdue in orange. Hover an account's name for where its statements come from.</p>
     <div id="mp_latest_sources"><div class="empty-note">Loading…</div></div>
@@ -2040,16 +2040,15 @@ const MP_ACCOUNT_SCHEDULE = {
   IBKR: 30, Freedom24: 30, Raiffeisen: 30, 'Ziraat Bank': 30, 'Yandex Bank': 30,
   Bybit: 30, 'Crypto.com': 30, Telegram: 30, Binance: 365,
 };
-// The split accounts' parts, each on its own period (days; the user's,
-// 25.10.2026); a split account is due when its most overdue part is. A part
-// synced by itself is "auto" whatever this says.
-const MP_PART_SCHEDULE = {
-  'Alfa|Broker': 14, 'Alfa|Cards & current accounts': 30, 'Alfa|Deposits & savings': 365,
-  'Sber|Broker': 14, 'Sber|Cards & current accounts': 30, 'Sber|Credit card': 365, 'Sber|Deposits & savings': 30,
-  'T-Bank|Cards & current accounts': 30, 'T-Bank|Credit card': 30, 'T-Bank|Deposits & savings': 30,
-  'Revolut|Broker': 60, 'Revolut|Flexible Cash Funds': 30, 'Revolut|Metals': 60, 'Revolut|Deposits & savings': 365,
-  'Ozon Bank|Cards & current accounts': 365, 'Ozon Bank|Credit card': 365, 'Ozon Bank|Deposits & savings': 365,
-  'Yandex Bank|Cards & current accounts': 365, 'Yandex Bank|Deposits & savings': 365,
+// The split accounts' parts, each on a period set by how active it is (its
+// real records over the last 90 / 180 days, income that comes by itself --
+// dividends, coupons, interest -- left out; latest_data_per_part): over 40 a
+// month (a broker: 20) every 2 weeks, 2+ a month monthly, any in half a year
+// every 2 months, none yearly. A part synced by itself is "auto" whatever its
+// activity.
+const mpPartPeriod = p => {
+  const perMonth = (p.rows_90d || 0) / 3;
+  return perMonth > (p.part === 'Broker' ? 20 : 40) ? 14 : perMonth >= 2 ? 30 : (p.rows_180d || 0) > 0 ? 60 : 365;
 };
 // Where each account's statements come from (the row's tooltip). "As is":
 // the bank's own file goes straight into Upload; "to Claude": a PDF /
@@ -2256,7 +2255,7 @@ async function mpRenderLatestSources() {
       p.up = partUploaded.get(`${name}|${p.part}`) || '';
       if (p.auto && !p.auto.error && p.auto.to > p.up) p.up = p.auto.to;
       p.day = p.up > p.last_day ? p.up : p.last_day;
-      p.every = p.auto ? 'auto' : MP_PART_SCHEDULE[`${name}|${p.part}`] ?? acc.get(name)?.every;
+      p.every = p.auto ? 'auto' : mpPartPeriod(p);
       p.left = p.auto ? keyLeft(p.auto) : typeof p.every === 'number' ? p.every - daysAgo(p.day) : null;
     }
     // a split account: labelled by its most frequent part
@@ -2289,7 +2288,7 @@ async function mpRenderLatestSources() {
       const auto = p.auto, up = p.up;
       const d = daysAgo(p.day);
       const contracts = (p.contracts || []).filter(Boolean);
-      const what = `${p.row_count} records${contracts.length ? ` · ${contracts.length === 1 ? 'contract' : 'contracts'} ${contracts.join(', ')}` : ''}`;
+      const what = `${p.row_count} records (${p.rows_90d || 0} in the last 90 days, ${p.rows_180d || 0} in 180 -- the period follows from them)${contracts.length ? ` · ${contracts.length === 1 ? 'contract' : 'contracts'} ${contracts.join(', ')}` : ''}`;
       const mode = auto?.check ? 'auto check' : 'auto';
       const update = auto ? (auto.error ? `<span style="color:#ff9500" title="${esc(auto.error)}">${mode} · last ${auto.check ? 'check' : 'sync'} failed</span>`
         : auto.warning ? `<span style="color:#ff9500" title="${esc(auto.warning)}">${mode} · statement due</span>` : mode)
