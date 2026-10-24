@@ -9,8 +9,8 @@
 // trade is refused, nothing is pulled.
 //
 // T-Bank's certificate chains to the Russian Trusted Root CA, which isn't in
-// the usual trust stores: it's trusted by the one HTTP client made here for
-// the API (_shared/russian_root_ca.ts), nowhere else.
+// the usual trust stores: it's trusted by the one HTTP client made for the
+// API (_shared/tinvest.ts, _shared/russian_root_ca.ts), nowhere else.
 //
 // The API takes the place of the rows taken from the app's screenshots
 // (_shared/app_rows.ts): for each open account (= agreement) the days after
@@ -48,11 +48,10 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { fromCron, notFromCron } from '../_shared/cron_auth.ts';
 import { removeCoveredSnowball } from '../_shared/statement_priority.ts';
 import { removeAppRows, reportPeriods } from '../_shared/app_rows.ts';
-import { RUSSIAN_TRUSTED_ROOT_CA } from '../_shared/russian_root_ca.ts';
+import { money, tinvest } from '../_shared/tinvest.ts';
 
 const ACCOUNT = 'T-Bank';
 const SOURCE = 'tbank_api';
-const API = 'https://invest-public-api.tbank.ru/rest/tinkoff.public.invest.api.contract.v1.';
 const CHECK_DAYS = 31;
 const ISIN = /^[A-Z]{2}[A-Z0-9]{9}\d$/;
 // The daily job's slots: 24 runs, 10 minutes apart, from 04:00 UTC.
@@ -65,24 +64,6 @@ function slotOf(userId: string): number {
 // T-Invest's answers that mean the token itself is no good -- not retried the same day.
 const KEY_REFUSED = /T-Invest (16|40003)\b|not read-only/;
 
-let client: Deno.HttpClient | null = null;
-// deno-lint-ignore no-explicit-any
-async function tinvest(token: string, method: string, body: Record<string, unknown>): Promise<any> {
-  client ??= Deno.createHttpClient({ caCerts: [RUSSIAN_TRUSTED_ROOT_CA] });
-  const res = await fetch(API + method, {
-    method: 'POST', client,
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  } as RequestInit);
-  const text = await res.text();
-  let out;
-  try { out = JSON.parse(text); } catch { throw new Error(`T-Invest ${method}: HTTP ${res.status} ${text.slice(0, 200)}`); }
-  if (!res.ok) throw new Error(`T-Invest ${out?.code ?? res.status} ${out?.message ?? ''} ${out?.description ?? ''} (${method})`.trim());
-  return out;
-}
-
-// deno-lint-ignore no-explicit-any
-const money = (m: any) => m ? Number(m.units ?? 0) + Number(m.nano ?? 0) / 1e9 : 0;
 const round = (x: number, d = 8) => Math.round(x * 10 ** d) / 10 ** d;
 // The API's UTC -> Moscow wall-clock labelled UTC, as the reports' times are kept.
 const msk = (iso: string) => new Date(Date.parse(iso) + 3 * 3600000).toISOString();

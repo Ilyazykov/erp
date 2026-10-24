@@ -51,6 +51,7 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { dec, STABLECOINS, recomputeExchange, type ExchangeWallet } from '../_shared/exchange_balances.ts';
+import { TELEGRAM_RULES } from '../_shared/estimates.ts';
 
 const ACCOUNT = 'Telegram';
 const ADDRESS = 'Telegram Wallet';
@@ -66,12 +67,7 @@ function kindOf(section: string, title: string, hasEarnHistory: boolean): string
   if (/^Gift/.test(title)) return 'reward';
   return 'other';
 }
-const RULES = {
-  internalKinds: new Set(['earn_internal']),
-  earnKinds: new Set<string>(),
-  savingsTicker: 'SAVINGS:Telegram USD',
-  unknownKinds: new Set(['trade_out_unknown']),
-};
+const RULES = TELEGRAM_RULES;
 const recompute = (db: any, w: ExchangeWallet) => recomputeExchange(db, w, RULES);
 
 // Fixed-point sum for the running main-wallet balance ('trade_out' amounts).

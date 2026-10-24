@@ -111,10 +111,15 @@ export async function rebuildCryptoComEstimates(db: any, wallet: Wallet, until =
   if (del) throw new Error(del.message);
   const actual = await allRows(db, wallet.id);
   const estimate = [...btcRows(actual, until), ...dposRows(actual, until)];
-  const rows = estimate.map((r, i) => ({
-    wallet_id: wallet.id, user_id: wallet.user_id, chain: 'cryptocom', contract: '', decimals: null, counterparty: null,
-    tx_hash: `estimated:cryptocom:${r.symbol}:${r.tx_time}:${i}`, seq: 0, estimated: true, ...r,
-  }));
+  // keyed by content, not position: the same row keeps its key from run to run
+  // (estimate_archive, migration ...114)
+  const seen = new Map<string, number>();
+  const rows = estimate.map(r => {
+    const key = `estimated:cryptocom:${r.symbol}:${r.kind}:${r.tx_time}:${r.amount}`;
+    const n = seen.get(key) ?? 0; seen.set(key, n + 1);
+    return { wallet_id: wallet.id, user_id: wallet.user_id, chain: 'cryptocom', contract: '', decimals: null, counterparty: null,
+      tx_hash: n ? `${key}:${n}` : key, seq: 0, estimated: true, ...r };
+  });
   for (let i = 0; i < rows.length; i += 500) {
     const { error } = await db.from('wallet_transactions').insert(rows.slice(i, i + 500));
     if (error) throw new Error(error.message);

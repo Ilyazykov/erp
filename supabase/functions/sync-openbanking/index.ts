@@ -191,6 +191,9 @@ async function revolutStandIns(db: any, userId: string, write: Tx[]): Promise<{ 
   // Invest statement's last row (investEnd above): the money doesn't drop out of the capital
   // until that statement shows what it bought.
   const investBal: Record<string, number> = {};
+  // keyed by content, so the same row keeps its key from run to run (estimate_archive, migration ...114)
+  const investSeen = new Map<string, number>();
+  const dupKey = (k: string) => { const n = investSeen.get(k) ?? 0; investSeen.set(k, n + 1); return n ? `${k}:dup${n}` : k; };
   const invest = moves.filter(x => /^(To|From) investment account/i.test(x.desc) && x.day > investEnd)
     .sort((p, q) => p.day.localeCompare(q.day)).map((x, i) => {
       const amount = -x.amount;   // the account's -X is the brokerage's +X
@@ -201,7 +204,7 @@ async function revolutStandIns(db: any, userId: string, write: Tx[]): Promise<{ 
         description: `ESTIMATED: ${amount > 0 ? 'CASH TOP-UP' : 'CASH WITHDRAWAL'} (${x.desc})`, counterparty: null,
         amount, currency: x.currency, category: null, balance_after: investBal[x.currency], synthetic: false, synthetic_kind: null,
         note: 'ESTIMATED: from the current account\'s Open Banking transfer, until the Invest statement comes',
-        external_source: OPENBANKING_INVEST_SOURCE, external_id: `revolut:${x.ref || `${x.day}:${x.currency}:${x.amount}`}:${i}`,
+        external_source: OPENBANKING_INVEST_SOURCE, external_id: dupKey(`revolut:${x.ref || `${x.day}:${x.currency}:${x.amount}`}`),
       };
     });
   const { error: iDel } = await db.from('bank_transactions').delete().eq('user_id', userId).eq('external_source', OPENBANKING_INVEST_SOURCE);

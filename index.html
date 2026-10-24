@@ -2423,6 +2423,22 @@ async function mpImportOneFile(file, statusEl, session) {
     }
     mpImportedSinceRefresh = true;
     mpLogUpload(kind, file.name, csvText, result);
+    // Everything worked out on top of statements is rebuilt on the new one:
+    // the estimated income (sync-estimates), and the source's own sync --
+    // its API rows and stand-ins start again after the statement. In the
+    // background; the daily runs catch up if one fails.
+    const mpAfterUpload = {
+      revolut_account: 'sync-openbanking', revolut_fund: 'sync-openbanking', revolut_deposit: 'sync-openbanking',
+      revolut_invest: 'sync-openbanking', boc_account: 'sync-openbanking', wise: 'sync-openbanking',
+      tbank_broker_xlsx: 'sync-tbank', atomyze_xlsx: 'sync-tbank', freedom24_xlsx: 'sync-freedom24', freedom24_json: 'sync-freedom24',
+      bybit_log: 'sync-bybit', ibkr: 'sync-ibkr',
+    };
+    for (const fnName of ['sync-estimates', mpAfterUpload[kind]].filter(Boolean))
+      fetch(`${SUPABASE_URL}/functions/v1/${fnName}`, {
+        method: 'POST', body: '{}',
+        headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json',
+          ...(fnName === 'sync-bybit' ? { 'x-region': 'eu-west-1' } : {}) },
+      }).catch(() => { /* the daily run catches up */ });
 
     if (kind === 'snowball') {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} rows, removed `
