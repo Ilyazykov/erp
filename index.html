@@ -94,6 +94,7 @@
   <div class="tab" data-tab="layer2r">Yield per Stock &amp; Rebalancing</div>
   <div class="tab" data-tab="usstocks">US Stocks Z-score</div>
   <div class="tab" data-tab="userp">US ERP</div>
+  <div class="tab" data-tab="automation">Automation</div>
 </div>
 
 <div id="sigmoid" class="chart-wrap"><div id="plot_sigmoid_amp" style="height:480px"></div>
@@ -261,146 +262,8 @@
     <div id="mp_any_csv_drop" class="drop-zone">…or drop any number of files here — they're queued and imported one by one</div>
     <div class="empty-note" id="mp_any_csv_status"></div>
 
-    <div class="section-title">IBKR automatic sync</div>
-    <p class="note">Instead of uploading the Activity Statement: an Activity Flex Query (Performance &amp; Reports → Flex Queries;
-      sections Trades, Cash Transactions, Cash Report; XML; Last 365 Calendar Days) and the Flex Web Service token
-      (Flex Web Service Configuration), with its Activation Period pasted as IBKR shows it (or just the date it ends — a
-      year at most). Pulled every morning; each run replaces IBKR's rows of the statement's period. The token is read-only on IBKR's
-      side and stays on the server — once saved, this page can't show it again. Leave the token empty to keep the one saved.</p>
-    <div class="form-row">
-      <label>Query ID <input type="text" id="mp_ibkr_query_id" inputmode="numeric" autocomplete="off"></label>
-      <label>Token <input type="password" id="mp_ibkr_token" autocomplete="off"></label>
-      <label title="Paste the token's Activation Period as IBKR shows it (2026-10-22, 20:18:28 EDT — 2027-09-23, 20:18:28 EDT) -- or just its end date">Activation Period / valid until
-        <input type="text" id="mp_ibkr_token_expires" size="34" placeholder="2026-10-22, 20:18:28 EDT — 2027-09-23, 20:18:28 EDT" autocomplete="off"></label>
-      <button class="btn primary" id="mp_ibkr_save">Save</button>
-      <button class="btn" id="mp_ibkr_sync">Sync now</button>
-      <a class="btn" href="https://www.interactivebrokers.com/AccountManagement/AmAuthentication?action=FlexQueries" target="_blank" rel="noopener"
-        title="Client Portal -> Flex Queries: Flex Web Service Configuration (the gear) -> Generate New Token, 1 Year, no IP">Get a new token at IBKR</a>
-    </div>
-    <div class="empty-note" id="mp_ibkr_status"></div>
-
-    <div class="section-title">Bybit automatic sync</div>
-    <p class="note">Instead of uploading the Data Export logs: a Bybit API key (API Management → Create New Key →
-      System-generated, API Transaction, <b>Read-Only</b>, no IP). Pulled every morning, the last 30 days; each run replaces
-      Bybit's rows of those days. A key that can trade or withdraw is refused. The secret stays on the server — once saved,
-      this page can't show it again; leave it empty to keep the one saved. The key's end date comes from Bybit by itself.</p>
-    <div class="form-row">
-      <label>API key <input type="text" id="mp_bybit_key" autocomplete="off"></label>
-      <label>API secret <input type="password" id="mp_bybit_secret" autocomplete="off"></label>
-      <button class="btn primary" id="mp_bybit_save">Save</button>
-      <button class="btn" id="mp_bybit_sync">Sync now</button>
-      <a class="btn" href="https://www.bybit.com/app/user/api-management" target="_blank" rel="noopener"
-        title="Create New Key -> System-generated API Keys -> API Transaction, Read-Only, no IP restriction">Get a key at Bybit</a>
-    </div>
-    <div class="empty-note" id="mp_bybit_status"></div>
-
-    <div class="section-title">Freedom24 automatic sync</div>
-    <p class="note">Instead of uploading the cash-movement table: a Tradernet API key pair (freedom24.com → Tradernet API →
-      API key → Generate a new key pair). Freedom24 has no read-only keys — a pair can place orders (not withdraw); this
-      site only reads the cash movements with it. Pulled every morning, the whole history; each run replaces Freedom24's
-      rows (the shares credited as gifts still come from the broker report JSON, uploaded by hand). The private key stays
-      on the server — once saved, this page can't show it again; leave it empty to keep the one saved.</p>
-    <div class="form-row">
-      <label>Public key <input type="text" id="mp_f24_public" autocomplete="off"></label>
-      <label>Private key <input type="password" id="mp_f24_private" autocomplete="off"></label>
-      <button class="btn primary" id="mp_f24_save">Save</button>
-      <button class="btn" id="mp_f24_sync">Sync now</button>
-      <a class="btn" href="https://freedom24.com/tradernet-api/auth-api" target="_blank" rel="noopener"
-        title="Tradernet API -> API key -> Generate a new key pair">Get keys at Freedom24</a>
-    </div>
-    <div class="empty-note" id="mp_f24_status"></div>
-
-    <div class="section-title">T-Bank broker automatic sync</div>
-    <p class="note">Instead of uploading the weekly broker report: a T-Invest API token (T-Investments → settings →
-      T-Invest API tokens → <b>read-only</b>, all accounts). A token that can trade is refused. Pulled every morning: the days
-      after each agreement's latest report, checked first against the month before that report's end — nothing is
-      replaced unless the API agrees with it (ЦФА: against the Atomyze report). A report uploaded later takes its
-      period back. Cards, credit card and deposits aren't in the API — still statements. The token stays on the server; it lives three months from
-      its last use, which the daily sync keeps renewing. T-Bank's certificate chains to the Russian Trusted Root CA,
-      trusted only for this connection.</p>
-    <div class="form-row">
-      <label>Token <input type="password" id="mp_tbank_token" autocomplete="off"></label>
-      <button class="btn primary" id="mp_tbank_save">Save</button>
-      <button class="btn" id="mp_tbank_sync">Sync now</button>
-      <a class="btn" href="https://www.tbank.ru/invest/settings/api/" target="_blank" rel="noopener"
-        title="T-Invest API tokens -> Create token -> read-only, all accounts">Get a token at T-Bank</a>
-    </div>
-    <div class="empty-note" id="mp_tbank_status"></div>
-
-    <div class="section-title">Binance automatic check</div>
-    <p class="note">Binance's history still comes from its export (Upload); this checks it every morning: a read-only API
-      key (API Management → Create API → System generated, only <b>Enable Reading</b>, no IP) lets the server read the coins
-      on the account — Spot, Funding, Simple Earn — and set them against the balances stored from the export. If they
-      differ, the account was used since the last export: the row in "Latest data per account" turns orange — upload a new
-      export. A key that can trade, withdraw or transfer is refused. The secret stays on the server; leave it empty to keep
-      the one saved.</p>
-    <div class="form-row">
-      <label>API key <input type="text" id="mp_binance_key" autocomplete="off"></label>
-      <label>Secret key <input type="password" id="mp_binance_secret" autocomplete="off"></label>
-      <button class="btn primary" id="mp_binance_save">Save</button>
-      <button class="btn" id="mp_binance_sync">Check now</button>
-      <a class="btn" href="https://www.binance.com/en/my/settings/api-management" target="_blank" rel="noopener"
-        title="Create API -> System generated -> only Enable Reading, unrestricted IP">Get a key at Binance</a>
-    </div>
-    <div class="empty-note" id="mp_binance_status"></div>
-
-    <div class="section-title">Revolut crypto automatic check</div>
-    <p class="note">Revolut's crypto history still comes from its crypto statement (Upload); this checks it every morning:
-      Revolut shows one crypto balance in the app and on Revolut X, and a read-only Revolut X API key lets the server read
-      it and set it against the coins stored from the statement. If they differ, crypto was bought, sold or received since:
-      the Crypto row of Revolut in "Latest data per account" turns orange — upload a new crypto statement. The key: press
-      <b>Make a key pair</b>, copy the public key, and in the Revolut X web app (Profile → API keys → create, <b>read-only</b>,
-      no IP) paste it; paste the API key it gives here and Save. The private key goes to the server with Save and stays
-      there — it isn't shown again; a new pair replaces it.</p>
-    <div class="form-row">
-      <button class="btn" id="mp_revx_pair">Make a key pair</button>
-      <label>API key <input type="text" id="mp_revx_key" autocomplete="off"></label>
-      <button class="btn primary" id="mp_revx_save">Save</button>
-      <button class="btn" id="mp_revx_sync">Check now</button>
-      <a class="btn" href="https://exchange.revolut.com/" target="_blank" rel="noopener"
-        title="Profile -> API keys -> create a read-only key with the public key below">Open Revolut X</a>
-    </div>
-    <textarea id="mp_revx_public" readonly rows="3" style="display:none;width:100%;font-family:monospace;font-size:12px"></textarea>
-    <div class="empty-note" id="mp_revx_status"></div>
-
-    <div class="section-title">Wise API token (kept for later)</div>
-    <p class="note">Wise is synced through Open Banking below: Wise no longer lets personal accounts sign the strong
-      customer authentication its statements need, so its own API can't read them. A read-only personal token (Wise →
-      Settings → API tokens) can still be kept here, in case Wise opens statements again — nothing runs with it. It stays
-      on the server; leave the field empty to keep the one saved.</p>
-    <div class="form-row">
-      <label>API token <input type="password" id="mp_wise_token" autocomplete="off"></label>
-      <button class="btn primary" id="mp_wise_save">Save</button>
-    </div>
-    <div class="empty-note" id="mp_wise_status"></div>
-
-    <div class="section-title">Revolut, Bank of Cyprus &amp; Wise (Open Banking)</div>
-    <p class="note">Through Enable Banking (enablebanking.com → Control Panel → API applications): an application
-      registered there in restricted mode — only your own accounts linked to it — with its id and the private key it
-      generated (drop the downloaded <code>&lt;id&gt;.pem</code> file below — the id is filled in from its name). The key stays on the server. Then connect each
-      bank: you're sent to its consent page and back here; the consent lasts up to 180 days, renewed the same way (the end
-      date shows below and in "Latest data per account", orange a week before). Every morning the transactions after
-      each bank's latest statement are pulled in (pending ones too, marked PENDING and rewritten each morning until
-      booked) — checked first against that statement's last month and against the bank's balance; nothing is replaced
-      unless they agree. A statement uploaded later takes its period back. Revolut's
-      funds, savings, Invest and metals aren't in Open Banking — still statements; until they come, the account's transfers to
-      the funds / savings / Invest account, its gold purchases (at the day's market price) and the funds' daily return and
-      fee are estimated (marked ESTIMATED) and replaced by the statement.</p>
-    <div class="form-row">
-      <label>Application ID <input type="text" id="mp_eb_app" size="36" autocomplete="off"></label>
-      <button class="btn primary" id="mp_eb_save">Save</button>
-    </div>
-    <div id="mp_eb_drop" class="drop-zone" style="cursor:pointer">Drop the application's private key (<code>&lt;id&gt;.pem</code>) here, or click to choose it</div>
-    <input type="file" id="mp_eb_key" accept=".pem,.key,.txt" hidden>
-    <div class="form-row">
-      <button class="btn" id="mp_eb_connect_revolut">Connect Revolut</button>
-      <button class="btn" id="mp_eb_connect_boc">Connect Bank of Cyprus</button>
-      <button class="btn" id="mp_eb_connect_wise">Connect Wise</button>
-      <button class="btn" id="mp_eb_sync">Sync now</button>
-      <button class="btn" id="mp_eb_debug" title="Keeps Revolut's raw transactions next to its statement's (the check window) for a look">Revolut details for Claude</button>
-      <a class="btn" href="https://enablebanking.com/cp/applications" target="_blank" rel="noopener">Enable Banking Control Panel</a>
-    </div>
-    <div class="empty-note" id="mp_eb_status"></div>
+    <p class="note">Automatic syncs and checks (IBKR, Bybit, Freedom24, T-Bank, Binance, Revolut X, Open Banking) —
+      their keys and status — are on the <a href="#" onclick="showTab('automation');return false">Automation</a> tab.</p>
 
     <div class="section-title">Export Revolut fund trades to Snowball</div>
     <p class="note">Generates a Snowball-importable CSV from the trades already stored here for the
@@ -667,6 +530,155 @@
   <span class="loading">Loading current allocation…</span>
 </p>
 <div id="us_alloc_target_table_wrap"></div>
+</div>
+
+<!-- The accounts that sync or are checked by themselves: their keys, tokens
+     and last runs (moved here from My Portfolio, where only the uploads stay). -->
+<div id="automation" class="chart-wrap">
+  <div id="auto_signed_out" class="empty-note">Sign in with Google (top of page) to set up the automatic syncs.</div>
+  <div id="auto_signed_in" style="display:none">
+    <div class="section-title">IBKR automatic sync</div>
+    <p class="note">Instead of uploading the Activity Statement: an Activity Flex Query (Performance &amp; Reports → Flex Queries;
+      sections Trades, Cash Transactions, Cash Report; XML; Last 365 Calendar Days) and the Flex Web Service token
+      (Flex Web Service Configuration), with its Activation Period pasted as IBKR shows it (or just the date it ends — a
+      year at most). Pulled every morning; each run replaces IBKR's rows of the statement's period. The token is read-only on IBKR's
+      side and stays on the server — once saved, this page can't show it again. Leave the token empty to keep the one saved.</p>
+    <div class="form-row">
+      <label>Query ID <input type="text" id="mp_ibkr_query_id" inputmode="numeric" autocomplete="off"></label>
+      <label>Token <input type="password" id="mp_ibkr_token" autocomplete="off"></label>
+      <label title="Paste the token's Activation Period as IBKR shows it (2026-10-22, 20:18:28 EDT — 2027-09-23, 20:18:28 EDT) -- or just its end date">Activation Period / valid until
+        <input type="text" id="mp_ibkr_token_expires" size="34" placeholder="2026-10-22, 20:18:28 EDT — 2027-09-23, 20:18:28 EDT" autocomplete="off"></label>
+      <button class="btn primary" id="mp_ibkr_save">Save</button>
+      <button class="btn" id="mp_ibkr_sync">Sync now</button>
+      <a class="btn" href="https://www.interactivebrokers.com/AccountManagement/AmAuthentication?action=FlexQueries" target="_blank" rel="noopener"
+        title="Client Portal -> Flex Queries: Flex Web Service Configuration (the gear) -> Generate New Token, 1 Year, no IP">Get a new token at IBKR</a>
+    </div>
+    <div class="empty-note" id="mp_ibkr_status"></div>
+
+    <div class="section-title">Bybit automatic sync</div>
+    <p class="note">Instead of uploading the Data Export logs: a Bybit API key (API Management → Create New Key →
+      System-generated, API Transaction, <b>Read-Only</b>, no IP). Pulled every morning, the last 30 days; each run replaces
+      Bybit's rows of those days. A key that can trade or withdraw is refused. The secret stays on the server — once saved,
+      this page can't show it again; leave it empty to keep the one saved. The key's end date comes from Bybit by itself.</p>
+    <div class="form-row">
+      <label>API key <input type="text" id="mp_bybit_key" autocomplete="off"></label>
+      <label>API secret <input type="password" id="mp_bybit_secret" autocomplete="off"></label>
+      <button class="btn primary" id="mp_bybit_save">Save</button>
+      <button class="btn" id="mp_bybit_sync">Sync now</button>
+      <a class="btn" href="https://www.bybit.com/app/user/api-management" target="_blank" rel="noopener"
+        title="Create New Key -> System-generated API Keys -> API Transaction, Read-Only, no IP restriction">Get a key at Bybit</a>
+    </div>
+    <div class="empty-note" id="mp_bybit_status"></div>
+
+    <div class="section-title">Freedom24 automatic sync</div>
+    <p class="note">Instead of uploading the cash-movement table: a Tradernet API key pair (freedom24.com → Tradernet API →
+      API key → Generate a new key pair). Freedom24 has no read-only keys — a pair can place orders (not withdraw); this
+      site only reads the cash movements with it. Pulled every morning, the whole history; each run replaces Freedom24's
+      rows (the shares credited as gifts still come from the broker report JSON, uploaded by hand). The private key stays
+      on the server — once saved, this page can't show it again; leave it empty to keep the one saved.</p>
+    <div class="form-row">
+      <label>Public key <input type="text" id="mp_f24_public" autocomplete="off"></label>
+      <label>Private key <input type="password" id="mp_f24_private" autocomplete="off"></label>
+      <button class="btn primary" id="mp_f24_save">Save</button>
+      <button class="btn" id="mp_f24_sync">Sync now</button>
+      <a class="btn" href="https://freedom24.com/tradernet-api/auth-api" target="_blank" rel="noopener"
+        title="Tradernet API -> API key -> Generate a new key pair">Get keys at Freedom24</a>
+    </div>
+    <div class="empty-note" id="mp_f24_status"></div>
+
+    <div class="section-title">T-Bank broker automatic sync</div>
+    <p class="note">Instead of uploading the weekly broker report: a T-Invest API token (T-Investments → settings →
+      T-Invest API tokens → <b>read-only</b>, all accounts). A token that can trade is refused. Pulled every morning: the days
+      after each agreement's latest report, checked first against the month before that report's end — nothing is
+      replaced unless the API agrees with it (ЦФА: against the Atomyze report). A report uploaded later takes its
+      period back. Cards, credit card and deposits aren't in the API — still statements. The token stays on the server; it lives three months from
+      its last use, which the daily sync keeps renewing. T-Bank's certificate chains to the Russian Trusted Root CA,
+      trusted only for this connection.</p>
+    <div class="form-row">
+      <label>Token <input type="password" id="mp_tbank_token" autocomplete="off"></label>
+      <button class="btn primary" id="mp_tbank_save">Save</button>
+      <button class="btn" id="mp_tbank_sync">Sync now</button>
+      <a class="btn" href="https://www.tbank.ru/invest/settings/api/" target="_blank" rel="noopener"
+        title="T-Invest API tokens -> Create token -> read-only, all accounts">Get a token at T-Bank</a>
+    </div>
+    <div class="empty-note" id="mp_tbank_status"></div>
+
+    <div class="section-title">Binance automatic check</div>
+    <p class="note">Binance's history still comes from its export (Upload); this checks it every morning: a read-only API
+      key (API Management → Create API → System generated, only <b>Enable Reading</b>, no IP) lets the server read the coins
+      on the account — Spot, Funding, Simple Earn — and set them against the balances stored from the export. If they
+      differ, the account was used since the last export: the row in "Latest data per account" turns orange — upload a new
+      export. A key that can trade, withdraw or transfer is refused. The secret stays on the server; leave it empty to keep
+      the one saved.</p>
+    <div class="form-row">
+      <label>API key <input type="text" id="mp_binance_key" autocomplete="off"></label>
+      <label>Secret key <input type="password" id="mp_binance_secret" autocomplete="off"></label>
+      <button class="btn primary" id="mp_binance_save">Save</button>
+      <button class="btn" id="mp_binance_sync">Check now</button>
+      <a class="btn" href="https://www.binance.com/en/my/settings/api-management" target="_blank" rel="noopener"
+        title="Create API -> System generated -> only Enable Reading, unrestricted IP">Get a key at Binance</a>
+    </div>
+    <div class="empty-note" id="mp_binance_status"></div>
+
+    <div class="section-title">Revolut crypto automatic check</div>
+    <p class="note">Revolut's crypto history still comes from its crypto statement (Upload); this checks it every morning:
+      Revolut shows one crypto balance in the app and on Revolut X, and a read-only Revolut X API key lets the server read
+      it and set it against the coins stored from the statement. If they differ, crypto was bought, sold or received since:
+      the Crypto row of Revolut in "Latest data per account" turns orange — upload a new crypto statement. The key: press
+      <b>Make a key pair</b>, copy the public key, and in the Revolut X web app (Profile → API keys → create, <b>read-only</b>,
+      no IP) paste it; paste the API key it gives here and Save. The private key goes to the server with Save and stays
+      there — it isn't shown again; a new pair replaces it.</p>
+    <div class="form-row">
+      <button class="btn" id="mp_revx_pair">Make a key pair</button>
+      <label>API key <input type="text" id="mp_revx_key" autocomplete="off"></label>
+      <button class="btn primary" id="mp_revx_save">Save</button>
+      <button class="btn" id="mp_revx_sync">Check now</button>
+      <a class="btn" href="https://exchange.revolut.com/" target="_blank" rel="noopener"
+        title="Profile -> API keys -> create a read-only key with the public key below">Open Revolut X</a>
+    </div>
+    <textarea id="mp_revx_public" readonly rows="3" style="display:none;width:100%;font-family:monospace;font-size:12px"></textarea>
+    <div class="empty-note" id="mp_revx_status"></div>
+
+    <div class="section-title">Wise API token (kept for later)</div>
+    <p class="note">Wise is synced through Open Banking below: Wise no longer lets personal accounts sign the strong
+      customer authentication its statements need, so its own API can't read them. A read-only personal token (Wise →
+      Settings → API tokens) can still be kept here, in case Wise opens statements again — nothing runs with it. It stays
+      on the server; leave the field empty to keep the one saved.</p>
+    <div class="form-row">
+      <label>API token <input type="password" id="mp_wise_token" autocomplete="off"></label>
+      <button class="btn primary" id="mp_wise_save">Save</button>
+    </div>
+    <div class="empty-note" id="mp_wise_status"></div>
+
+    <div class="section-title">Revolut, Bank of Cyprus &amp; Wise (Open Banking)</div>
+    <p class="note">Through Enable Banking (enablebanking.com → Control Panel → API applications): an application
+      registered there in restricted mode — only your own accounts linked to it — with its id and the private key it
+      generated (drop the downloaded <code>&lt;id&gt;.pem</code> file below — the id is filled in from its name). The key stays on the server. Then connect each
+      bank: you're sent to its consent page and back here; the consent lasts up to 180 days, renewed the same way (the end
+      date shows below and in "Latest data per account", orange a week before). Every morning the transactions after
+      each bank's latest statement are pulled in (pending ones too, marked PENDING and rewritten each morning until
+      booked) — checked first against that statement's last month and against the bank's balance; nothing is replaced
+      unless they agree. A statement uploaded later takes its period back. Revolut's
+      funds, savings, Invest and metals aren't in Open Banking — still statements; until they come, the account's transfers to
+      the funds / savings / Invest account, its gold purchases (at the day's market price) and the funds' daily return and
+      fee are estimated (marked ESTIMATED) and replaced by the statement.</p>
+    <div class="form-row">
+      <label>Application ID <input type="text" id="mp_eb_app" size="36" autocomplete="off"></label>
+      <button class="btn primary" id="mp_eb_save">Save</button>
+    </div>
+    <div id="mp_eb_drop" class="drop-zone" style="cursor:pointer">Drop the application's private key (<code>&lt;id&gt;.pem</code>) here, or click to choose it</div>
+    <input type="file" id="mp_eb_key" accept=".pem,.key,.txt" hidden>
+    <div class="form-row">
+      <button class="btn" id="mp_eb_connect_revolut">Connect Revolut</button>
+      <button class="btn" id="mp_eb_connect_boc">Connect Bank of Cyprus</button>
+      <button class="btn" id="mp_eb_connect_wise">Connect Wise</button>
+      <button class="btn" id="mp_eb_sync">Sync now</button>
+      <button class="btn" id="mp_eb_debug" title="Keeps Revolut's raw transactions next to its statement's (the check window) for a look">Revolut details for Claude</button>
+      <a class="btn" href="https://enablebanking.com/cp/applications" target="_blank" rel="noopener">Enable Banking Control Panel</a>
+    </div>
+    <div class="empty-note" id="mp_eb_status"></div>
+
+  </div>
 </div>
 
 <script>
@@ -6446,6 +6458,7 @@ async function mpEbReturn() {
   const state = p.get('state');
   if (!state || !(state in MP_EB_BANKS)) return;
   history.replaceState(null, '', window.location.pathname + window.location.hash);
+  showTab('automation');   // where the Open Banking block lives
   const statusEl = document.getElementById('mp_eb_status');
   if (p.get('error')) {
     statusEl.style.color = 'var(--red, #f85149)';
@@ -6858,6 +6871,8 @@ function mpUpdateAuthUi(session) {
     btn.textContent = `Sign out (${session.user.email})`;
     document.getElementById('mp_signed_out').style.display = 'none';
     document.getElementById('mp_signed_in').style.display = '';
+    document.getElementById('auto_signed_out').style.display = 'none';
+    document.getElementById('auto_signed_in').style.display = '';
     document.getElementById('crypto_signed_out').style.display = 'none';
     document.getElementById('crypto_signed_in').style.display = '';
     document.getElementById('lookthrough_signed_out').style.display = 'none';
@@ -6894,6 +6909,8 @@ function mpUpdateAuthUi(session) {
     btn.textContent = 'Sign in with Google';
     document.getElementById('mp_signed_out').style.display = '';
     document.getElementById('mp_signed_in').style.display = 'none';
+    document.getElementById('auto_signed_out').style.display = '';
+    document.getElementById('auto_signed_in').style.display = 'none';
     document.getElementById('crypto_signed_out').style.display = '';
     document.getElementById('crypto_signed_in').style.display = 'none';
     document.getElementById('lookthrough_signed_out').style.display = '';
