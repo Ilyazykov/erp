@@ -363,21 +363,14 @@
     <textarea id="mp_revx_public" readonly rows="3" style="display:none;width:100%;font-family:monospace;font-size:12px"></textarea>
     <div class="empty-note" id="mp_revx_status"></div>
 
-    <div class="section-title">Wise automatic sync</div>
-    <p class="note">Wise through its own API — ahead of Open Banking for Wise (with it set up, Enable Banking leaves Wise
-      alone). Every morning the transactions after the latest Wise statement are pulled in, checked first against that
-      statement's last month (by Wise's own ids) and against Wise's balance; nothing is replaced unless they agree. A Wise
-      statement uploaded later takes its period back. Set up: in Wise → Settings → <b>API tokens</b> add a <b>read-only</b>
-      personal token and paste it here; press <b>Make a key pair</b> and upload the downloaded <code>wise_public.pem</code>
-      in Wise → API tokens → <b>Manage public keys</b> (Wise's statements ask for it in the EEA); then Save. The token and
-      the private key go to the server with Save and stay there.</p>
+    <div class="section-title">Wise API token (kept for later)</div>
+    <p class="note">Wise is synced through Open Banking below: Wise no longer lets personal accounts sign the strong
+      customer authentication its statements need, so its own API can't read them. A read-only personal token (Wise →
+      Settings → API tokens) can still be kept here, in case Wise opens statements again — nothing runs with it. It stays
+      on the server; leave the field empty to keep the one saved.</p>
     <div class="form-row">
       <label>API token <input type="password" id="mp_wise_token" autocomplete="off"></label>
-      <button class="btn" id="mp_wise_pair">Make a key pair</button>
       <button class="btn primary" id="mp_wise_save">Save</button>
-      <button class="btn" id="mp_wise_sync">Sync now</button>
-      <a class="btn" href="https://wise.com/settings/api-tokens" target="_blank" rel="noopener"
-        title="Add a read-only token; Manage public keys: upload wise_public.pem">Open Wise API tokens</a>
     </div>
     <div class="empty-note" id="mp_wise_status"></div>
 
@@ -2183,21 +2176,8 @@ async function mpRenderLatestSources() {
     // Revolut, Bank of Cyprus, Wise through Open Banking (sync-openbanking):
     // the consent's end as the key's; Revolut on its accounts part only (its
     // funds, savings, Invest, metals are statements)
-    // Wise through its own API (sync-wise) ahead of Enable Banking: its token
-    // doesn't end; dated by its last good run
-    const { data: wst } = await sb.rpc('wise_api_status');
-    const wiseApi = (wst || [])[0];
-    if (wiseApi?.token_set && acc.has('Wise')) {
-      let last = {};
-      try { last = JSON.parse(wiseApi.last_sync_result || '{}'); } catch { /* not JSON */ }
-      const a = acc.get('Wise');
-      const to = last.error ? '' : last.period_to || '';
-      if (to && (!a.uploaded || to > a.uploaded)) a.uploaded = to;
-      a.flex = { expires: null, error: last.error || '', label: 'token', perpetual: true, to };
-    }
     const { data: ebRows } = await sb.rpc('enablebanking_status');
     for (const [bank, name] of Object.entries(MP_EB_BANKS)) {
-      if (bank === 'wise' && wiseApi?.token_set) continue;   // superseded by Wise's own API
       const s = (ebRows || []).find(r => r.broker === `eb:${bank}`);
       if (!s?.session_set || !s.last_sync_at || !acc.has(name)) continue;
       let last = {};
@@ -2493,7 +2473,7 @@ async function mpImportOneFile(file, statusEl, session) {
     // background; the daily runs catch up if one fails.
     const mpAfterUpload = {
       revolut_account: 'sync-openbanking', revolut_fund: 'sync-openbanking', revolut_deposit: 'sync-openbanking',
-      revolut_invest: 'sync-openbanking', boc_account: 'sync-openbanking', wise: 'sync-wise',
+      revolut_invest: 'sync-openbanking', boc_account: 'sync-openbanking', wise: 'sync-openbanking',
       tbank_broker_xlsx: 'sync-tbank', atomyze_xlsx: 'sync-tbank', freedom24_xlsx: 'sync-freedom24', freedom24_json: 'sync-freedom24',
       bybit_log: 'sync-bybit', ibkr: 'sync-ibkr',
     };
@@ -6338,7 +6318,6 @@ async function mpEbLoad() {
 
 function mpEbSummary(r) {
   if (r.error) return `error — ${r.error}`;
-  if (r.superseded) return `left to ${r.superseded} (Wise automatic sync above)`;
   const bal = Object.entries(r.balances || {}).filter(([, b]) => b.bank || b.expected).map(([c, b]) => `${c} ${b.bank ?? b.expected}`).join(', ');
   return `${r.written ?? 0} transactions after the statement of ${r.after_statement || '?'}`
     + (r.pending ? ` (${r.pending} of them pending)` : '')
@@ -6662,12 +6641,7 @@ document.getElementById('mp_revx_sync').addEventListener('click', async () => {
   }
 });
 
-// ---- Wise automatic sync (supabase/functions/sync-wise) ----
-// The token by its last characters, the key only as "saved" (wise_api_status,
-// migration ...120). The RSA pair for Wise's SCA is made here: the public key
-// downloaded as a .pem to upload in Wise, the private key sent once with Save.
-let mpWisePrivatePem = '';
-
+// ---- Wise API token, kept for later (set_wise_api / wise_api_status, migrations ...120, ...121) ----
 async function mpWiseApiLoad() {
   const statusEl = document.getElementById('mp_wise_status');
   const { data, error } = await sb.rpc('wise_api_status');
@@ -6676,94 +6650,16 @@ async function mpWiseApiLoad() {
   const tokenEl = document.getElementById('mp_wise_token');
   tokenEl.value = '';
   tokenEl.placeholder = s?.token_set ? `saved …${s.token_tail} — leave empty to keep` : 'not set';
-  statusEl.style.color = '';
-  if (!s) { statusEl.textContent = 'Not set up.'; return; }
-  let last = 'never synced';
-  if (s.last_sync_at) {
-    let r = {};
-    try { r = JSON.parse(s.last_sync_result || '{}'); } catch { /* not JSON */ }
-    last = `last synced ${new Date(s.last_sync_at).toLocaleString()}: ` + mpWiseSummary(r);
-    if (r.error) statusEl.style.color = 'var(--red, #f85149)';
-  }
-  statusEl.textContent = `Token ${s.token_set ? `…${s.token_tail}` : 'not set'}, SCA key ${s.key_set ? 'saved' : 'not set'} (no end date); ${last}.`;
+  statusEl.textContent = s?.token_set ? `Token …${s.token_tail} saved (not used).` : 'No token saved.';
 }
-
-function mpWiseSummary(r) {
-  if (r.error) return `error — ${r.error}`;
-  const bal = Object.entries(r.balances || {}).map(([c, b]) => `${c} ${b.wise ?? b.expected ?? ''}`).join(', ');
-  if (r.profile) return `the token and the key work (${Object.keys(r.balances || {}).join(', ') || 'no balances'})`;
-  return `${r.written ?? 0} transactions after the statement of ${r.after_statement || '?'}`
-    + (r.checked ? `; checked against the statement ${r.checked.window}: ${r.checked.matched} paired` : '')
-    + (bal ? `; balance ${bal} — agrees with Wise` : '');
-}
-
-async function mpWiseCall(body) {
-  const { data: { session } } = await sb.auth.getSession();
-  if (!session) throw new Error('Sign in first.');
-  const res = await fetch(`${SUPABASE_URL}/functions/v1/sync-wise`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const r = await res.json();
-  if (!res.ok) throw new Error(r.error || res.statusText);
-  return r;
-}
-
-document.getElementById('mp_wise_pair').addEventListener('click', async () => {
-  const statusEl = document.getElementById('mp_wise_status');
-  try {
-    const pair = await crypto.subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
-      true, ['sign', 'verify']);
-    mpWisePrivatePem = mpPem('PRIVATE KEY', await crypto.subtle.exportKey('pkcs8', pair.privateKey));
-    const pub = mpPem('PUBLIC KEY', await crypto.subtle.exportKey('spki', pair.publicKey));
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([pub + '\n'], { type: 'application/x-pem-file' }));
-    a.download = 'wise_public.pem';
-    a.click();
-    statusEl.style.color = '';
-    statusEl.textContent = 'Key pair made; wise_public.pem downloaded. Upload it in Wise → API tokens → Manage public keys, '
-      + 'paste the token above (if not saved yet) and press Save — before leaving the page (the private key lives only in it until then).';
-  } catch (err) {
-    statusEl.style.color = 'var(--red, #f85149)';
-    statusEl.textContent = `Couldn't make the key pair: ${err.message}`;
-  }
-});
 
 document.getElementById('mp_wise_save').addEventListener('click', async () => {
   const statusEl = document.getElementById('mp_wise_status');
   const tokenEl = document.getElementById('mp_wise_token');
-  if (!tokenEl.value.trim() && !tokenEl.placeholder.startsWith('saved')) { statusEl.textContent = 'Enter the API token.'; return; }
-  // An empty token or key keeps the saved one (set_wise_api).
-  const { error } = await sb.rpc('set_wise_api', { p_token: tokenEl.value, p_private_key: mpWisePrivatePem });
+  if (!tokenEl.value.trim()) { statusEl.textContent = 'Enter the API token.'; return; }
+  const { error } = await sb.rpc('set_wise_api', { p_token: tokenEl.value, p_private_key: '' });
   if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
-  mpWisePrivatePem = '';
-  statusEl.style.color = '';
-  statusEl.textContent = 'Saved; checking the token and the key with Wise…';
-  let problem = '', r = {};
-  try { r = await mpWiseCall({ check: true }); } catch (err) { problem = err.message; }
   await mpWiseApiLoad();
-  if (problem) {
-    statusEl.style.color = 'var(--red, #f85149)';
-    statusEl.textContent = `Saved, but Wise refuses: ${problem}`;
-  } else {
-    statusEl.textContent += ` Wise answers: ${mpWiseSummary(r)}.`;
-  }
-  mpRenderLatestSources();
-});
-
-document.getElementById('mp_wise_sync').addEventListener('click', async () => {
-  const statusEl = document.getElementById('mp_wise_status');
-  statusEl.style.color = '';
-  statusEl.textContent = 'Pulling the Wise statement…';
-  try {
-    await mpWiseCall({});
-    await mpWiseApiLoad();
-    mpRenderLatestSources();
-  } catch (err) {
-    statusEl.style.color = 'var(--red, #f85149)';
-    statusEl.textContent = `Error: ${err.message}`;
-  }
 });
 
 // ---- T-Bank broker automatic sync (supabase/functions/sync-tbank) ----
