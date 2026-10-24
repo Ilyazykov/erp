@@ -25,6 +25,10 @@ export const OPENBANKING_TRADE_SOURCE = { fund: 'openbanking_revolut_fund', savi
 // top of the Invest statement's) until the Invest statement comes.
 export const OPENBANKING_INVEST_SOURCE = 'openbanking_revolut_invest';
 
+// Wise's own API (sync-wise), which takes precedence over Enable Banking for
+// Wise: its rows after the latest Wise statement, as Enable Banking's are.
+export const WISE_API_SOURCE = 'wise_api';
+
 // deno-lint-ignore no-explicit-any
 export async function removeOpenBankingTrades(db: any, userId: string, source: string, periodEnd: string): Promise<number> {
   if (!periodEnd) return 0;

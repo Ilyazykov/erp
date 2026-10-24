@@ -48,6 +48,7 @@ jobs:
           supabase functions deploy sync-tbank --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
           supabase functions deploy sync-binance --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
           supabase functions deploy sync-revolutx --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+          supabase functions deploy sync-wise --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
           supabase functions deploy sync-openbanking --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
           supabase functions deploy update-real-estate-index --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
           supabase functions deploy update-fund-holdings --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt

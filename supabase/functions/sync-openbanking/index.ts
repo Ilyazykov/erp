@@ -530,6 +530,16 @@ Deno.serve(async (req) => {
       try { jwt = await jwtOf(app.app_id, app.private_key); } catch { /* reported per session below */ }
       for (const s of sessions ?? []) {
         if (!BANKS[s.broker.slice(3)]) continue;   // e.g. 'eb:revolut:debug'
+        // Wise's own API (sync-wise) takes precedence: Enable Banking leaves Wise alone
+        if (s.broker === 'eb:wise') {
+          const { data: own } = await db.rpc('wise_api_credentials').eq('user_id', app.user_id);
+          if (own?.length) {
+            results.push({ bank: 'wise', superseded: 'Wise API' });
+            await db.from('broker_credentials').update({ last_sync_at: new Date().toISOString(),
+              last_sync_result: JSON.stringify({ superseded: 'Wise API (sync-wise)' }) }).eq('user_id', app.user_id).eq('broker', s.broker);
+            continue;
+          }
+        }
         let result: Record<string, unknown>;
         try {
           if (!jwt) throw new Error("The application's key doesn't load");
