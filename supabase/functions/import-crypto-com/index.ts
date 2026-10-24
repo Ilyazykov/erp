@@ -33,6 +33,7 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { dec, recomputeExchange, type ExchangeWallet } from '../_shared/exchange_balances.ts';
+import { CRYPTOCOM_RULES, rebuildCryptoComEstimates } from '../_shared/cryptocom_estimates.ts';
 
 const ACCOUNT = 'Crypto.com';
 const ADDRESS = 'Crypto.com App';
@@ -47,12 +48,7 @@ function kindOf(k: string): string {
   if (/reward|bonus|cashback/.test(k)) return 'reward';
   return 'other';
 }
-const RULES = {
-  internalKinds: new Set(['earn_internal', 'staking_internal']),
-  earnKinds: new Set(['earn_internal']),
-  savingsTicker: 'SAVINGS:Crypto.com USD',
-};
-const recompute = (db: any, w: ExchangeWallet) => recomputeExchange(db, w, RULES);
+const recompute = (db: any, w: ExchangeWallet) => recomputeExchange(db, w, CRYPTOCOM_RULES);
 
 function parseCsvLine(line: string): string[] {
   const cells: string[] = [];
@@ -164,8 +160,13 @@ Deno.serve(async (req) => {
       if (error) throw new Error(error.message);
     }
 
+    // The export is the source of truth. Rebuild (rather than append to) its
+    // short-lived projections, so actual rewards replace their estimates.
+    const estimated = await rebuildCryptoComEstimates(supabase, wallet as ExchangeWallet);
     const r = await recompute(supabase, wallet as ExchangeWallet);
-    return json({ rows: rows.length, skipped_mirrored: parsed.skipped, total_rows_stored: r.rows, balances: r.balances });
+    const { error: refresh } = await supabase.rpc('request_capital_refresh', { p_user: user.id });
+    if (refresh) throw new Error(refresh.message);
+    return json({ rows: rows.length, skipped_mirrored: parsed.skipped, total_rows_stored: r.rows, balances: r.balances, ...estimated });
   } catch (err) {
     return json({ error: String(err) }, 500);
   }

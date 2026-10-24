@@ -38,6 +38,7 @@ jobs:
           supabase functions deploy sync-crypto-wallets --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
           supabase functions deploy import-bybit --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
           supabase functions deploy import-crypto-com --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+          supabase functions deploy sync-crypto-com-estimates --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
           supabase functions deploy import-telegram-wallet --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
           supabase functions deploy import-binance --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
           supabase functions deploy sync-ibkr --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
