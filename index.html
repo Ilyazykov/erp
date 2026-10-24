@@ -344,6 +344,25 @@
     </div>
     <div class="empty-note" id="mp_binance_status"></div>
 
+    <div class="section-title">Revolut crypto automatic check</div>
+    <p class="note">Revolut's crypto history still comes from its crypto statement (Upload); this checks it every morning:
+      Revolut shows one crypto balance in the app and on Revolut X, and a read-only Revolut X API key lets the server read
+      it and set it against the coins stored from the statement. If they differ, crypto was bought, sold or received since:
+      the Crypto row of Revolut in "Latest data per account" turns orange — upload a new crypto statement. The key: press
+      <b>Make a key pair</b>, copy the public key, and in the Revolut X web app (Profile → API keys → create, <b>read-only</b>,
+      no IP) paste it; paste the API key it gives here and Save. The private key goes to the server with Save and stays
+      there — it isn't shown again; a new pair replaces it.</p>
+    <div class="form-row">
+      <button class="btn" id="mp_revx_pair">Make a key pair</button>
+      <label>API key <input type="text" id="mp_revx_key" autocomplete="off"></label>
+      <button class="btn primary" id="mp_revx_save">Save</button>
+      <button class="btn" id="mp_revx_sync">Check now</button>
+      <a class="btn" href="https://exchange.revolut.com/" target="_blank" rel="noopener"
+        title="Profile -> API keys -> create a read-only key with the public key below">Open Revolut X</a>
+    </div>
+    <textarea id="mp_revx_public" readonly rows="3" style="display:none;width:100%;font-family:monospace;font-size:12px"></textarea>
+    <div class="empty-note" id="mp_revx_status"></div>
+
     <div class="section-title">Revolut, Bank of Cyprus &amp; Wise (Open Banking)</div>
     <p class="note">Through Enable Banking (enablebanking.com → Control Panel → API applications): an application
       registered there in restricted mode — only your own accounts linked to it — with its id and the private key it
@@ -435,7 +454,7 @@
     <p class="note">The date of the newest real record of each bank / broker account (bank rows and broker
       trades or payouts from any of its sources; synthetic rows -- extrapolated, data gaps, snapshots -- left out),
       to see when a fresh statement is due -- dated by the later of the newest record and the end of the latest statement uploaded for it (an account with no movements stays fresh once its statement is in): a broker monthly, a bank in active use weekly, one in little use monthly;
-      an account synced by itself "auto", with its key's end date (orange within a week of it); Binance "auto check" -- only its balances checked every morning, set against the stored export, orange when they differ; one that could be synced but isn't yet "TODO auto";
+      an account synced by itself "auto", with its key's end date (orange within a week of it); Binance and Revolut's crypto "auto check" -- only their balances checked every morning, set against the stored export, orange when they differ; one that could be synced but isn't yet "TODO auto";
       cash and Wise without a reminder, crypto exchanges monthly (Binance rarely), on-chain wallets (synced by themselves) dated by their last sync; closed accounts greyed out. Overdue in orange. Hover an account's name for where its statements come from.</p>
     <div id="mp_latest_sources"><div class="empty-note">Loading…</div></div>
   </div>
@@ -2131,6 +2150,18 @@ async function mpRenderLatestSources() {
       a.flex = { expires: null, error: last.error || '', label: 'key', perpetual: true, check: true,
         warning: differ.length ? `balances differ: ${differ.join('; ')} -- upload a new export` : '' };
     }
+    // Revolut's crypto checked by itself (sync-revolutx), as Binance's: its
+    // Crypto part current (dated by the check) while it agrees with the
+    // stored statement, orange when not
+    const { data: rxs } = await sb.rpc('revolutx_api_status');
+    const revxApi = (rxs || [])[0];
+    if (revxApi?.secret_set && revxApi.last_sync_at) {
+      let last = {};
+      try { last = JSON.parse(revxApi.last_sync_result || '{}'); } catch { /* not JSON */ }
+      const differ = last.differences || [];
+      partAuto.set('Revolut|Crypto', { error: last.error || '', to: !last.error && !differ.length ? last.checked_at || '' : '',
+        perpetual: true, check: true, warning: differ.length ? `balances differ: ${differ.join('; ')} -- upload a new crypto statement` : '' });
+    }
     // Revolut, Bank of Cyprus, Wise through Open Banking (sync-openbanking):
     // the consent's end as the key's; Revolut on its accounts part only (its
     // funds, savings, Invest, metals are statements)
@@ -2212,11 +2243,13 @@ async function mpRenderLatestSources() {
       const d = Math.round((today - Date.parse(day + 'T00:00:00Z')) / dayMs);
       const contracts = (p.contracts || []).filter(Boolean);
       const what = `${p.row_count} records${contracts.length ? ` · ${contracts.length === 1 ? 'contract' : 'contracts'} ${contracts.join(', ')}` : ''}`;
-      const update = auto ? (auto.error ? `<span style="color:#ff9500" title="${esc(auto.error)}">auto · last sync failed</span>` : 'auto')
+      const mode = auto?.check ? 'auto check' : 'auto';
+      const update = auto ? (auto.error ? `<span style="color:#ff9500" title="${esc(auto.error)}">${mode} · last ${auto.check ? 'check' : 'sync'} failed</span>`
+        : auto.warning ? `<span style="color:#ff9500" title="${esc(auto.warning)}">${mode} · statement due</span>` : mode)
         : MP_TODO_AUTO[name] === p.part ? todoAuto : '';
       return `<tr class="mp-part" data-acc="${esc(name)}"${mpOpenAccounts.has(name) ? '' : ' hidden'} style="color:#8b949e${closed ? ';opacity:.7' : ''}">`
         + `<td><span style="display:inline-block;width:32px"></span><span class="mp-src" data-src="${esc(what)}">${esc(p.label || p.part)}</span></td>`
-        + `<td>${update}</td><td>${!auto ? '' : auto.expires ? `<span${Math.round((Date.parse(auto.expires + 'T00:00:00Z') - today) / dayMs) <= 7 ? ' style="color:#ff9500"' : ''}>${auto.expires}</span>` : 'renews'}</td><td>${p.last_day}</td><td>${up || '—'}</td><td>${d}</td></tr>`;
+        + `<td>${update}</td><td>${!auto ? '' : auto.perpetual ? 'no end' : auto.expires ? `<span${Math.round((Date.parse(auto.expires + 'T00:00:00Z') - today) / dayMs) <= 7 ? ' style="color:#ff9500"' : ''}>${auto.expires}</span>` : 'renews'}</td><td>${p.last_day}</td><td>${up || '—'}</td><td>${d}</td></tr>`;
     }).join('');
     wrap.innerHTML = `<table class="data-table"><thead><tr><th>Account</th><th>Update</th><th>Key valid until</th><th>Latest record</th><th>Statements to</th><th>Days ago</th></tr></thead><tbody>${
       rows.map(([name, a]) => {
@@ -6489,6 +6522,114 @@ document.getElementById('mp_binance_sync').addEventListener('click', async () =>
   }
 });
 
+// ---- Revolut crypto automatic check (supabase/functions/sync-revolutx) ----
+// The API key shows by its last characters, the private key only as "saved"
+// (revolutx_api_status, migration ...116). The Ed25519 pair is made here: the
+// public key to register at Revolut X, the private key sent once with Save.
+let mpRevxPrivatePem = '', mpRevxSecretSaved = false;
+const mpPem = (label, buf) => `-----BEGIN ${label}-----\n${btoa(String.fromCharCode(...new Uint8Array(buf))).match(/.{1,64}/g).join('\n')}\n-----END ${label}-----`;
+
+async function mpRevxApiLoad() {
+  const statusEl = document.getElementById('mp_revx_status');
+  const { data, error } = await sb.rpc('revolutx_api_status');
+  if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
+  const s = (data || [])[0];
+  mpRevxSecretSaved = !!s?.secret_set;
+  const keyEl = document.getElementById('mp_revx_key');
+  keyEl.value = '';
+  keyEl.placeholder = s?.key_tail ? `saved …${s.key_tail} — leave empty to keep` : 'not set';
+  statusEl.style.color = '';
+  if (!s) { statusEl.textContent = 'Not set up.'; return; }
+  let last = 'never checked';
+  if (s.last_sync_at) {
+    let r = {};
+    try { r = JSON.parse(s.last_sync_result || '{}'); } catch { /* not JSON */ }
+    last = `last checked ${new Date(s.last_sync_at).toLocaleString()}: ` + mpRevxSummary(r);
+    if (r.error || r.differences?.length) statusEl.style.color = 'var(--red, #f85149)';
+  }
+  statusEl.textContent = `API key …${s.key_tail || '—'}, private key ${s.secret_set ? 'saved' : 'not set'} (no end date); ${last}.`;
+}
+
+function mpRevxSummary(r) {
+  if (r.error) return `error — ${r.error}`;
+  const coins = Object.entries(r.balances || {}).map(([c, v]) => `${c} ${Number(v).toLocaleString('en', { maximumFractionDigits: 8 })}`).join(', ') || 'nothing';
+  return r.differences?.length
+    ? `Revolut's crypto differs from the stored statement (${r.differences.join('; ')}) — upload a new Revolut crypto statement`
+    : `matches the stored statement (${coins})`;
+}
+
+async function mpRevxCall(body) {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) throw new Error('Sign in first.');
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/sync-revolutx`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json', 'x-region': 'eu-west-1' },
+    body: JSON.stringify(body),
+  });
+  const r = await res.json();
+  if (!res.ok) throw new Error(r.error || res.statusText);
+  return r;
+}
+
+document.getElementById('mp_revx_pair').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_revx_status'), pubEl = document.getElementById('mp_revx_public');
+  try {
+    const pair = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
+    mpRevxPrivatePem = mpPem('PRIVATE KEY', await crypto.subtle.exportKey('pkcs8', pair.privateKey));
+    pubEl.value = mpPem('PUBLIC KEY', await crypto.subtle.exportKey('spki', pair.publicKey));
+    pubEl.style.display = '';
+    pubEl.select();
+    statusEl.style.color = '';
+    statusEl.textContent = 'Key pair made. Copy the public key above into Revolut X (Profile → API keys → read-only), '
+      + 'then paste the API key it gives here and press Save — before leaving the page (the private key lives only in it until then).';
+  } catch (err) {
+    statusEl.style.color = 'var(--red, #f85149)';
+    statusEl.textContent = `This browser can't make Ed25519 keys (${err.message}) — use a current Chrome, Safari or Firefox.`;
+  }
+});
+
+document.getElementById('mp_revx_save').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_revx_status');
+  const keyEl = document.getElementById('mp_revx_key');
+  if (!keyEl.value.trim() && !keyEl.placeholder.startsWith('saved')) { statusEl.textContent = 'Enter the API key.'; return; }
+  if (!mpRevxPrivatePem && !mpRevxSecretSaved) {
+    statusEl.textContent = 'Make a key pair first: the API key works only with the private key of the public key you registered.';
+    return;
+  }
+  // An empty key or private key keeps the saved one (set_revolutx_api).
+  const { error } = await sb.rpc('set_revolutx_api', { p_key: keyEl.value, p_private_key: mpRevxPrivatePem });
+  if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
+  mpRevxPrivatePem = '';
+  document.getElementById('mp_revx_public').style.display = 'none';
+  statusEl.style.color = '';
+  statusEl.textContent = 'Saved; checking the key with Revolut X…';
+  let problem = '';
+  try { await mpRevxCall({ check: true }); } catch (err) { problem = err.message; }
+  await mpRevxApiLoad();
+  if (problem) {
+    statusEl.style.color = 'var(--red, #f85149)';
+    statusEl.textContent = `Saved, but Revolut X refuses the key: ${problem}`;
+  } else {
+    statusEl.textContent += ' Revolut X accepts the key.';
+  }
+  mpRenderLatestSources();
+});
+
+document.getElementById('mp_revx_sync').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_revx_status');
+  statusEl.style.color = '';
+  statusEl.textContent = 'Reading the balances from Revolut X…';
+  try {
+    const r = await mpRevxCall({});
+    if (r.differences?.length) statusEl.style.color = 'var(--red, #f85149)';
+    statusEl.textContent = `Checked: ${mpRevxSummary(r)}.`;
+    mpRenderLatestSources();
+  } catch (err) {
+    statusEl.style.color = 'var(--red, #f85149)';
+    statusEl.textContent = `Error: ${err.message}`;
+  }
+});
+
 // ---- T-Bank broker automatic sync (supabase/functions/sync-tbank) ----
 // The token only as "saved" (tbank_api_status, migration ...104).
 async function mpTbankApiLoad() {
@@ -6668,6 +6809,7 @@ function mpUpdateAuthUi(session) {
     mpF24ApiLoad();
     mpTbankApiLoad();
     mpBinanceApiLoad();
+    mpRevxApiLoad();
     mpEbLoad().then(mpEbReturn);
     mpRenderRealEstate();
     mpRenderLookThrough();
