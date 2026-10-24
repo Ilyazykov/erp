@@ -21,8 +21,10 @@
 // into bank_transactions 'openbanking_<bank>' -- a running balance per
 // currency from 0 on top of the statement's, as the app rows of other banks
 // have it; a statement uploaded later takes its period back
-// (_shared/openbanking_rows.ts). Pending ones (Revolut's PDNG) wait until
-// they're booked. Before anything is written two checks, per bank:
+// (_shared/openbanking_rows.ts). Pending ones (Revolut's PDNG) are written
+// too, "PENDING: " in the description -- every run rewrites the rows, so one
+// whose amount changes, gets booked or is cancelled follows by the next
+// morning. Before anything is written two checks, per bank:
 //   - the month before the statement's end: every stored statement row and
 //     every booked API transaction pair up (same currency and amount, at most
 //     3 days apart); the statement's last 3 days are where an export can end
@@ -241,7 +243,7 @@ async function syncBank(db: any, userId: string, jwt: string, bankKey: string, s
     }
     // 0.00 rows (card checks) move nothing and the statement leaves them out
     const booked = txs.filter(x => x.status === 'BOOK' && x.day && x.amount !== 0);
-    const pending = txs.filter(x => x.status === 'PDNG');
+    const pending = txs.filter(x => x.status === 'PDNG' && x.amount !== 0);
     pendingCount += pending.length;
 
     // The statement's rows of the window, and its last balance.
@@ -274,6 +276,8 @@ async function syncBank(db: any, userId: string, jwt: string, bankKey: string, s
       if (x.day <= edge) diffs.push(`${ccy} API ${x.day} ${x.amount} "${x.desc.slice(0, 30)}" not in the statement`);
       else write.push(x);   // after the statement, or at its very end and not in it
     });
+    const today = new Date().toISOString().slice(0, 10);
+    for (const x of pending) write.push({ ...x, day: x.day || today });
 
     // The balance: the statement's plus what's written now (plus the pending, for an available balance).
     const b = await eb(jwt, 'GET', `/accounts/${uid}/balances`);
@@ -281,7 +285,7 @@ async function syncBank(db: any, userId: string, jwt: string, bankKey: string, s
     const pick = (types: string[]) => (b.balances ?? []).find((x: any) => types.includes(x.balance_type));
     const bookedBal = pick(['CLBD', 'ITBD', 'OPBD']);
     const bal = bookedBal ?? pick(['ITAV', 'CLAV', 'XPCD', 'OTHR']);
-    const added = round2(write.filter(x => x.currency === ccy).reduce((a, x) => a + x.amount, 0));
+    const added = round2(write.filter(x => x.currency === ccy && x.status !== 'PDNG').reduce((a, x) => a + x.amount, 0));
     const expected = round2(storedBalance + added + (bookedBal ? 0 : pending.reduce((a, x) => a + x.amount, 0)));
     const actual = bal ? round2(Number(bal.balance_amount?.amount)) : null;
     balances[ccy] = { statement: storedBalance, added, expected, bank: actual, type: bal?.balance_type ?? null };
@@ -297,11 +301,12 @@ async function syncBank(db: any, userId: string, jwt: string, bankKey: string, s
   const seen = new Map<string, number>();
   const rows = write.sort((p, q) => p.day.localeCompare(q.day)).map((x, i) => {
     bal[x.currency] = round2((bal[x.currency] ?? 0) + x.amount);
-    const id = x.ref ? `${bankKey}:${x.ref}` : `${bankKey}:${x.day}:${x.currency}:${x.amount}:${x.desc.slice(0, 60)}`;
+    const pend = x.status === 'PDNG';
+    const id = (pend ? 'pending:' : '') + (x.ref ? `${bankKey}:${x.ref}` : `${bankKey}:${x.day}:${x.currency}:${x.amount}:${x.desc.slice(0, 60)}`);
     const n = seen.get(id) ?? 0; seen.set(id, n + 1);
     const at = new Date(Date.parse(`${x.day}T00:00:00Z`) + i).toISOString();
     return {
-      user_id: userId, account: bank.label, tx_date: at, booked_at: at, description: x.desc || '(no description)', counterparty: null,
+      user_id: userId, account: bank.label, tx_date: at, booked_at: at, description: (pend ? 'PENDING: ' : '') + (x.desc || '(no description)'), counterparty: null,
       amount: x.amount, currency: x.currency, category: null, balance_after: bal[x.currency], synthetic: false, synthetic_kind: null,
       note: null, external_source: src, external_id: n ? `${id}:dup${n}` : id,
     };
@@ -310,7 +315,7 @@ async function syncBank(db: any, userId: string, jwt: string, bankKey: string, s
     const { error } = await db.from('bank_transactions').upsert(rows.slice(i, i + 500), { onConflict: 'user_id,external_source,external_id' });
     if (error) throw new Error(error.message);
   }
-  const standIn = bankKey === 'revolut' ? await revolutStandIns(db, userId, write) : { transfers: 0, returns: 0 };
+  const standIn = bankKey === 'revolut' ? await revolutStandIns(db, userId, write.filter(x => x.status !== 'PDNG')) : { transfers: 0, returns: 0 };
   if (rows.length || standIn.transfers || standIn.returns) {
     const { error: rq } = await db.rpc('request_capital_refresh', { p_user: userId });
     if (rq) throw new Error(rq.message);

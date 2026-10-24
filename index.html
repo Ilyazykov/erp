@@ -349,9 +349,10 @@
       registered there in restricted mode — only your own accounts linked to it — with its id and the private key it
       generated (drop the downloaded <code>&lt;id&gt;.pem</code> file below — the id is filled in from its name). The key stays on the server. Then connect each
       bank: you're sent to its consent page and back here; the consent lasts up to 180 days, renewed the same way (the end
-      date shows below and in "Latest data per account", orange a week before). Every morning the booked transactions after
-      each bank's latest statement are pulled in — checked first against that statement's last month and against the
-      bank's balance; nothing is replaced unless they agree. A statement uploaded later takes its period back. Revolut's
+      date shows below and in "Latest data per account", orange a week before). Every morning the transactions after
+      each bank's latest statement are pulled in (pending ones too, marked PENDING and rewritten each morning until
+      booked) — checked first against that statement's last month and against the bank's balance; nothing is replaced
+      unless they agree. A statement uploaded later takes its period back. Revolut's
       funds, savings, Invest and metals aren't in Open Banking — still statements; until they come, the account's transfers to
       the funds / savings and the funds' daily return and fee are estimated (marked ESTIMATED) and replaced by the statement.</p>
     <div class="form-row">
@@ -6258,7 +6259,7 @@ function mpEbSummary(r) {
   if (r.error) return `error — ${r.error}`;
   const bal = Object.entries(r.balances || {}).filter(([, b]) => b.bank || b.expected).map(([c, b]) => `${c} ${b.bank ?? b.expected}`).join(', ');
   return `${r.written ?? 0} transactions after the statement of ${r.after_statement || '?'}`
-    + (r.pending ? ` (${r.pending} pending, not yet)` : '')
+    + (r.pending ? ` (${r.pending} of them pending)` : '')
     + (r.fund_savings_trades || r.fund_returns_estimated
       ? `; estimated until the fund / savings statements: ${r.fund_savings_trades || 0} transfers, ${r.fund_returns_estimated || 0} daily return / fee rows` : '')
     + (r.checked ? `; checked against the statement ${r.checked.window}: ${r.checked.matched} paired` : '')
