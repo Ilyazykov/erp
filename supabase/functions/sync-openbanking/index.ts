@@ -239,12 +239,13 @@ async function syncBank(db: any, userId: string, jwt: string, bankKey: string, s
       key = r.continuation_key ?? '';
       if (!key) break;
     }
-    const booked = txs.filter(x => x.status === 'BOOK' && x.day);
+    // 0.00 rows (card checks) move nothing and the statement leaves them out
+    const booked = txs.filter(x => x.status === 'BOOK' && x.day && x.amount !== 0);
     const pending = txs.filter(x => x.status === 'PDNG');
     pendingCount += pending.length;
 
     // The statement's rows of the window, and its last balance.
-    const { data: stored, error: sErr } = await db.from('bank_transactions').select('amount, tx_date, booked_at, description')
+    const { data: stored, error: sErr } = await db.from('bank_transactions').select('amount, tx_date, description')
       .eq('user_id', userId).eq('external_source', bank.base).eq('currency', ccy).is('synthetic_kind', null)
       .gte('tx_date', `${checkFrom}T00:00:00Z`);
     if (sErr) throw new Error(sErr.message);
@@ -254,13 +255,17 @@ async function syncBank(db: any, userId: string, jwt: string, bankKey: string, s
     if (lErr) throw new Error(lErr.message);
     const storedBalance = Number(lastRow?.[0]?.balance_after ?? 0);
 
-    // Pair the statement's rows with the API's (amount, at most 3 days apart).
+    // Pair the statement's rows with the API's: same amount, the nearest day at
+    // most 3 apart -- the API's booking date is the statement's started date
+    // (give or take the time zone), not its completed one.
     const used = new Set<number>();
-    const dayOf = (r: { booked_at: string | null; tx_date: string }) => String(r.booked_at ?? r.tx_date).slice(0, 10);
     for (const r of (stored ?? []).sort((p: { tx_date: string }, q: { tx_date: string }) => p.tx_date.localeCompare(q.tx_date))) {
-      const day = dayOf(r);
-      const i = booked.findIndex((x, n) => !used.has(n) && Math.abs(x.amount - Number(r.amount)) < 0.005
-        && Math.abs(Date.parse(x.day) - Date.parse(day)) <= EDGE_DAYS * 86400000);
+      const day = String(r.tx_date).slice(0, 10);
+      let i = -1, best = Infinity;
+      booked.forEach((x, n) => {
+        const gap = Math.abs(Date.parse(x.day) - Date.parse(day));
+        if (!used.has(n) && Math.abs(x.amount - Number(r.amount)) < 0.005 && gap <= EDGE_DAYS * 86400000 && gap < best) { i = n; best = gap; }
+      });
       if (i >= 0) { used.add(i); matched++; continue; }
       if (day <= edge) diffs.push(`${ccy} statement ${day} ${r.amount} "${String(r.description ?? '').slice(0, 30)}" not in the API`);
     }
