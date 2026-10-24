@@ -354,7 +354,8 @@
       booked) — checked first against that statement's last month and against the bank's balance; nothing is replaced
       unless they agree. A statement uploaded later takes its period back. Revolut's
       funds, savings, Invest and metals aren't in Open Banking — still statements; until they come, the account's transfers to
-      the funds / savings and the funds' daily return and fee are estimated (marked ESTIMATED) and replaced by the statement.</p>
+      the funds / savings / Invest account, its gold purchases (at the day's market price) and the funds' daily return and
+      fee are estimated (marked ESTIMATED) and replaced by the statement.</p>
     <div class="form-row">
       <label>Application ID <input type="text" id="mp_eb_app" size="36" autocomplete="off"></label>
       <button class="btn primary" id="mp_eb_save">Save</button>
@@ -6261,7 +6262,7 @@ function mpEbSummary(r) {
   return `${r.written ?? 0} transactions after the statement of ${r.after_statement || '?'}`
     + (r.pending ? ` (${r.pending} of them pending)` : '')
     + (r.fund_savings_trades || r.fund_returns_estimated
-      ? `; estimated until the fund / savings statements: ${r.fund_savings_trades || 0} transfers, ${r.fund_returns_estimated || 0} daily return / fee rows` : '')
+      ? `; estimated until the fund / savings / Invest / metal statements: ${r.fund_savings_trades || 0} transfers, ${r.fund_returns_estimated || 0} daily return / fee rows` : '')
     + (r.checked ? `; checked against the statement ${r.checked.window}: ${r.checked.matched} paired` : '')
     + (bal ? `; balance ${bal} — agrees with the bank` : '');
 }

@@ -14,9 +14,16 @@ export const OPENBANKING_SOURCE: Record<string, string> = {
 // Revolut's moves to / from its Flexible Cash Funds and Instant Access
 // Savings, seen as transfers on its accounts, stand in as the fund's / the
 // savings' trades until their own statement comes: trades
-// 'openbanking_revolut_fund' / 'openbanking_revolut_savings'. A fund or
-// savings statement takes its period back.
-export const OPENBANKING_TRADE_SOURCE = { fund: 'openbanking_revolut_fund', savings: 'openbanking_revolut_savings' };
+// 'openbanking_revolut_fund' / 'openbanking_revolut_savings'. Its purchases of
+// metals ("Exchanged to XAU") stand in as the metal's buys, at the market
+// price of the day: 'openbanking_revolut_metal'. A fund, savings or metal
+// pocket statement takes its period back.
+export const OPENBANKING_TRADE_SOURCE = { fund: 'openbanking_revolut_fund', savings: 'openbanking_revolut_savings', metal: 'openbanking_revolut_metal' };
+
+// Its transfers to / from the brokerage (Invest) account stand in as that
+// account's cash (bank_transactions, a running balance per currency from 0 on
+// top of the Invest statement's) until the Invest statement comes.
+export const OPENBANKING_INVEST_SOURCE = 'openbanking_revolut_invest';
 
 // deno-lint-ignore no-explicit-any
 export async function removeOpenBankingTrades(db: any, userId: string, source: string, periodEnd: string): Promise<number> {
@@ -30,7 +37,14 @@ export async function removeOpenBankingTrades(db: any, userId: string, source: s
 // deno-lint-ignore no-explicit-any
 export async function removeOpenBankingRows(db: any, userId: string, account: string, periodEnd: string): Promise<number> {
   const src = OPENBANKING_SOURCE[account];
-  if (!src || !periodEnd) return 0;
+  return src ? await removeOpenBankingCash(db, userId, src, periodEnd) : 0;
+}
+
+// The rows of one Open Banking cash source up to a statement's end, the rest
+// counted again from 0.
+// deno-lint-ignore no-explicit-any
+export async function removeOpenBankingCash(db: any, userId: string, src: string, periodEnd: string): Promise<number> {
+  if (!periodEnd) return 0;
   const { count, error } = await db.from('bank_transactions').delete({ count: 'exact' })
     .eq('user_id', userId).eq('external_source', src).lte('tx_date', `${periodEnd.slice(0, 10)}T23:59:59.999Z`);
   if (error) throw new Error(error.message);

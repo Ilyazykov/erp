@@ -40,7 +40,7 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { fromCron, notFromCron } from '../_shared/cron_auth.ts';
-import { OPENBANKING_SOURCE, OPENBANKING_TRADE_SOURCE } from '../_shared/openbanking_rows.ts';
+import { OPENBANKING_INVEST_SOURCE, OPENBANKING_SOURCE, OPENBANKING_TRADE_SOURCE } from '../_shared/openbanking_rows.ts';
 
 const EB = 'https://api.enablebanking.com';
 const REDIRECT = 'https://ilyazykov.github.io/erp/';
@@ -84,7 +84,7 @@ async function eb(jwt: string, method: 'GET' | 'POST', path: string, body?: unkn
   return out;
 }
 
-type Tx = { day: string; amount: number; currency: string; ref: string; desc: string; status: string };
+type Tx = { day: string; amount: number; currency: string; ref: string; desc: string; status: string; code: string };
 
 // Revolut's transfers to / from its Flexible Cash Funds ("To GBP Flexible Cash
 // Funds") and Instant Access Savings stand in as the fund's / savings' own
@@ -116,9 +116,28 @@ async function revolutStandIns(db: any, userId: string, write: Tx[]): Promise<{ 
   const fundOf = new Map<string, string>();
   for (const f of fundRows) if (!fundOf.has(f.currency)) fundOf.set(f.currency, f.ticker);
 
+  const { data: lastInvest } = await db.from('bank_transactions').select('tx_date').eq('user_id', userId)
+    .eq('external_source', 'revolut_invest_csv').order('tx_date', { ascending: false }).limit(1);
+  const investEnd = lastInvest?.[0] ? String(lastInvest[0].tx_date).slice(0, 10) : '';
+
+  // The transfers: the API's after the account's statement, and the
+  // statement's own after the fund's / savings' / Invest's -- uploading the
+  // account's statement first mustn't take the stand-ins away.
+  const since = [fundEnd, savingsEnd, investEnd].filter(Boolean).sort()[0];
+  const moves: Tx[] = [...write];
+  if (since) {
+    const { data: stored, error } = await db.from('bank_transactions').select('tx_date, amount, currency, description')
+      .eq('user_id', userId).eq('external_source', 'revolut_csv').gt('tx_date', `${since}T23:59:59.999Z`)
+      .or('description.ilike.%Flexible Cash Funds%,description.ilike.%Instant Access Savings%,description.ilike.%investment account%');
+    if (error) throw new Error(error.message);
+    for (const r of stored ?? [])
+      moves.push({ day: String(r.tx_date).slice(0, 10), amount: Number(r.amount), currency: r.currency, ref: '',
+        desc: String(r.description ?? ''), status: 'BOOK', code: '' });
+  }
+
   const rows = [];
   const seen = new Map<string, number>();
-  for (const x of write) {
+  for (const x of moves) {
     const fcf = /^(To|From)\s+(?:[A-Z]{3}\s+)?Flexible Cash Funds/i.exec(x.desc);
     const ias = /^(To|From)\s+Instant Access Savings/i.exec(x.desc);
     if (!fcf && !ias) continue;
@@ -135,7 +154,62 @@ async function revolutStandIns(db: any, userId: string, write: Tx[]): Promise<{ 
       external_source: fcf ? OPENBANKING_TRADE_SOURCE.fund : OPENBANKING_TRADE_SOURCE.savings, external_id: n ? `${base}:dup${n}` : base,
     });
   }
+
+  // Metal purchases: the account's side of the exchange ("Exchanged to XAU";
+  // in the account's own statement it's "Revolut Ltd", so that too when the
+  // bank calls it an exchange -- gold is the only metal bought so far) as a
+  // buy of the metal at the day's market price in the account's currency.
+  // Revolut's own price is some 0.5-1% higher (its fee): the units come out
+  // that much more than the metal statement's. Only after the metal pocket's
+  // latest statement.
+  const { data: lastMetal } = await db.from('trades').select('trade_date').eq('user_id', userId)
+    .eq('external_source', 'revolut_metal_csv').order('trade_date', { ascending: false }).limit(1);
+  const metalEnd = lastMetal?.[0]?.trade_date ?? '';
+  for (const x of write) {
+    const m = /^Exchanged to (XAU|XAG|XPT|XPD)\b/i.exec(x.desc);
+    const metal = m ? m[1].toUpperCase() : /^Revolut Ltd$/i.test(x.desc) && x.code === 'EXCHANGE' ? 'XAU' : '';
+    if (!metal || x.amount >= 0 || x.day <= metalEnd) continue;
+    const { data: px } = await db.from('price_history').select('price_usd').eq('ticker', metal).lte('day', x.day)
+      .order('day', { ascending: false }).limit(1);
+    const { data: fx } = await db.from('fx_history').select('usd_per_unit').eq('currency', x.currency).lte('day', x.day)
+      .order('day', { ascending: false }).limit(1);
+    const usd = Number(px?.[0]?.price_usd), perUnit = x.currency === 'USD' ? 1 : Number(fx?.[0]?.usd_per_unit);
+    if (!(usd > 0) || !(perUnit > 0)) continue;
+    const price = usd / perUnit;
+    const base = `revolut:${x.ref || `${x.day}:${x.currency}:${x.amount}`}`;
+    rows.push({
+      user_id: userId, account: 'Revolut', ticker: metal, side: 'buy', quantity: Math.round(-x.amount / price * 1e6) / 1e6,
+      price: Math.round(price * 10000) / 10000, trade_date: x.day, currency: x.currency,
+      fee_tax: null, fee_currency: null, nkd: null, exchange: null, estimated: true,
+      note: `ESTIMATED: ${x.desc} (${x.amount} ${x.currency}) at the day's market price -- from the account's Open Banking row, until the metal statement comes`,
+      external_source: OPENBANKING_TRADE_SOURCE.metal, external_id: base,
+    });
+  }
   const transfers = rows.length;
+
+  // Transfers to / from the brokerage (Invest) account as its cash, after the
+  // Invest statement's last row (investEnd above): the money doesn't drop out of the capital
+  // until that statement shows what it bought.
+  const investBal: Record<string, number> = {};
+  const invest = moves.filter(x => /^(To|From) investment account/i.test(x.desc) && x.day > investEnd)
+    .sort((p, q) => p.day.localeCompare(q.day)).map((x, i) => {
+      const amount = -x.amount;   // the account's -X is the brokerage's +X
+      investBal[x.currency] = Math.round(((investBal[x.currency] ?? 0) + amount) * 100) / 100;
+      const at = new Date(Date.parse(`${x.day}T12:00:00Z`) + i).toISOString();
+      return {
+        user_id: userId, account: 'Revolut', tx_date: at, booked_at: at,
+        description: `ESTIMATED: ${amount > 0 ? 'CASH TOP-UP' : 'CASH WITHDRAWAL'} (${x.desc})`, counterparty: null,
+        amount, currency: x.currency, category: null, balance_after: investBal[x.currency], synthetic: false, synthetic_kind: null,
+        note: 'ESTIMATED: from the current account\'s Open Banking transfer, until the Invest statement comes',
+        external_source: OPENBANKING_INVEST_SOURCE, external_id: `revolut:${x.ref || `${x.day}:${x.currency}:${x.amount}`}:${i}`,
+      };
+    });
+  const { error: iDel } = await db.from('bank_transactions').delete().eq('user_id', userId).eq('external_source', OPENBANKING_INVEST_SOURCE);
+  if (iDel) throw new Error(iDel.message);
+  if (invest.length) {
+    const { error } = await db.from('bank_transactions').insert(invest);
+    if (error) throw new Error(error.message);
+  }
 
   // Each fund's daily return and fee after its statement.
   let returns = 0;
@@ -182,7 +256,7 @@ async function revolutStandIns(db: any, userId: string, write: Tx[]): Promise<{ 
     }
   }
 
-  for (const src of [OPENBANKING_TRADE_SOURCE.fund, OPENBANKING_TRADE_SOURCE.savings]) {
+  for (const src of [OPENBANKING_TRADE_SOURCE.fund, OPENBANKING_TRADE_SOURCE.savings, OPENBANKING_TRADE_SOURCE.metal]) {
     const { error } = await db.from('trades').delete().eq('user_id', userId).eq('external_source', src);
     if (error) throw new Error(error.message);
   }
@@ -190,7 +264,7 @@ async function revolutStandIns(db: any, userId: string, write: Tx[]): Promise<{ 
     const { error } = await db.from('trades').upsert(rows.slice(i, i + 500), { onConflict: 'user_id,external_source,external_id' });
     if (error) throw new Error(error.message);
   }
-  return { transfers, returns };
+  return { transfers: transfers + invest.length, returns };
 }
 
 // One bank's session: checked against its statements, then its rows replaced.
@@ -235,7 +309,7 @@ async function syncBank(db: any, userId: string, jwt: string, bankKey: string, s
           amount: round2(x.credit_debit_indicator === 'DBIT' ? -Math.abs(a) : Math.abs(a)),
           currency: String(x.transaction_amount?.currency ?? ccy).toUpperCase(), ref: String(x.entry_reference ?? ''),
           desc: String((x.remittance_information ?? []).join(' ') || x.creditor?.name || x.debtor?.name || '').trim().slice(0, 500),
-          status: String(x.status ?? 'BOOK'),
+          status: String(x.status ?? 'BOOK'), code: String(x.bank_transaction_code?.code ?? ''),
         });
       }
       key = r.continuation_key ?? '';

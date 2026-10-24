@@ -56,7 +56,7 @@
 // leaves that metal out of later Snowball uploads.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
-import { removeOpenBankingRows } from '../_shared/openbanking_rows.ts';
+import { OPENBANKING_TRADE_SOURCE, removeOpenBankingRows, removeOpenBankingTrades } from '../_shared/openbanking_rows.ts';
 import { orderWithinGroups } from '../_shared/day_order.ts';
 
 const METALS = new Set(['XAU', 'XAG', 'XPT', 'XPD']);
@@ -417,11 +417,17 @@ Deno.serve(async (req) => {
       if (delErr) return new Response(JSON.stringify({ error: delErr.message }), { status: 500, headers: corsHeaders });
       removedSnowball = count ?? 0;
     }
+    // a metal pocket's statement takes its days back from sync-openbanking's estimated buys
+    let removedMetalEstimates = 0;
+    if (csvRows.some(r => METALS.has(r.currency)))
+      removedMetalEstimates = await removeOpenBankingTrades(supabase, user.id, OPENBANKING_TRADE_SOURCE.metal,
+        rows.reduce((m, r) => ((r.booked_at ?? r.tx_date) > m ? (r.booked_at ?? r.tx_date) : m), ''));
 
     return new Response(JSON.stringify({
       imported: count ?? rows.length,
       imported_metal_trades: metalTrades.length,
       removed_open_banking_rows: removedOpenBanking,
+      removed_metal_estimates: removedMetalEstimates,
       metal_rows_without_price: metalWithoutPrice,
       removed_snowball_duplicates: removedSnowball,
       time_shift_hours: shift / HOUR,

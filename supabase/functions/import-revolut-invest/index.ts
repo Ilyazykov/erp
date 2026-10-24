@@ -20,6 +20,7 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { removeCoveredSnowball } from '../_shared/statement_priority.ts';
+import { OPENBANKING_INVEST_SOURCE, removeOpenBankingCash } from '../_shared/openbanking_rows.ts';
 
 const ACCOUNT = 'Revolut';
 const SOURCE = 'revolut_invest_csv';
@@ -148,6 +149,9 @@ Deno.serve(async (req) => {
       if (error) return json({ error: error.message }, 500);
     }
     const removedSnowball = await removeCoveredSnowball(supabase, user.id, trades);
+    // the statement's days back from the cash sync-openbanking stood in with (_shared/openbanking_rows.ts)
+    const removedOpenBanking = await removeOpenBankingCash(supabase, user.id, OPENBANKING_INVEST_SOURCE,
+      bank.reduce((m: string, b: { tx_date: string }) => (b.tx_date > m ? b.tx_date : m), ''));
 
     const holdings: Record<string, number> = {};
     for (const t of trades) {
@@ -156,7 +160,7 @@ Deno.serve(async (req) => {
     }
     return json({
       trades: trades.filter(t => t.side !== 'dividend').length, dividends: trades.filter(t => t.side === 'dividend').length,
-      cash_rows: bank.length, skipped: parsed.skipped, removed_snowball_duplicates: removedSnowball,
+      cash_rows: bank.length, skipped: parsed.skipped, removed_snowball_duplicates: removedSnowball, removed_open_banking_rows: removedOpenBanking,
       holdings, cash: parsed.balance,
     });
   } catch (err) {
