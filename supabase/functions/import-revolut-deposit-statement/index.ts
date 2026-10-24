@@ -29,6 +29,7 @@
 // rows, which net to a *separate* reinvestment purchase there instead).
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { OPENBANKING_TRADE_SOURCE, removeOpenBankingTrades } from '../_shared/openbanking_rows.ts';
 
 interface DepositRow {
   startedDate: string;
@@ -210,9 +211,13 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: upsertErr.message }),
         { status: 500, headers: corsHeaders });
     }
+    // the statement's days back from the trades stood in from Open Banking (_shared/openbanking_rows.ts)
+    const removedOpenBanking = await removeOpenBankingTrades(supabase, user.id, OPENBANKING_TRADE_SOURCE.savings,
+      rows.reduce((m: string, r: { trade_date: string }) => (r.trade_date > m ? r.trade_date : m), ''));
 
     return new Response(JSON.stringify({
       imported: count ?? rows.length,
+      removed_open_banking_trades: removedOpenBanking,
       total_rows: depositRows.length,
       skipped_bad_date: skippedBadDate,
     }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });

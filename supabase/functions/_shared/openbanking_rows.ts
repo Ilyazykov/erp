@@ -11,6 +11,22 @@ export const OPENBANKING_SOURCE: Record<string, string> = {
   Wise: 'openbanking_wise',
 };
 
+// Revolut's moves to / from its Flexible Cash Funds and Instant Access
+// Savings, seen as transfers on its accounts, stand in as the fund's / the
+// savings' trades until their own statement comes: trades
+// 'openbanking_revolut_fund' / 'openbanking_revolut_savings'. A fund or
+// savings statement takes its period back.
+export const OPENBANKING_TRADE_SOURCE = { fund: 'openbanking_revolut_fund', savings: 'openbanking_revolut_savings' };
+
+// deno-lint-ignore no-explicit-any
+export async function removeOpenBankingTrades(db: any, userId: string, source: string, periodEnd: string): Promise<number> {
+  if (!periodEnd) return 0;
+  const { count, error } = await db.from('trades').delete({ count: 'exact' })
+    .eq('user_id', userId).eq('external_source', source).lte('trade_date', periodEnd.slice(0, 10));
+  if (error) throw new Error(error.message);
+  return count ?? 0;
+}
+
 // deno-lint-ignore no-explicit-any
 export async function removeOpenBankingRows(db: any, userId: string, account: string, periodEnd: string): Promise<number> {
   const src = OPENBANKING_SOURCE[account];

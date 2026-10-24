@@ -38,7 +38,7 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { fromCron, notFromCron } from '../_shared/cron_auth.ts';
-import { OPENBANKING_SOURCE } from '../_shared/openbanking_rows.ts';
+import { OPENBANKING_SOURCE, OPENBANKING_TRADE_SOURCE } from '../_shared/openbanking_rows.ts';
 
 const EB = 'https://api.enablebanking.com';
 const REDIRECT = 'https://ilyazykov.github.io/erp/';
@@ -83,6 +83,113 @@ async function eb(jwt: string, method: 'GET' | 'POST', path: string, body?: unkn
 }
 
 type Tx = { day: string; amount: number; currency: string; ref: string; desc: string; status: string };
+
+// Revolut's transfers to / from its Flexible Cash Funds ("To GBP Flexible Cash
+// Funds") and Instant Access Savings stand in as the fund's / savings' own
+// trades -- a share is 1 of the currency, so the amount is the quantity --
+// and each fund's daily return and service fee are worked out on the units
+// held the day before (the fee at its fixed yearly rate, the return at the
+// fund's yield on the statement's last day), until their statements come, which take their days back: the
+// money leaving the account doesn't drop out of the capital meanwhile, nor
+// does the return go missing. All of them estimated = true, "ESTIMATED" in
+// the note; only the days after the fund's / savings' own latest statement.
+// deno-lint-ignore no-explicit-any
+async function revolutStandIns(db: any, userId: string, write: Tx[]): Promise<{ transfers: number; returns: number }> {
+  const endOf = async (kind: string) => {
+    const { data } = await db.from('statement_uploads').select('period_to').eq('user_id', userId).eq('account', 'Revolut')
+      .eq('kind', kind).order('period_to', { ascending: false }).limit(1);
+    return data?.[0]?.period_to ?? '';
+  };
+  const fundEnd = await endOf('revolut_fund'), savingsEnd = await endOf('revolut_deposit');
+  // the fund statement's own trades (buys / sells: the units; dividends: the daily return and fee)
+  const fundRows: { ticker: string; currency: string; side: string; quantity: number; trade_date: string; note: string }[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await db.from('trades').select('ticker, currency, side, quantity::text, trade_date, note').eq('user_id', userId)
+      .eq('external_source', 'revolut_fund_csv').order('trade_date', { ascending: false }).range(from, from + 999);
+    if (error) throw new Error(error.message);
+    for (const r of data ?? []) fundRows.push({ ...r, quantity: Number(r.quantity) });
+    if (!data || data.length < 1000) break;
+  }
+  // the fund of each currency, as its statement names it (its ISIN)
+  const fundOf = new Map<string, string>();
+  for (const f of fundRows) if (!fundOf.has(f.currency)) fundOf.set(f.currency, f.ticker);
+
+  const rows = [];
+  const seen = new Map<string, number>();
+  for (const x of write) {
+    const fcf = /^(To|From)\s+(?:[A-Z]{3}\s+)?Flexible Cash Funds/i.exec(x.desc);
+    const ias = /^(To|From)\s+Instant Access Savings/i.exec(x.desc);
+    if (!fcf && !ias) continue;
+    if (fcf && (x.day <= fundEnd || !fundOf.has(x.currency))) continue;
+    if (ias && x.day <= savingsEnd) continue;
+    const buy = /^to$/i.test((fcf ?? ias)![1]);
+    const base = `revolut:${x.ref || `${x.day}:${x.currency}:${x.amount}`}`;
+    const n = seen.get(base) ?? 0; seen.set(base, n + 1);
+    rows.push({
+      user_id: userId, account: 'Revolut', ticker: fcf ? fundOf.get(x.currency) : `SAVINGS:Revolut ${x.currency}`,
+      side: buy ? 'buy' : 'sell', quantity: Math.abs(x.amount), price: 1, trade_date: x.day, currency: x.currency,
+      fee_tax: null, fee_currency: null, nkd: null, exchange: null, estimated: true,
+      note: `ESTIMATED: ${x.desc} -- from the account's Open Banking transfer, until the ${fcf ? 'fund' : 'savings'} statement comes`,
+      external_source: fcf ? OPENBANKING_TRADE_SOURCE.fund : OPENBANKING_TRADE_SOURCE.savings, external_id: n ? `${base}:dup${n}` : base,
+    });
+  }
+  const transfers = rows.length;
+
+  // Each fund's daily return and fee after its statement.
+  let returns = 0;
+  if (fundEnd) {
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    for (const [ccy, ticker] of fundOf) {
+      const moves = [...fundRows.filter(r => r.ticker === ticker && (r.side === 'buy' || r.side === 'sell')),
+        ...rows.filter(r => r.ticker === ticker)] as { side: string; quantity: number; trade_date: string }[];
+      const unitsBy = (day: string) => moves.filter(m => m.trade_date <= day).reduce((a, m) => a + (m.side === 'buy' ? m.quantity : -m.quantity), 0);
+      // The base is the units held the day before. The service fee is a fixed
+      // yearly rate (EUR 0.30%, USD 0.75%, GBP 0.50% when written) -- read off
+      // the statement's last day and rounded to 0.01%, it gives the
+      // statement's amounts exactly; the return is the fund's own daily yield,
+      // which moves every day: the statement's last day's is the best guess.
+      let perRet = 0, perFee = 0;
+      for (let d = fundEnd; d >= addDays(fundEnd, -6) && !perRet; d = addDays(d, -1)) {
+        const held = unitsBy(addDays(d, -1));
+        if (held <= 0) continue;
+        const day = fundRows.filter(r => r.ticker === ticker && r.side === 'dividend' && r.trade_date === d);
+        const r = day.filter(x => /Return PAID/i.test(x.note)).reduce((a, x) => a + x.quantity, 0);
+        const f = day.filter(x => /Service Fee/i.test(x.note)).reduce((a, x) => a + x.quantity, 0);
+        if (!r) continue;
+        perRet = r / held;
+        perFee = Math.round(f / held * 365 * 10000) / 10000 / 365;
+      }
+      if (!perRet) continue;
+      for (let d = addDays(fundEnd, 1); d <= yesterday; d = addDays(d, 1)) {
+        const held = unitsBy(addDays(d, -1));
+        if (held <= 0) continue;
+        for (const [kind, per, label] of [['return', perRet, 'Return PAID'], ['fee', perFee, 'Service Fee Charged']] as [string, number, string][]) {
+          const q = Math.round(held * per * 10000) / 10000;
+          if (!q) continue;
+          rows.push({
+            user_id: userId, account: 'Revolut', ticker, side: 'dividend', quantity: q, price: 0, trade_date: d, currency: ccy,
+            fee_tax: null, fee_currency: null, nkd: null, exchange: null, estimated: true,
+            note: kind === 'fee'
+              ? `ESTIMATED: ${label} ${ccy} Class ${ticker} -- ${held.toFixed(2)} units x ${(-per * 365 * 100).toFixed(2)}% a year / 365, until the fund statement comes`
+              : `ESTIMATED: ${label} ${ccy} Class R ${ticker} -- ${held.toFixed(2)} units x ${(per * 365 * 100).toFixed(4)}% a year / 365 (the fund's yield on the statement's last day), until the fund statement comes`,
+            external_source: OPENBANKING_TRADE_SOURCE.fund, external_id: `est:${ticker}:${d}:${kind}`,
+          });
+          returns++;
+        }
+      }
+    }
+  }
+
+  for (const src of [OPENBANKING_TRADE_SOURCE.fund, OPENBANKING_TRADE_SOURCE.savings]) {
+    const { error } = await db.from('trades').delete().eq('user_id', userId).eq('external_source', src);
+    if (error) throw new Error(error.message);
+  }
+  for (let i = 0; i < rows.length; i += 500) {
+    const { error } = await db.from('trades').upsert(rows.slice(i, i + 500), { onConflict: 'user_id,external_source,external_id' });
+    if (error) throw new Error(error.message);
+  }
+  return { transfers, returns };
+}
 
 // One bank's session: checked against its statements, then its rows replaced.
 // deno-lint-ignore no-explicit-any
@@ -198,11 +305,12 @@ async function syncBank(db: any, userId: string, jwt: string, bankKey: string, s
     const { error } = await db.from('bank_transactions').upsert(rows.slice(i, i + 500), { onConflict: 'user_id,external_source,external_id' });
     if (error) throw new Error(error.message);
   }
-  if (rows.length) {
+  const standIn = bankKey === 'revolut' ? await revolutStandIns(db, userId, write) : { transfers: 0, returns: 0 };
+  if (rows.length || standIn.transfers || standIn.returns) {
     const { error: rq } = await db.rpc('request_capital_refresh', { p_user: userId });
     if (rq) throw new Error(rq.message);
   }
-  return { after_statement: lastEnd, written: rows.length, pending: pendingCount, checked: { window: `${checkFrom}..${lastEnd}`, matched },
+  return { after_statement: lastEnd, written: rows.length, fund_savings_trades: standIn.transfers, fund_returns_estimated: standIn.returns, pending: pendingCount, checked: { window: `${checkFrom}..${lastEnd}`, matched },
     balances, period_to: new Date().toISOString().slice(0, 10), valid_until: s.access?.valid_until ?? null };
 }
 
