@@ -224,7 +224,7 @@ async function depositEstimates(db: any, userId: string, until: string) {
     const [account, ticker] = key.split('|');
     const own = rows.filter(r => r.account === account && r.ticker === ticker);
     const end = await statementEnd(db, userId, account, ['bank_csv']);
-    if (!end || end >= until || heldOn(own, end) <= 0) continue;
+    if (!end || end >= until || heldOn(own, end) < 0.005) continue;   // (a rounding tail is empty)
     const interest = own.filter(r => r.side === 'buy' && /interest|процент/i.test(r.note ?? ''));
     const currency = own[0].currency;
     // the rates set by hand, each from its valid_from on; the day's rate
