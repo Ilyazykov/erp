@@ -6204,7 +6204,7 @@ async function mpBinanceApiLoad() {
 
 function mpBinanceSummary(r) {
   if (r.error) return `error — ${r.error}`;
-  const coins = Object.entries(r.balances || {}).map(([c, v]) => `${c} ${v}`).join(', ') || 'nothing';
+  const coins = Object.entries(r.balances || {}).map(([c, v]) => `${c} ${Number(v).toLocaleString('en', { maximumFractionDigits: 8 })}`).join(', ') || 'nothing';
   return r.differences?.length
     ? `the account differs from the stored export (${r.differences.join('; ')}) — upload a new Binance export`
     : `matches the stored export (${coins})`;
