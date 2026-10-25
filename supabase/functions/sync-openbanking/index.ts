@@ -71,10 +71,16 @@ async function jwtOf(appId: string, pem: string): Promise<string> {
   return `${head}.${b64url(sig)}`;
 }
 
+// The user's own IP and browser when the page asks (Sync now, connect): the
+// bank then counts the request as made with the user present -- PSD2 lets a
+// bank cap the ones without the user at a few a day per account (Bank of
+// Cyprus: ASPSP_RATE_LIMIT_EXCEEDED); the daily job sends none.
+let PSU: Record<string, string> = {};
+
 // deno-lint-ignore no-explicit-any
 async function eb(jwt: string, method: 'GET' | 'POST', path: string, body?: unknown): Promise<any> {
   const res = await fetch(EB + path, {
-    method, headers: { Authorization: `Bearer ${jwt}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+    method, headers: { Authorization: `Bearer ${jwt}`, 'Content-Type': 'application/json', Accept: 'application/json', ...PSU },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await res.text();
@@ -434,7 +440,10 @@ Deno.serve(async (req) => {
     }
     const body = await req.json().catch(() => ({}));
 
+    PSU = {};
     if (userId) {
+      const ip = (req.headers.get('x-forwarded-for') ?? '').split(',')[0].trim();
+      if (ip) PSU = { 'Psu-Ip-Address': ip, 'Psu-User-Agent': req.headers.get('user-agent') ?? 'Mozilla/5.0' };
       const app = apps[0];
       let jwt: string;
       try { jwt = await jwtOf(app.app_id, app.private_key); } catch (err) { return json({ error: `The key doesn't load: ${String(err)}` }, 400); }
@@ -523,13 +532,18 @@ Deno.serve(async (req) => {
     // Every session (the page's "Sync now": the user's; the daily job: everyone's).
     const results = [];
     for (const app of apps) {
-      const { data: sessions, error } = await db.from('broker_credentials').select('broker, query_id')
+      const { data: sessions, error } = await db.from('broker_credentials').select('broker, query_id, last_sync_at, last_sync_result')
         .eq('user_id', app.user_id).like('broker', 'eb:%');
       if (error) throw new Error(error.message);
       let jwt = '';
       try { jwt = await jwtOf(app.app_id, app.private_key); } catch { /* reported per session below */ }
       for (const s of sessions ?? []) {
         if (!BANKS[s.broker.slice(3)]) continue;   // e.g. 'eb:revolut:debug'
+        // The daily job (every 10 minutes 04:00-07:59 UTC): each bank once a
+        // day -- a good run today, or the bank's rate limit hit today, waits
+        // for tomorrow (a failed run is retried by the next slot).
+        if (!userId && s.last_sync_at && s.last_sync_at.slice(0, 10) >= new Date().toISOString().slice(0, 10)
+          && (!(s.last_sync_result || '').startsWith('{"error"') || /RATE_LIMIT|\b429\b/.test(s.last_sync_result || ''))) continue;
         let result: Record<string, unknown>;
         try {
           if (!jwt) throw new Error("The application's key doesn't load");
