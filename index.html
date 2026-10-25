@@ -265,14 +265,6 @@
     <p class="note">Automatic syncs and checks (IBKR, Bybit, Freedom24, T-Bank, Binance, Revolut X, Open Banking) —
       their keys and status — are on the <a href="#" onclick="showTab('automation');return false">Automation</a> tab.</p>
 
-    <div class="section-title">Export Revolut fund trades to Snowball</div>
-    <p class="note">Generates a Snowball-importable CSV from the trades already stored here for the
-      Revolut Flexible Cash Funds money-market fund share classes (IE0002RUHW32, IE000AZVL3K0, IE000H9J0QX4).</p>
-    <div class="form-row">
-      <button class="btn primary" id="mp_fund_snowball_export">Download Snowball CSV</button>
-    </div>
-    <p class="empty-note" id="mp_fund_snowball_status"></p>
-
     <div class="section-title">Full export to Snowball</div>
     <p class="note">Everything stored here as one Snowball CSV, laid out like Snowball's own export and starting,
       like the Snowball portfolio, on its first deal (2025-08-28), without blocked assets: every
@@ -2729,9 +2721,9 @@ async function mpImportOneFile(file, statusEl, session) {
   }
 }
 
-// Maps this app's `trades.side` values to Snowball's `Event` column, and
-// builds a Snowball-format CSV row per trade -- see Snowball's "custom
-// broker" template for the full column semantics.
+// Maps this app's `trades.side` values to Snowball's `Event` column (the
+// full export below) -- see Snowball's "custom broker" template for the
+// column semantics.
 const MP_FUND_SNOWBALL_EVENT = {
   buy: 'Buy',
   sell: 'Sell',
@@ -2740,85 +2732,6 @@ const MP_FUND_SNOWBALL_EVENT = {
   amortisation: 'Amortisation',
   repayment: 'Repayment',
 };
-const MP_FUND_SNOWBALL_ISINS = ['IE0002RUHW32', 'IE000AZVL3K0', 'IE000H9J0QX4'];
-
-function mpCsvField(v) {
-  const s = v === null || v === undefined ? '' : String(v);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-
-// Snowball's own export uses European decimal formatting (comma, not dot)
-// throughout its CSV, including this EUFUND asset class -- matching it
-// avoids re-parsing issues on import.
-function mpSnowballNumber(v) {
-  if (v === null || v === undefined) return '';
-  return String(v).replace('.', ',');
-}
-
-document.getElementById('mp_fund_snowball_export').addEventListener('click', async () => {
-  const statusEl = document.getElementById('mp_fund_snowball_status');
-  const { data: { session } } = await sb.auth.getSession();
-  if (!session) { statusEl.textContent = 'Sign in first.'; return; }
-
-  statusEl.textContent = 'Loading trades…';
-  try {
-    // Supabase/PostgREST caps a single response at 1000 rows by default --
-    // this ticker set easily exceeds that (daily dividend/fee rows across
-    // 3 currencies), so page through with .range() until a page comes back
-    // short, instead of silently truncating history at row 1000.
-    const trades = [];
-    const PAGE_SIZE = 1000;
-    for (let from = 0; ; from += PAGE_SIZE) {
-      const { data: page, error } = await sb
-        .from('trades')
-        .select('ticker, side, quantity, price, trade_date, currency, fee_tax')
-        .in('ticker', MP_FUND_SNOWBALL_ISINS)
-        .order('trade_date', { ascending: true })
-        .range(from, from + PAGE_SIZE - 1);
-      if (error) { statusEl.textContent = `Error: ${error.message}`; return; }
-      trades.push(...page);
-      if (page.length < PAGE_SIZE) break;
-    }
-    if (!trades || !trades.length) {
-      statusEl.textContent = 'No trades found for these ISINs.';
-      return;
-    }
-
-    const header = ['Event', 'Date', 'Symbol', 'Price', 'Quantity', 'Currency', 'FeeTax', 'Exchange', 'NKD', 'FeeCurrency'];
-    const lines = [header.join(',')];
-    for (const t of trades) {
-      const event = MP_FUND_SNOWBALL_EVENT[t.side];
-      if (!event) continue;
-      lines.push([
-        event,
-        t.trade_date,
-        t.ticker,
-        mpSnowballNumber(t.price),
-        mpSnowballNumber(t.quantity),
-        t.currency || '',
-        mpSnowballNumber(t.fee_tax || 0),
-        'EUFUND',
-        '',
-        t.currency || '',
-      ].map(mpCsvField).join(','));
-    }
-
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `revolut_fund_snowball_export_${new Date().toISOString().slice(0, 10)}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-
-    statusEl.textContent = `Downloaded ${lines.length - 1} rows.`;
-  } catch (err) {
-    statusEl.textContent = `Error: ${err.message}`;
-  }
-});
-
 // ---- Full export to Snowball ----
 // Mirrors Snowball's own export (statements/Snowball_Export_*.csv): every
 // field quoted, upper-case events, "YYYY-MM-DD 00:00:00" dates, comma
