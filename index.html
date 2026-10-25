@@ -2196,10 +2196,11 @@ async function mpRenderLatestSources() {
       if (!s?.session_set || !s.last_sync_at || !acc.has(name)) continue;
       let last = {};
       try { last = JSON.parse(s.last_sync_result || '{}'); } catch { /* not JSON */ }
-      const flex = { expires: s.valid_until, error: last.error || '', label: 'consent', to: last.period_to || '' };
+      // the data is good up to the last good run's day, a failed run's too (last_ok)
+      const flex = { expires: s.valid_until, error: last.error || '', label: 'consent', to: last.period_to || last.last_ok || '' };
       if (bank === 'revolut') { partAuto.set('Revolut|Cards & current accounts', flex); continue; }
       const a = acc.get(name);
-      if (!flex.error && flex.to && (!a.uploaded || flex.to > a.uploaded)) a.uploaded = flex.to;
+      if (flex.to && (!a.uploaded || flex.to > a.uploaded)) a.uploaded = flex.to;
       a.flex = flex;
     }
     for (const a of acc.values()) a.record = a.day, a.day = a.uploaded && a.uploaded > a.day ? a.uploaded : a.day;
@@ -2258,7 +2259,7 @@ async function mpRenderLatestSources() {
     for (const [name, ps] of parts) for (const p of ps) {
       p.auto = partAuto.get(`${name}|${p.part}`);
       p.up = partUploaded.get(`${name}|${p.part}`) || '';
-      if (p.auto && !p.auto.error && p.auto.to > p.up) p.up = p.auto.to;
+      if (p.auto && p.auto.to > p.up) p.up = p.auto.to;   // (a failed run's to: its last good day)
       p.day = p.up > p.last_day ? p.up : p.last_day;
       p.every = p.auto ? 'auto' : mpPartPeriod(p);
       p.left = p.auto ? keyLeft(p.auto) : typeof p.every === 'number' ? p.every - daysAgo(p.day) : null;

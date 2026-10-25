@@ -549,9 +549,17 @@ Deno.serve(async (req) => {
           if (!jwt) throw new Error("The application's key doesn't load");
           result = await syncBank(db, app.user_id, jwt, s.broker.slice(3), s.query_id);
         } catch (err) { result = { error: String(err) }; }
+        // a failed run keeps the day the data was last good up to -- the
+        // page's "Statements to" mustn't fall back to the statement's end
+        if (result.error) {
+          let prev: Record<string, unknown> = {};
+          try { prev = JSON.parse(s.last_sync_result || '{}'); } catch { /* not JSON */ }
+          const ok = prev.period_to ?? prev.last_ok;
+          if (ok) result.last_ok = ok;
+        }
         let kept = JSON.stringify(result);
         if (kept.length > 4000) kept = JSON.stringify({ ...result, balances: undefined });
-        if (kept.length > 4000) kept = JSON.stringify(result.error ? { error: String(result.error).slice(0, 3800) } : { period_to: result.period_to });
+        if (kept.length > 4000) kept = JSON.stringify(result.error ? { error: String(result.error).slice(0, 3700), last_ok: result.last_ok } : { period_to: result.period_to });
         await db.from('broker_credentials').update({ last_sync_at: new Date().toISOString(), last_sync_result: kept })
           .eq('user_id', app.user_id).eq('broker', s.broker);
         results.push({ bank: s.broker.slice(3), ...result });
