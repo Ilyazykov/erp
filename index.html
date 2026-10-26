@@ -2840,7 +2840,7 @@ async function mpXlsxModel(fromMonth) {
 
   const snaps = days.map(day => {
     const acc = new Map();
-    const s = { day, acc, estate: { usd: 0, native: 0, ccy: null }, ru: {}, cols: new Map() };
+    const s = { day, acc, estate: { usd: 0, native: 0, ccy: null }, ru: {}, ruPos: {}, cols: new Map() };
     for (const r of rows.filter(x => x.day === day)) {
       const usd = Number(r.value_usd);
       if (!usd) continue;
@@ -2849,7 +2849,7 @@ async function mpXlsxModel(fromMonth) {
         const per = usdPer(r.currency, day); if (per) s.estate.native += usd / per;
         continue;
       }
-      if (!acc.has(r.account)) acc.set(r.account, { usd: 0, native: new Map(), usdBy: new Map(), cls: {}, idx: {} });
+      if (!acc.has(r.account)) acc.set(r.account, { usd: 0, native: new Map(), usdBy: new Map(), cls: {}, idx: {}, pos: [] });
       const a = acc.get(r.account);
       const col = colOf(r);
       const unitUsd = isFiat(col) ? usdPer(col, day) : priceOf(col === 'XAU' ? (r.ticker === 'XAUT' ? 'XAUT' : 'XAU') : col, day) ?? priceOf(col, day);
@@ -2857,8 +2857,12 @@ async function mpXlsxModel(fromMonth) {
       a.usdBy.set(col, (a.usdBy.get(col) || 0) + usd);
       if (unitUsd) a.native.set(col, (a.native.get(col) || 0) + usd / unitUsd);
       const c = classOf(r); a.cls[c] = (a.cls[c] || 0) + usd;
-      if (r.instrument_type === 'stock') { const i = indexOf(r); a.idx[i] = (a.idx[i] || 0) + usd; }
-      const ru = ruOf(r); if (ru) s.ru[ru] = (s.ru[ru] || 0) + usd;
+      const i = r.instrument_type === 'stock' ? indexOf(r) : null;
+      if (i) a.idx[i] = (a.idx[i] || 0) + usd;
+      // each position too: the sheet's cells are written as the sum of them
+      a.pos.push({ col, native: unitUsd ? usd / unitUsd : null, usd, cls: c, idx: i, worldFund: MP_XLSX_INDEX_OF[r.ticker] === 'Акции мира' });
+      const ru = ruOf(r);
+      if (ru) { s.ru[ru] = (s.ru[ru] || 0) + usd; (s.ruPos[ru] ??= []).push(usd); }
       s.cols.set(col, (s.cols.get(col) || 0) + usd);
     }
     // the rate to the dollar: a currency's units per USD, a metal's / coin's USD price
@@ -2898,12 +2902,13 @@ const mpXlsxFill = i => `<c:spPr><a:solidFill><a:srgbClr val="${MP_XLSX_PALETTE[
 
 function mpXlsxChartXml(ch) {
   const x = mpXmlEsc;
+  const font = (sz, b = 0) => `<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="${sz}" b="${b}"><a:latin typeface="Helvetica Neue"/><a:cs typeface="Helvetica Neue"/></a:defRPr></a:pPr><a:endParaRPr lang="ru-RU"/></a:p></c:txPr>`;
   const ser = (s, i) => {
     const tx = s.nameRef ? `<c:tx><c:strRef><c:f>${x(s.nameRef)}</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>${x(s.name)}</c:v></c:pt></c:strCache></c:strRef></c:tx>` : '';
-    // a pie: a colour per slice; an area: one per series
+    // a pie: a colour per slice, "name / %" outside it with a leader line; an area: a colour per series
     const fill = ch.type === 'pie' ? ch.cats.map((_, j) => `<c:dPt><c:idx val="${j}"/><c:bubble3D val="0"/>${mpXlsxFill(j)}</c:dPt>`).join('') : mpXlsxFill(i);
     const lbl = ch.type === 'pie'
-      ? '<c:dLbls><c:showLegendKey val="0"/><c:showVal val="0"/><c:showCatName val="1"/><c:showSerName val="0"/><c:showPercent val="1"/><c:showBubbleSize val="0"/><c:separator>\n</c:separator><c:showLeaderLines val="1"/></c:dLbls>' : '';
+      ? `<c:dLbls>${font(1200)}<c:dLblPos val="bestFit"/><c:showLegendKey val="0"/><c:showVal val="0"/><c:showCatName val="1"/><c:showSerName val="0"/><c:showPercent val="1"/><c:showBubbleSize val="0"/><c:separator>\n</c:separator><c:showLeaderLines val="1"/></c:dLbls>` : '';
     const cat = `<c:cat><c:strRef><c:f>${x(ch.catRef)}</c:f><c:strCache><c:ptCount val="${ch.cats.length}"/>${ch.cats.map((c, j) => `<c:pt idx="${j}"><c:v>${x(c)}</c:v></c:pt>`).join('')}</c:strCache></c:strRef></c:cat>`;
     const val = `<c:val><c:numRef><c:f>${x(s.ref)}</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="${s.values.length}"/>${s.values.map((v, j) => Number.isFinite(v) ? `<c:pt idx="${j}"><c:v>${v}</c:v></c:pt>` : '').join('')}</c:numCache></c:numRef></c:val>`;
     return ch.type === 'pie'
@@ -2913,12 +2918,13 @@ function mpXlsxChartXml(ch) {
   const plot = ch.type === 'pie'
     ? `<c:pieChart><c:varyColors val="1"/>${ch.series.map(ser).join('')}<c:firstSliceAng val="0"/></c:pieChart>`
     : `<c:areaChart><c:grouping val="${ch.type === 'area%' ? 'percentStacked' : 'stacked'}"/><c:varyColors val="0"/>${ch.series.map(ser).join('')}<c:axId val="101"/><c:axId val="102"/></c:areaChart>`
-      + '<c:catAx><c:axId val="101"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:numFmt formatCode="General" sourceLinked="0"/><c:tickLblPos val="nextTo"/><c:crossAx val="102"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/></c:catAx>'
-      + `<c:valAx><c:axId val="102"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:majorGridlines/><c:numFmt formatCode="${ch.type === 'area%' ? '0%' : '#,##0'}" sourceLinked="0"/><c:tickLblPos val="nextTo"/><c:crossAx val="101"/><c:crosses val="autoZero"/><c:crossBetween val="midCat"/></c:valAx>`;
+      + `<c:catAx><c:axId val="101"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:numFmt formatCode="General" sourceLinked="0"/><c:tickLblPos val="nextTo"/>${font(1000)}<c:crossAx val="102"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/></c:catAx>`
+      + `<c:valAx><c:axId val="102"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:majorGridlines/><c:numFmt formatCode="${ch.type === 'area%' ? '0%' : '#,##0'}" sourceLinked="0"/><c:tickLblPos val="nextTo"/>${font(1000)}<c:crossAx val="101"/><c:crosses val="autoZero"/><c:crossBetween val="midCat"/></c:valAx>`;
+  const legend = ch.type === 'pie' ? '' : `<c:legend><c:legendPos val="t"/><c:overlay val="0"/>${font(1100)}</c:legend>`;
   return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
     + '<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
-    + `<c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t>${x(ch.title)}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title><c:autoTitleDeleted val="0"/>`
-    + `<c:plotArea><c:layout/>${plot}</c:plotArea>${ch.type === 'pie' ? '' : '<c:legend><c:legendPos val="t"/><c:overlay val="0"/></c:legend>'}<c:plotVisOnly val="1"/><c:dispBlanksAs val="zero"/></c:chart></c:chartSpace>`;
+    + `<c:chart><c:autoTitleDeleted val="1"/><c:plotArea><c:layout/>${plot}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="zero"/></c:chart>`
+    + '<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>' + font(1100) + '</c:chartSpace>';
 }
 
 // The workbook's files from its sheets.
@@ -2935,7 +2941,7 @@ async function mpXlsxZip(sheets) {
     const n = i + 1;
     const byRow = new Map();
     for (const cell of sh.cells.values()) { if (!byRow.has(cell.r)) byRow.set(cell.r, []); byRow.get(cell.r).push(cell); }
-    const rowsXml = [...byRow.keys()].sort((a, b) => a - b).map(r => `<row r="${r + 1}">${byRow.get(r).sort((a, b) => a.c - b.c).map(cell => {
+    const rowsXml = [...byRow.keys()].sort((a, b) => a - b).map(r => `<row r="${r + 1}" ht="22" customHeight="1">${byRow.get(r).sort((a, b) => a.c - b.c).map(cell => {
       const ref = `${mpColL(cell.c)}${r + 1}`;
       if (typeof cell.v === 'string' && !cell.f) return `<c r="${ref}" t="s" s="${cell.s}"><v>${str(cell.v)}</v></c>`;
       return `<c r="${ref}" s="${cell.s}">${cell.f ? `<f>${mpXmlEsc(cell.f)}</f>` : ''}<v>${cell.v}</v></c>`;
@@ -2969,19 +2975,22 @@ async function mpXlsxZip(sheets) {
   });
   zip.file('xl/sharedStrings.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
     + `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${strings.length}" uniqueCount="${strings.length}">${strings.map(s => `<si><t xml:space="preserve">${mpXmlEsc(s)}</t></si>`).join('')}</sst>`);
+  // the look of money.numbers: grey header / label column, darker totals, a grid of thin lines
+  // styles: 0 plain, 1 header, 2 money, 3 whole, 4 coin, 5 title, 6 total whole, 7 total money,
+  // 8 label, 9 total label, 10 money on grey, 11 text in the grid, 12 grand money, 13 share
+  const xf = (num, font, fill, border) => `<xf numFmtId="${num}" fontId="${font}" fillId="${fill}" borderId="${border}" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1"><alignment vertical="center"/></xf>`;
   zip.file('xl/styles.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-    + '<numFmts count="3"><numFmt numFmtId="164" formatCode="#,##0.00"/><numFmt numFmtId="165" formatCode="#,##0"/><numFmt numFmtId="166" formatCode="#,##0.00######"/></numFmts>'
+    + '<numFmts count="4"><numFmt numFmtId="164" formatCode="#,##0.00"/><numFmt numFmtId="165" formatCode="#,##0"/><numFmt numFmtId="166" formatCode="#,##0.00######"/><numFmt numFmtId="167" formatCode="0.00"/></numFmts>'
     + '<fonts count="3"><font><sz val="11"/><name val="Helvetica Neue"/></font><font><b/><sz val="11"/><name val="Helvetica Neue"/></font><font><b/><sz val="16"/><name val="Helvetica Neue"/></font></fonts>'
-    + '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEDEFF2"/><bgColor indexed="64"/></patternFill></fill></fills>'
-    + '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
-    + '<cellXfs count="8"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
-    + '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>'
-    + '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'
-    + '<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'
-    + '<xf numFmtId="166" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'
-    + '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/>'
-    + '<xf numFmtId="165" fontId="1" fillId="2" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1"/>'
-    + '<xf numFmtId="164" fontId="1" fillId="2" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1"/></cellXfs>'
+    + '<fills count="5"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>'
+    + '<fill><patternFill patternType="solid"><fgColor rgb="FFDBDBDB"/><bgColor indexed="64"/></patternFill></fill>'
+    + '<fill><patternFill patternType="solid"><fgColor rgb="FFC8C8C8"/><bgColor indexed="64"/></patternFill></fill>'
+    + '<fill><patternFill patternType="solid"><fgColor rgb="FFA5A5A5"/><bgColor indexed="64"/></patternFill></fill></fills>'
+    + '<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border>'
+    + '<border><left style="thin"><color rgb="FFAAAAAA"/></left><right style="thin"><color rgb="FFAAAAAA"/></right><top style="thin"><color rgb="FFAAAAAA"/></top><bottom style="thin"><color rgb="FFAAAAAA"/></bottom><diagonal/></border></borders>'
+    + '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+    + `<cellXfs count="14">${[xf(0, 0, 0, 0), xf(0, 1, 2, 1), xf(164, 0, 0, 1), xf(165, 0, 0, 1), xf(166, 0, 0, 1), xf(0, 2, 0, 0), xf(165, 1, 3, 1), xf(164, 1, 3, 1),
+      xf(0, 1, 2, 1), xf(0, 1, 4, 1), xf(164, 0, 2, 1), xf(0, 0, 0, 1), xf(164, 1, 4, 1), xf(167, 0, 0, 1)].join('')}</cellXfs>`
     + '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>');
   zip.file('xl/workbook.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
     + `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="${NS}"><sheets>${sheets.map((s, i) => `<sheet name="${mpXmlEsc(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets></workbook>`);
@@ -3014,154 +3023,201 @@ const mpXlsxAccOrder = (a, b) => {
   return (i < 0 ? 99 : i) - (j < 0 ? 99 : j) || a.localeCompare(b);
 };
 
-// One date's sheet: the table, the Russian block, the flat; the pies' data
-// stacked down the left, the pies beside it (Numbers' rows run taller than the
-// file says, so nothing is put below a table it could overlap).
+// One date's sheet, as money.numbers lays it out: accounts x currencies (each
+// cell the sum of the positions in that currency), the USD total of the row
+// from the rates below, asset types and indexes (sums of the positions in
+// USD), the totals, the rates, the totals in USD; the Russian block and the
+// flat to the right of it; the pies' data further right, its cells referring
+// to the table's; the pies under the table, four to a row.
 function mpXlsxDaySheet(model, s, name) {
   const { cols, classes, isFiat } = model;
   const sh = mpXlsxSheet(name);
+  const L = mpColL;
   const [y, mo, d] = s.day.split('-').map(Number);
   sh.set(0, 0, `${d} ${MP_XLSX_RU_MONTHS[mo - 1]} ${y}`, 5);
   const accounts = [...s.acc.entries()].sort((a, b) => mpXlsxAccOrder(a[0], b[0]));
   const H = 2, R0 = 3, RN = R0 + accounts.length - 1;
   const cCol = i => 1 + i, cTot = 1 + cols.length, cCls = i => cTot + 1 + i, cClsTot = cTot + 1 + classes.length;
   const cIdx = i => cClsTot + 1 + i, cIdxTot = cClsTot + 1 + MP_XLSX_INDEXES.length;
+  const rT = RN + 1, rRate = RN + 2, rUsd = RN + 3;
+  const cRub = cols.indexOf('RUB') >= 0 ? cCol(cols.indexOf('RUB')) : null;
+  const rubRef = cRub !== null ? `${L(cRub)}$${rRate + 1}` : String(s.rubPerUsd || 0);
+  const sumOf = list => list.reduce((t, v) => t + v, 0);
+  const plus = (list, dec) => list.map(v => v.toFixed(dec)).join('+');
+
   sh.set(H, 0, '', 1);
   cols.forEach((c, i) => sh.set(H, cCol(i), mpXlsxCol(c), 1));
-  sh.set(H, cTot, 'Всего (USD)', 1);
+  sh.set(H, cTot, 'Всего (USD)', 9);
   classes.forEach((c, i) => sh.set(H, cCls(i), c, 1));
-  sh.set(H, cClsTot, 'Всего', 1);
+  sh.set(H, cClsTot, 'Всего', 9);
   MP_XLSX_INDEXES.forEach((c, i) => sh.set(H, cIdx(i), MP_XLSX_INDEX_LABEL[c], 1));
-  sh.set(H, cIdxTot, 'Всего', 1);
-  const L = mpColL;
+  sh.set(H, cIdxTot, 'Всего', 9);
+
   accounts.forEach(([acc, a], k) => {
     const r = R0 + k;
-    sh.set(r, 0, mpXlsxAcc(acc), 1);
-    cols.forEach((c, i) => { const v = a.native.get(c); if (v) sh.set(r, cCol(i), v, isFiat(c) ? 2 : 4); });
-    sh.set(r, cTot, a.usd, 2);
-    classes.forEach((c, i) => { if (a.cls[c]) sh.set(r, cCls(i), a.cls[c], 2); });
-    sh.set(r, cClsTot, a.usd, 2, `SUM(${L(cCls(0))}${r + 1}:${L(cCls(classes.length - 1))}${r + 1})`);
-    MP_XLSX_INDEXES.forEach((c, i) => { if (a.idx[c]) sh.set(r, cIdx(i), a.idx[c], 2); });
-    const st = MP_XLSX_INDEXES.reduce((t, c) => t + (a.idx[c] || 0), 0);
-    if (st) sh.set(r, cIdxTot, st, 2, `SUM(${L(cIdx(0))}${r + 1}:${L(cIdx(MP_XLSX_INDEXES.length - 1))}${r + 1})`);
+    sh.set(r, 0, mpXlsxAcc(acc), 8);
+    cols.forEach((c, i) => {
+      const parts = a.pos.filter(p => p.col === c && p.native).map(p => p.native);
+      const dec = isFiat(c) ? 2 : 8;
+      if (!parts.length) { sh.set(r, cCol(i), 0, isFiat(c) ? 2 : 4); return; }
+      sh.set(r, cCol(i), Number(sumOf(parts).toFixed(dec)), isFiat(c) ? 2 : 4, plus(parts, dec));
+    });
+    const terms = cols.map((c, i) => s.rate(c) ? `${L(cCol(i))}${r + 1}${isFiat(c) ? '/' : '*'}${L(cCol(i))}$${rRate + 1}` : null).filter(Boolean);
+    sh.set(r, cTot, a.usd, 10, terms.join('+') || null);
+    classes.forEach((c, i) => {
+      const parts = a.pos.filter(p => p.cls === c).map(p => p.usd);
+      if (parts.length) sh.set(r, cCls(i), sumOf(parts), 2, plus(parts, 2));
+    });
+    sh.set(r, cClsTot, a.usd, 10, `SUM(${L(cCls(0))}${r + 1}:${L(cCls(classes.length - 1))}${r + 1})`);
+    MP_XLSX_INDEXES.forEach((c, i) => {
+      const parts = a.pos.filter(p => p.idx === c).map(p => p.usd);
+      if (parts.length) sh.set(r, cIdx(i), sumOf(parts), 2, plus(parts, 2));
+    });
+    const st = sumOf(a.pos.filter(p => p.idx).map(p => p.usd));
+    if (st) sh.set(r, cIdxTot, st, 10, `SUM(${L(cIdx(0))}${r + 1}:${L(cIdx(MP_XLSX_INDEXES.length - 1))}${r + 1})`);
   });
+
   // totals: in each currency, its rate to the dollar, in USD
-  const rT = RN + 1, rRate = RN + 2, rUsd = RN + 3;
-  sh.set(rT, 0, 'Всего', 1); sh.set(rRate, 0, 'Курс к доллару', 1); sh.set(rUsd, 0, 'Всего (USD)', 1);
+  sh.set(rT, 0, 'Всего', 9); sh.set(rRate, 0, 'Курс к доллару', 8); sh.set(rUsd, 0, 'Всего (USD)', 9);
   const sum = c => accounts.length ? `SUM(${L(c)}${R0 + 1}:${L(c)}${RN + 1})` : '0';
   const colSum = c => accounts.reduce((t, _, k) => t + (sh.get(R0 + k, c) || 0), 0);
   cols.forEach((c, i) => {
-    const total = colSum(cCol(i)), rate = s.rate(c);
-    sh.set(rT, cCol(i), total, isFiat(c) ? 7 : 4, sum(cCol(i)));
+    const rate = s.rate(c);
+    sh.set(rT, cCol(i), colSum(cCol(i)), isFiat(c) ? 7 : 4, sum(cCol(i)));
     if (rate) sh.set(rRate, cCol(i), rate, isFiat(c) ? 4 : 2);
-    const usd = s.cols.get(c) || 0;
-    sh.set(rUsd, cCol(i), usd, 7, rate ? (isFiat(c) ? `${L(cCol(i))}${rT + 1}/${L(cCol(i))}${rRate + 1}` : `${L(cCol(i))}${rT + 1}*${L(cCol(i))}${rRate + 1}`) : null);
+    sh.set(rUsd, cCol(i), s.cols.get(c) || 0, 7, rate ? `${L(cCol(i))}${rT + 1}${isFiat(c) ? '/' : '*'}${L(cCol(i))}${rRate + 1}` : null);
   });
   const grand = accounts.reduce((t, [, a]) => t + a.usd, 0);
-  for (const c of [cTot, cClsTot, ...classes.map((_, i) => cCls(i)), ...MP_XLSX_INDEXES.map((_, i) => cIdx(i)), cIdxTot])
-    sh.set(rUsd, c, colSum(c), 7, sum(c));
-  if (s.rubPerUsd) sh.set(rRate, cTot, s.rubPerUsd, 2);   // the ruble's, for the Russian block below
-  // Russia, the rest of the world, the flat
-  let r = rUsd + 2;
-  sh.set(r, 0, 'Россия', 1); sh.set(r, 1, 'USD', 1); sh.set(r, 2, 'RUB', 1);
-  const ruTop = r + 1;
-  MP_XLSX_RU.forEach((k, i) => {
-    sh.set(ruTop + i, 0, k); sh.set(ruTop + i, 1, s.ru[k] || 0, 2);
-    if (s.rubPerUsd) sh.set(ruTop + i, 2, (s.ru[k] || 0) * s.rubPerUsd, 3, `B${ruTop + i + 1}*${L(cTot)}${rRate + 1}`);
+  sh.set(rT, cTot, grand, 12, sum(cTot));
+  sh.set(rRate, cTot, grand * (s.rubPerUsd || 0), 7, `${L(cTot)}${rUsd + 1}*${rubRef}`);   // the total in rubles
+  sh.set(rUsd, cTot, grand, 12, `${L(cTot)}${rT + 1}`);
+  classes.forEach((c, i) => sh.set(rUsd, cCls(i), colSum(cCls(i)), 7, sum(cCls(i))));
+  sh.set(rUsd, cClsTot, grand, 12, `SUM(${L(cCls(0))}${rUsd + 1}:${L(cCls(classes.length - 1))}${rUsd + 1})`);
+  // the world funds look through to the indexes: 53% S&P 500, 7% S&P 400, 16% STOXX 600, 24% the rest
+  const world = sumOf(accounts.flatMap(([, a]) => a.pos.filter(p => p.worldFund).map(p => p.usd)));
+  const share = { 'S&P500': 0.53, 'S&P400': 0.07, STOXX600: 0.16, 'Акции мира': -0.76 };
+  let idxGrand = 0;
+  MP_XLSX_INDEXES.forEach((c, i) => {
+    const v = colSum(cIdx(i)) + (share[c] || 0) * world;
+    idxGrand += v;
+    sh.set(rUsd, cIdx(i), v, 7, share[c] && world ? `${sum(cIdx(i))}${share[c] > 0 ? '+' : '-'}${world.toFixed(2)}*${Math.abs(share[c])}` : sum(cIdx(i)));
   });
-  const ruTot = MP_XLSX_RU.reduce((t, k) => t + (s.ru[k] || 0), 0), rRuT = ruTop + MP_XLSX_RU.length;
-  sh.set(rRuT, 0, 'Всего 🇷🇺', 1); sh.set(rRuT, 1, ruTot, 7, `SUM(B${ruTop + 1}:B${rRuT})`);
-  if (s.rubPerUsd) sh.set(rRuT, 2, ruTot * s.rubPerUsd, 6, `SUM(C${ruTop + 1}:C${rRuT})`);
-  sh.set(rRuT + 1, 0, 'Всего 🌎', 1); sh.set(rRuT + 1, 1, grand - ruTot, 7, `${L(cTot)}${rUsd + 1}-B${rRuT + 1}`);
-  r = rRuT + 3;
-  sh.set(r, 0, 'Квартира', 1); sh.set(r, 1, 'USD', 1); sh.set(r, 2, s.estate.ccy || '', 1); sh.set(r, 3, 'кв.м.', 1);
-  sh.set(r + 1, 0, 'real estate 🏠'); sh.set(r + 1, 1, s.estate.usd, 2);
-  if (s.estate.native) sh.set(r + 1, 2, s.estate.native, 3);
-  if (s.m2) sh.set(r + 1, 3, Number(s.m2.price_per_m2), 3);
-  sh.set(r + 2, 0, 'Всего с квартирой', 1); sh.set(r + 2, 1, grand + s.estate.usd, 7, `${L(cTot)}${rUsd + 1}+B${r + 2}`);
+  sh.set(rUsd, cIdxTot, idxGrand, 12, `SUM(${L(cIdx(0))}${rUsd + 1}:${L(cIdx(MP_XLSX_INDEXES.length - 1))}${rUsd + 1})`);
 
-  // the pies, as money.numbers has them
-  const clsSum = c => accounts.reduce((t, [, a]) => t + (a.cls[c] || 0), 0);
-  const idxSum = c => accounts.reduce((t, [, a]) => t + (a.idx[c] || 0), 0);
-  const coins = cols.filter(c => !isFiat(c) && c !== 'XAU');
-  const blocks = [
-    ['По валютам', cols.map(c => [mpXlsxCol(c), s.cols.get(c) || 0])],
-    ['По банкам', accounts.map(([acc, a]) => [mpXlsxAcc(acc), a.usd])],
-    ['По типам активов', classes.map(c => [c, clsSum(c)])],
-    ['Акции по индексам', MP_XLSX_INDEXES.map(c => [MP_XLSX_INDEX_LABEL[c], idxSum(c)])],
-    ['Крипта', coins.map(c => [c, s.cols.get(c) || 0])],
-    ['Россия', [['MOEX 🇷🇺', idxSum('MOEX')], ...MP_XLSX_RU.map(k => [k, s.ru[k] || 0])]],
-    ['Инвестиции', ['Акции', 'Облигации', 'Вклады'].map(c => [c, clsSum(c)])],
-    ['Акции по брокерам', accounts.map(([acc, a]) => [mpXlsxAcc(acc), a.cls['Акции'] || 0])],
-    ['Россия и мир', [['Всего 🇷🇺', ruTot], ['Всего 🌎', grand - ruTot]]],
-    ['С квартирой', [...classes.map(c => [c, clsSum(c)]), ['Квартира', s.estate.usd]]],
-  ].map(([t, list]) => [t, list.filter(([, v]) => v > 0.005)]).filter(([, list]) => list.length);
-  let top = r + 5;
-  const first = top;
-  blocks.forEach(([title, list], b) => {
-    sh.set(top, 0, title, 1); sh.set(top, 1, 'USD', 1);
-    list.forEach(([k, v], i) => { sh.set(top + 1 + i, 0, k); sh.set(top + 1 + i, 1, v, 2); });
-    sh.charts.push({
-      // spaced wide: Numbers grows a pie's frame around its labels
-      type: 'pie', title, at: { c: 6 + (b % 4) * 6, r: first + Math.floor(b / 4) * 30, w: 440, h: 400 },
-      catRef: mpRef(name, 0, top + 1, 0, top + list.length), cats: list.map(x => x[0]),
-      series: [{ name: 'USD', ref: mpRef(name, 1, top + 1, 1, top + list.length), values: list.map(x => x[1]) }],
-    });
-    top += list.length + 2;
+  // Russia, USD and rubles, and the rest of the world -- to the right
+  const cRu = cIdxTot + 2;
+  sh.set(R0, cRu - 1, 'USD', 8); sh.set(R0 + 1, cRu - 1, 'RUB', 8);
+  MP_XLSX_RU.forEach((k, i) => {
+    const parts = s.ruPos[k] || [];
+    sh.set(H, cRu + i, k, 1);
+    sh.set(R0, cRu + i, s.ru[k] || 0, 2, parts.length ? plus(parts, 2) : null);
+    sh.set(R0 + 1, cRu + i, (s.ru[k] || 0) * (s.rubPerUsd || 0), 3, `${L(cRu + i)}${R0 + 1}*${rubRef}`);
   });
-  sh.widths[0] = 24;
-  for (let c = 1; c <= Math.max(cIdxTot, 27); c++) if (!sh.widths[c]) sh.widths[c] = 13;
+  const ruTot = MP_XLSX_RU.reduce((t, k) => t + (s.ru[k] || 0), 0), cRuT = cRu + MP_XLSX_RU.length;
+  sh.set(H, cRuT, 'Всего 🇷🇺', 9); sh.set(H, cRuT + 1, 'Всего 🌎', 9);
+  sh.set(R0, cRuT, ruTot, 7, `SUM(${L(cRu)}${R0 + 1}:${L(cRuT - 1)}${R0 + 1})`);
+  sh.set(R0 + 1, cRuT, ruTot * (s.rubPerUsd || 0), 6, `SUM(${L(cRu)}${R0 + 2}:${L(cRuT - 1)}${R0 + 2})`);
+  sh.set(R0, cRuT + 1, grand - ruTot, 7, `${L(cTot)}${rUsd + 1}-${L(cRuT)}${R0 + 1}`);
+  // the flat
+  const cFlat = cRuT + 3;
+  sh.set(H, cFlat, 'кв.м.', 1); sh.set(H, cFlat + 1, 'Квартира', 9);
+  if (s.m2) sh.set(R0, cFlat, Number(s.m2.price_per_m2), 3);
+  sh.set(R0, cFlat + 1, s.estate.usd, 2);
+  sh.set(R0 + 1, cFlat, 'с квартирой', 8);
+  sh.set(R0 + 1, cFlat + 1, grand + s.estate.usd, 12, `${L(cFlat + 1)}${R0 + 1}+${L(cTot)}${rUsd + 1}`);
+
+  // the pies take their slices straight from the table, as the original does:
+  // a label cell and a value cell for each
+  const ref = (r, c) => `${L(c)}${r + 1}`;
+  const clsTotRef = k => ref(rUsd, cCls(classes.indexOf(k)));
+  const coins = cols.filter(c => !isFiat(c) && c !== 'XAU');
+  const accRow = acc => R0 + accounts.findIndex(x => x[0] === acc);
+  const cls = k => [[H, cCls(classes.indexOf(k))], [rUsd, cCls(classes.indexOf(k))]];
+  const idx = k => [[H, cIdx(MP_XLSX_INDEXES.indexOf(k))], [rUsd, cIdx(MP_XLSX_INDEXES.indexOf(k))]];
+  const blocks = [
+    ['По валютам', cols.map((c, i) => [[H, cCol(i)], [rUsd, cCol(i)]])],
+    ['По банкам', accounts.map(([acc]) => [[accRow(acc), 0], [accRow(acc), cTot]])],
+    ['По типам активов', classes.map(cls)],
+    ['Акции по индексам', MP_XLSX_INDEXES.map(idx)],
+    ['Крипта', coins.map(c => [[H, cCol(cols.indexOf(c))], [rUsd, cCol(cols.indexOf(c))]])],
+    ['Россия', [idx('MOEX'), ...MP_XLSX_RU.map((k, i) => [[H, cRu + i], [R0, cRu + i]])]],
+    ['Инвестиции', ['Акции', 'Облигации', 'Вклады'].filter(k => classes.includes(k)).map(cls)],
+    ['Акции по брокерам', classes.includes('Акции') ? accounts.map(([acc]) => [[accRow(acc), 0], [accRow(acc), cCls(classes.indexOf('Акции'))]]) : []],
+    ['Россия и мир', [[[H, cRuT], [R0, cRuT]], [[H, cRuT + 1], [R0, cRuT + 1]]]],
+    ['С квартирой', [...classes.map(cls), [[H, cFlat + 1], [R0, cFlat + 1]]]],
+  ].map(([t, list]) => [t, list.filter(([, [r, c]]) => (sh.get(r, c) || 0) > 0.005)]).filter(([, list]) => list.length);
+  const q = `'${name.replace(/'/g, "''")}'!`;
+  const union = cells => `(${cells.map(([r, c]) => `${q}$${L(c)}$${r + 1}`).join(',')})`;
+  const pieTop = rUsd + 3;
+  blocks.forEach(([title, list], b) => {
+    sh.charts.push({
+      type: 'pie', title, at: { c: (b % 4) * 6, r: pieTop + Math.floor(b / 4) * 27, w: 520, h: 480 },
+      catRef: union(list.map(x => x[0])), cats: list.map(([[r, c]]) => sh.get(r, c)),
+      series: [{ name: 'USD', ref: union(list.map(x => x[1])), values: list.map(([, [r, c]]) => sh.get(r, c) || 0) }],
+    });
+  });
+
+  // where the summary takes its numbers from
+  sh.refs = {
+    cls: Object.fromEntries(classes.map(k => [k, q + clsTotRef(k)])),
+    col: Object.fromEntries(cols.map((c, i) => [c, q + ref(rUsd, cCol(i))])),
+    acc: Object.fromEntries(accounts.map(([acc]) => [acc, q + ref(accRow(acc), cTot)])),
+    estate: q + ref(R0, cFlat + 1),
+  };
+  sh.widths[0] = 18;
+  for (let c = 1; c <= cFlat + 1; c++) if (!sh.widths[c]) sh.widths[c] = 12;
   return sh;
 }
 
-// The summary: the history by asset type, currency and account -- in USD and
-// as shares of the total -- with a stacked-area chart over each table; the
-// charts on top, the tables below them.
-function mpXlsxSummary(model) {
+// The summary: the history by asset type, currency and account -- each cell
+// referring to its date's sheet -- and the same as shares of the total, with a
+// stacked-area chart for each; the charts on top, the tables below them.
+function mpXlsxSummary(model, daySheets) {
   const { snaps, cols, classes } = model;
   const sh = mpXlsxSheet('Сводка');
-  sh.set(0, 0, 'Капитал на 6-е число', 5);
   const label = s => s.day.split('-').reverse().join('.');
   const accounts = [...new Set(snaps.flatMap(s => [...s.acc.keys()]))].sort(mpXlsxAccOrder);
   const clsOf = (s, k) => [...s.acc.values()].reduce((t, a) => t + (a.cls[k] || 0), 0);
   const tables = [
     // the flat is a column of its own, left out of the total and the chart
-    ['По типам активов', classes, (s, k) => clsOf(s, k), [['Недвижимость', s => s.estate.usd]], k => k],
-    ['По валютам', cols, (s, k) => s.cols.get(k) || 0, [], mpXlsxCol],
-    ['По банкам', accounts, (s, k) => s.acc.get(k)?.usd || 0, [], mpXlsxAcc],
+    ['По типам активов', classes, (s, k) => clsOf(s, k), 'cls', [['Недвижимость', s => s.estate.usd, 'estate']], k => k],
+    ['По валютам', cols, (s, k) => s.cols.get(k) || 0, 'col', [], mpXlsxCol],
+    ['По банкам', accounts, (s, k) => s.acc.get(k)?.usd || 0, 'acc', [], mpXlsxAcc],
   ];
   const n = snaps.length;
-  let r = 44;
-  const pctTop = r + n + 4;
+  const r = 46, pctTop = r + n + 4;
   let c0 = 0;
-  tables.forEach(([title, keys, value, extra, show], t) => {
-    const shown = keys.map((k, i) => [k, i]).filter(([k]) => snaps.some(s => Math.abs(value(s, k)) > 0.5));
+  tables.forEach(([title, keys, value, kind, extra, show], t) => {
+    const shown = keys.filter(k => snaps.some(s => Math.abs(value(s, k)) > 0.5));
+    const cTot = c0 + 1 + shown.length;
     for (const pct of [false, true]) {
       const top = pct ? pctTop : r;
-      sh.set(top - 1, c0, pct ? `${title}, доли` : title, 1);
+      sh.set(top - 1, c0, pct ? `${title}-1` : title, 0);
       sh.set(top, c0, '', 1);
-      shown.forEach(([k], i) => sh.set(top, c0 + 1 + i, show(k), 1));
-      const cTot = c0 + 1 + shown.length;
-      sh.set(top, cTot, 'Всего', 1);
+      shown.forEach((k, i) => sh.set(top, c0 + 1 + i, show(k), 1));
+      sh.set(top, cTot, 'Всего', 9);
       if (!pct) extra.forEach(([k], e) => sh.set(top, cTot + 1 + e, k, 1));
       snaps.forEach((s, j) => {
-        const row = top + 1 + j;
-        const tot = shown.reduce((a, [k]) => a + value(s, k), 0);
-        sh.set(row, c0, label(s));
-        shown.forEach(([k], i) => pct
-          ? sh.set(row, c0 + 1 + i, tot ? value(s, k) / tot : 0, 2)
-          : sh.set(row, c0 + 1 + i, value(s, k), 2));
-        sh.set(row, cTot, tot, 7, pct ? null : `SUM(${mpColL(c0 + 1)}${row + 1}:${mpColL(cTot - 1)}${row + 1})`);
-        if (!pct) extra.forEach(([, f], e) => sh.set(row, cTot + 1 + e, f(s), 2));
+        const row = top + 1 + j, absRow = r + 1 + j;
+        const refs = daySheets[j].refs;
+        const tot = shown.reduce((a, k) => a + value(s, k), 0);
+        sh.set(row, c0, label(s), 8);
+        shown.forEach((k, i) => {
+          const cell = `${mpColL(c0 + 1 + i)}${absRow + 1}`;
+          if (pct) sh.set(row, c0 + 1 + i, tot ? value(s, k) / tot : 0, 13, `IF(${mpColL(cTot)}${absRow + 1}=0,0,${cell}/${mpColL(cTot)}${absRow + 1})`);
+          else sh.set(row, c0 + 1 + i, value(s, k), 2, refs[kind][k] ?? null);
+        });
+        sh.set(row, cTot, tot, 7, pct ? `${mpColL(cTot)}${absRow + 1}` : `SUM(${mpColL(c0 + 1)}${row + 1}:${mpColL(cTot - 1)}${row + 1})`);
+        if (!pct) extra.forEach(([, f, key], e) => sh.set(row, cTot + 1 + e, f(s), 2, refs[key] ?? null));
       });
       sh.charts.push({
-        type: pct ? 'area%' : 'area', title: `${title}${pct ? ', доли' : ''}`, at: { c: t * 8, r: pct ? 23 : 2, w: 760, h: 400 },
+        type: pct ? 'area%' : 'area', title, at: { c: t * 9, r: pct ? 25 : 1, w: 820, h: 420 },
         catRef: mpRef('Сводка', c0, top + 1, c0, top + n), cats: snaps.map(label),
-        series: shown.map(([k], i) => ({ name: show(k), nameRef: mpRef('Сводка', c0 + 1 + i, top, c0 + 1 + i, top),
+        series: shown.map((k, i) => ({ name: show(k), nameRef: mpRef('Сводка', c0 + 1 + i, top, c0 + 1 + i, top),
           ref: mpRef('Сводка', c0 + 1 + i, top + 1, c0 + 1 + i, top + n), values: snaps.map(s => Math.max(0, value(s, k))) })),
       });
     }
-    c0 += shown.length + 2 + extra.length + 1;
+    c0 = cTot + 2 + extra.length;
   });
   sh.widths[0] = 12;
   for (let c = 1; c < c0 + 2; c++) sh.widths[c] = 12;
@@ -3177,10 +3233,12 @@ document.getElementById('mp_xlsx_export').addEventListener('click', async () => 
     const model = await mpXlsxModel(document.getElementById('mp_xlsx_from').value || '2024-11');
     const names = model.snaps.map((s, i) => {
       const [y, m, d] = s.day.split('-').map(Number);
-      return i === model.snaps.length - 1 && d !== 6 ? `Сейчас ${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}` : `${MP_XLSX_EN_MONTHS[m - 1]} ${y}`;
+      // the latest day, when it isn't a 6th, as money.numbers names it (a dot in a name breaks Numbers' chart ranges)
+      return i === model.snaps.length - 1 && d !== 6 ? 'cur' : `${MP_XLSX_EN_MONTHS[m - 1]} ${y}`;
     });
     statusEl.textContent = 'Building the workbook…';
-    const sheets = [mpXlsxSummary(model), ...model.snaps.map((s, i) => mpXlsxDaySheet(model, s, names[i]))];
+    const days = model.snaps.map((s, i) => mpXlsxDaySheet(model, s, names[i]));
+    const sheets = [mpXlsxSummary(model, days), ...days];
     const blob = await mpXlsxZip(sheets);
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
