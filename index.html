@@ -2896,9 +2896,39 @@ function mpXlsxSheet(name) {
   };
 }
 
-// a palette of 12, so a 7th series doesn't repeat the 1st's colour
-const MP_XLSX_PALETTE = ['4E79A7', 'F28E2B', 'E15759', '76B7B2', '59A14F', 'EDC948', 'B07AA1', 'FF9DA7', '9C755F', 'BAB0AC', '1F77B4', '8C564B'];
-const mpXlsxFill = i => `<c:spPr><a:solidFill><a:srgbClr val="${MP_XLSX_PALETTE[i % MP_XLSX_PALETTE.length]}"/></a:solidFill></c:spPr>`;
+// Numbers' own palette, in the order it hands colours out
+const MP_XLSX_PALETTE = ['00A2FF', '61D836', '929292', 'F8BA00', 'FF2600', 'FF42A1', '22AEFF', '73DD4E', 'A0A0A0', 'F9C321', 'FF4322', 'D93386',
+  '44BAFF', '87E366', 'AFAFAF', 'FACC43', 'FF6044', 'DF4E97', '66C7FF', '9BE87F', 'BEBEBE'];
+// each chart's colours as money.numbers has them, by slice / series
+const MP_XLSX_TYPE_COLORS = { 'Облигации': '00A2FF', 'Кэш': '61D836', 'Вклады': '929292', 'Золото': 'F8BA00', 'Крипта': 'FF2600', 'Акции': 'FF42A1', 'Квартира': '8BCBFA' };
+const MP_XLSX_CCY_COLORS = { EUR: '00A2FF', USD: '61D836', RUB: '929292', TRY: 'F8BA00', GBP: 'FF2600', CNY: 'FF42A1', RSD: '22AEFF', ETH: '73DD4E',
+  TON: 'A0A0A0', XAU: 'F9C321', BTC: 'FF4322', SOL: 'D93386', TAO: '44BAFF', TRX: '87E366', DOGE: 'AFAFAF' };
+const MP_XLSX_COLORS = {
+  'По валютам': MP_XLSX_CCY_COLORS,
+  'По банкам': { 'Freedom24': '44BAFF', 'Банк Кипра': '479FF8', 'Wise': '81D653', 'Revolut': '929292', 'Райф': 'EFBD40', 'Зираат': 'EA4025', 'IBKR': 'C23175',
+    'Сбер': '61D836', 'Тиньков': '81D653', 'Ozon-Банк': 'F8BA00', 'Binance': 'EFBD40', 'Telegram': '54ABF8', 'Bybit': '90DB67', 'Cryptocom': 'A0A0A0',
+    'Trust': 'F1C54B', 'Nexo': 'EB5335', 'cash': 'C84285' },
+  'По типам активов': MP_XLSX_TYPE_COLORS, 'Инвестиции': MP_XLSX_TYPE_COLORS, 'С квартирой': MP_XLSX_TYPE_COLORS,
+  'Акции по индексам': { 'Акции мира': 'C23175', 'STOXX600': '479FF8', 'S&P500': '81D653', 'S&P400': '929292', 'S&P600': 'FF2600', 'MOEX': 'EA4025' },
+  'Крипта': { TON: '479FF8', TAO: 'A0A0A0', ETH: '81D653', TRX: '929292', DOGE: 'FF2600', BTC: 'EA4025', SOL: 'C23175' },
+  'Россия': { 'MOEX 🇷🇺': '00A2FF', 'Облигации 🇷🇺': '61D836', 'Вклады 🇷🇺': '929292', 'Облигации 🇨🇳': 'F8BA00' },
+  'Акции по брокерам': { 'Freedom24': '00A2FF', 'IBKR': 'FF42A1' },
+  'Россия и мир': { 'Всего 🇷🇺': 'EA4025', 'Всего 🌎': '479FF8' },
+  'area:По типам активов': { 'Кэш': '81D653', 'Вклады': '929292', 'Золото': 'EFBD40', 'Облигации': '479FF8', 'Акции': 'C23175', 'Крипта': 'FFD932' },
+  'area:По валютам': { ...MP_XLSX_CCY_COLORS, RSD: 'FF42A1', CNY: '22AEFF', SOL: 'A0A0A0', TON: 'D93386' },
+  'area:По банкам': { 'Банк Кипра': '00A2FF', 'Wise': '61D836', 'Revolut': '929292', 'Райф': 'F8BA00', 'Зираат': 'FF2600', 'IBKR': 'FF42A1', 'Финуслуги': '22AEFF',
+    'Сбер': '73DD4E', 'Binance': 'A0A0A0', 'Тиньков': 'F9C321', 'Bybit': 'FF4322', 'Cryptocom': 'D93386', 'Telegram': '44BAFF', 'Nexo': '87E366',
+    'Trust': 'DF4E97', 'cash': '9BE87F', 'Freedom24': 'BEBEBE' },
+};
+// the colours for a chart's labels: by the full label, else by it without its
+// flag; one not in money.numbers takes the next colour of the palette not used yet
+function mpXlsxColors(key, labels) {
+  const map = MP_XLSX_COLORS[key] || {};
+  const known = labels.map(l => map[l] ?? map[l.replace(/[^\p{L}\p{N}&+.\- ]/gu, '').trim()]);
+  const spare = MP_XLSX_PALETTE.filter(c => !known.includes(c));
+  return known.map((c, i) => c || spare.shift() || MP_XLSX_PALETTE[i % MP_XLSX_PALETTE.length]);
+}
+const mpXlsxFill = hex => `<c:spPr><a:solidFill><a:srgbClr val="${hex}"/></a:solidFill></c:spPr>`;
 
 function mpXlsxChartXml(ch) {
   const x = mpXmlEsc;
@@ -2906,7 +2936,7 @@ function mpXlsxChartXml(ch) {
   const ser = (s, i) => {
     const tx = s.nameRef ? `<c:tx><c:strRef><c:f>${x(s.nameRef)}</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>${x(s.name)}</c:v></c:pt></c:strCache></c:strRef></c:tx>` : '';
     // a pie: a colour per slice, "name / %" outside it with a leader line; an area: a colour per series
-    const fill = ch.type === 'pie' ? ch.cats.map((_, j) => `<c:dPt><c:idx val="${j}"/><c:bubble3D val="0"/>${mpXlsxFill(j)}</c:dPt>`).join('') : mpXlsxFill(i);
+    const fill = ch.type === 'pie' ? ch.cats.map((_, j) => `<c:dPt><c:idx val="${j}"/><c:bubble3D val="0"/>${mpXlsxFill(ch.colors[j])}</c:dPt>`).join('') : mpXlsxFill(ch.colors[i]);
     const lbl = ch.type === 'pie'
       ? `<c:dLbls>${font(1200)}<c:dLblPos val="bestFit"/><c:showLegendKey val="0"/><c:showVal val="0"/><c:showCatName val="1"/><c:showSerName val="0"/><c:showPercent val="1"/><c:showBubbleSize val="0"/><c:separator>\n</c:separator><c:showLeaderLines val="1"/></c:dLbls>` : '';
     const cat = `<c:cat><c:strRef><c:f>${x(ch.catRef)}</c:f><c:strCache><c:ptCount val="${ch.cats.length}"/>${ch.cats.map((c, j) => `<c:pt idx="${j}"><c:v>${x(c)}</c:v></c:pt>`).join('')}</c:strCache></c:strRef></c:cat>`;
@@ -2941,7 +2971,7 @@ async function mpXlsxZip(sheets) {
     const n = i + 1;
     const byRow = new Map();
     for (const cell of sh.cells.values()) { if (!byRow.has(cell.r)) byRow.set(cell.r, []); byRow.get(cell.r).push(cell); }
-    const rowsXml = [...byRow.keys()].sort((a, b) => a - b).map(r => `<row r="${r + 1}" ht="22" customHeight="1">${byRow.get(r).sort((a, b) => a.c - b.c).map(cell => {
+    const rowsXml = [...byRow.keys()].sort((a, b) => a - b).map(r => `<row r="${r + 1}" ht="20" customHeight="1">${byRow.get(r).sort((a, b) => a.c - b.c).map(cell => {
       const ref = `${mpColL(cell.c)}${r + 1}`;
       if (typeof cell.v === 'string' && !cell.f) return `<c r="${ref}" t="s" s="${cell.s}"><v>${str(cell.v)}</v></c>`;
       return `<c r="${ref}" s="${cell.s}">${cell.f ? `<f>${mpXmlEsc(cell.f)}</f>` : ''}<v>${cell.v}</v></c>`;
@@ -2949,7 +2979,7 @@ async function mpXlsxZip(sheets) {
     const colsXml = Object.keys(sh.widths).length
       ? `<cols>${Object.entries(sh.widths).sort((a, b) => a[0] - b[0]).map(([c, w]) => `<col min="${+c + 1}" max="${+c + 1}" width="${w}" customWidth="1"/>`).join('')}</cols>` : '';
     zip.file(`xl/worksheets/sheet${n}.xml`, '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-      + `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="${NS}">${colsXml}<sheetData>${rowsXml}</sheetData>${sh.charts.length ? '<drawing r:id="rId1"/>' : ''}</worksheet>`);
+      + `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="${NS}"><sheetViews><sheetView workbookViewId="0" zoomScale="100" zoomScaleNormal="100" showGridLines="0"/></sheetViews>${colsXml}<sheetData>${rowsXml}</sheetData>${sh.charts.length ? '<drawing r:id="rId1"/>' : ''}</worksheet>`);
     types.push(`<Override PartName="/xl/worksheets/sheet${n}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`);
     if (!sh.charts.length) return;
     zip.file(`xl/worksheets/_rels/sheet${n}.xml.rels`, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${NS}/drawing" Target="../drawings/drawing${n}.xml"/></Relationships>`);
@@ -2981,7 +3011,7 @@ async function mpXlsxZip(sheets) {
   const xf = (num, font, fill, border) => `<xf numFmtId="${num}" fontId="${font}" fillId="${fill}" borderId="${border}" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1"><alignment vertical="center"/></xf>`;
   zip.file('xl/styles.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
     + '<numFmts count="4"><numFmt numFmtId="164" formatCode="#,##0.00"/><numFmt numFmtId="165" formatCode="#,##0"/><numFmt numFmtId="166" formatCode="#,##0.00######"/><numFmt numFmtId="167" formatCode="0.00"/></numFmts>'
-    + '<fonts count="3"><font><sz val="11"/><name val="Helvetica Neue"/></font><font><b/><sz val="11"/><name val="Helvetica Neue"/></font><font><b/><sz val="16"/><name val="Helvetica Neue"/></font></fonts>'
+    + '<fonts count="3"><font><sz val="10"/><name val="Helvetica Neue"/></font><font><b/><sz val="10"/><name val="Helvetica Neue"/></font><font><b/><sz val="16"/><name val="Helvetica Neue"/></font></fonts>'
     + '<fills count="5"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>'
     + '<fill><patternFill patternType="solid"><fgColor rgb="FFDBDBDB"/><bgColor indexed="64"/></patternFill></fill>'
     + '<fill><patternFill patternType="solid"><fgColor rgb="FFC8C8C8"/><bgColor indexed="64"/></patternFill></fill>'
@@ -3152,7 +3182,7 @@ function mpXlsxDaySheet(model, s, name) {
   blocks.forEach(([title, list], b) => {
     sh.charts.push({
       type: 'pie', title, at: { c: (b % 4) * 6, r: pieTop + Math.floor(b / 4) * 27, w: 520, h: 480 },
-      catRef: union(list.map(x => x[0])), cats: list.map(([[r, c]]) => sh.get(r, c)),
+      catRef: union(list.map(x => x[0])), cats: list.map(([[r, c]]) => sh.get(r, c)), colors: mpXlsxColors(title, list.map(([[r, c]]) => sh.get(r, c))),
       series: [{ name: 'USD', ref: union(list.map(x => x[1])), values: list.map(([, [r, c]]) => sh.get(r, c) || 0) }],
     });
   });
@@ -3164,8 +3194,9 @@ function mpXlsxDaySheet(model, s, name) {
     acc: Object.fromEntries(accounts.map(([acc]) => [acc, q + ref(accRow(acc), cTot)])),
     estate: q + ref(R0, cFlat + 1),
   };
-  sh.widths[0] = 18;
-  for (let c = 1; c <= cFlat + 1; c++) if (!sh.widths[c]) sh.widths[c] = 12;
+  // money.numbers' widths: the accounts, the currencies, the asset types and indexes, the blocks on the right
+  sh.widths[0] = 16.35;
+  for (let c = 1; c <= cFlat + 1; c++) sh.widths[c] = c < cTot ? 10.63 : c <= cIdxTot ? 13 : 13.89;
   return sh;
 }
 
@@ -3212,15 +3243,19 @@ function mpXlsxSummary(model, daySheets) {
       });
       sh.charts.push({
         type: pct ? 'area%' : 'area', title, at: { c: t * 9, r: pct ? 25 : 1, w: 820, h: 420 },
-        catRef: mpRef('Сводка', c0, top + 1, c0, top + n), cats: snaps.map(label),
+        catRef: mpRef('Сводка', c0, top + 1, c0, top + n), cats: snaps.map(label), colors: mpXlsxColors(`area:${title}`, shown.map(show)),
         series: shown.map((k, i) => ({ name: show(k), nameRef: mpRef('Сводка', c0 + 1 + i, top, c0 + 1 + i, top),
           ref: mpRef('Сводка', c0 + 1 + i, top + 1, c0 + 1 + i, top + n), values: snaps.map(s => Math.max(0, value(s, k))) })),
       });
     }
     c0 = cTot + 2 + extra.length;
   });
-  sh.widths[0] = 12;
-  for (let c = 1; c < c0 + 2; c++) sh.widths[c] = 12;
+  for (let c = 0; c < c0 + 2; c++) sh.widths[c] = 10.63;
+  let c1 = 0;
+  for (const [, keys, value, , extra] of tables) {   // the date columns, as wide as money.numbers'
+    sh.widths[c1] = 16.35;
+    c1 += 3 + keys.filter(k => snaps.some(s => Math.abs(value(s, k)) > 0.5)).length + extra.length;
+  }
   return sh;
 }
 
