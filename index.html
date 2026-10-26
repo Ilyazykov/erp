@@ -265,6 +265,18 @@
     <p class="note">Automatic syncs and checks (IBKR, Bybit, Freedom24, T-Bank, Binance, Revolut X, Open Banking) —
       their keys and status — are on the <a href="#" onclick="showTab('automation');return false">Automation</a> tab.</p>
 
+    <div class="section-title">Export to Numbers (.xlsx)</div>
+    <p class="note">The capital as of the 6th of each month (and today), laid out like money.numbers: a sheet per month —
+      accounts × currencies (in each currency, at that day's rate), the total in USD, by asset type, the shares by index
+      (S&amp;P 500 / 400 / 600, STOXX 600, MOEX, world), the Russian bonds and deposits, the flat — with pie charts by
+      currency, asset type and account; and a summary sheet first, with the history by asset type, currency and account as
+      stacked areas (in USD and in shares of the total). Opens in Numbers (File → Open), and saves from there as .numbers.</p>
+    <div class="form-row">
+      <label>From <input type="month" id="mp_xlsx_from" value="2024-11"></label>
+      <button class="btn primary" id="mp_xlsx_export">Download .xlsx</button>
+    </div>
+    <p class="empty-note" id="mp_xlsx_status"></p>
+
     <div class="section-title">Full export to Snowball</div>
     <p class="note">Everything stored here as one Snowball CSV, laid out like Snowball's own export and starting,
       like the Snowball portfolio, on its first deal (2025-08-28), without blocked assets: every
@@ -2733,6 +2745,454 @@ const MP_FUND_SNOWBALL_EVENT = {
   amortisation: 'Amortisation',
   repayment: 'Repayment',
 };
+// ---- Export to Numbers (.xlsx with charts) ----
+// The capital (capital_daily) as of the 6th of each month from the month
+// chosen, and the latest day, as money.numbers lays it out: a summary sheet
+// (by asset type / currency / account over time, stacked areas in USD and in
+// shares) and a sheet per date (accounts x currencies in each currency at the
+// day's rate, the USD total, asset types, shares by index, the Russian block,
+// the flat, three pies). Written as OOXML by hand -- charts included, which
+// the spreadsheet libraries leave out -- and zipped with JSZip; Numbers opens
+// it with its charts as its own.
+const MP_XLSX_RU_MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+const MP_XLSX_EN_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MP_XLSX_CLASSES = ['Акции', 'Облигации', 'Вклады', 'Кэш', 'Золото', 'Крипта', 'Прочее'];
+const MP_XLSX_INDEXES = ['S&P500', 'S&P400', 'S&P600', 'STOXX600', 'MOEX', 'Акции мира'];
+const MP_XLSX_RU = ['Облигации 🇷🇺', 'Вклады 🇷🇺', 'Облигации 🇨🇳'];
+// funds by the index they follow; a single share: Russian -> MOEX, an S&P 500
+// member -> S&P500, any other -> world
+const MP_XLSX_INDEX_OF = {
+  CSPX: 'S&P500', VUAA: 'S&P500', VOO: 'S&P500', SPY: 'S&P500', IVV: 'S&P500', SXR8: 'S&P500', SPXS: 'S&P500',
+  SPY4: 'S&P400', IJH: 'S&P400', MDY: 'S&P400', IJR: 'S&P600', ISP6: 'S&P600', SLY: 'S&P600',
+  XSX6: 'STOXX600', EXSA: 'STOXX600', MEUD: 'STOXX600', VWRA: 'Акции мира', VWCE: 'Акции мира', IWDA: 'Акции мира', SWDA: 'Акции мира',
+};
+const MP_XLSX_SP500 = new Set(['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'GOOG', 'META', 'AMZN', 'TSLA', 'MU', 'WMT', 'JPM', 'V', 'MA', 'BRK.B', 'AVGO',
+  'LLY', 'UNH', 'XOM', 'JNJ', 'PG', 'HD', 'COST', 'NFLX', 'AMD', 'INTC', 'KO', 'PEP', 'DIS', 'ORCL', 'ADBE', 'CRM', 'QCOM', 'CSCO', 'BAC', 'PFE']);
+const MP_XLSX_STABLE = new Set(['USDT', 'USDC', 'DAI', 'USDS', 'USDE', 'FDUSD', 'PYUSD', 'TUSD', 'BUSD', 'USDP']);
+const MP_XLSX_RU_ACCOUNTS = new Set(['Sber', 'T-Bank', 'Alfa', 'Yandex Bank', 'Ozon Bank', 'Finuslugi']);
+const MP_XLSX_FIAT_ORDER = ['USD', 'EUR', 'GBP', 'RUB', 'TRY', 'RSD', 'CNY', 'GEL'];
+
+async function mpXlsxFetchAll(build) {
+  const out = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await build().range(from, from + 999);
+    if (error) throw new Error(error.message);
+    out.push(...data);
+    if (data.length < 1000) return out;
+  }
+}
+
+// The dates, the capital on them, and what's needed to show it in each currency.
+async function mpXlsxModel(fromMonth) {
+  const { data: last, error } = await sb.from('capital_daily').select('day').order('day', { ascending: false }).limit(1);
+  if (error) throw new Error(error.message);
+  const lastDay = last?.[0]?.day;
+  if (!lastDay) throw new Error('No capital history yet.');
+  const days = [];
+  let [y, m] = fromMonth.split('-').map(Number);
+  for (;;) {
+    const d = `${y}-${String(m).padStart(2, '0')}-06`;
+    if (d > lastDay) { if (days.at(-1) !== lastDay) days.push(lastDay); break; }
+    days.push(d);
+    if (++m > 12) { m = 1; y++; }
+  }
+  const rows = await mpXlsxFetchAll(() => sb.from('capital_daily')
+    .select('day, account, ticker, instrument_type, currency, value_usd').in('day', days).order('day'));
+  const first = days[0], lo = new Date(Date.parse(first) - 40 * 86400000).toISOString().slice(0, 10);
+  const ccys = [...new Set(rows.map(r => r.currency).filter(Boolean)).add('RUB')];
+  const fx = await mpXlsxFetchAll(() => sb.from('fx_history').select('currency, day, usd_per_unit')
+    .in('currency', ccys).gte('day', lo).lte('day', lastDay).order('day'));
+  const priced = [...new Set(rows.filter(r => r.instrument_type === 'crypto' || r.instrument_type === 'gold').map(r => r.ticker)).add('XAU')];
+  const px = await mpXlsxFetchAll(() => sb.from('price_history').select('ticker, day, price_usd')
+    .in('ticker', priced).gte('day', lo).lte('day', lastDay).order('day'));
+  const stocks = [...new Set(rows.filter(r => r.instrument_type === 'stock').map(r => r.ticker))];
+  const { data: regions } = await sb.from('market_prices').select('ticker, infra_region').in('ticker', stocks.length ? stocks : ['-']);
+  const { data: estates } = await sb.from('real_estate').select('city, currency');
+  const city = estates?.[0]?.city;
+  const { data: m2 } = city
+    ? await sb.from('real_estate_index').select('month, price_per_m2, currency').eq('city', city).order('month')
+    : { data: [] };
+  // the latest value on or before the day
+  const latest = (list, key, field) => {
+    const by = new Map();
+    for (const r of list) { if (!by.has(r[key])) by.set(r[key], []); by.get(r[key]).push(r); }
+    return (k, d) => { const l = by.get(k) || []; let v = null; for (const r of l) { if (r.day <= d) v = Number(r[field]); else break; } return v; };
+  };
+  const usdPer = latest(fx, 'currency', 'usd_per_unit');
+  const priceOf = latest(px, 'ticker', 'price_usd');
+  const regionOf = new Map((regions || []).map(r => [r.ticker, r.infra_region]));
+  const m2On = d => { let v = null; for (const r of m2 || []) if (r.month <= d) v = r; return v; };
+
+  const colOf = r => r.instrument_type === 'crypto' ? (r.ticker === 'XAUT' ? 'XAU' : MP_XLSX_STABLE.has(r.ticker) ? 'USD' : r.ticker)
+    : r.instrument_type === 'gold' ? 'XAU' : (r.currency || 'USD');
+  const classOf = r => {
+    const t = r.instrument_type;
+    if (t === 'crypto') return r.ticker === 'XAUT' ? 'Золото' : MP_XLSX_STABLE.has(r.ticker) ? 'Кэш' : 'Крипта';
+    return t === 'stock' ? 'Акции' : t === 'bond' ? 'Облигации' : t === 'deposit' || t === 'liquid' ? 'Вклады'
+      : t === 'cash' || t === 'credit' ? 'Кэш' : t === 'gold' ? 'Золото' : 'Прочее';
+  };
+  const indexOf = r => MP_XLSX_INDEX_OF[r.ticker]
+    ?? (regionOf.get(r.ticker) === 'ru' || r.currency === 'RUB' ? 'MOEX' : MP_XLSX_SP500.has(r.ticker) ? 'S&P500' : 'Акции мира');
+  const ruOf = r => !MP_XLSX_RU_ACCOUNTS.has(r.account) ? null
+    : r.instrument_type === 'bond' ? (r.currency === 'CNY' ? 'Облигации 🇨🇳' : r.currency === 'RUB' ? 'Облигации 🇷🇺' : null)
+    : (r.instrument_type === 'deposit' || r.instrument_type === 'liquid') && r.currency === 'RUB' ? 'Вклады 🇷🇺' : null;
+  const isFiat = c => c !== 'XAU' && !priced.includes(c) || MP_XLSX_FIAT_ORDER.includes(c);
+
+  const snaps = days.map(day => {
+    const acc = new Map();
+    const s = { day, acc, estate: { usd: 0, native: 0, ccy: null }, ru: {}, cols: new Map() };
+    for (const r of rows.filter(x => x.day === day)) {
+      const usd = Number(r.value_usd);
+      if (!usd) continue;
+      if (r.instrument_type === 'real_estate') {
+        s.estate.usd += usd; s.estate.ccy = r.currency;
+        const per = usdPer(r.currency, day); if (per) s.estate.native += usd / per;
+        continue;
+      }
+      if (!acc.has(r.account)) acc.set(r.account, { usd: 0, native: new Map(), usdBy: new Map(), cls: {}, idx: {} });
+      const a = acc.get(r.account);
+      const col = colOf(r);
+      const unitUsd = isFiat(col) ? usdPer(col, day) : priceOf(col === 'XAU' ? (r.ticker === 'XAUT' ? 'XAUT' : 'XAU') : col, day) ?? priceOf(col, day);
+      a.usd += usd;
+      a.usdBy.set(col, (a.usdBy.get(col) || 0) + usd);
+      if (unitUsd) a.native.set(col, (a.native.get(col) || 0) + usd / unitUsd);
+      const c = classOf(r); a.cls[c] = (a.cls[c] || 0) + usd;
+      if (r.instrument_type === 'stock') { const i = indexOf(r); a.idx[i] = (a.idx[i] || 0) + usd; }
+      const ru = ruOf(r); if (ru) s.ru[ru] = (s.ru[ru] || 0) + usd;
+      s.cols.set(col, (s.cols.get(col) || 0) + usd);
+    }
+    // the rate to the dollar: a currency's units per USD, a metal's / coin's USD price
+    s.rate = col => isFiat(col) ? (usdPer(col, day) ? 1 / usdPer(col, day) : null) : priceOf(col, day);
+    s.rubPerUsd = usdPer('RUB', day) ? 1 / usdPer('RUB', day) : null;
+    s.m2 = m2On(day);
+    return s;
+  });
+  // the same columns on every sheet: currencies first, then the metal, then coins by size
+  const allCols = new Map();
+  for (const s of snaps) for (const [c, v] of s.cols) allCols.set(c, Math.max(allCols.get(c) || 0, Math.abs(v)));
+  const fiat = [...allCols.keys()].filter(isFiat).sort((a, b) => (MP_XLSX_FIAT_ORDER.indexOf(a) + 1 || 99) - (MP_XLSX_FIAT_ORDER.indexOf(b) + 1 || 99) || a.localeCompare(b));
+  const coins = [...allCols.keys()].filter(c => !isFiat(c) && c !== 'XAU').sort((a, b) => allCols.get(b) - allCols.get(a));
+  const cols = [...fiat, ...(allCols.has('XAU') ? ['XAU'] : []), ...coins];
+  const classes = MP_XLSX_CLASSES.filter(c => snaps.some(s => [...s.acc.values()].some(a => a.cls[c])));
+  return { snaps, cols, classes, isFiat, lastDay };
+}
+
+const mpXmlEsc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const mpColL = n => { let s = ''; for (n++; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s; return s; };
+const mpRef = (sheet, c1, r1, c2, r2) => `'${sheet.replace(/'/g, "''")}'!$${mpColL(c1)}$${r1 + 1}:$${mpColL(c2)}$${r2 + 1}`;
+
+// A sheet in the making: cells by (row, col), 0-based; styles: 0 plain, 1
+// header, 2 money, 3 whole, 4 coin, 5 title, 6 bold whole, 7 bold money.
+function mpXlsxSheet(name) {
+  const cells = new Map();
+  return {
+    name, cells, charts: [], widths: {},
+    set(r, c, v, s = 0, f = null) { if (v === null || v === undefined || (typeof v === 'number' && !Number.isFinite(v))) return; cells.set(`${r},${c}`, { r, c, v, s, f }); },
+    get(r, c) { return cells.get(`${r},${c}`)?.v; },
+  };
+}
+
+// a palette of 12, so a 7th series doesn't repeat the 1st's colour
+const MP_XLSX_PALETTE = ['4E79A7', 'F28E2B', 'E15759', '76B7B2', '59A14F', 'EDC948', 'B07AA1', 'FF9DA7', '9C755F', 'BAB0AC', '1F77B4', '8C564B'];
+const mpXlsxFill = i => `<c:spPr><a:solidFill><a:srgbClr val="${MP_XLSX_PALETTE[i % MP_XLSX_PALETTE.length]}"/></a:solidFill></c:spPr>`;
+
+function mpXlsxChartXml(ch) {
+  const x = mpXmlEsc;
+  const ser = (s, i) => {
+    const tx = s.nameRef ? `<c:tx><c:strRef><c:f>${x(s.nameRef)}</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>${x(s.name)}</c:v></c:pt></c:strCache></c:strRef></c:tx>` : '';
+    // a pie: a colour per slice; an area: one per series
+    const fill = ch.type === 'pie' ? ch.cats.map((_, j) => `<c:dPt><c:idx val="${j}"/><c:bubble3D val="0"/>${mpXlsxFill(j)}</c:dPt>`).join('') : mpXlsxFill(i);
+    const lbl = ch.type === 'pie'
+      ? '<c:dLbls><c:showLegendKey val="0"/><c:showVal val="0"/><c:showCatName val="1"/><c:showSerName val="0"/><c:showPercent val="1"/><c:showBubbleSize val="0"/><c:separator>\n</c:separator><c:showLeaderLines val="1"/></c:dLbls>' : '';
+    const cat = `<c:cat><c:strRef><c:f>${x(ch.catRef)}</c:f><c:strCache><c:ptCount val="${ch.cats.length}"/>${ch.cats.map((c, j) => `<c:pt idx="${j}"><c:v>${x(c)}</c:v></c:pt>`).join('')}</c:strCache></c:strRef></c:cat>`;
+    const val = `<c:val><c:numRef><c:f>${x(s.ref)}</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="${s.values.length}"/>${s.values.map((v, j) => Number.isFinite(v) ? `<c:pt idx="${j}"><c:v>${v}</c:v></c:pt>` : '').join('')}</c:numCache></c:numRef></c:val>`;
+    return ch.type === 'pie'
+      ? `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${tx}${fill}${lbl}${cat}${val}</c:ser>`
+      : `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${tx}${fill}${cat}${val}</c:ser>`;
+  };
+  const plot = ch.type === 'pie'
+    ? `<c:pieChart><c:varyColors val="1"/>${ch.series.map(ser).join('')}<c:firstSliceAng val="0"/></c:pieChart>`
+    : `<c:areaChart><c:grouping val="${ch.type === 'area%' ? 'percentStacked' : 'stacked'}"/><c:varyColors val="0"/>${ch.series.map(ser).join('')}<c:axId val="101"/><c:axId val="102"/></c:areaChart>`
+      + '<c:catAx><c:axId val="101"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:numFmt formatCode="General" sourceLinked="0"/><c:tickLblPos val="nextTo"/><c:crossAx val="102"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/></c:catAx>'
+      + `<c:valAx><c:axId val="102"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:majorGridlines/><c:numFmt formatCode="${ch.type === 'area%' ? '0%' : '#,##0'}" sourceLinked="0"/><c:tickLblPos val="nextTo"/><c:crossAx val="101"/><c:crosses val="autoZero"/><c:crossBetween val="midCat"/></c:valAx>`;
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+    + `<c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t>${x(ch.title)}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title><c:autoTitleDeleted val="0"/>`
+    + `<c:plotArea><c:layout/>${plot}</c:plotArea>${ch.type === 'pie' ? '' : '<c:legend><c:legendPos val="t"/><c:overlay val="0"/></c:legend>'}<c:plotVisOnly val="1"/><c:dispBlanksAs val="zero"/></c:chart></c:chartSpace>`;
+}
+
+// The workbook's files from its sheets.
+async function mpXlsxZip(sheets) {
+  if (!window.JSZip) {
+    await new Promise((ok, fail) => { const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js'; s.onload = ok; s.onerror = () => fail(new Error('JSZip did not load')); document.head.appendChild(s); });
+  }
+  const zip = new JSZip();
+  const strings = [], strIdx = new Map();
+  const str = v => { if (!strIdx.has(v)) { strIdx.set(v, strings.length); strings.push(v); } return strIdx.get(v); };
+  const types = [], NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+  let chartNo = 0;
+  sheets.forEach((sh, i) => {
+    const n = i + 1;
+    const byRow = new Map();
+    for (const cell of sh.cells.values()) { if (!byRow.has(cell.r)) byRow.set(cell.r, []); byRow.get(cell.r).push(cell); }
+    const rowsXml = [...byRow.keys()].sort((a, b) => a - b).map(r => `<row r="${r + 1}">${byRow.get(r).sort((a, b) => a.c - b.c).map(cell => {
+      const ref = `${mpColL(cell.c)}${r + 1}`;
+      if (typeof cell.v === 'string' && !cell.f) return `<c r="${ref}" t="s" s="${cell.s}"><v>${str(cell.v)}</v></c>`;
+      return `<c r="${ref}" s="${cell.s}">${cell.f ? `<f>${mpXmlEsc(cell.f)}</f>` : ''}<v>${cell.v}</v></c>`;
+    }).join('')}</row>`).join('');
+    const colsXml = Object.keys(sh.widths).length
+      ? `<cols>${Object.entries(sh.widths).sort((a, b) => a[0] - b[0]).map(([c, w]) => `<col min="${+c + 1}" max="${+c + 1}" width="${w}" customWidth="1"/>`).join('')}</cols>` : '';
+    zip.file(`xl/worksheets/sheet${n}.xml`, '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="${NS}">${colsXml}<sheetData>${rowsXml}</sheetData>${sh.charts.length ? '<drawing r:id="rId1"/>' : ''}</worksheet>`);
+    types.push(`<Override PartName="/xl/worksheets/sheet${n}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`);
+    if (!sh.charts.length) return;
+    zip.file(`xl/worksheets/_rels/sheet${n}.xml.rels`, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${NS}/drawing" Target="../drawings/drawing${n}.xml"/></Relationships>`);
+    const anchors = [], rels = [];
+    sh.charts.forEach((ch, j) => {
+      chartNo++;
+      zip.file(`xl/charts/chart${chartNo}.xml`, mpXlsxChartXml(ch));
+      types.push(`<Override PartName="/xl/charts/chart${chartNo}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>`);
+      rels.push(`<Relationship Id="rId${j + 1}" Type="${NS}/chart" Target="../charts/chart${chartNo}.xml"/>`);
+      // the top-left cell and a size in pixels (EMU: 9525 a pixel) -- Numbers
+      // lays rows out taller than a file says, so a size in cells comes out uneven
+      const { c, r, w, h } = ch.at;
+      anchors.push(`<xdr:oneCellAnchor><xdr:from><xdr:col>${c}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${r}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>`
+        + `<xdr:ext cx="${w * 9525}" cy="${h * 9525}"/>`
+        + `<xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="${j + 2}" name="Chart ${j + 1}"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr>`
+        + '<xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">'
+        + `<c:chart r:id="rId${j + 1}"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:oneCellAnchor>`);
+    });
+    zip.file(`xl/drawings/drawing${n}.xml`, '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + `<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="${NS}" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">${anchors.join('')}</xdr:wsDr>`);
+    zip.file(`xl/drawings/_rels/drawing${n}.xml.rels`, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.join('')}</Relationships>`);
+    types.push(`<Override PartName="/xl/drawings/drawing${n}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>`);
+  });
+  zip.file('xl/sharedStrings.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${strings.length}" uniqueCount="${strings.length}">${strings.map(s => `<si><t xml:space="preserve">${mpXmlEsc(s)}</t></si>`).join('')}</sst>`);
+  zip.file('xl/styles.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+    + '<numFmts count="3"><numFmt numFmtId="164" formatCode="#,##0.00"/><numFmt numFmtId="165" formatCode="#,##0"/><numFmt numFmtId="166" formatCode="#,##0.00######"/></numFmts>'
+    + '<fonts count="3"><font><sz val="11"/><name val="Helvetica Neue"/></font><font><b/><sz val="11"/><name val="Helvetica Neue"/></font><font><b/><sz val="16"/><name val="Helvetica Neue"/></font></fonts>'
+    + '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEDEFF2"/><bgColor indexed="64"/></patternFill></fill></fills>'
+    + '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+    + '<cellXfs count="8"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+    + '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>'
+    + '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'
+    + '<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'
+    + '<xf numFmtId="166" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'
+    + '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/>'
+    + '<xf numFmtId="165" fontId="1" fillId="2" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1"/>'
+    + '<xf numFmtId="164" fontId="1" fillId="2" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1"/></cellXfs>'
+    + '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>');
+  zip.file('xl/workbook.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="${NS}"><sheets>${sheets.map((s, i) => `<sheet name="${mpXmlEsc(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets></workbook>`);
+  zip.file('xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+    + sheets.map((s, i) => `<Relationship Id="rId${i + 1}" Type="${NS}/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')
+    + `<Relationship Id="rId${sheets.length + 1}" Type="${NS}/styles" Target="styles.xml"/><Relationship Id="rId${sheets.length + 2}" Type="${NS}/sharedStrings" Target="sharedStrings.xml"/></Relationships>`);
+  zip.file('_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${NS}/officeDocument" Target="xl/workbook.xml"/></Relationships>`);
+  zip.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+    + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>'
+    + '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+    + '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+    + '<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>'
+    + types.join('') + '</Types>');
+  return zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+// The names money.numbers shows: accounts in its order, currencies and indexes with flags.
+const MP_XLSX_ACCOUNT = {
+  Revolut: 'Revolut 🇪🇺', Wise: 'Wise 🇪🇺', 'Bank of Cyprus': 'Банк Кипра 🇨🇾', IBKR: 'IBKR 🇺🇸', Freedom24: 'Freedom24 🇰🇿',
+  'Ziraat Bank': 'Зираат 🇹🇷', Raiffeisen: 'Райф 🇷🇸', 'Credo Bank': 'Credo 🇬🇪', Sber: 'Сбер 🇷🇺', 'T-Bank': 'Тиньков 🇷🇺',
+  Alfa: 'Альфа 🇷🇺', 'Ozon Bank': 'Ozon-Банк 🇷🇺', 'Yandex Bank': 'Яндекс 🇷🇺', Finuslugi: 'Финуслуги 🇷🇺',
+  Binance: 'Binance', Bybit: 'Bybit', 'Crypto.com': 'Cryptocom', Telegram: 'Telegram', Trust: 'Trust', Nexo: 'Nexo', cash: 'cash 💵',
+};
+const MP_XLSX_FLAG = { USD: '🇺🇸', EUR: '🇪🇺', GBP: '🇬🇧', RUB: '🇷🇺', TRY: '🇹🇷', RSD: '🇷🇸', CNY: '🇨🇳', GEL: '🇬🇪' };
+const MP_XLSX_INDEX_LABEL = { 'S&P500': 'S&P500 🇺🇸', 'S&P400': 'S&P400 🇺🇸', 'S&P600': 'S&P600 🇺🇸', 'STOXX600': 'STOXX600 🇪🇺', MOEX: 'MOEX 🇷🇺', 'Акции мира': 'Акции мира 🌎' };
+const mpXlsxAcc = a => MP_XLSX_ACCOUNT[a] ?? a;
+const mpXlsxCol = c => MP_XLSX_FLAG[c] ? `${c} ${MP_XLSX_FLAG[c]}` : c;
+const mpXlsxAccOrder = (a, b) => {
+  const keys = Object.keys(MP_XLSX_ACCOUNT), i = keys.indexOf(a), j = keys.indexOf(b);
+  return (i < 0 ? 99 : i) - (j < 0 ? 99 : j) || a.localeCompare(b);
+};
+
+// One date's sheet: the table, the Russian block, the flat; the pies' data
+// stacked down the left, the pies beside it (Numbers' rows run taller than the
+// file says, so nothing is put below a table it could overlap).
+function mpXlsxDaySheet(model, s, name) {
+  const { cols, classes, isFiat } = model;
+  const sh = mpXlsxSheet(name);
+  const [y, mo, d] = s.day.split('-').map(Number);
+  sh.set(0, 0, `${d} ${MP_XLSX_RU_MONTHS[mo - 1]} ${y}`, 5);
+  const accounts = [...s.acc.entries()].sort((a, b) => mpXlsxAccOrder(a[0], b[0]));
+  const H = 2, R0 = 3, RN = R0 + accounts.length - 1;
+  const cCol = i => 1 + i, cTot = 1 + cols.length, cCls = i => cTot + 1 + i, cClsTot = cTot + 1 + classes.length;
+  const cIdx = i => cClsTot + 1 + i, cIdxTot = cClsTot + 1 + MP_XLSX_INDEXES.length;
+  sh.set(H, 0, '', 1);
+  cols.forEach((c, i) => sh.set(H, cCol(i), mpXlsxCol(c), 1));
+  sh.set(H, cTot, 'Всего (USD)', 1);
+  classes.forEach((c, i) => sh.set(H, cCls(i), c, 1));
+  sh.set(H, cClsTot, 'Всего', 1);
+  MP_XLSX_INDEXES.forEach((c, i) => sh.set(H, cIdx(i), MP_XLSX_INDEX_LABEL[c], 1));
+  sh.set(H, cIdxTot, 'Всего', 1);
+  const L = mpColL;
+  accounts.forEach(([acc, a], k) => {
+    const r = R0 + k;
+    sh.set(r, 0, mpXlsxAcc(acc), 1);
+    cols.forEach((c, i) => { const v = a.native.get(c); if (v) sh.set(r, cCol(i), v, isFiat(c) ? 2 : 4); });
+    sh.set(r, cTot, a.usd, 2);
+    classes.forEach((c, i) => { if (a.cls[c]) sh.set(r, cCls(i), a.cls[c], 2); });
+    sh.set(r, cClsTot, a.usd, 2, `SUM(${L(cCls(0))}${r + 1}:${L(cCls(classes.length - 1))}${r + 1})`);
+    MP_XLSX_INDEXES.forEach((c, i) => { if (a.idx[c]) sh.set(r, cIdx(i), a.idx[c], 2); });
+    const st = MP_XLSX_INDEXES.reduce((t, c) => t + (a.idx[c] || 0), 0);
+    if (st) sh.set(r, cIdxTot, st, 2, `SUM(${L(cIdx(0))}${r + 1}:${L(cIdx(MP_XLSX_INDEXES.length - 1))}${r + 1})`);
+  });
+  // totals: in each currency, its rate to the dollar, in USD
+  const rT = RN + 1, rRate = RN + 2, rUsd = RN + 3;
+  sh.set(rT, 0, 'Всего', 1); sh.set(rRate, 0, 'Курс к доллару', 1); sh.set(rUsd, 0, 'Всего (USD)', 1);
+  const sum = c => accounts.length ? `SUM(${L(c)}${R0 + 1}:${L(c)}${RN + 1})` : '0';
+  const colSum = c => accounts.reduce((t, _, k) => t + (sh.get(R0 + k, c) || 0), 0);
+  cols.forEach((c, i) => {
+    const total = colSum(cCol(i)), rate = s.rate(c);
+    sh.set(rT, cCol(i), total, isFiat(c) ? 7 : 4, sum(cCol(i)));
+    if (rate) sh.set(rRate, cCol(i), rate, isFiat(c) ? 4 : 2);
+    const usd = s.cols.get(c) || 0;
+    sh.set(rUsd, cCol(i), usd, 7, rate ? (isFiat(c) ? `${L(cCol(i))}${rT + 1}/${L(cCol(i))}${rRate + 1}` : `${L(cCol(i))}${rT + 1}*${L(cCol(i))}${rRate + 1}`) : null);
+  });
+  const grand = accounts.reduce((t, [, a]) => t + a.usd, 0);
+  for (const c of [cTot, cClsTot, ...classes.map((_, i) => cCls(i)), ...MP_XLSX_INDEXES.map((_, i) => cIdx(i)), cIdxTot])
+    sh.set(rUsd, c, colSum(c), 7, sum(c));
+  if (s.rubPerUsd) sh.set(rRate, cTot, s.rubPerUsd, 2);   // the ruble's, for the Russian block below
+  // Russia, the rest of the world, the flat
+  let r = rUsd + 2;
+  sh.set(r, 0, 'Россия', 1); sh.set(r, 1, 'USD', 1); sh.set(r, 2, 'RUB', 1);
+  const ruTop = r + 1;
+  MP_XLSX_RU.forEach((k, i) => {
+    sh.set(ruTop + i, 0, k); sh.set(ruTop + i, 1, s.ru[k] || 0, 2);
+    if (s.rubPerUsd) sh.set(ruTop + i, 2, (s.ru[k] || 0) * s.rubPerUsd, 3, `B${ruTop + i + 1}*${L(cTot)}${rRate + 1}`);
+  });
+  const ruTot = MP_XLSX_RU.reduce((t, k) => t + (s.ru[k] || 0), 0), rRuT = ruTop + MP_XLSX_RU.length;
+  sh.set(rRuT, 0, 'Всего 🇷🇺', 1); sh.set(rRuT, 1, ruTot, 7, `SUM(B${ruTop + 1}:B${rRuT})`);
+  if (s.rubPerUsd) sh.set(rRuT, 2, ruTot * s.rubPerUsd, 6, `SUM(C${ruTop + 1}:C${rRuT})`);
+  sh.set(rRuT + 1, 0, 'Всего 🌎', 1); sh.set(rRuT + 1, 1, grand - ruTot, 7, `${L(cTot)}${rUsd + 1}-B${rRuT + 1}`);
+  r = rRuT + 3;
+  sh.set(r, 0, 'Квартира', 1); sh.set(r, 1, 'USD', 1); sh.set(r, 2, s.estate.ccy || '', 1); sh.set(r, 3, 'кв.м.', 1);
+  sh.set(r + 1, 0, 'real estate 🏠'); sh.set(r + 1, 1, s.estate.usd, 2);
+  if (s.estate.native) sh.set(r + 1, 2, s.estate.native, 3);
+  if (s.m2) sh.set(r + 1, 3, Number(s.m2.price_per_m2), 3);
+  sh.set(r + 2, 0, 'Всего с квартирой', 1); sh.set(r + 2, 1, grand + s.estate.usd, 7, `${L(cTot)}${rUsd + 1}+B${r + 2}`);
+
+  // the pies, as money.numbers has them
+  const clsSum = c => accounts.reduce((t, [, a]) => t + (a.cls[c] || 0), 0);
+  const idxSum = c => accounts.reduce((t, [, a]) => t + (a.idx[c] || 0), 0);
+  const coins = cols.filter(c => !isFiat(c) && c !== 'XAU');
+  const blocks = [
+    ['По валютам', cols.map(c => [mpXlsxCol(c), s.cols.get(c) || 0])],
+    ['По банкам', accounts.map(([acc, a]) => [mpXlsxAcc(acc), a.usd])],
+    ['По типам активов', classes.map(c => [c, clsSum(c)])],
+    ['Акции по индексам', MP_XLSX_INDEXES.map(c => [MP_XLSX_INDEX_LABEL[c], idxSum(c)])],
+    ['Крипта', coins.map(c => [c, s.cols.get(c) || 0])],
+    ['Россия', [['MOEX 🇷🇺', idxSum('MOEX')], ...MP_XLSX_RU.map(k => [k, s.ru[k] || 0])]],
+    ['Инвестиции', ['Акции', 'Облигации', 'Вклады'].map(c => [c, clsSum(c)])],
+    ['Акции по брокерам', accounts.map(([acc, a]) => [mpXlsxAcc(acc), a.cls['Акции'] || 0])],
+    ['Россия и мир', [['Всего 🇷🇺', ruTot], ['Всего 🌎', grand - ruTot]]],
+    ['С квартирой', [...classes.map(c => [c, clsSum(c)]), ['Квартира', s.estate.usd]]],
+  ].map(([t, list]) => [t, list.filter(([, v]) => v > 0.005)]).filter(([, list]) => list.length);
+  let top = r + 5;
+  const first = top;
+  blocks.forEach(([title, list], b) => {
+    sh.set(top, 0, title, 1); sh.set(top, 1, 'USD', 1);
+    list.forEach(([k, v], i) => { sh.set(top + 1 + i, 0, k); sh.set(top + 1 + i, 1, v, 2); });
+    sh.charts.push({
+      // spaced wide: Numbers grows a pie's frame around its labels
+      type: 'pie', title, at: { c: 6 + (b % 4) * 6, r: first + Math.floor(b / 4) * 30, w: 440, h: 400 },
+      catRef: mpRef(name, 0, top + 1, 0, top + list.length), cats: list.map(x => x[0]),
+      series: [{ name: 'USD', ref: mpRef(name, 1, top + 1, 1, top + list.length), values: list.map(x => x[1]) }],
+    });
+    top += list.length + 2;
+  });
+  sh.widths[0] = 24;
+  for (let c = 1; c <= Math.max(cIdxTot, 27); c++) if (!sh.widths[c]) sh.widths[c] = 13;
+  return sh;
+}
+
+// The summary: the history by asset type, currency and account -- in USD and
+// as shares of the total -- with a stacked-area chart over each table; the
+// charts on top, the tables below them.
+function mpXlsxSummary(model) {
+  const { snaps, cols, classes } = model;
+  const sh = mpXlsxSheet('Сводка');
+  sh.set(0, 0, 'Капитал на 6-е число', 5);
+  const label = s => s.day.split('-').reverse().join('.');
+  const accounts = [...new Set(snaps.flatMap(s => [...s.acc.keys()]))].sort(mpXlsxAccOrder);
+  const clsOf = (s, k) => [...s.acc.values()].reduce((t, a) => t + (a.cls[k] || 0), 0);
+  const tables = [
+    // the flat is a column of its own, left out of the total and the chart
+    ['По типам активов', classes, (s, k) => clsOf(s, k), [['Недвижимость', s => s.estate.usd]], k => k],
+    ['По валютам', cols, (s, k) => s.cols.get(k) || 0, [], mpXlsxCol],
+    ['По банкам', accounts, (s, k) => s.acc.get(k)?.usd || 0, [], mpXlsxAcc],
+  ];
+  const n = snaps.length;
+  let r = 44;
+  const pctTop = r + n + 4;
+  let c0 = 0;
+  tables.forEach(([title, keys, value, extra, show], t) => {
+    const shown = keys.map((k, i) => [k, i]).filter(([k]) => snaps.some(s => Math.abs(value(s, k)) > 0.5));
+    for (const pct of [false, true]) {
+      const top = pct ? pctTop : r;
+      sh.set(top - 1, c0, pct ? `${title}, доли` : title, 1);
+      sh.set(top, c0, '', 1);
+      shown.forEach(([k], i) => sh.set(top, c0 + 1 + i, show(k), 1));
+      const cTot = c0 + 1 + shown.length;
+      sh.set(top, cTot, 'Всего', 1);
+      if (!pct) extra.forEach(([k], e) => sh.set(top, cTot + 1 + e, k, 1));
+      snaps.forEach((s, j) => {
+        const row = top + 1 + j;
+        const tot = shown.reduce((a, [k]) => a + value(s, k), 0);
+        sh.set(row, c0, label(s));
+        shown.forEach(([k], i) => pct
+          ? sh.set(row, c0 + 1 + i, tot ? value(s, k) / tot : 0, 2)
+          : sh.set(row, c0 + 1 + i, value(s, k), 2));
+        sh.set(row, cTot, tot, 7, pct ? null : `SUM(${mpColL(c0 + 1)}${row + 1}:${mpColL(cTot - 1)}${row + 1})`);
+        if (!pct) extra.forEach(([, f], e) => sh.set(row, cTot + 1 + e, f(s), 2));
+      });
+      sh.charts.push({
+        type: pct ? 'area%' : 'area', title: `${title}${pct ? ', доли' : ''}`, at: { c: t * 8, r: pct ? 23 : 2, w: 760, h: 400 },
+        catRef: mpRef('Сводка', c0, top + 1, c0, top + n), cats: snaps.map(label),
+        series: shown.map(([k], i) => ({ name: show(k), nameRef: mpRef('Сводка', c0 + 1 + i, top, c0 + 1 + i, top),
+          ref: mpRef('Сводка', c0 + 1 + i, top + 1, c0 + 1 + i, top + n), values: snaps.map(s => Math.max(0, value(s, k))) })),
+      });
+    }
+    c0 += shown.length + 2 + extra.length + 1;
+  });
+  sh.widths[0] = 12;
+  for (let c = 1; c < c0 + 2; c++) sh.widths[c] = 12;
+  return sh;
+}
+
+document.getElementById('mp_xlsx_export').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_xlsx_status');
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) { statusEl.textContent = 'Sign in first.'; return; }
+  statusEl.textContent = 'Loading the capital history…';
+  try {
+    const model = await mpXlsxModel(document.getElementById('mp_xlsx_from').value || '2024-11');
+    const names = model.snaps.map((s, i) => {
+      const [y, m, d] = s.day.split('-').map(Number);
+      return i === model.snaps.length - 1 && d !== 6 ? `Сейчас ${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}` : `${MP_XLSX_EN_MONTHS[m - 1]} ${y}`;
+    });
+    statusEl.textContent = 'Building the workbook…';
+    const sheets = [mpXlsxSummary(model), ...model.snaps.map((s, i) => mpXlsxDaySheet(model, s, names[i]))];
+    const blob = await mpXlsxZip(sheets);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `money_${model.lastDay}.xlsx`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    statusEl.textContent = `Downloaded: a summary and ${model.snaps.length} dates (${model.snaps[0].day} … ${model.lastDay}).`;
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`;
+  }
+});
+
 // ---- Full export to Snowball ----
 // Mirrors Snowball's own export (statements/Snowball_Export_*.csv): every
 // field quoted, upper-case events, "YYYY-MM-DD 00:00:00" dates, comma
