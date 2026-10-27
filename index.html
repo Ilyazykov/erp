@@ -455,8 +455,10 @@
       </select>
       <button class="btn" id="exp_next" type="button" title="Next period">›</button>
       <input type="date" id="exp_from"> – <input type="date" id="exp_to">
+      <label title="Periods of life_periods: where you lived or travelled, and with whom">where I was <select id="exp_life"><option value="">—</option></select></label>
       <label>in <select id="exp_ccy"><option value="USD">USD $</option><option value="EUR">EUR €</option><option value="RUB">RUB ₽</option></select></label>
     </div>
+    <div id="exp_life_now" class="note" style="margin:0 0 6px"></div>
     <div id="exp_status" class="empty-note"></div>
     <div class="exp-layout">
       <div id="plot_exp_donut" style="height:380px"></div>
@@ -7778,6 +7780,8 @@ async function mpExpLoad() {
     page(() => sb.from('internal_transfers').select('out_source, out_id').neq('matched_by', 'rejected').order('id')),
   ]);
   const own = new Set(pairs.map(p => p.out_source + '\u0000' + p.out_id));
+  // where one was, with whom (migration 128); none yet or no table: no bands
+  const { data: periods } = await sb.from('life_periods').select('start_day, end_day, place, company, note').order('start_day');
   const ccys = [...new Set([...rows.map(r => r.currency.toUpperCase()), 'EUR', 'RUB'])].filter(c => c !== 'USD' && c !== 'XAU');
   const rates = {};
   await Promise.all(ccys.map(async c => {
@@ -7807,7 +7811,7 @@ async function mpExpLoad() {
     if (row.cat === 'Other' && r.category === 'utilities_or_shopping') row.cat = 'Shopping';
     spent.push(row);
   }
-  return { spent, skipped, usdPer };
+  return { spent, skipped, usdPer, periods: periods || [] };
 }
 function mpExpRange() {
   const mode = document.getElementById('exp_period').value;
@@ -7842,6 +7846,34 @@ function mpExpShift(dir) {
   }
   mpRenderExpenses();
 }
+// The life periods as bands behind the bars, one colour per company (alone: grey),
+// the place written along the band's top.
+const MP_EXP_LIFE_COLORS = ['#a371f7', '#f778ba', '#3dd68c', '#ffb020', '#58a6ff', '#ff7a45'];
+function mpExpLifeBands(periods, buckets, bucket, lifeName) {
+  const shapes = [], annotations = [], colors = new Map();
+  for (const p of periods) {
+    let i0 = buckets.indexOf(bucket(p.start_day.slice(0, 7)));
+    let i1 = buckets.indexOf(bucket(p.end_day.slice(0, 7)));
+    if (i0 < 0 && i1 < 0 && !(p.start_day.slice(0, 7) < buckets[0] && p.end_day.slice(0, 7) > buckets[buckets.length - 1])) continue;
+    if (i0 < 0) i0 = 0;
+    if (i1 < 0) i1 = buckets.length - 1;
+    if (p.company && !colors.has(p.company)) colors.set(p.company, MP_EXP_LIFE_COLORS[colors.size % MP_EXP_LIFE_COLORS.length]);
+    const color = p.company ? colors.get(p.company) : '#6a7381';
+    shapes.push({ type: 'rect', xref: 'x', yref: 'paper', x0: i0 - 0.45, x1: i1 + 0.45, y0: 0, y1: 1,
+      fillcolor: color, opacity: 0.12, line: { width: 0 }, layer: 'below' });
+    annotations.push({ x: (i0 + i1) / 2, y: 1, xref: 'x', yref: 'paper', yanchor: 'top', showarrow: false, textangle: -90,
+      text: lifeName(p), font: { size: 9, color } });
+  }
+  return { shapes, annotations };
+}
+document.getElementById('exp_life').addEventListener('change', e => {
+  const p = mpExpCache?.periods[e.target.value];
+  if (!p) return;
+  document.getElementById('exp_period').value = 'custom';
+  document.getElementById('exp_from').value = p.start_day;
+  document.getElementById('exp_to').value = p.end_day;
+  mpRenderExpenses();
+});
 async function mpRenderExpenses() {
   const status = document.getElementById('exp_status');
   if (!document.getElementById('exp_from').value) mpExpSetPeriod(document.getElementById('exp_period').value, new Date().toISOString().slice(0, 10));
@@ -7850,10 +7882,20 @@ async function mpRenderExpenses() {
     try { mpExpCache = await mpExpLoad(); } catch (error) { status.textContent = error.message; return; }
   }
   status.textContent = '';
-  const { spent, skipped, usdPer } = mpExpCache;
+  const { spent, skipped, usdPer, periods } = mpExpCache;
+  const lifeName = p => `${p.place}${p.company ? ' with ' + p.company : ''}`;
+  const dmy = d => d.slice(8, 10) + '.' + d.slice(5, 7) + '.' + d.slice(0, 4);
+  const lifeSel = document.getElementById('exp_life');
+  if (lifeSel.options.length === 1 && periods.length) {
+    periods.forEach((p, i) => lifeSel.add(new Option(`${dmy(p.start_day)} – ${dmy(p.end_day)}: ${lifeName(p)}`, i)));
+  }
   const { from, to } = mpExpRange();
   const ccy = document.getElementById('exp_ccy').value;
   const sym = { EUR: '€', USD: '$', RUB: '₽' }[ccy];
+  const here = periods.filter(p => p.start_day <= to && p.end_day >= from);
+  document.getElementById('exp_life_now').textContent = here.length
+    ? 'Where: ' + here.map(p => `${lifeName(p)} ${dmy(p.start_day)} – ${dmy(p.end_day)}`).join(' · ') : '';
+  lifeSel.value = String(periods.findIndex(p => p.start_day === from && p.end_day === to)).replace('-1', '');
   const conv = r => r.usd / usdPer(ccy, r.day);
   const money = v => {
     const n = Math.round(v).toLocaleString('en-US');
@@ -7912,7 +7954,7 @@ async function mpRenderExpenses() {
   const span = document.getElementById('exp_span').value;
   const step = document.getElementById('exp_step').value;
   const bars = document.getElementById('plot_exp_months');
-  const barsKey = [span, step, ccy, spent.length].join('|');
+  const barsKey = [span, step, ccy, spent.length, periods.length].join('|');
   if (bars.mpExpKey !== barsKey) {
   bars.mpExpKey = barsKey;
   const bucket = mo => step === 'year' ? mo.slice(0, 4)
@@ -7944,6 +7986,7 @@ async function mpRenderExpenses() {
     margin: { t: 10, b: 40, l: 60, r: 10 }, hovermode: 'x unified', hoverlabel: { font: { size: 11 } },
     xaxis: { type: 'category', gridcolor: '#1e2830' }, yaxis: { gridcolor: '#1e2830', ticksuffix: ccy === 'RUB' ? ' ₽' : '', tickprefix: ccy === 'RUB' ? '' : sym },
     legend: { orientation: 'h', y: -0.1 },
+    ...mpExpLifeBands(periods, buckets, bucket, lifeName),
   }, CONFIG);
   bars.removeAllListeners?.('plotly_click');
   bars.on('plotly_click', ev => {
