@@ -7869,9 +7869,10 @@ function mpExpLifeBands(periods, buckets, bucket, lifeName) {
 document.getElementById('exp_life').addEventListener('change', e => {
   const p = mpExpCache?.periods[e.target.value];
   if (!p) return;
+  const end = p.end_day ?? new Date().toISOString().slice(0, 10);
   document.getElementById('exp_period').value = 'custom';
   document.getElementById('exp_from').value = p.start_day;
-  document.getElementById('exp_to').value = p.end_day;
+  document.getElementById('exp_to').value = end;
   mpRenderExpenses();
 });
 async function mpRenderExpenses() {
@@ -7882,7 +7883,9 @@ async function mpRenderExpenses() {
     try { mpExpCache = await mpExpLoad(); } catch (error) { status.textContent = error.message; return; }
   }
   status.textContent = '';
-  const { spent, skipped, usdPer, periods } = mpExpCache;
+  const { spent, skipped, usdPer } = mpExpCache;
+  // a period with no end is where one still is: to today
+  const periods = mpExpCache.periods.map(p => ({ ...p, end_day: p.end_day ?? new Date().toISOString().slice(0, 10) }));
   const lifeName = p => `${p.place}${p.company ? ' with ' + p.company : ''}`;
   const dmy = d => d.slice(8, 10) + '.' + d.slice(5, 7) + '.' + d.slice(0, 4);
   const lifeSel = document.getElementById('exp_life');

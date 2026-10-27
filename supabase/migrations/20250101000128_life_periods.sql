@@ -6,12 +6,12 @@ create table public.life_periods (
   id bigint generated always as identity primary key,
   user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
   start_day date not null,
-  end_day date not null,
+  end_day date,            -- null: still there
   place text not null,     -- 'Antalya', 'Georgia', 'Novi Sad'
   company text,            -- who with; null: alone
   note text,
   created_at timestamptz not null default now(),
-  check (end_day >= start_day)
+  check (end_day is null or end_day >= start_day)
 );
 alter table public.life_periods enable row level security;
 create policy "own life periods" on public.life_periods
