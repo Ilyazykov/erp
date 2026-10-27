@@ -127,9 +127,14 @@ interface StoredRow { amount: unknown; currency: string; balance_after: unknown;
 // (migrations/20250101000087_revolut_timezone_duplicates.sql). A row stored
 // before: same currency, amount and running balance, Started and Completed
 // Date both off by the same whole number of hours (up to 14) -- two
-// different transactions don't line up like that. The offset most rows
-// agree on wins, if more rows agree on it than sit at no offset at all.
-function detectShift(rows: CsvRow[], stored: StoredRow[]): number {
+// different transactions don't line up like that. Not one offset for the
+// whole file: daylight saving moves it for part of the year, and the metals
+// statement of 27.10.2026 met the one of 26.09 an hour off on summer-time
+// days (its two gold buys went in twice,
+// migrations/20250101000126_revolut_fund_timezone_duplicates_again.sql). So
+// per row: one stored at no offset is the row itself; else the offset most
+// rows agree on among its own.
+function detectShifts(rows: CsvRow[], stored: StoredRow[]): Map<CsvRow, number> {
   const byKey = new Map<string, StoredRow[]>();
   for (const s of stored) {
     if (s.balance_after === null) continue;
@@ -137,6 +142,7 @@ function detectShift(rows: CsvRow[], stored: StoredRow[]): number {
     byKey.set(key, [...(byKey.get(key) ?? []), s]);
   }
   const votes = new Map<number, number>();
+  const rowOffsets = new Map<CsvRow, Set<number>>();
   for (const r of rows) {
     if (!r.balance) continue;
     const started = Date.parse(toIsoTimestamp(r.startedDate) ?? '');
@@ -152,11 +158,15 @@ function detectShift(rows: CsvRow[], stored: StoredRow[]): number {
           && Math.floor(Date.parse(s.booked_at) / 1000) * 1000 - completed !== d) continue;
       offsets.add(d);
     }
+    rowOffsets.set(r, offsets);
     for (const d of offsets) votes.set(d, (votes.get(d) ?? 0) + 1);
   }
-  let best = 0;
-  for (const [d, n] of votes) if (d !== 0 && n > (votes.get(best) ?? 0)) best = d;
-  return best;
+  const shifts = new Map<CsvRow, number>();
+  for (const [r, offsets] of rowOffsets) {
+    if (!offsets.size || offsets.has(0)) continue;
+    shifts.set(r, [...offsets].sort((a, b) => (votes.get(b)! - votes.get(a)!) || Math.abs(a) - Math.abs(b))[0]);
+  }
+  return shifts;
 }
 
 function parseRows(text: string): CsvRow[] {
@@ -256,9 +266,9 @@ Deno.serve(async (req) => {
         { status: 400, headers: corsHeaders });
     }
 
-    // Onto the stored rows' clock (detectShift), before any key is built.
+    // Onto the stored rows' clock (detectShifts), before any key is built.
     const completedRows = csvRows.filter(r => r.state === 'COMPLETED' && toIsoTimestamp(r.startedDate));
-    let shift = 0;
+    let shifts = new Map<CsvRow, number>();
     if (completedRows.length) {
       const times = completedRows.map(r => Date.parse(toIsoTimestamp(r.startedDate)!));
       const from = new Date(Math.min(...times) - 14 * HOUR).toISOString();
@@ -273,8 +283,8 @@ Deno.serve(async (req) => {
         stored.push(...(data ?? []));
         if (!data || data.length < 1000) break;
       }
-      shift = detectShift(completedRows, stored);
-      if (shift) for (const r of csvRows) {
+      shifts = detectShifts(completedRows, stored);
+      for (const [r, shift] of shifts) {
         r.startedDate = shiftLocal(r.startedDate, shift);
         r.completedDate = shiftLocal(r.completedDate, shift);
       }
@@ -430,7 +440,7 @@ Deno.serve(async (req) => {
       removed_metal_estimates: removedMetalEstimates,
       metal_rows_without_price: metalWithoutPrice,
       removed_snowball_duplicates: removedSnowball,
-      time_shift_hours: shift / HOUR,
+      time_shift_hours: [...new Set(shifts.values())].map(d => d / HOUR),
       total_rows: csvRows.length,
       skipped_not_completed: skippedNotCompleted,
       skipped_deposit: skippedDeposit,
