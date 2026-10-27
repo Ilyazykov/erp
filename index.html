@@ -456,6 +456,7 @@
       <button class="btn" id="exp_next" type="button" title="Next period">›</button>
       <input type="date" id="exp_from"> – <input type="date" id="exp_to">
       <label title="Periods of life_periods: where you lived or travelled, and with whom">where I was <select id="exp_life"><option value="">—</option></select></label>
+      <label title="Rent paid for several months at once (Antalya 2022, Novi Sad 01-03.2024): a share in each month it paid for, or all on the day it was paid"><input type="checkbox" id="exp_spread" checked> spread prepaid rent over its months</label>
       <label>in <select id="exp_ccy"><option value="USD">USD $</option><option value="EUR">EUR €</option><option value="RUB">RUB ₽</option></select></label>
     </div>
     <div id="exp_life_now" class="note" style="margin:0 0 6px"></div>
@@ -7729,12 +7730,15 @@ const MP_EXP_SKIP = [
   // "Exchanged to TRY and paid for the flat" is rent, not an exchange
   ['Currency exchange', r => !/paid for the flat/i.test(r.description)
     && (/^fx_/.test(r.category || '') || /^Exchanged |Döviz (Alış|Satış)|Currency (buy|sell)|KORONAPAY|QIWI P2P|menjacnica|обмен валют|конвертац/i.test(r.description))],
+  // T-Bank's transfers to a contract: one's own cards and accounts only -- the rest
+  // are other people's T-Bank accounts (spending, "Transfers to people")
+  ['Own accounts', r => /^(Internal transfer to contract|Внутренний перевод на договор) (0643044746|5040156423|5063173370|5063173388|8219282925|5152956495)\b/.test(r.description)],
   // bought for someone else, who paid it back (to an account or in cash, not in the
   // statements): the two Pixel orders from New York, 02 and 05.11.2021
   ['Bought for others', r => /GOOGLE \*SELLER/.test(r.description) && r.day >= '2021-11-01' && r.day <= '2021-11-06'],
   ['Crypto', r => /crypto\.com|mercuryo|\bMRCR\b|bybit|binance|\bokx\b|kraken/i.test(r.description)],
   ['Own accounts', r => ['internal_transfer', 'brokerage_funding', 'top_up', 'salary'].includes(r.category)
-    || /^Deposited at |6012 ?Revolut|Wise PURCHASE|^Wise$|top-?up|между (своими )?счетами|Internal transfer/i.test(r.description)],
+    || /^Deposited at |6012 ?Revolut|Wise PURCHASE|^Wise$|top-?up|между (своими )?счетами|^Внутрибанковский перевод/i.test(r.description)],
 ];
 const MP_EXP_CATS = [
   // [name, icon, colour, test on "description category"]
@@ -7753,7 +7757,7 @@ const MP_EXP_CATS = [
   ['Government & visas', '🏛', '#8b949e', /\bvisas?\b|visapro|embassy|konsulprime|\bvfs\b|immigration|consulate|\bgov\b|\btax\b|налог|НДФЛ|штраф/i],
   ['Fees', '🏦', '#6e7681', /\bfees?\b|commission|комисси|maintenance|naknad|provizij|обслуживан|ücret|masraf|bank_fee/i],
   ['Cash', '💵', '#d0d7de', /\batm\b|\bcash\b|банкомат|наличн|bankomat|para çekme/i],
-  ['Transfers to people', '👥', '#c297ff', /^transfer( to|$)|^to \S|sent money to|Mobil Havale|перевод|p2p_transfer|^Revolut( Ltd| Bank UAB)?$/i],
+  ['Transfers to people', '👥', '#c297ff', /^transfer( to|$)|^to \S|sent money to|^Internal transfer to contract|^Внутренний перевод на договор|Mobil Havale|перевод|p2p_transfer|^Revolut( Ltd| Bank UAB)?$/i],
   ['Other', '•', '#4b5560', /[\s\S]*/],
 ];
 // Rows no description tells apart, placed by hand: [category, test on the row].
@@ -7830,15 +7834,16 @@ async function mpExpLoad() {
     const text = `${r.description} ${r.category === 'utilities_or_shopping' ? '' : r.category || ''}`.trim();
     row.cat = MP_EXP_BY_HAND.find(([, test]) => test(row))?.[0] ?? MP_EXP_CATS.find(c => c[3].test(text))[0];
     if (row.cat === 'Other' && r.category === 'utilities_or_shopping') row.cat = 'Shopping';
+    spent.push(row);
+    // paid for several months at once: a share in each of them, shown when "spread" is on
     const spread = mpExpSpread(row);
-    if (!spread) { spent.push(row); continue; }
-    // paid for several months at once: a share in each of them
+    if (!spread) continue;
     const [y, m, d] = spread.from.split('-').map(Number);
-    for (let k = 0; k < spread.n; k++) {
+    row.parts = Array.from({ length: spread.n }, (_, k) => {
       const day = new Date(Date.UTC(y, m - 1 + k, Math.min(d, 28))).toISOString().slice(0, 10);
-      spent.push({ ...row, day, tx_date: day, amt: row.amt / spread.n, usd: row.usd / spread.n,
-        description: `${row.description} -- ${k + 1}/${spread.n}, paid ${row.day}` });
-    }
+      return { ...row, parts: null, day, tx_date: day, amt: row.amt / spread.n, usd: row.usd / spread.n,
+        description: `${row.description} -- ${k + 1}/${spread.n}, paid ${row.day}` };
+    });
   }
   return { spent, skipped, usdPer, periods: periods || [] };
 }
@@ -7912,7 +7917,9 @@ async function mpRenderExpenses() {
     try { mpExpCache = await mpExpLoad(); } catch (error) { status.textContent = error.message; return; }
   }
   status.textContent = '';
-  const { spent, skipped, usdPer } = mpExpCache;
+  const { skipped, usdPer } = mpExpCache;
+  const spreadOn = document.getElementById('exp_spread').checked;
+  const spent = spreadOn ? mpExpCache.spent.flatMap(r => r.parts || [r]) : mpExpCache.spent;
   // a period with no end is where one still is: to today
   const periods = mpExpCache.periods.map(p => ({ ...p, end_day: p.end_day ?? new Date().toISOString().slice(0, 10) }));
   const lifeName = p => `${p.place}${p.company ? ' with ' + p.company : ''}`;
@@ -7990,7 +7997,7 @@ async function mpRenderExpenses() {
   const span = document.getElementById('exp_span').value;
   const step = document.getElementById('exp_step').value;
   const bars = document.getElementById('plot_exp_months');
-  const barsKey = [span, step, ccy, spent.length, periods.length].join('|');
+  const barsKey = [span, step, ccy, spent.length, periods.length, spreadOn].join('|');
   if (bars.mpExpKey !== barsKey) {
   bars.mpExpKey = barsKey;
   const bucket = mo => step === 'year' ? mo.slice(0, 4)
@@ -8075,6 +8082,11 @@ for (const id of ['exp_span', 'exp_step']) {
     if (mpIsSignedIn) mpRenderExpenses();
   });
 }
+try { const saved = localStorage.getItem('mp_exp_spread'); if (saved) document.getElementById('exp_spread').checked = saved === '1'; } catch { /* no storage */ }
+document.getElementById('exp_spread').addEventListener('change', e => {
+  try { localStorage.setItem('mp_exp_spread', e.target.checked ? '1' : '0'); } catch { /* no storage */ }
+  if (mpIsSignedIn) mpRenderExpenses();
+});
 document.getElementById('exp_ccy').addEventListener('change', e => {
   try { localStorage.setItem('mp_exp_ccy', e.target.value); } catch { /* no storage */ }
   if (mpIsSignedIn) mpRenderExpenses();
