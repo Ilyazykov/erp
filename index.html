@@ -7726,7 +7726,9 @@ const MP_EXP_SKIP = [
   ['Investments', r => /^(tbank_broker|ibkr|freedom24|sber_broker|atomyze|estimate_|tbank_api|finuslugi|revolut_invest)/.test(r.external_source)
     || r.currency === 'XAU' || /^Покупка |Комиссия брокера|Пополнение брокерского|^(BUY|SELL) - |^(Buy|Sell) \S+ .*(units?|паёв|@)/.test(r.description)],
   ['Funds & savings', r => /Flexible Cash Funds|Instant Access Savings|investment account|\bSavings\b|\bPocket\b|\bVault\b/i.test(r.description)],
-  ['Currency exchange', r => /^fx_/.test(r.category || '') || /^Exchanged |Döviz (Alış|Satış)|Currency (buy|sell)|KORONAPAY|QIWI P2P|menjacnica|обмен валют|конвертац/i.test(r.description)],
+  // "Exchanged to TRY and paid for the flat" is rent, not an exchange
+  ['Currency exchange', r => !/paid for the flat/i.test(r.description)
+    && (/^fx_/.test(r.category || '') || /^Exchanged |Döviz (Alış|Satış)|Currency (buy|sell)|KORONAPAY|QIWI P2P|menjacnica|обмен валют|конвертац/i.test(r.description))],
   ['Crypto', r => /crypto\.com|mercuryo|\bMRCR\b|bybit|binance|\bokx\b|kraken/i.test(r.description)],
   ['Own accounts', r => ['internal_transfer', 'brokerage_funding', 'top_up', 'salary'].includes(r.category)
     || /^Deposited at |6012 ?Revolut|Wise PURCHASE|^Wise$|top-?up|между (своими )?счетами|Internal transfer/i.test(r.description)],
@@ -7757,10 +7759,23 @@ const MP_EXP_BY_HAND = [
   // the flat in Moscow, paid by phone number 20.04-23.09.2020
   ['Rent & housing', r => r.account === 'T-Bank' && /^External transfer by phone number/.test(r.description)
     && r.day >= '2020-04-01' && r.day <= '2020-09-30' && r.amt >= 40000 && r.amt <= 44000],
+  // the flat in Moscow before that, paid in cash from a Tinkoff ATM (35k and the bills);
+  // the 60k and 90k withdrawals of 09.2019 and 01.2020 aren't known, they stay cash
+  ['Rent & housing', r => r.account === 'T-Bank' && /^Cash withdrawal in ATM\.Tinkoff/.test(r.description)
+    && r.day >= '2018-06-01' && r.day <= '2020-03-31' && r.amt >= 17000 && r.amt <= 45000],
   // mock interviews for Meta, paid through PayPal in March 2025
   ['Education', r => r.account === 'Raiffeisen' && /^PAYPAL \*/.test(r.description)
     && r.day >= '2025-03-01' && r.day <= '2025-03-31'],
 ];
+// Rent paid for several months at once, spread over them: { n months, from day } or null.
+function mpExpSpread(r) {
+  // the cash rows of Turkey say it: "Paid for the flat (6 months from 07.05.2022)"
+  const m = r.description.match(/\((\d+) months from (\d\d)\.(\d\d)\.(\d{4})\)/);
+  if (m) return { n: Number(m[1]), from: `${m[4]}-${m[3]}-${m[2]}` };
+  // Novi Sad, January-March 2024 paid before leaving for Asia
+  if (r.account === 'cash' && /^Paid the flat rent/.test(r.description) && r.day === '2023-12-25') return { n: 3, from: '2024-01-03' };
+  return null;
+}
 let mpExpCache = null;
 async function mpExpLoad() {
   const page = async (q) => {
@@ -7809,7 +7824,15 @@ async function mpExpLoad() {
     const text = `${r.description} ${r.category === 'utilities_or_shopping' ? '' : r.category || ''}`.trim();
     row.cat = MP_EXP_BY_HAND.find(([, test]) => test(row))?.[0] ?? MP_EXP_CATS.find(c => c[3].test(text))[0];
     if (row.cat === 'Other' && r.category === 'utilities_or_shopping') row.cat = 'Shopping';
-    spent.push(row);
+    const spread = mpExpSpread(row);
+    if (!spread) { spent.push(row); continue; }
+    // paid for several months at once: a share in each of them
+    const [y, m, d] = spread.from.split('-').map(Number);
+    for (let k = 0; k < spread.n; k++) {
+      const day = new Date(Date.UTC(y, m - 1 + k, Math.min(d, 28))).toISOString().slice(0, 10);
+      spent.push({ ...row, day, tx_date: day, amt: row.amt / spread.n, usd: row.usd / spread.n,
+        description: `${row.description} -- ${k + 1}/${spread.n}, paid ${row.day}` });
+    }
   }
   return { spent, skipped, usdPer, periods: periods || [] };
 }
