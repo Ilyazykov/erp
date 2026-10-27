@@ -74,6 +74,7 @@
     border: 1px solid #e0a83a; border-left-width: 4px; border-radius: 6px; background: #fff7e6; color: #5a3d00; font-size: 0.9rem; }
   .card-reminder.urgent { border-color: #e05252; background: #fdecec; color: #6b1414; }
   .card-reminder .note { color: inherit; opacity: 0.75; font-size: 0.8rem; }
+  .card-reminder.faint { border-color: #8b949e; border-left-width: 3px; background: transparent; color: #8b949e; padding: 6px 12px; font-size: 0.85rem; }
 </style>
 </head>
 <body>
@@ -7411,9 +7412,9 @@ const mpIsDayOff = d => {
 async function mpRenderCardReminders() {
   const box = document.getElementById('card_reminders');
   const { data: rules, error } = await sb.from('credit_card_reminders').select('*');
-  if (error || !rules?.length) { box.innerHTML = ''; return; }
+  const out = await mpEarnReminders();
+  if (error || !rules?.length) { box.innerHTML = out.join(''); return; }
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const out = [];
   for (const r of rules) {
     // the latest statement day not after today, and the due date after it
     let st = mpDayIn(today.getFullYear(), today.getMonth(), r.statement_day);
@@ -7460,7 +7461,48 @@ async function mpRenderCardReminders() {
       <span class="note">${asOf ? `по выписке на ${asOf.split('-').reverse().join('.')}` : 'выписок нет'}${stale ? ' — загрузите свежую' : ''}</span>
     </div>`);
   }
-  box.innerHTML = out.join('');
+  // the credit cards first, then the fainter Earn ones
+  box.innerHTML = [...out.filter(h => !h.includes('faint')), ...out.filter(h => h.includes('faint'))].join('');
+}
+
+// Crypto.com's Earn terms don't renew: 90 days after it's opened a term's BTC
+// goes back to the wallet and earns nothing until a new one is opened by hand.
+// A faint banner from a week before a term's end to 3 days after it (by then
+// it's reopened, or the next export shows it isn't), and for a withdrawal the
+// export shows with no new term after it, for 2 weeks.
+async function mpEarnReminders() {
+  const { data: wallets } = await sb.from('crypto_wallets').select('id').eq('chain', 'cryptocom');
+  if (!wallets?.length) return [];
+  const { data: moves } = await sb.from('wallet_transactions').select('tx_time, symbol, amount')
+    .in('wallet_id', wallets.map(w => w.id)).eq('kind', 'earn_internal').eq('estimated', false).order('tx_time');
+  if (!moves?.length) return [];
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const dayOf = t => { const d = new Date(t.slice(0, 10) + 'T00:00:00'); return d; };
+  const fmt = d => d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  const days = d => Math.round((d - today) / 86400000);
+  const amt = x => Math.abs(Number(x.amount));
+  // the open terms: allocations no withdrawal of the same amount has closed
+  const withdrawals = moves.filter(m => Number(m.amount) > 0);
+  const left = withdrawals.map(amt);
+  const open = moves.filter(m => Number(m.amount) < 0).filter(m => {
+    const i = left.findIndex(x => Math.abs(x - amt(m)) < 1e-12);
+    if (i < 0) return true;
+    left.splice(i, 1);
+    return false;
+  });
+  const out = [];
+  for (const m of open) {
+    const end = dayOf(m.tx_time); end.setDate(end.getDate() + 90);
+    const n = days(end);
+    if (n > 7 || n < -3) continue;
+    out.push(`<div class="card-reminder faint">🔒 Crypto.com Earn: вклад ${amt(m)} ${m.symbol} ${n > 0 ? `закрывается ${fmt(end)} (через ${n} дн.)` : n === 0 ? 'закрывается сегодня' : `закрылся ${fmt(end)}`} — открыть заново</div>`);
+  }
+  for (const w of withdrawals) {
+    const d = dayOf(w.tx_time), n = days(d);
+    if (n < -14 || moves.some(m => Number(m.amount) < 0 && m.symbol === w.symbol && m.tx_time > w.tx_time)) continue;
+    out.push(`<div class="card-reminder faint">🔒 Crypto.com Earn: вклад ${amt(w)} ${w.symbol} закрылся ${fmt(d)} и не открыт заново — открыть</div>`);
+  }
+  return out;
 }
 
 function mpUpdateAuthUi(session) {

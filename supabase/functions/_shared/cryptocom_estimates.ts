@@ -40,10 +40,11 @@ const daysBetween = (a: string, b: string) => Math.round((Date.parse(`${b}T00:00
 
 // Each BTC allocation is a separate 90-day Earn term. It pays weekly on its
 // opening weekday (opened + 7, + 14, ...) the same amount, and on its last
-// day, with the withdrawal, 6/7 of it; the next day it's renewed -- 91 days,
-// so the renewed term keeps the weekday. Several terms overlap, each with its
-// own stream. The open ones: allocations no withdrawal of the same amount
-// has closed.
+// day, with the withdrawal, 6/7 of it. It doesn't renew: the BTC goes back
+// to the wallet, earning nothing, until a new term is opened by hand (the
+// page reminds of it) -- the export shows that one when it comes. Several
+// terms overlap, each with its own stream. The open ones: allocations no
+// withdrawal of the same amount has closed.
 function btcRows(actual: Row[], through: string) {
   const rewards = actual.filter(r => r.symbol === 'BTC' && r.kind === 'interest' && /crypto_earn_interest_paid/i.test(r.status ?? ''));
   const moves = actual.filter(r => r.symbol === 'BTC' && r.kind === 'earn_internal');
@@ -57,28 +58,20 @@ function btcRows(actual: Row[], through: string) {
   const out: any[] = [];
   for (const allocation of open) {
     const opened = dayOf(allocation.tx_time);
-    let ends = addDays(opened, 90);
+    const ends = addDays(opened, 90);
     const stream = rewards.filter(r => { const n = daysBetween(opened, dayOf(r.tx_time)); return n > 0 && n < 90 && n % 7 === 0; });
     if (!stream.length) continue;
     // the latest payments are the current rate; a one-off rounding evens out
     const payout = round18(mean(stream.slice(-4).map(r => abs(r.amount))));
-    let started = opened, principal = abs(allocation.amount), d = addDays(dayOf(stream.at(-1)!.tx_time), 7);
-    // keep rolling terms, so an old export never stops the capital line
-    while (started <= through) {
-      for (; d < ends && d <= through; d = addDays(d, 7))
-        out.push({ symbol: 'BTC', amount: payout, tx_time: atUtc(d, '00:15:00'), kind: 'interest',
-          status: `ESTIMATED: Crypto Earn weekly reward; 90-day term opened ${started}, until CSV export` });
-      if (ends > through) break;
-      out.push({ symbol: 'BTC', amount: round18(payout * 6 / 7), tx_time: atUtc(ends, '00:15:00'), kind: 'interest',
-        status: `ESTIMATED: Crypto Earn last reward of term opened ${started}, until CSV export` });
-      out.push({ symbol: 'BTC', amount: principal, tx_time: atUtc(ends, '12:00:00'), kind: 'earn_internal',
-        status: `ESTIMATED: Crypto Earn Withdrawal of term opened ${started}, until CSV export` });
-      started = addDays(ends, 1);
-      out.push({ symbol: 'BTC', amount: -principal, tx_time: atUtc(started, '12:00:00'), kind: 'earn_internal',
-        status: `ESTIMATED: Crypto Earn Allocation renewed from term opened ${opened}, until CSV export` });
-      ends = addDays(started, 90);
-      d = addDays(started, 7);
-    }
+    const principal = abs(allocation.amount);
+    for (let d = addDays(dayOf(stream.at(-1)!.tx_time), 7); d < ends && d <= through; d = addDays(d, 7))
+      out.push({ symbol: 'BTC', amount: payout, tx_time: atUtc(d, '00:15:00'), kind: 'interest',
+        status: `ESTIMATED: Crypto Earn weekly reward; 90-day term opened ${opened}, until CSV export` });
+    if (ends > through) continue;
+    out.push({ symbol: 'BTC', amount: round18(payout * 6 / 7), tx_time: atUtc(ends, '00:15:00'), kind: 'interest',
+      status: `ESTIMATED: Crypto Earn last reward of term opened ${opened}, until CSV export` });
+    out.push({ symbol: 'BTC', amount: principal, tx_time: atUtc(ends, '12:00:00'), kind: 'earn_internal',
+      status: `ESTIMATED: Crypto Earn Withdrawal of term opened ${opened} (not renewed by itself), until CSV export` });
   }
   return out;
 }
