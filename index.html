@@ -7341,10 +7341,34 @@ document.getElementById('mp_exchange_recalc').addEventListener('click', async ()
 // statement_day, the payment is due on the next due_day after it. From
 // remind_days before the due date a banner on top says how much is owed --
 // the card's latest balance_after from its statement, so as fresh as the last
-// upload -- until "Paid" marks that due date paid.
+// upload -- until "Paid" marks that due date paid. A transfer can't be made on
+// a day off: a due date at the weekend or on a Russian public holiday wants the
+// money by the working day before, and the banner turns red with 3 working days
+// or fewer left. The days off come from the Russian work calendar (isdayoff.ru:
+// a digit a day, 1 = off, holidays and moved days included); without it, the
+// weekends alone.
 const mpIsoDay = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 // the day in a month, or its last day when the month is shorter
 const mpDayIn = (y, m, day) => new Date(y, m, Math.min(day, new Date(y, m + 1, 0).getDate()));
+
+const mpRuDaysOff = new Map();   // year -> its calendar string, or null when it didn't load
+async function mpLoadRuDaysOff(year) {
+  if (!mpRuDaysOff.has(year)) {
+    let cal = null;
+    try {
+      const res = await fetch(`https://isdayoff.ru/api/getdata?year=${year}&cc=ru`);
+      const txt = res.ok ? (await res.text()).trim() : '';
+      if (/^[0-9]{365,366}$/.test(txt)) cal = txt;
+    } catch (_) { /* the weekends alone */ }
+    mpRuDaysOff.set(year, cal);
+  }
+  return mpRuDaysOff.get(year);
+}
+const mpIsDayOff = d => {
+  const cal = mpRuDaysOff.get(d.getFullYear());
+  if (!cal) return d.getDay() === 0 || d.getDay() === 6;
+  return cal[Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - new Date(d.getFullYear(), 0, 1)) / 86400000)] === '1';
+};
 
 async function mpRenderCardReminders() {
   const box = document.getElementById('card_reminders');
@@ -7358,7 +7382,13 @@ async function mpRenderCardReminders() {
     if (st > today) st = mpDayIn(today.getFullYear(), today.getMonth() - 1, r.statement_day);
     let due = mpDayIn(st.getFullYear(), st.getMonth(), r.due_day);
     if (due <= st) due = mpDayIn(st.getFullYear(), st.getMonth() + 1, r.due_day);
-    const left = Math.round((due - today) / 86400000);
+    // the last working day for the transfer, and the working days left till it, today included
+    await Promise.all([...new Set([today.getFullYear(), due.getFullYear()])].map(mpLoadRuDaysOff));
+    const pay = new Date(due);
+    while (mpIsDayOff(pay)) pay.setDate(pay.getDate() - 1);
+    const left = Math.round((pay - today) / 86400000);
+    let work = 0;
+    for (const d = new Date(today); d <= pay; d.setDate(d.getDate() + 1)) if (!mpIsDayOff(d)) work++;
     if (left > r.remind_days || (r.paid_for && r.paid_for >= mpIsoDay(due))) continue;
     const { data: last } = await sb.from('bank_transactions').select('tx_date, balance_after')
       .eq('account', r.account).eq('product', 'credit_card').not('balance_after', 'is', null)
@@ -7368,10 +7398,12 @@ async function mpRenderCardReminders() {
     const asOf = row ? row.tx_date.slice(0, 10) : null;
     const stale = !asOf || asOf < mpIsoDay(st);
     if (debt !== null && debt <= 0 && !stale) continue;   // nothing owed on a fresh statement
-    const when = due.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
-    const daysTxt = left === 0 ? 'сегодня' : left === 1 ? 'завтра' : `через ${left} дн.`;
+    const fmt = d => d.toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long' });
+    const when = fmt(due);
+    const daysTxt = (pay < due ? `перевести до ${fmt(pay)} — срок в нерабочий день; ` : '')
+      + (left < 0 ? 'последний рабочий день прошёл' : left === 0 ? 'перевести сегодня' : `рабочих дней: ${work}`);
     const amount = debt !== null && debt > 0 ? `долг ≈ ${debt.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ${r.currency}` : 'долг неизвестен';
-    out.push(`<div class="card-reminder${left <= 2 ? ' urgent' : ''}">
+    out.push(`<div class="card-reminder${work <= 3 ? ' urgent' : ''}">
       <span>💳 <b>${mpEscapeHtml(r.account)}</b>: погасить кредитку до <b>${when}</b> (${daysTxt}) — ${amount}</span>
       <span class="note">${asOf ? `по выписке на ${asOf.split('-').reverse().join('.')}` : 'выписок нет'}${stale ? ' — загрузите свежую' : ''}; точная сумма для льготного периода — в приложении банка</span>
       <button class="btn" data-card-paid="${r.id}" data-due="${mpIsoDay(due)}">Оплачено</button>
