@@ -2273,6 +2273,7 @@ async function mpRenderLatestSources() {
     const partOfUpload = u => {
       const k = u.kind || '', f = (u.file_name || '').toLowerCase();
       if (k === 'revolut_account') return 'Cards & current accounts';
+      if (k === 'revolut_metal') return 'Metals';
       if (k === 'revolut_fund') return 'Flexible Cash Funds';
       if (k === 'revolut_deposit') return 'Deposits & savings';
       if (/crypto/.test(k + f)) return 'Crypto';
@@ -2462,7 +2463,17 @@ async function mpLogUpload(kind, fileName, csvText, result) {
       rows.push({ account: a, kind, file_name: fileName, period_from: p?.[0] ?? null, period_to: p?.[1] ?? null });
     }
   } else {
-    for (const a of accounts) rows.push({ account: a, kind, file_name: fileName, period_from: period?.[0] ?? null, period_to: period?.[1] ?? null });
+    // Revolut's metal pocket comes as an account statement of its own, every
+    // row in XAU (XAG, ...): logged as the metal's, not as the current
+    // account's -- sync-openbanking takes the account's statement end from the log
+    let logged = kind;
+    if (kind === 'revolut_account' && csvText) {
+      const lines = csvText.split(/\r?\n/).filter(Boolean);
+      const ci = (lines[0] || '').split(',').indexOf('Currency');
+      const ccys = lines.slice(1).map(l => l.split(',')[ci]);
+      if (ci >= 0 && ccys.length && ccys.every(c => /^X(AU|AG|PT|PD)$/.test(c))) logged = 'revolut_metal';
+    }
+    for (const a of accounts) rows.push({ account: a, kind: logged, file_name: fileName, period_from: period?.[0] ?? null, period_to: period?.[1] ?? null });
   }
   if (!rows.length) return;
   try {
