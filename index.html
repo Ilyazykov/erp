@@ -68,6 +68,18 @@
     text-align: center; font-size: 0.85rem; }
   .drop-zone.over { border-color: #4da8c8; color: #4da8c8; background: #13191f; }
   .empty-note { color: #6a7381; font-size: 0.85rem; padding: 8px 0; }
+  .exp-layout { display: grid; grid-template-columns: minmax(280px, 420px) 1fr; gap: 24px; align-items: start; }
+  @media (max-width: 800px) { .exp-layout { grid-template-columns: 1fr; } }
+  .exp-cat { display: flex; align-items: center; gap: 12px; padding: 10px 8px; border-bottom: 1px solid #1e2830; cursor: pointer; }
+  .exp-cat:hover { background: #13191f; }
+  .exp-dot { width: 32px; height: 32px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; font-size: 15px; }
+  .exp-name { flex: 1; min-width: 0; }
+  .exp-name b { display: block; color: #e6edf3; font-weight: 600; }
+  .exp-name span, .exp-amt span { font-size: 0.78rem; color: #6a7381; }
+  .exp-amt { text-align: right; white-space: nowrap; }
+  .exp-amt b { display: block; color: #e6edf3; font-weight: 600; }
+  .exp-rows { padding: 0 8px 8px 52px; }
+  .exp-rows .data-table { margin-top: 4px; }
   .icon-btn { background: none; border: none; color: #6a7381; cursor: pointer; font-size: 0.9rem; padding: 2px 6px; }
   .icon-btn:hover { color: #e05252; }
   .card-reminder { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; padding: 10px 14px;
@@ -95,6 +107,7 @@
   <div class="tab" data-tab="capital">Capital</div>
   <div class="tab" data-tab="capitalbrokers">Capital by broker</div>
   <div class="tab" data-tab="invested">Invested vs earned</div>
+  <div class="tab" data-tab="expenses">Expenses</div>
   <div class="tab" data-tab="sigmoid">USD/RUB → CNY Weight (current + 5Y)</div>
   <div class="tab" data-tab="layer2a">ERP &amp; Stocks/Bonds Allocation</div>
   <div class="tab" data-tab="layer2r">Yield per Stock &amp; Rebalancing</div>
@@ -420,6 +433,39 @@
     </div>
     <div id="invested_by_status" class="empty-note"></div>
     <div id="plot_invested_assets" style="height:400px"></div>
+  </div>
+</div>
+
+<div id="expenses" class="chart-wrap">
+  <div id="expenses_signed_out" class="empty-note">Sign in with Google (top of page) to see your expenses.</div>
+  <div id="expenses_signed_in" style="display:none">
+    <div class="section-title">Expenses</div>
+    <p class="note">Money out of the bank accounts, cards and cash over the period, each row at its day's rate. Not counted:
+      transfers between your own accounts (the pairs on the Capital tab), currency exchanges, buying investments, funds, savings
+      and crypto, and top-ups of a broker or another own card -- they're listed below the categories. The category is guessed
+      from the row's description.</p>
+    <div class="form-row" style="gap:12px">
+      <button class="btn" id="exp_prev" type="button" title="Previous period">‹</button>
+      <select id="exp_period">
+        <option value="month">month</option>
+        <option value="3m">3 months</option>
+        <option value="year">year</option>
+        <option value="12m">last 12 months</option>
+        <option value="custom">from – to</option>
+      </select>
+      <button class="btn" id="exp_next" type="button" title="Next period">›</button>
+      <input type="date" id="exp_from"> – <input type="date" id="exp_to">
+      <label>in <select id="exp_ccy"><option value="EUR">EUR €</option><option value="USD">USD $</option><option value="RUB">RUB ₽</option></select></label>
+    </div>
+    <div id="exp_status" class="empty-note"></div>
+    <div class="exp-layout">
+      <div id="plot_exp_donut" style="height:380px"></div>
+      <div id="exp_categories"></div>
+    </div>
+    <div class="section-title" style="margin-top:24px">By month</div>
+    <p class="note">The 12 months to the period's end; click a month to open it.</p>
+    <div id="plot_exp_months" style="height:320px"></div>
+    <div id="exp_excluded"></div>
   </div>
 </div>
 
@@ -855,6 +901,7 @@ function showTab(id) {
   if (id === 'capital' && mpIsSignedIn) mpRenderCapital();
   if (id === 'capitalbrokers' && mpIsSignedIn) mpRenderCapitalBrokers();
   if (id === 'invested' && mpIsSignedIn) mpRenderInvested();
+  if (id === 'expenses' && mpIsSignedIn) mpRenderExpenses();
   if (DATA && !rendered[id]) {
     rendered[id] = true;
     renderChart(id);
@@ -7529,6 +7576,8 @@ function mpUpdateAuthUi(session) {
     document.getElementById('capitalbrokers_signed_in').style.display = '';
     document.getElementById('invested_signed_out').style.display = 'none';
     document.getElementById('invested_signed_in').style.display = '';
+    document.getElementById('expenses_signed_out').style.display = 'none';
+    document.getElementById('expenses_signed_in').style.display = '';
     mpRenderCardReminders();
     mpRenderPortfolioPies();
     mpRenderLatestSources();
@@ -7569,6 +7618,9 @@ function mpUpdateAuthUi(session) {
     document.getElementById('capitalbrokers_signed_in').style.display = 'none';
     document.getElementById('invested_signed_out').style.display = '';
     document.getElementById('invested_signed_in').style.display = 'none';
+    document.getElementById('expenses_signed_out').style.display = '';
+    document.getElementById('expenses_signed_in').style.display = 'none';
+    mpExpCache = null;
     mpCapitalBrokerRows = null;
     mpExactMask = null;
     mpEverHeldRows = null;
@@ -7657,6 +7709,247 @@ async function mpRenderCapital() {
   }
   await mpRenderCapitalTypes(ccy, conv);
 }
+// Expenses over a period, by category, as in Revolut's spending view: every
+// row out of bank_transactions less what isn't spending (MP_EXP_SKIP) and the
+// legs of transfers between own accounts (internal_transfers), each at its
+// day's rate (fx_history). Categories are guessed from the description.
+const MP_EXP_SKIP = [
+  // [why not counted, test on the row]
+  ['Investments', r => /^(tbank_broker|ibkr|freedom24|sber_broker|atomyze|estimate_|tbank_api|finuslugi|revolut_invest)/.test(r.external_source)
+    || r.currency === 'XAU' || /^Покупка |Комиссия брокера|^(BUY|SELL) - |^(Buy|Sell) \S+ .*(units?|паёв|@)/.test(r.description)],
+  ['Funds & savings', r => /Flexible Cash Funds|Instant Access Savings|investment account|\bSavings\b|\bPocket\b|\bVault\b/i.test(r.description)],
+  ['Currency exchange', r => /^fx_/.test(r.category || '') || /^Exchanged |Döviz (Alış|Satış)|menjacnica|обмен валют|конвертац/i.test(r.description)],
+  ['Crypto', r => /crypto\.com|mercuryo|\bMRCR\b|bybit|binance|\bokx\b|kraken/i.test(r.description)],
+  ['Own accounts', r => ['internal_transfer', 'brokerage_funding', 'top_up', 'salary'].includes(r.category)
+    || /^Deposited at |6012 ?Revolut|Wise PURCHASE|top-?up|между (своими )?счетами|Internal transfer/i.test(r.description)],
+];
+const MP_EXP_CATS = [
+  // [name, icon, colour, test on "description category"]
+  ['Rent & housing', '🏠', '#ff7a45', /\brent\b|MPE PROPERTIES|TEPLOENERGO|ЖКХ|JKH|My Home|My house|Capital Repair|Cap\. Repair|TNS-Energo|cleaning lady/i],
+  ['Bills & utilities', '💡', '#ffb020', /Cyta|\bEAC\b|Municipality|Water Board|Primetel|Epic\b|Beeline|\bMTS\b|Megafon|Yota|Tele2|\bEE Ltd\b|1global|utilit|osiguranje|insurance|страхов/i],
+  ['Food delivery', '🛵', '#ff5d5d', /wolt|foody|glovo|deliveroo|bolt food|yandex\W*eda|яндекс еда|delivery club|getir|yemeksepeti|food_delivery/i],
+  ['Restaurants & cafés', '🍽', '#f778ba', /restaurant|\bcaf[eé]\b|kafe|coffee|costa|starbucks|\bpaul\b|mcdonald|burger|kfc|pizza|\bbar\b|\bpub\b|bistro|tavern|grill|bakery|bread|cuisine|kitchen|ramen|malatang|indian|fish & chips|cinnabon|wagamama|brewdog|greene king|\barms\b|Lángosh|Cocorico|Fix Choc|ресторан|кафе|кофе/i],
+  ['Groceries', '🛒', '#3dd68c', /groceries|Bakalicom|Berezka|\bSPAR\b|Lidl|Alphamega|Sklavenitis|Carrefour|Kiosk|supermarket|markets?\b|Sainsbury|Monoprix|Tesco|Пятер|Перекр|Магнит|ВкусВилл|Lenta|Ашан|Migros|\bBIM\b|A101|Şok|Univerexport|Shopping Plaza|Bazaar/i],
+  ['Transport', '🚕', '#58a6ff', /\bbolt\b|uber|ubr\*|taxi|такси|transport|\btfl\b|sncf|eurostar|metro|\bbus\b|railway|trainline|shuttle|\bRATP\b|BKK|Mobilités|parking|fuel|petrol|lukoil|Siticard|Mos\.Tr/i],
+  ['Travel', '✈️', '#a371f7', /booking|airbnb|hotel|hostel|inter ?continental|atlantis|marriott|hilton|wizz|easyjet|ryanair|aegean|airline|airways|aviasales|kiwi\.com|trip\.com|skyscanner|swissport|airport|T-BankAir|travel/i],
+  ['Health & sport', '💊', '#7ee787', /pharm|аптек|apteka|eczane|clinic|hospital|dental|dentist|doctor|chemist|optic|vision express|fitness|\bgym\b|climbing|health/i],
+  ['Entertainment', '🎟', '#00c2c7', /disney|headout|viator|theatre|theater|театр|cinema|кино|museum|aquaventure|theme park|tickets|\batg\b|concert|punting|Széchenyi|\bspa\b|entertainment|steam|playstation/i],
+  ['Subscriptions & services', '🧾', '#79c0ff', /leetcode|anthropic|openai|chatgpt|hello interview|parallels|patreon|netflix|spotify|youtube|google|apple\.com|icloud|microsoft|github|notion|cursor|teamlogs|podpiska|prodamus|subscription|T-Bundle|sberprime|yandex\W.*plus/i],
+  ['Shopping', '🛍', '#d29922', /superdry|lafayette|rip curl|kotsovolos|istyle|ikea|3F HOME|mediamarkt|whsmith|retail|zara|h&m|uniqlo|decathlon|amazon|ozon|wildberries|aliexpress|\bshop|store\b|\bmall\b|SANAL POS/i],
+  ['Government & visas', '🏛', '#8b949e', /\bvisas?\b|visapro|embassy|\bvfs\b|immigration|consulate|\bgov\b|\btax\b|налог|НДФЛ|штраф/i],
+  ['Fees', '🏦', '#6e7681', /\bfees?\b|commission|комисси|maintenance|naknad|provizij|обслуживан|ücret|masraf|bank_fee/i],
+  ['Cash', '💵', '#56d364', /\batm\b|\bcash\b|банкомат|наличн|bankomat/i],
+  ['Transfers to people', '👥', '#c297ff', /^transfer( to|$)|^to \S|sent money to|перевод|p2p_transfer|^Revolut( Ltd| Bank UAB)?$/i],
+  ['Other', '•', '#4b5560', /[\s\S]*/],
+];
+let mpExpCache = null;
+async function mpExpLoad() {
+  const page = async (q) => {
+    const out = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await q().range(from, from + 999);
+      if (error) throw new Error(error.message);
+      out.push(...data);
+      if (data.length < 1000) break;
+    }
+    return out;
+  };
+  const [rows, pairs] = await Promise.all([
+    page(() => sb.from('bank_transactions')
+      .select('id, tx_date, account, description, amount, currency, category, external_source, external_id, synthetic_kind')
+      .lt('amount', 0).order('tx_date')),
+    page(() => sb.from('internal_transfers').select('out_source, out_id').neq('matched_by', 'rejected').order('id')),
+  ]);
+  const own = new Set(pairs.map(p => p.out_source + '\u0000' + p.out_id));
+  const ccys = [...new Set([...rows.map(r => r.currency.toUpperCase()), 'EUR', 'RUB'])].filter(c => c !== 'USD' && c !== 'XAU');
+  const rates = {};
+  await Promise.all(ccys.map(async c => {
+    rates[c] = (await page(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', c).order('day')))
+      .map(r => [r.day, Number(r.usd_per_unit)]);
+  }));
+  const usdPer = (c, day) => {
+    if (c === 'USD') return 1;
+    const rs = rates[c];
+    if (!rs?.length) return NaN;
+    let lo = 0, hi = rs.length - 1, rate = rs[0][1];
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (rs[mid][0] <= day) { rate = rs[mid][1]; lo = mid + 1; } else hi = mid - 1; }
+    return rate;
+  };
+  const spent = [], skipped = [];
+  for (const r of rows) {
+    if (['balance_snapshot', 'account_closed', 'data_gap'].includes(r.synthetic_kind)) continue;
+    const day = r.tx_date.slice(0, 10);
+    const row = { ...r, day, ccy: r.currency.toUpperCase(), amt: -Number(r.amount) };
+    row.usd = row.amt * usdPer(row.ccy, day);
+    let skip = own.has(r.external_source + '\u0000' + r.external_id) ? 'Own accounts' : null;
+    for (const [why, test] of MP_EXP_SKIP) { if (skip) break; if (test(row)) skip = why; }
+    if (skip) { row.cat = skip; skipped.push(row); continue; }
+    // the importers' own guess helps, except their catch-all utilities_or_shopping
+    const text = `${r.description} ${r.category === 'utilities_or_shopping' ? '' : r.category || ''}`.trim();
+    row.cat = MP_EXP_CATS.find(c => c[3].test(text))[0];
+    if (row.cat === 'Other' && r.category === 'utilities_or_shopping') row.cat = 'Shopping';
+    spent.push(row);
+  }
+  return { spent, skipped, usdPer };
+}
+function mpExpRange() {
+  const mode = document.getElementById('exp_period').value;
+  const from = document.getElementById('exp_from').value, to = document.getElementById('exp_to').value;
+  return { mode, from, to };
+}
+// The period ending in the month of `anchor` (YYYY-MM-DD) for the chosen mode.
+function mpExpSetPeriod(mode, anchor) {
+  const [y, m] = anchor.split('-').map(Number);
+  const iso = (yy, mm, dd) => new Date(Date.UTC(yy, mm - 1, dd)).toISOString().slice(0, 10);
+  let from, to;
+  if (mode === 'year') { from = iso(y, 1, 1); to = iso(y, 12, 31); }
+  else {
+    const months = mode === '3m' ? 3 : mode === '12m' ? 12 : 1;
+    from = iso(y, m - months + 1, 1); to = iso(y, m + 1, 0);
+  }
+  document.getElementById('exp_from').value = from;
+  document.getElementById('exp_to').value = to;
+}
+function mpExpShift(dir) {
+  const { mode, from, to } = mpExpRange();
+  if (!from || !to) return;
+  if (mode === 'custom') {
+    const len = Date.parse(to) - Date.parse(from) + 86400000;
+    const f = new Date(Date.parse(from) + dir * len), t = new Date(Date.parse(to) + dir * len);
+    document.getElementById('exp_from').value = f.toISOString().slice(0, 10);
+    document.getElementById('exp_to').value = t.toISOString().slice(0, 10);
+  } else {
+    const months = mode === 'year' || mode === '12m' ? 12 : mode === '3m' ? 3 : 1;
+    const [y, m] = to.split('-').map(Number);
+    mpExpSetPeriod(mode, new Date(Date.UTC(y, m - 1 + dir * months, 1)).toISOString().slice(0, 10));
+  }
+  mpRenderExpenses();
+}
+async function mpRenderExpenses() {
+  const status = document.getElementById('exp_status');
+  if (!document.getElementById('exp_from').value) mpExpSetPeriod(document.getElementById('exp_period').value, new Date().toISOString().slice(0, 10));
+  if (!mpExpCache) {
+    status.textContent = 'Loading transactions…';
+    try { mpExpCache = await mpExpLoad(); } catch (error) { status.textContent = error.message; return; }
+  }
+  status.textContent = '';
+  const { spent, skipped, usdPer } = mpExpCache;
+  const { from, to } = mpExpRange();
+  const ccy = document.getElementById('exp_ccy').value;
+  const sym = { EUR: '€', USD: '$', RUB: '₽' }[ccy];
+  const conv = r => r.usd / usdPer(ccy, r.day);
+  const money = v => {
+    const n = Math.round(v).toLocaleString('en-US');
+    return ccy === 'RUB' ? `${n} ₽` : sym + n;
+  };
+  const esc = s => String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
+  const inPeriod = list => list.filter(r => r.day >= from && r.day <= to && Number.isFinite(r.usd));
+  const rows = inPeriod(spent);
+  const meta = Object.fromEntries(MP_EXP_CATS.map(c => [c[0], { icon: c[1], color: c[2] }]));
+  const group = (list) => {
+    const g = new Map();
+    for (const r of list) {
+      if (!g.has(r.cat)) g.set(r.cat, { cat: r.cat, total: 0, rows: [] });
+      const e = g.get(r.cat);
+      e.total += conv(r);
+      e.rows.push(r);
+    }
+    return [...g.values()].sort((a, b) => b.total - a.total);
+  };
+  const cats = group(rows);
+  const total = cats.reduce((s, c) => s + c.total, 0);
+
+  const donut = document.getElementById('plot_exp_donut');
+  await Plotly.react(donut, [{
+    type: 'pie', hole: 0.78, sort: false, direction: 'clockwise',
+    labels: cats.map(c => c.cat), values: cats.map(c => c.total),
+    marker: { colors: cats.map(c => meta[c.cat].color), line: { color: '#0d1117', width: 3 } },
+    textinfo: 'none', hovertemplate: `%{label}<br>%{value:,.0f} ${sym}<br>%{percent}<extra></extra>`,
+  }], {
+    paper_bgcolor: '#0d1117', plot_bgcolor: '#0d1117', showlegend: false, margin: { t: 10, b: 10, l: 10, r: 10 },
+    annotations: [
+      { text: 'Total spent', showarrow: false, x: 0.5, y: 0.58, font: { size: 14, color: '#8b949e' } },
+      { text: `<b>${money(total)}</b>`, showarrow: false, x: 0.5, y: 0.46, font: { size: 30, color: '#e6edf3' } },
+      { text: `${from} – ${to}`, showarrow: false, x: 0.5, y: 0.35, font: { size: 11, color: '#6a7381' } },
+    ],
+  }, { ...CONFIG, displayModeBar: false });
+
+  const rowsTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
+    list.slice().sort((a, b) => b.tx_date.localeCompare(a.tx_date)).map(r => `<tr><td>${r.day}</td><td style="text-align:left">${esc(r.description)}</td><td style="text-align:left">${esc(r.account)}</td>
+      <td>${r.amt.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${r.ccy}</td><td>${money(conv(r))}</td></tr>`).join('')}</tbody></table></div>`;
+  const catList = document.getElementById('exp_categories');
+  catList.innerHTML = cats.length ? cats.map((c, i) => `<div class="exp-cat" data-i="${i}">
+      <div class="exp-dot" style="background:${meta[c.cat].color}33;color:${meta[c.cat].color}">${meta[c.cat].icon}</div>
+      <div class="exp-name"><b>${c.cat}</b><span>${c.rows.length} transaction${c.rows.length === 1 ? '' : 's'}</span></div>
+      <div class="exp-amt"><b>${money(c.total)}</b><span>${total ? Math.round(c.total / total * 100) : 0}%</span></div>
+    </div><div class="exp-open" data-i="${i}" style="display:none"></div>`).join('')
+    : '<p class="empty-note">No expenses in this period.</p>';
+  catList.querySelectorAll('.exp-cat').forEach(el => el.addEventListener('click', () => {
+    const box = catList.querySelector(`.exp-open[data-i="${el.dataset.i}"]`);
+    if (!box.innerHTML) box.innerHTML = rowsTable(cats[el.dataset.i].rows);
+    box.style.display = box.style.display === 'none' ? '' : 'none';
+  }));
+
+  // the 12 months to the period's end, stacked by category
+  const [ty, tm] = to.split('-').map(Number);
+  const months = Array.from({ length: 12 }, (_, k) => new Date(Date.UTC(ty, tm - 12 + k, 1)).toISOString().slice(0, 7));
+  const byMonth = new Map();
+  for (const r of spent) {
+    const mo = r.day.slice(0, 7);
+    if (mo < months[0] || mo > months[11] || !Number.isFinite(r.usd)) continue;
+    const k = r.cat + '\u0000' + mo;
+    byMonth.set(k, (byMonth.get(k) || 0) + conv(r));
+  }
+  const order = MP_EXP_CATS.map(c => c[0]).filter(n => months.some(mo => byMonth.has(n + '\u0000' + mo)));
+  const bars = document.getElementById('plot_exp_months');
+  await Plotly.react(bars, order.map(n => ({
+    type: 'bar', name: n, x: months, y: months.map(mo => byMonth.get(n + '\u0000' + mo) || 0),
+    marker: { color: meta[n].color }, hovertemplate: `${n}: %{y:,.0f} ${sym}<extra></extra>`,
+  })), {
+    barmode: 'stack', paper_bgcolor: '#0d1117', plot_bgcolor: '#0d1117', font: { color: '#8b949e' },
+    margin: { t: 10, b: 40, l: 60, r: 10 }, hovermode: 'x unified',
+    xaxis: { type: 'category', gridcolor: '#1e2830' }, yaxis: { gridcolor: '#1e2830', ticksuffix: ccy === 'RUB' ? ' ₽' : '', tickprefix: ccy === 'RUB' ? '' : sym },
+    legend: { orientation: 'h', y: -0.15 },
+  }, CONFIG);
+  bars.removeAllListeners?.('plotly_click');
+  bars.on('plotly_click', ev => {
+    const mo = ev.points?.[0]?.x;
+    if (!mo) return;
+    document.getElementById('exp_period').value = 'month';
+    mpExpSetPeriod('month', mo + '-01');
+    mpRenderExpenses();
+  });
+
+  const skip = group(inPeriod(skipped));
+  const skipTotal = skip.reduce((s, c) => s + c.total, 0);
+  const exWrap = document.getElementById('exp_excluded');
+  exWrap.innerHTML = skip.length ? `<div class="section-title" style="margin-top:24px">Not counted: ${money(skipTotal)}</div>
+    <p class="note">Money out over the same period that only moved between your own money. Click a line to see its rows --
+      something that is spending after all means a rule in MP_EXP_SKIP is too wide.</p>
+    ${skip.map((c, i) => `<details><summary class="exp-cat" style="display:flex"><div class="exp-name"><b>${c.cat}</b>
+      <span>${c.rows.length} transaction${c.rows.length === 1 ? '' : 's'}</span></div><div class="exp-amt"><b>${money(c.total)}</b></div></summary>
+      ${rowsTable(c.rows)}</details>`).join('')}` : '';
+}
+for (const id of ['exp_from', 'exp_to']) {
+  document.getElementById(id).addEventListener('change', () => {
+    document.getElementById('exp_period').value = 'custom';
+    if (mpIsSignedIn) mpRenderExpenses();
+  });
+}
+try { const saved = localStorage.getItem('mp_exp_period'); if (saved) document.getElementById('exp_period').value = saved; } catch { /* no storage */ }
+try { const saved = localStorage.getItem('mp_exp_ccy'); if (saved) document.getElementById('exp_ccy').value = saved; } catch { /* no storage */ }
+document.getElementById('exp_period').addEventListener('change', e => {
+  try { localStorage.setItem('mp_exp_period', e.target.value); } catch { /* no storage */ }
+  if (e.target.value !== 'custom') mpExpSetPeriod(e.target.value, document.getElementById('exp_to').value || new Date().toISOString().slice(0, 10));
+  if (mpIsSignedIn) mpRenderExpenses();
+});
+document.getElementById('exp_ccy').addEventListener('change', e => {
+  try { localStorage.setItem('mp_exp_ccy', e.target.value); } catch { /* no storage */ }
+  if (mpIsSignedIn) mpRenderExpenses();
+});
+document.getElementById('exp_prev').addEventListener('click', () => { if (mpIsSignedIn) mpExpShift(-1); });
+document.getElementById('exp_next').addEventListener('click', () => { if (mpIsSignedIn) mpExpShift(1); });
+
 // Invested vs value of the investments (investment_daily, migration 058).
 let mpInvestedRows = null;
 async function mpRenderInvested() {
