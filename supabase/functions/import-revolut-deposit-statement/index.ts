@@ -211,12 +211,41 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: upsertErr.message }),
         { status: 500, headers: corsHeaders });
     }
+
+    // The statement lists every row of its span, but Date has no time, and an
+    // export from another timezone puts a row on the next or previous day
+    // with a new external_id: the export of 22.09.2026 had six withdrawals a
+    // day before the one of 27.10, and they stood twice
+    // (migrations/20250101000126_revolut_fund_timezone_duplicates_again.sql).
+    // So the stored rows of the file's tickers and days that the file no
+    // longer has go.
+    const keep = new Set(rows.map(r => r.external_id));
+    const dates = rows.map(r => r.trade_date).sort();
+    const { data: stored, error: storedErr } = await supabase.from('trades')
+      .select('id, external_id')
+      .eq('external_source', 'revolut_deposit_csv')
+      .in('ticker', [...new Set(rows.map(r => r.ticker))])
+      .gte('trade_date', dates[0]).lte('trade_date', dates[dates.length - 1]);
+    if (storedErr) {
+      return new Response(JSON.stringify({ error: storedErr.message }),
+        { status: 500, headers: corsHeaders });
+    }
+    const stale = (stored ?? []).filter((s: { external_id: string }) => !keep.has(s.external_id))
+      .map((s: { id: string }) => s.id);
+    if (stale.length) {
+      const { error: delErr } = await supabase.from('trades').delete().in('id', stale);
+      if (delErr) {
+        return new Response(JSON.stringify({ error: delErr.message }),
+          { status: 500, headers: corsHeaders });
+      }
+    }
     // the statement's days back from the trades stood in from Open Banking (_shared/openbanking_rows.ts)
     const removedOpenBanking = await removeOpenBankingTrades(supabase, user.id, OPENBANKING_TRADE_SOURCE.savings,
       rows.reduce((m: string, r: { trade_date: string }) => (r.trade_date > m ? r.trade_date : m), ''));
 
     return new Response(JSON.stringify({
       imported: count ?? rows.length,
+      removed_stale: stale.length,
       removed_open_banking_trades: removedOpenBanking,
       total_rows: depositRows.length,
       skipped_bad_date: skippedBadDate,

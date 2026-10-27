@@ -178,10 +178,16 @@ interface TradeRow { ticker: string; side: string; trade_date: string; external_
 // west) gave every shared row two external_ids, and the upload added the
 // overlap a second time (migrations/20250101000093_revolut_fund_timezone_duplicates.sql).
 // A row stored before: same ticker, side and external_id after the Date, the
-// Date off by a whole number of hours (up to 14). The offset most rows agree
-// on wins, if more rows agree on it than sit at no offset at all; the rows
-// then take the stored rows' external_id and date, so the upsert matches them.
-async function matchShiftedRows(supabase: any, rows: TradeRow[]): Promise<number> {
+// Date off by a whole number of hours (up to 14). The offset need not hold for
+// the whole file: daylight saving moves it for part of the year. The export of
+// 27.10.2026 met the one of 22.09 at no offset on the winter-time days and an
+// hour off on the summer-time ones; no offset won the vote, and the summer
+// rows of 22.09 went in a second time
+// (migrations/20250101000126_revolut_fund_timezone_duplicates_again.sql).
+// So per row: one stored at no offset is the row itself; else its twin at the
+// offset most rows agree on (two at least), each stored row taken once. The
+// rows take the stored rows' external_id and date, so the upsert matches them.
+async function matchShiftedRows(supabase: any, rows: TradeRow[]): Promise<number[]> {
   const days = rows.map(r => r.trade_date).sort();
   const day = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 24 * HOUR).toISOString().slice(0, 10);
   const stored: TradeRow[] = [];
@@ -205,19 +211,28 @@ async function matchShiftedRows(supabase: any, rows: TradeRow[]): Promise<number
     const p = splitExternalId(r.external_id);
     return p ? (byKey.get(`${r.ticker}|${r.side}|${p.rest}`) ?? []).map(s => ({ d: s.at - p.at, row: s.row })) : [];
   };
+  const shifted = (d: number) => d !== 0 && d % HOUR === 0 && Math.abs(d) <= 14 * HOUR;
   const votes = new Map<number, number>();
   for (const r of rows) {
-    const offsets = new Set(candidates(r).map(c => c.d).filter(d => d % HOUR === 0 && Math.abs(d) <= 14 * HOUR));
+    const offsets = new Set(candidates(r).map(c => c.d).filter(shifted));
     for (const d of offsets) votes.set(d, (votes.get(d) ?? 0) + 1);
   }
-  let best = 0;
-  for (const [d, n] of votes) if (d !== 0 && n > (votes.get(best) ?? 0)) best = d;
-  if (!best) return 0;
+  const ownIds = new Set(rows.map(r => r.external_id));
+  const taken = new Set<string>();
+  const used = new Set<number>();
   for (const r of rows) {
-    const twin = candidates(r).find(c => c.d === best);
-    if (twin) { r.external_id = twin.row.external_id; r.trade_date = twin.row.trade_date; }
+    const cs = candidates(r);
+    if (cs.some(c => c.d === 0)) continue;
+    const twin = cs.filter(c => shifted(c.d) && (votes.get(c.d) ?? 0) >= 2
+        && !ownIds.has(c.row.external_id) && !taken.has(c.row.external_id))
+      .sort((a, b) => (votes.get(b.d)! - votes.get(a.d)!) || Math.abs(a.d) - Math.abs(b.d))[0];
+    if (!twin) continue;
+    taken.add(twin.row.external_id);
+    used.add(twin.d);
+    r.external_id = twin.row.external_id;
+    r.trade_date = twin.row.trade_date;
   }
-  return best;
+  return [...used];
 }
 
 Deno.serve(async (req) => {
@@ -356,7 +371,7 @@ Deno.serve(async (req) => {
       interest_rows: interestRows,
       skipped_no_quantity_no_value: skippedNoQuantityNoValue,
       skipped_bad_date: skippedBadDate,
-      time_shift_hours: shift / HOUR,
+      time_shift_hours: shift.map(d => d / HOUR),
     }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (err) {
     return new Response(JSON.stringify({ error: String(err) }),
