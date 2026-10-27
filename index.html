@@ -2086,7 +2086,7 @@ const MP_ACCOUNT_SOURCE = {
   Sber: 'Broker: SberBank Online → Инвестиции → account → Отчёты и справки → broker report (.html, one per month), upload as is. Card and savings account: Выписки и справки → PDF → to Claude.',
   Alfa: 'Alfa-Online → statements of the current, salary and Alfa-Account (PDF); broker account: screenshots of Alfa-Investments → History → to Claude.',
   'Yandex Bank': 'Yandex Bank app → statement for each contract (current account, «Сейв») (PDF) → to Claude.',
-  'Ozon Bank': 'Ozon Bank → statement of movements (PDF) → to Claude.',
+  'Ozon Bank': 'Ozon Bank app → Ещё → Получить справку → О движении средств → language → основной / накопительный / кредитная карта (PDF, one each) → to Claude.',
   'Credo Bank': 'mycredo.ge → Transactions (screenshots or the statement) → to Claude, who builds the Credo Bank CSV (import-bank-csv).',
   Wise: 'Wise → balance statement, CSV, one per currency. Upload as is.',
   'Crypto.com': 'Crypto.com App → Accounts → History → Export → Crypto Wallet. Upload as is.',
@@ -2429,8 +2429,10 @@ async function mpLogUpload(kind, fileName, csvText, result) {
       if (!by.has(a)) by.set(a, []);
       by.get(a).push(l);
     }
+    // a date in the file's name is the day its statements run to
+    // (ozon_current_account_2026-10-26.csv: no move since August, but checked to 26.10)
     for (const [a, ls] of by) {
-      const p = mpUploadPeriod('', ls.join('\n'), null);
+      const p = mpUploadPeriod(fileName, ls.join('\n'), null);
       rows.push({ account: a, kind, file_name: fileName, period_from: p?.[0] ?? null, period_to: p?.[1] ?? null });
     }
   } else {
