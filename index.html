@@ -258,8 +258,8 @@
       Raiffeisen Bank Serbia transaction CSV, its generic bank CSV (Yandex Bank, T-Bank), a Bybit transaction log
       (Data Export → Transaction Log → Account Change Details: upload each Funding and Unified Trading file), or a
       Crypto.com App export (Accounts → History → Export → Crypto Wallet), a Binance transaction export (Orders → Assets
-      History → Export → Export Transaction Records; keep the file name, its "(UTC+3)" is the time zone), or this project's own Telegram Wallet CSV
-      (built from the Wallet app's history) — the file type is detected automatically from its header
+      History → Export → Export Transaction Records; keep the file name, its "(UTC+3)" is the time zone), or this project's own Telegram wallet CSV
+      (built from the history in Walt, ex. Wallet in Telegram) — the file type is detected automatically from its header
       row or extension.</p>
     <div class="form-row">
       <input type="file" id="mp_any_csv_file" accept=".csv,.xlsx,.json,.html,.htm" multiple>
@@ -365,11 +365,11 @@
     <div id="mp_wallets_wrap"></div>
 
     <div class="section-title">Exchange accounts</div>
-    <p class="note">Custodial exchange accounts (Binance, Bybit, Crypto.com, Telegram Wallet): there's no blockchain address to read, so they're
+    <p class="note">Custodial exchange accounts (Binance, Bybit, Crypto.com, Walt in Telegram): there's no blockchain address to read, so they're
       updated by uploading the exchange's own export in <b>Import CSV</b> on the My Portfolio tab (Binance: Orders → Assets History →
       Export → Export Transaction Records; Bybit: Data Export → Transaction Log →
       Account Change Details, each Funding and Unified Trading file; Crypto.com App: Accounts → History → Export →
-      Crypto Wallet; Telegram Wallet: this project's own CSV built from the app's history). The Sync button above
+      Crypto Wallet; Walt (ex. Wallet) in Telegram: this project's own CSV built from its history). The Sync button above
       doesn't touch them.</p>
     <div class="form-row">
       <button class="btn" id="mp_exchange_recalc" title="Recompute balances from the transaction history already stored">Recalculate</button>
@@ -2092,7 +2092,7 @@ const MP_ACCOUNT_SOURCE = {
   Wise: 'Wise → balance statement, CSV, one per currency. Upload as is.',
   'Crypto.com': 'Crypto.com App → Accounts → History → Export → Crypto Wallet. Upload as is.',
   Binance: 'Checked every morning through a read-only API key (Binance automatic check, below the uploads) -- when the balances differ: Binance → Orders → Assets History → Export → Export Transaction Records; keep the file name (its time zone). Upload as is.',
-  Telegram: 'Telegram Wallet history → to Claude, who builds the Telegram Wallet CSV.',
+  Telegram: 'Walt (ex. Wallet) in Telegram → History, and Earn → each coin → history (screenshots or copied text) → to Claude, who builds the Telegram wallet CSV.',
   Trust: 'On-chain wallet: synced from the blockchain by itself (Crypto tab), nothing to upload.',
   cash: 'statements/cash: cash.csv (exact), cash_estimated.csv, cash_extrapolated.csv -- kept by hand with Claude; the counts of cash on hand.',
 };
@@ -2502,7 +2502,7 @@ async function mpImportOneFile(file, statusEl, session) {
         + 'a Revolut account statement, a Revolut Flexible Cash Funds statement, a Revolut '
         + 'Instant Access Savings statement, a Wise balance statement, an IBKR Activity Statement, a Bank of Cyprus transaction history export, or '
         + 'this project\'s own Raiffeisen Bank Serbia, generic bank transaction or broker operations CSV, a Bybit transaction log, '
-        + 'a Crypto.com App export, a Binance transaction export, or this project\'s own Telegram Wallet CSV.';
+        + 'a Crypto.com App export, a Binance transaction export, or this project\'s own Telegram wallet (Walt) CSV.';
       return;
     }
     if (kind === 'binance_aux') {
@@ -2523,7 +2523,7 @@ async function mpImportOneFile(file, statusEl, session) {
       broker_csv: { fn: 'import-broker-csv', label: 'broker operations (generic CSV)' },
       bybit_log: { fn: 'import-bybit', label: 'Bybit transaction log' },
       cryptocom: { fn: 'import-crypto-com', label: 'Crypto.com App export' },
-      telegram_wallet: { fn: 'import-telegram-wallet', label: 'Telegram Wallet history' },
+      telegram_wallet: { fn: 'import-telegram-wallet', label: 'Walt (ex. Wallet in Telegram) history' },
       binance: { fn: 'import-binance', label: 'Binance transaction export' },
       revolut_crypto: { fn: 'import-revolut-crypto', label: 'Revolut crypto statement' },
       revolut_invest: { fn: 'import-revolut-invest', label: 'Revolut brokerage (Invest) statement' },
@@ -2946,7 +2946,7 @@ const MP_XLSX_PALETTE = ['00A2FF', '61D836', '929292', 'F8BA00', 'FF2600', 'FF42
 // each chart's colours as money.numbers has them, by slice / series
 const MP_XLSX_TYPE_COLORS = { 'Облигации': '00A2FF', 'Кэш': '61D836', 'Вклады': '929292', 'Золото': 'F8BA00', 'Крипта': 'FF2600', 'Акции': 'FF42A1', 'Квартира': '8BCBFA' };
 const MP_XLSX_CCY_COLORS = { EUR: '00A2FF', USD: '61D836', RUB: '929292', TRY: 'F8BA00', GBP: 'FF2600', CNY: 'FF42A1', RSD: '22AEFF', ETH: '73DD4E',
-  TON: 'A0A0A0', XAU: 'F9C321', BTC: 'FF4322', SOL: 'D93386', TAO: '44BAFF', TRX: '87E366', DOGE: 'AFAFAF' };
+  TON: 'A0A0A0', GRAM: 'A0A0A0', XAU: 'F9C321', BTC: 'FF4322', SOL: 'D93386', TAO: '44BAFF', TRX: '87E366', DOGE: 'AFAFAF' };
 const MP_XLSX_COLORS = {
   'По валютам': MP_XLSX_CCY_COLORS,
   'По банкам': { 'Freedom24': '44BAFF', 'Банк Кипра': '479FF8', 'Wise': '81D653', 'Revolut': '929292', 'Райф': 'EFBD40', 'Зираат': 'EA4025', 'IBKR': 'C23175',
@@ -2954,12 +2954,12 @@ const MP_XLSX_COLORS = {
     'Trust': 'F1C54B', 'Nexo': 'EB5335', 'cash': 'C84285' },
   'По типам активов': MP_XLSX_TYPE_COLORS, 'Инвестиции': MP_XLSX_TYPE_COLORS, 'С квартирой': MP_XLSX_TYPE_COLORS,
   'Акции по индексам': { 'Акции мира': 'C23175', 'STOXX600': '479FF8', 'S&P500': '81D653', 'S&P400': '929292', 'S&P600': 'FF2600', 'MOEX': 'EA4025' },
-  'Крипта': { TON: '479FF8', TAO: 'A0A0A0', ETH: '81D653', TRX: '929292', DOGE: 'FF2600', BTC: 'EA4025', SOL: 'C23175' },
+  'Крипта': { TON: '479FF8', GRAM: '479FF8', TAO: 'A0A0A0', ETH: '81D653', TRX: '929292', DOGE: 'FF2600', BTC: 'EA4025', SOL: 'C23175' },
   'Россия': { 'MOEX 🇷🇺': '00A2FF', 'Облигации 🇷🇺': '61D836', 'Вклады 🇷🇺': '929292', 'Облигации 🇨🇳': 'F8BA00' },
   'Акции по брокерам': { 'Freedom24': '00A2FF', 'IBKR': 'FF42A1' },
   'Россия и мир': { 'Всего 🇷🇺': 'EA4025', 'Всего 🌎': '479FF8' },
   'area:По типам активов': { 'Кэш': '81D653', 'Вклады': '929292', 'Золото': 'EFBD40', 'Облигации': '479FF8', 'Акции': 'C23175', 'Крипта': 'FFD932' },
-  'area:По валютам': { ...MP_XLSX_CCY_COLORS, RSD: 'FF42A1', CNY: '22AEFF', SOL: 'A0A0A0', TON: 'D93386' },
+  'area:По валютам': { ...MP_XLSX_CCY_COLORS, RSD: 'FF42A1', CNY: '22AEFF', SOL: 'A0A0A0', TON: 'D93386', GRAM: 'D93386' },
   'area:По банкам': { 'Банк Кипра': '00A2FF', 'Wise': '61D836', 'Revolut': '929292', 'Райф': 'F8BA00', 'Зираат': 'FF2600', 'IBKR': 'FF42A1', 'Финуслуги': '22AEFF',
     'Сбер': '73DD4E', 'Binance': 'A0A0A0', 'Тиньков': 'F9C321', 'Bybit': 'FF4322', 'Cryptocom': 'D93386', 'Telegram': '44BAFF', 'Nexo': '87E366',
     'Trust': 'DF4E97', 'cash': '9BE87F', 'Freedom24': 'BEBEBE' },
@@ -6443,7 +6443,7 @@ const mpShortAddress = a => `${a.slice(0, 6)}…${a.slice(-4)}`;
 let mpWallets = [];
 const mpFindWallet = (chain, address) => mpWallets.find(w => w.chain === chain
   && (chain === 'ethereum' ? w.address.toLowerCase() === address.toLowerCase() : w.address === address));
-const MP_CHAIN_LABELS = { ethereum: 'Ethereum', tron: 'TRON', bitcoin: 'Bitcoin', solana: 'Solana', binance: 'Binance', bybit: 'Bybit', cryptocom: 'Crypto.com', telegram: 'Telegram Wallet' };
+const MP_CHAIN_LABELS = { ethereum: 'Ethereum', tron: 'TRON', bitcoin: 'Bitcoin', solana: 'Solana', binance: 'Binance', bybit: 'Bybit', cryptocom: 'Crypto.com', telegram: 'Walt (Telegram)' };
 
 // Which network an address belongs to, from its own format -- no picker:
 //   0x + 40 hex                          -> Ethereum

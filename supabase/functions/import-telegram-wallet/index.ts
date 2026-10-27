@@ -38,10 +38,25 @@
 //     0.000045 a day, the reward the Earn balance of two days before (rewards
 //     compounding) at 3.955844% a year -- the rate at which all of it adds
 //     up to exactly what the 24.07.2026 withdrawal shows was earned
-//     (0.012255). For
-//     any other coin (USDT, BTC, FLR, XLM: withdrawn from Earn in full long
-//     ago) "Transfer to/from Earn" count as real moves out of / into the
-//     wallet, so its rewards still arrive inside "Transfer from Earn".
+//     (0.012255). USDT, BTC and XLM (withdrawn from Earn in full long ago,
+//     their Earn history gone with it) the same way: each day's reward the
+//     Earn balance of two days before, rewards compounding, at the rate
+//     that adds up to what each stay brought back. USDT (Dollars Earn, held
+//     as Ethena's USDe) pays two things, as XAUT did: "Rewarded" at USDe's
+//     own yield, which moves -- sUSDe's APY (DefiLlama pool
+//     66985a81-9c51-46ca-9977-42b4fe7bc6df, a lone glitched day such as
+//     0.13% on 23.10.2025 taken out by a 3-day median), one rate a calendar
+//     month, its mean: Wallet passes a steady rate -- its GRAM rewards follow
+//     the TON staking rate (Hipo on DefiLlama) month by month, 3.4-3.6% vs
+//     3.3% Nov 2025-Mar 2026, the jump to ~15% in Apr 2026, but barely move
+//     day to day while the protocol's swing -- and a "Bonus" on the first 100
+//     only (Wallet's cap) at the rate that closes the stay: 5.477% in
+//     22.09-03.11.2025, 4.545% in 02.12.2025-28.05.2026; XLM 126.3%
+//     (33.862669 -> 47.2927 by 05.02.2026, far above the advertised 25%:
+//     some boost the history doesn't show); BTC 0.18% (0.0000001 in a
+//     week). FLR isn't interest on FLR but Flare's launchpool paid for the
+//     dollars / BTC in Earn: each "Transfer from Earn" spread evenly over
+//     the days since the one before. So these too stay owned while in Earn.
 // Checked against the app on 26.09.2026: XAUT 0.459574, GRAM 39.8496
 // (in Earn), ADI 0.16, USDT 0.
 //
@@ -99,7 +114,10 @@ function parse(text: string) {
     const tx_time = `${ts.replace(' ', 'T')}:00Z`;
     const base = { tx_hash: sig, tx_time, status: `${title}${status ? ` | ${status}` : ''}` };
     const counterparty = title.match(/^(?:Withdrew to|Top-up from) (\S+)/)?.[1] ?? null;
-    rows.push({ ...base, kind, seq: n * 2, symbol, amount, counterparty });
+    // a day worked out, not seen ("Rewarded (extrapolated)"): estimated -- for
+    // good, unlike sync-estimates' projections ('estimated:' hashes), which
+    // its nightly rebuild and estimate_archive alone take (migration ...125)
+    rows.push({ ...base, kind, seq: n * 2, symbol, amount, counterparty, estimated: /\(extrapolated\)/.test(title) });
     if (section === 'wallet') main.set(symbol, (main.get(symbol) ?? 0n) + toBig(amount));
 
     const src = kind === 'trade' ? title.match(/^Exchanged (\S+) to /)?.[1] : undefined;
@@ -163,6 +181,7 @@ Deno.serve(async (req) => {
 
     const rows = parsed.rows.map(r => ({
       ...r, wallet_id: wallet!.id, user_id: user!.id, chain: 'telegram', contract: '', decimals: null,
+      estimated: (r as { estimated?: boolean }).estimated ?? false,   // every row the same columns for the bulk upsert
     }));
     for (let i = 0; i < rows.length; i += 500) {
       const { error } = await supabase.from('wallet_transactions')

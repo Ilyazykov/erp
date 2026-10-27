@@ -327,7 +327,7 @@ async function telegramEstimates(db: any, userId: string, until: string) {
   if (error) throw new Error(error.message);
   let rewards = 0;
   for (const wallet of (wallets ?? []) as ExchangeWallet[]) {
-    const { error: del } = await db.from('wallet_transactions').delete().eq('wallet_id', wallet.id).eq('estimated', true);
+    const { error: del } = await db.from('wallet_transactions').delete().eq('wallet_id', wallet.id).eq('estimated', true).like('tx_hash', 'estimated:%');
     if (del) throw new Error(del.message);
     const end = await statementEnd(db, userId, wallet.account, ['telegram_wallet']);
     const { data: recent, error: rErr } = await db.from('wallet_transactions').select('tx_time, symbol, amount::text')

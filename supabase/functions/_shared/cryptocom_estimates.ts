@@ -100,7 +100,7 @@ function dposRows(actual: Row[], through: string) {
 }
 
 export async function rebuildCryptoComEstimates(db: any, wallet: Wallet, until = addDays(today(), -1)) {
-  const { error: del } = await db.from('wallet_transactions').delete().eq('wallet_id', wallet.id).eq('estimated', true);
+  const { error: del } = await db.from('wallet_transactions').delete().eq('wallet_id', wallet.id).eq('estimated', true).like('tx_hash', 'estimated:%');
   if (del) throw new Error(del.message);
   const actual = await allRows(db, wallet.id);
   const estimate = [...btcRows(actual, until), ...dposRows(actual, until)];
