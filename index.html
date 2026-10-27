@@ -8004,10 +8004,17 @@ async function mpRenderExpenses() {
     byBucket.set(k, (byBucket.get(k) || 0) + conv(r));
   }
   const order = MP_EXP_CATS.map(c => c[0]).filter(n => buckets.some(b => byBucket.has(n + '\u0000' + b)));
-  await Plotly.react(bars, order.map(n => ({
+  const totals = buckets.map(b => order.reduce((t, n) => t + (byBucket.get(n + '\u0000' + b) || 0), 0));
+  await Plotly.react(bars, [...order.map(n => ({
     type: 'bar', name: n, x: buckets, y: buckets.map(b => byBucket.get(n + '\u0000' + b) ?? null),  // null: no line in the hover
     marker: { color: meta[n].color }, hovertemplate: `${n}: %{y:,.0f} ${sym}<extra></extra>`,
-  })), {
+  })),
+  // the bar's total: written over it (when the bars are few enough to read) and
+  // first in the hover -- the stack's hover lists the traces last to first
+  { type: 'scatter', mode: buckets.length <= 40 ? 'text' : 'markers', marker: { opacity: 0 }, name: 'Total', showlegend: false,
+    x: buckets, y: totals, text: totals.map(v => v ? money(v) : ''), textposition: 'top center',
+    textfont: { size: 10, color: '#c9d1d9' }, cliponaxis: false,
+    hovertemplate: `<b>Total: %{y:,.0f} ${sym}</b><extra></extra>` }], {
     barmode: 'stack', paper_bgcolor: '#0d1117', plot_bgcolor: '#0d1117', font: { color: '#8b949e' },
     margin: { t: 10, b: 40, l: 60, r: 10 }, hovermode: 'x unified', hoverlabel: { font: { size: 11 } },
     // labels at an angle, the margin grown to fit them; the legend above, out of their way
