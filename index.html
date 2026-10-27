@@ -7745,8 +7745,8 @@ const MP_EXP_CATS = [
   ['Health & sport', '💊', '#db61a2', /pharm|аптек|apteka|eczane|clinic|hospital|dental|dentist|doctor|chemist|optic|vision express|fitness|\bgym\b|climbing|health|yasno/i],
   ['Entertainment', '🎟', '#00c2c7', /disney|headout|viator|theatre|theater|театр|cinema|кино|museum|aquaventure|theme park|tickets|kassir\.ru|dream-aero|parter\.ru|luzhniki|\bFIFA\b|at the top|stalinskie vysotki|\batg\b|concert|punting|Széchenyi|\bspa\b|entertainment|steam|playstation/i],
   ['Education', '🎓', '#ffa198', /leetcode|hello ?interview|skyeng|skylingua|getcourse|udemy|coursera/i],
-  ['Subscriptions & services', '🧾', '#79c0ff', /anthropic|openai|chatgpt|adobe|itunes|parallels|patreon|netflix|spotify|youtube|google|apple\.com|icloud|microsoft|github|notion|cursor|teamlogs|podpiska|prodamus|subscription|T-Bundle|sberprime|yandex\W.*plus/i],
-  ['Shopping', '🛍', '#d29922', /superdry|lafayette|rip curl|tommy hilfiger|teknosa|sportmaster|sephora|lee wrangler|povolzhe- ?sport|AMZN|svyaznoy|m\.video|\bDNS\b|adidas|quiksilver|sunglass hut|lego|kotsovolos|istyle|ikea|3F HOME|mediamarkt|whsmith|retail|zara|h&m|uniqlo|decathlon|amazon|ozon|wildberries|aliexpress|\bshop|store\b|\bmall\b|SANAL POS/i],
+  ['Subscriptions & services', '🧾', '#79c0ff', /anthropic|openai|chatgpt|adobe|itunes|parallels|patreon|netflix|spotify|youtube|google \*(?!seller)|google one|nordvp|g\.co\/|apple\.com\/bill|icloud|microsoft|github|notion|cursor|teamlogs|podpiska|prodamus|subscription|T-Bundle|sberprime|yandex\W.*plus/i],
+  ['Shopping', '🛍', '#d29922', /pixel|google store|google \*seller|apple\.com\/us|apple store|iphone|ipad|macbook|airpods|bought in cash|superdry|lafayette|rip curl|tommy hilfiger|teknosa|sportmaster|sephora|lee wrangler|povolzhe- ?sport|AMZN|svyaznoy|m\.video|\bDNS\b|adidas|quiksilver|sunglass hut|lego|kotsovolos|istyle|ikea|3F HOME|mediamarkt|whsmith|retail|zara|h&m|uniqlo|decathlon|amazon|ozon|wildberries|aliexpress|\bshop|store\b|\bmall\b|SANAL POS/i],
   ['Government & visas', '🏛', '#8b949e', /\bvisas?\b|visapro|embassy|konsulprime|\bvfs\b|immigration|consulate|\bgov\b|\btax\b|налог|НДФЛ|штраф/i],
   ['Fees', '🏦', '#6e7681', /\bfees?\b|commission|комисси|maintenance|naknad|provizij|обслуживан|ücret|masraf|bank_fee/i],
   ['Cash', '💵', '#d0d7de', /\batm\b|\bcash\b|банкомат|наличн|bankomat|para çekme/i],
@@ -8016,11 +8016,9 @@ async function mpRenderExpenses() {
     type: 'bar', name: n, x: buckets, y: buckets.map(b => byBucket.get(n + '\u0000' + b) ?? null),  // null: no line in the hover
     marker: { color: meta[n].color }, hovertemplate: `${n}: %{y:,.0f} ${sym}<extra></extra>`,
   })),
-  // the bar's total: written over it (when the bars are few enough to read) and
-  // first in the hover -- the stack's hover lists the traces last to first
-  { type: 'scatter', mode: buckets.length <= 40 ? 'text' : 'markers', marker: { opacity: 0 }, name: 'Total', showlegend: false,
-    x: buckets, y: totals, text: totals.map(v => v ? money(v) : ''), textposition: 'top center',
-    textfont: { size: 10, color: '#c9d1d9' }, cliponaxis: false,
+  // the bar's total, in the hover only: first there -- the stack's hover lists the traces last to first
+  { type: 'scatter', mode: 'markers', marker: { opacity: 0 }, name: 'Total', showlegend: false,
+    x: buckets, y: totals,
     hovertemplate: `<b>Total: %{y:,.0f} ${sym}</b><extra></extra>` }], {
     barmode: 'stack', paper_bgcolor: '#0d1117', plot_bgcolor: '#0d1117', font: { color: '#8b949e' },
     margin: { t: 10, b: 40, l: 60, r: 10 }, hovermode: 'x unified', hoverlabel: { font: { size: 11 } },
