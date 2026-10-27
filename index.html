@@ -859,6 +859,9 @@ function showTab(id) {
     rendered[id] = true;
     renderChart(id);
   }
+  // The sigmoid tab is drawn on load while hidden (Plotly's 700px default):
+  // fit every plot already drawn in the tab to its now visible width.
+  document.querySelectorAll(`#${id} .js-plotly-plot`).forEach(el => Plotly.Plots.resize(el));
 }
 
 document.querySelectorAll('.tab').forEach(t => {
