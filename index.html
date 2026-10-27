@@ -7722,31 +7722,41 @@ async function mpRenderCapital() {
 const MP_EXP_SKIP = [
   // [why not counted, test on the row]
   ['Investments', r => /^(tbank_broker|ibkr|freedom24|sber_broker|atomyze|estimate_|tbank_api|finuslugi|revolut_invest)/.test(r.external_source)
-    || r.currency === 'XAU' || /^Покупка |Комиссия брокера|^(BUY|SELL) - |^(Buy|Sell) \S+ .*(units?|паёв|@)/.test(r.description)],
+    || r.currency === 'XAU' || /^Покупка |Комиссия брокера|Пополнение брокерского|^(BUY|SELL) - |^(Buy|Sell) \S+ .*(units?|паёв|@)/.test(r.description)],
   ['Funds & savings', r => /Flexible Cash Funds|Instant Access Savings|investment account|\bSavings\b|\bPocket\b|\bVault\b/i.test(r.description)],
-  ['Currency exchange', r => /^fx_/.test(r.category || '') || /^Exchanged |Döviz (Alış|Satış)|menjacnica|обмен валют|конвертац/i.test(r.description)],
+  ['Currency exchange', r => /^fx_/.test(r.category || '') || /^Exchanged |Döviz (Alış|Satış)|Currency (buy|sell)|KORONAPAY|QIWI P2P|menjacnica|обмен валют|конвертац/i.test(r.description)],
+  // roubles sold by phone transfer to an exchanger, the lira in Ziraat from HIZLIPARA 25.03 and 28.03.2023
+  ['Currency exchange', r => r.account === 'T-Bank' && /^External transfer by phone number/.test(r.description)
+    && ((r.day === '2023-03-25' && r.amt === 50000) || (r.day === '2023-03-27' && r.amt === 59000))],
   ['Crypto', r => /crypto\.com|mercuryo|\bMRCR\b|bybit|binance|\bokx\b|kraken/i.test(r.description)],
   ['Own accounts', r => ['internal_transfer', 'brokerage_funding', 'top_up', 'salary'].includes(r.category)
-    || /^Deposited at |6012 ?Revolut|Wise PURCHASE|top-?up|между (своими )?счетами|Internal transfer/i.test(r.description)],
+    || /^Deposited at |6012 ?Revolut|Wise PURCHASE|^Wise$|top-?up|между (своими )?счетами|Internal transfer/i.test(r.description)],
 ];
 const MP_EXP_CATS = [
   // [name, icon, colour, test on "description category"]
-  ['Rent & housing', '🏠', '#ff7a45', /\brent\b|MPE PROPERTIES|TEPLOENERGO|ЖКХ|JKH|My Home|My house|Capital Repair|Cap\. Repair|TNS-Energo|cleaning lady/i],
-  ['Bills & utilities', '💡', '#ffb020', /Cyta|\bEAC\b|Municipality|Water Board|Primetel|Epic\b|Beeline|\bMTS\b|Megafon|Yota|Tele2|\bEE Ltd\b|1global|utilit|osiguranje|insurance|страхов/i],
+  ['Rent & housing', '🏠', '#ff7a45', /\brent\b|MPE PROPERTIES|TEPLOENERGO|ЖКХ|JKH|My Home|My house|Moj Dom|Capital Repair|Cap\. Repair|TNS-Energo|cleaning lady/i],
+  ['Bills & utilities', '💡', '#ffb020', /Cyta|\bEAC\b|Municipality|Water Board|Primetel|Epic\b|Beeline|\bMTS\b|Megafon|Yota|Tele2|\bEE Ltd\b|1global|airalo|Rostelecom|A-3|CLK AKDEN|utilit|osiguranje|insurance|страхов/i],
   ['Food delivery', '🛵', '#ff5d5d', /wolt|foody|glovo|deliveroo|bolt food|yandex\W*eda|яндекс еда|delivery club|getir|yemeksepeti|food_delivery/i],
-  ['Restaurants & cafés', '🍽', '#f778ba', /restaurant|\bcaf[eé]\b|kafe|coffee|costa|starbucks|\bpaul\b|mcdonald|burger|kfc|pizza|\bbar\b|\bpub\b|bistro|tavern|grill|bakery|bread|cuisine|kitchen|ramen|malatang|indian|fish & chips|cinnabon|wagamama|brewdog|greene king|\barms\b|Lángosh|Cocorico|Fix Choc|ресторан|кафе|кофе/i],
-  ['Groceries', '🛒', '#3dd68c', /groceries|Bakalicom|Berezka|\bSPAR\b|Lidl|Alphamega|Sklavenitis|Carrefour|Kiosk|supermarket|markets?\b|Sainsbury|Monoprix|Tesco|Пятер|Перекр|Магнит|ВкусВилл|Lenta|Ашан|Migros|\bBIM\b|A101|Şok|Univerexport|Shopping Plaza|Bazaar/i],
-  ['Transport', '🚕', '#58a6ff', /\bbolt\b|uber|ubr\*|taxi|такси|transport|\btfl\b|sncf|eurostar|metro|\bbus\b|railway|trainline|shuttle|\bRATP\b|BKK|Mobilités|parking|fuel|petrol|lukoil|Siticard|Mos\.Tr/i],
-  ['Travel', '✈️', '#a371f7', /booking|airbnb|hotel|hostel|inter ?continental|atlantis|marriott|hilton|wizz|easyjet|ryanair|aegean|airline|airways|aviasales|kiwi\.com|trip\.com|skyscanner|swissport|airport|T-BankAir|travel/i],
-  ['Health & sport', '💊', '#7ee787', /pharm|аптек|apteka|eczane|clinic|hospital|dental|dentist|doctor|chemist|optic|vision express|fitness|\bgym\b|climbing|health/i],
-  ['Entertainment', '🎟', '#00c2c7', /disney|headout|viator|theatre|theater|театр|cinema|кино|museum|aquaventure|theme park|tickets|\batg\b|concert|punting|Széchenyi|\bspa\b|entertainment|steam|playstation/i],
-  ['Subscriptions & services', '🧾', '#79c0ff', /leetcode|anthropic|openai|chatgpt|hello interview|parallels|patreon|netflix|spotify|youtube|google|apple\.com|icloud|microsoft|github|notion|cursor|teamlogs|podpiska|prodamus|subscription|T-Bundle|sberprime|yandex\W.*plus/i],
-  ['Shopping', '🛍', '#d29922', /superdry|lafayette|rip curl|kotsovolos|istyle|ikea|3F HOME|mediamarkt|whsmith|retail|zara|h&m|uniqlo|decathlon|amazon|ozon|wildberries|aliexpress|\bshop|store\b|\bmall\b|SANAL POS/i],
+  ['Restaurants & cafés', '🍽', '#f778ba', /restaurant|\bcaf[eé]\b|kafe|coffee|costa|starbucks|\bpaul\b|mcdonald|burger|kfc|pizza|\bbar\b|\bpub\b|bistro|tavern|grill|bakery|restoran|\bRSTR\b|steakhou|Le Bol|SOLO NA GOROHOVOY|vend ?servi|bread|cuisine|kitchen|ramen|malatang|indian|fish & chips|cinnabon|wagamama|brewdog|greene king|\barms\b|Lángosh|Cocorico|Fix Choc|ресторан|кафе|кофе/i],
+  ['Groceries', '🛒', '#3dd68c', /groceries|Bakalicom|Berezka|\bSPAR\b|Lidl|Alphamega|Sklavenitis|Carrefour|Kiosk|supermarket|markets?\b|\bOKEY\b|MIGRO|\bMAXI\b|GIDA\b|Sainsbury|Monoprix|Tesco|Пятер|Перекр|Магнит|ВкусВилл|Lenta|Ашан|Migros|\bBIM\b|A101|Şok|Univerexport|Shopping Plaza|Bazaar/i],
+  ['Transport', '🚕', '#58a6ff', /\bbolt\b|uber|ubr\*|taxi|такси|transport|\btfl\b|sncf|eurostar|metro|\bbus\b|railway|trainline|shuttle|\bgrab\b|flixbus|JFK TRANSFER|\bRATP\b|BKK|Mobilités|parking|fuel|petrol|lukoil|Siticard|Mos\.Tr/i],
+  ['Travel', '✈️', '#a371f7', /booking|airbnb|hotel|hostel|inter ?continental|atlantis|marriott|hilton|wizz|easyjet|ryanair|aegean|airline|airways|aviasales|kiwi\.com|trip\.com|skyscanner|swissport|airport|T-BankAir|travel|belavia|kupibilet|aviakassa|\bavia\b|flyone|utair|biletik|aerobilet|clickavia|onetwotrip|ostrovok|trip\.ru|mytrip|go2see|golden tours|short lets|otelcilik|seyahat|lucky house|apartment/i],
+  ['Health & sport', '💊', '#7ee787', /pharm|аптек|apteka|eczane|clinic|hospital|dental|dentist|doctor|chemist|optic|vision express|fitness|\bgym\b|climbing|health|yasno/i],
+  ['Entertainment', '🎟', '#00c2c7', /disney|headout|viator|theatre|theater|театр|cinema|кино|museum|aquaventure|theme park|tickets|parter\.ru|luzhniki|\bFIFA\b|at the top|stalinskie vysotki|\batg\b|concert|punting|Széchenyi|\bspa\b|entertainment|steam|playstation/i],
+  ['Subscriptions & services', '🧾', '#79c0ff', /leetcode|anthropic|openai|chatgpt|hello ?interview|itunes|skyeng|skylingua|getcourse|parallels|patreon|netflix|spotify|youtube|google|apple\.com|icloud|microsoft|github|notion|cursor|teamlogs|podpiska|prodamus|subscription|T-Bundle|sberprime|yandex\W.*plus/i],
+  ['Shopping', '🛍', '#d29922', /superdry|lafayette|rip curl|tommy hilfiger|teknosa|sportmaster|svyaznoy|m\.video|\bDNS\b|adidas|quiksilver|sunglass hut|lego|kotsovolos|istyle|ikea|3F HOME|mediamarkt|whsmith|retail|zara|h&m|uniqlo|decathlon|amazon|ozon|wildberries|aliexpress|\bshop|store\b|\bmall\b|SANAL POS/i],
   ['Government & visas', '🏛', '#8b949e', /\bvisas?\b|visapro|embassy|\bvfs\b|immigration|consulate|\bgov\b|\btax\b|налог|НДФЛ|штраф/i],
   ['Fees', '🏦', '#6e7681', /\bfees?\b|commission|комисси|maintenance|naknad|provizij|обслуживан|ücret|masraf|bank_fee/i],
-  ['Cash', '💵', '#56d364', /\batm\b|\bcash\b|банкомат|наличн|bankomat/i],
+  ['Cash', '💵', '#56d364', /\batm\b|\bcash\b|банкомат|наличн|bankomat|para çekme/i],
   ['Transfers to people', '👥', '#c297ff', /^transfer( to|$)|^to \S|sent money to|перевод|p2p_transfer|^Revolut( Ltd| Bank UAB)?$/i],
   ['Other', '•', '#4b5560', /[\s\S]*/],
+];
+// Rows no description tells apart, placed by hand: [category, test on the row].
+// (No names or phone numbers here -- the page is public.)
+const MP_EXP_BY_HAND = [
+  // the flat in Moscow, paid by phone number 20.04-23.09.2020
+  ['Rent & housing', r => r.account === 'T-Bank' && /^External transfer by phone number/.test(r.description)
+    && r.day >= '2020-04-01' && r.day <= '2020-09-30' && r.amt >= 40000 && r.amt <= 44000],
 ];
 let mpExpCache = null;
 async function mpExpLoad() {
@@ -7792,7 +7802,7 @@ async function mpExpLoad() {
     if (skip) { row.cat = skip; skipped.push(row); continue; }
     // the importers' own guess helps, except their catch-all utilities_or_shopping
     const text = `${r.description} ${r.category === 'utilities_or_shopping' ? '' : r.category || ''}`.trim();
-    row.cat = MP_EXP_CATS.find(c => c[3].test(text))[0];
+    row.cat = MP_EXP_BY_HAND.find(([, test]) => test(row))?.[0] ?? MP_EXP_CATS.find(c => c[3].test(text))[0];
     if (row.cat === 'Other' && r.category === 'utilities_or_shopping') row.cat = 'Shopping';
     spent.push(row);
   }
