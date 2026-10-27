@@ -7880,25 +7880,41 @@ function mpExpShift(dir) {
   }
   mpRenderExpenses();
 }
-// The life periods as bands behind the bars, one colour per company (alone: grey),
-// the place written along the band's top.
+// The life periods on the chart over time: a band behind the bars for each period
+// spent with someone (one colour per person, named in the legend), and in the
+// bar's hover where one was -- the names of the short trips wouldn't fit on it.
 const MP_EXP_LIFE_COLORS = ['#a371f7', '#f778ba', '#3dd68c', '#ffb020', '#58a6ff', '#ff7a45'];
-function mpExpLifeBands(periods, buckets, bucket, lifeName) {
-  const shapes = [], annotations = [], colors = new Map();
+function mpExpBucketDays(b) {
+  const q = b.match(/^(\d{4}) Q(\d)$/);
+  const [y, m0, n] = q ? [Number(q[1]), (q[2] - 1) * 3, 3] : /^\d{4}$/.test(b) ? [Number(b), 0, 12] : [Number(b.slice(0, 4)), b.slice(5, 7) - 1, 1];
+  const iso = (mm, dd) => new Date(Date.UTC(y, mm, dd)).toISOString().slice(0, 10);
+  return [iso(m0, 1), iso(m0 + n, 0)];
+}
+function mpExpLifeBands(periods, buckets, lifeName) {
+  const shapes = [], legend = [], colors = new Map();
+  const where = buckets.map(b => {
+    const [from, to] = mpExpBucketDays(b);
+    const here = periods.filter(p => p.start_day <= to && p.end_day >= from).map(lifeName);
+    const names = [...new Set(here)];
+    return names.length ? 'Where: ' + (names.length > 6 ? names.slice(0, 6).join(', ') + ', …' : names.join(', ')) : '';
+  });
   for (const p of periods) {
-    let i0 = buckets.indexOf(bucket(p.start_day.slice(0, 7)));
-    let i1 = buckets.indexOf(bucket(p.end_day.slice(0, 7)));
-    if (i0 < 0 && i1 < 0 && !(p.start_day.slice(0, 7) < buckets[0] && p.end_day.slice(0, 7) > buckets[buckets.length - 1])) continue;
-    if (i0 < 0) i0 = 0;
-    if (i1 < 0) i1 = buckets.length - 1;
-    if (p.company && !colors.has(p.company)) colors.set(p.company, MP_EXP_LIFE_COLORS[colors.size % MP_EXP_LIFE_COLORS.length]);
-    const color = p.company ? colors.get(p.company) : '#6a7381';
+    if (!p.company) continue;
+    const span = buckets.map(mpExpBucketDays);
+    const i0 = span.findIndex(([, to]) => to >= p.start_day);
+    let i1 = -1;
+    span.forEach(([from], k) => { if (from <= p.end_day) i1 = k; });
+    if (i0 < 0 || i1 < i0) continue;
+    if (!colors.has(p.company)) {
+      const color = MP_EXP_LIFE_COLORS[colors.size % MP_EXP_LIFE_COLORS.length];
+      colors.set(p.company, color);
+      legend.push({ type: 'scatter', x: [null], y: [null], mode: 'markers', name: `with ${p.company}`,
+        marker: { symbol: 'square', size: 12, color, opacity: 0.4 }, hoverinfo: 'skip' });
+    }
     shapes.push({ type: 'rect', xref: 'x', yref: 'paper', x0: i0 - 0.45, x1: i1 + 0.45, y0: 0, y1: 1,
-      fillcolor: color, opacity: 0.12, line: { width: 0 }, layer: 'below' });
-    annotations.push({ x: (i0 + i1) / 2, y: 1, xref: 'x', yref: 'paper', yanchor: 'top', showarrow: false, textangle: -90,
-      text: lifeName(p), font: { size: 9, color } });
+      fillcolor: colors.get(p.company), opacity: 0.15, line: { width: 0 }, layer: 'below' });
   }
-  return { shapes, annotations };
+  return { shapes, legend, where };
 }
 document.getElementById('exp_life').addEventListener('change', e => {
   const p = mpExpCache?.periods[e.target.value];
@@ -8021,22 +8037,25 @@ async function mpRenderExpenses() {
     byBucket.set(k, (byBucket.get(k) || 0) + conv(r));
   }
   const order = MP_EXP_CATS.map(c => c[0]).filter(n => buckets.some(b => byBucket.has(n + '\u0000' + b)));
+  const life = mpExpLifeBands(periods, buckets, lifeName);
   const totals = buckets.map(b => order.reduce((t, n) => t + (byBucket.get(n + '\u0000' + b) || 0), 0));
   await Plotly.react(bars, [...order.map(n => ({
     type: 'bar', name: n, x: buckets, y: buckets.map(b => byBucket.get(n + '\u0000' + b) ?? null),  // null: no line in the hover
     marker: { color: meta[n].color }, hovertemplate: `${n}: %{y:,.0f} ${sym}<extra></extra>`,
   })),
-  // the bar's total, in the hover only: first there -- the stack's hover lists the traces last to first
+  ...life.legend,
+  // the bar's total and where one was, in the hover only: first there -- the stack's
+  // hover lists the traces last to first
   { type: 'scatter', mode: 'markers', marker: { opacity: 0 }, name: 'Total', showlegend: false,
-    x: buckets, y: totals,
-    hovertemplate: `<b>Total: %{y:,.0f} ${sym}</b><extra></extra>` }], {
+    x: buckets, y: totals, customdata: life.where,
+    hovertemplate: `<b>Total: %{y:,.0f} ${sym}</b><br>%{customdata}<extra></extra>` }], {
     barmode: 'stack', paper_bgcolor: '#0d1117', plot_bgcolor: '#0d1117', font: { color: '#8b949e' },
     margin: { t: 10, b: 40, l: 60, r: 10 }, hovermode: 'x unified', hoverlabel: { font: { size: 11 } },
     // labels at an angle, the margin grown to fit them; the legend above, out of their way
     xaxis: { type: 'category', gridcolor: '#1e2830', tickangle: -45, automargin: true },
     yaxis: { gridcolor: '#1e2830', ticksuffix: ccy === 'RUB' ? ' ₽' : '', tickprefix: ccy === 'RUB' ? '' : sym },
     legend: { orientation: 'h', x: 0, y: 1.02, yanchor: 'bottom' },
-    ...mpExpLifeBands(periods, buckets, bucket, lifeName),
+    shapes: life.shapes,
   }, CONFIG);
   bars.removeAllListeners?.('plotly_click');
   bars.on('plotly_click', ev => {
