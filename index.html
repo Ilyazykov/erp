@@ -7729,6 +7729,9 @@ const MP_EXP_SKIP = [
   // "Exchanged to TRY and paid for the flat" is rent, not an exchange
   ['Currency exchange', r => !/paid for the flat/i.test(r.description)
     && (/^fx_/.test(r.category || '') || /^Exchanged |Döviz (Alış|Satış)|Currency (buy|sell)|KORONAPAY|QIWI P2P|menjacnica|обмен валют|конвертац/i.test(r.description))],
+  // bought for someone else, who paid it back (to an account or in cash, not in the
+  // statements): the two Pixel orders from New York, 02 and 05.11.2021
+  ['Bought for others', r => /GOOGLE \*SELLER/.test(r.description) && r.day >= '2021-11-01' && r.day <= '2021-11-06'],
   ['Crypto', r => /crypto\.com|mercuryo|\bMRCR\b|bybit|binance|\bokx\b|kraken/i.test(r.description)],
   ['Own accounts', r => ['internal_transfer', 'brokerage_funding', 'top_up', 'salary'].includes(r.category)
     || /^Deposited at |6012 ?Revolut|Wise PURCHASE|^Wise$|top-?up|между (своими )?счетами|Internal transfer/i.test(r.description)],
