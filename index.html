@@ -2099,6 +2099,30 @@ const MP_ACCOUNT_SOURCE = {
 // and current accounts, credit card, deposits and savings, ЦФА -- each with
 // its newest record (latest_data_per_part, migrations ...101, ...102):
 // Russian banks and Revolut, one statement each part.
+// Where a split account's part gets its statements (the part row's tooltip);
+// a part not here shows its account's (MP_ACCOUNT_SOURCE).
+const MP_OZON_STATEMENT = 'Ozon Bank app → Ещё → Получить справку → О движении средств → language';
+const MP_PART_SOURCE = {
+  'Ozon Bank|Cards & current accounts': `${MP_OZON_STATEMENT} → основной (PDF) → to Claude.`,
+  'Ozon Bank|Credit card': `${MP_OZON_STATEMENT} → кредитная карта (PDF) → to Claude.`,
+  'Ozon Bank|Deposits & savings': `${MP_OZON_STATEMENT} → накопительный, each (PDF) → to Claude.`,
+  'T-Bank|Broker': 'Synced every morning through the T-Invest API (T-Bank broker automatic sync, below the uploads); or T-Investments → reports → broker report (.xlsx), upload as is.',
+  'T-Bank|ЦФА (Atomyze)': 'Synced every morning through the T-Invest API; or the Atomyze report, upload as is.',
+  'T-Bank|Cards & current accounts': '«Справка о движении средств» (PDF) for each card / current account contract → to Claude.',
+  'T-Bank|Credit card': '«Справка о движении средств» (PDF) for the credit card contract → to Claude.',
+  'T-Bank|Deposits & savings': '«Справка о движении средств» (PDF) for each deposit / savings contract → to Claude.',
+  'T-Bank|Metals': '«Справка о движении средств» (PDF) for the metal account → to Claude.',
+  'Sber|Broker': 'SberBank Online → Инвестиции → account → Отчёты и справки → broker report (.html, one per month), upload as is.',
+  'Sber|Cards & current accounts': 'SberBank Online → card → Выписки и справки → PDF → to Claude.',
+  'Sber|Deposits & savings': 'SberBank Online → savings account → Выписки и справки → PDF → to Claude.',
+  'Alfa|Cards & current accounts': 'Alfa-Online → statements of the current, salary and Alfa-Account (PDF) → to Claude.',
+  'Alfa|Broker': 'Screenshots of Alfa-Investments → History → to Claude.',
+  'Yandex Bank|Cards & current accounts': 'Yandex Bank app → statement of the current account (PDF) → to Claude.',
+  'Yandex Bank|Deposits & savings': 'Yandex Bank app → statement of «Сейв» (PDF) → to Claude.',
+  'Revolut|Cards & current accounts': 'Revolut app → Profile → Statements → Account statement → CSV. Upload as is.',
+  'Revolut|Flexible Cash Funds': 'Revolut app → Flexible Cash Funds statement. Upload as is.',
+  'Revolut|Deposits & savings': 'Revolut app → savings statement. Upload as is.',
+};
 const MP_SPLIT_ACCOUNTS = new Set(['T-Bank', 'Sber', 'Alfa', 'Yandex Bank', 'Ozon Bank', 'Finuslugi', 'Revolut']);
 const MP_PART_ORDER = ['Broker', 'ЦФА (Atomyze)', 'Flexible Cash Funds', 'Crypto', 'Metals', 'Cards & current accounts', 'Credit card', 'Deposits & savings'];
 const mpOpenAccounts = new Set();
@@ -2310,8 +2334,7 @@ async function mpRenderLatestSources() {
     const partRowsHtml = (name, closed) => (parts.get(name) || []).map(p => {
       const auto = p.auto, up = p.up;
       const d = daysAgo(p.day);
-      const contracts = (p.contracts || []).filter(Boolean);
-      const what = `${p.row_count} records (${p.rows_90d || 0} in the last 90 days, ${p.rows_180d || 0} in 180 -- the period follows from them)${contracts.length ? ` · ${contracts.length === 1 ? 'contract' : 'contracts'} ${contracts.join(', ')}` : ''}`;
+      const what = MP_PART_SOURCE[`${name}|${p.part}`] || MP_ACCOUNT_SOURCE[name] || '';
       const mode = auto?.check ? 'auto check' : 'auto';
       const update = auto ? (auto.error ? `<span style="color:#ff9500" title="${esc(auto.error)}">${mode} · last ${auto.check ? 'check' : 'sync'} failed</span>`
         : auto.warning ? `<span style="color:#ff9500" title="${esc(auto.warning)}">${mode} · statement due</span>` : mode)
