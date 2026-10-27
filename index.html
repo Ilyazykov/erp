@@ -462,8 +462,14 @@
       <div id="plot_exp_donut" style="height:380px"></div>
       <div id="exp_categories"></div>
     </div>
-    <div class="section-title" style="margin-top:24px">By month</div>
-    <p class="note">The 12 months to the period's end; click a month to open it.</p>
+    <div class="section-title" style="margin-top:24px">Over time</div>
+    <p class="note">To the period's end; click a bar to open it.</p>
+    <div class="form-row" style="gap:12px">
+      <label>last <select id="exp_span">
+        <option value="12">12 months</option><option value="24">2 years</option><option value="36">3 years</option>
+        <option value="60">5 years</option><option value="all">all</option></select></label>
+      <label>by <select id="exp_step"><option value="month">month</option><option value="quarter">quarter</option><option value="year">year</option></select></label>
+    </div>
     <div id="plot_exp_months" style="height:320px"></div>
     <div id="exp_excluded"></div>
   </div>
@@ -7890,20 +7896,33 @@ async function mpRenderExpenses() {
     box.style.display = box.style.display === 'none' ? '' : 'none';
   }));
 
-  // the 12 months to the period's end, stacked by category
-  const [ty, tm] = to.split('-').map(Number);
-  const months = Array.from({ length: 12 }, (_, k) => new Date(Date.UTC(ty, tm - 12 + k, 1)).toISOString().slice(0, 7));
-  const byMonth = new Map();
+  // the chosen span to the period's end, by month / quarter / year, stacked by category
+  const span = document.getElementById('exp_span').value;
+  const step = document.getElementById('exp_step').value;
+  const bucket = mo => step === 'year' ? mo.slice(0, 4)
+    : step === 'quarter' ? `${mo.slice(0, 4)} Q${Math.ceil(Number(mo.slice(5, 7)) / 3)}` : mo;
+  const endMo = to.slice(0, 7);
+  const startMo = span === 'all'
+    ? spent.reduce((m, r) => (r.day < m ? r.day : m), endMo).slice(0, 7)
+    : (([y, m]) => new Date(Date.UTC(y, m - Number(span), 1)).toISOString().slice(0, 7))(endMo.split('-').map(Number));
+  const buckets = [];
+  for (let [y, m] = startMo.split('-').map(Number); ; m++) {
+    const mo = new Date(Date.UTC(y, m - 1, 1)).toISOString().slice(0, 7);
+    if (mo > endMo) break;
+    const b = bucket(mo);
+    if (buckets[buckets.length - 1] !== b) buckets.push(b);
+  }
+  const byBucket = new Map();
   for (const r of spent) {
     const mo = r.day.slice(0, 7);
-    if (mo < months[0] || mo > months[11] || !Number.isFinite(r.usd)) continue;
-    const k = r.cat + '\u0000' + mo;
-    byMonth.set(k, (byMonth.get(k) || 0) + conv(r));
+    if (mo < startMo || mo > endMo || !Number.isFinite(r.usd)) continue;
+    const k = r.cat + '\u0000' + bucket(mo);
+    byBucket.set(k, (byBucket.get(k) || 0) + conv(r));
   }
-  const order = MP_EXP_CATS.map(c => c[0]).filter(n => months.some(mo => byMonth.has(n + '\u0000' + mo)));
+  const order = MP_EXP_CATS.map(c => c[0]).filter(n => buckets.some(b => byBucket.has(n + '\u0000' + b)));
   const bars = document.getElementById('plot_exp_months');
   await Plotly.react(bars, order.map(n => ({
-    type: 'bar', name: n, x: months, y: months.map(mo => byMonth.get(n + '\u0000' + mo) || 0),
+    type: 'bar', name: n, x: buckets, y: buckets.map(b => byBucket.get(n + '\u0000' + b) || 0),
     marker: { color: meta[n].color }, hovertemplate: `${n}: %{y:,.0f} ${sym}<extra></extra>`,
   })), {
     barmode: 'stack', paper_bgcolor: '#0d1117', plot_bgcolor: '#0d1117', font: { color: '#8b949e' },
@@ -7913,10 +7932,14 @@ async function mpRenderExpenses() {
   }, CONFIG);
   bars.removeAllListeners?.('plotly_click');
   bars.on('plotly_click', ev => {
-    const mo = ev.points?.[0]?.x;
-    if (!mo) return;
-    document.getElementById('exp_period').value = 'month';
-    mpExpSetPeriod('month', mo + '-01');
+    const b = ev.points?.[0]?.x;
+    if (!b) return;
+    // a bar opens as the period: a month, a quarter's 3 months, a year
+    const q = b.match(/^(\d{4}) Q(\d)$/);
+    const [mode, anchor] = q ? ['3m', `${q[1]}-${String(q[2] * 3).padStart(2, '0')}-01`]
+      : /^\d{4}$/.test(b) ? ['year', `${b}-01-01`] : ['month', `${b}-01`];
+    document.getElementById('exp_period').value = mode;
+    mpExpSetPeriod(mode, anchor);
     mpRenderExpenses();
   });
 
@@ -7943,6 +7966,13 @@ document.getElementById('exp_period').addEventListener('change', e => {
   if (e.target.value !== 'custom') mpExpSetPeriod(e.target.value, document.getElementById('exp_to').value || new Date().toISOString().slice(0, 10));
   if (mpIsSignedIn) mpRenderExpenses();
 });
+for (const id of ['exp_span', 'exp_step']) {
+  try { const saved = localStorage.getItem('mp_' + id); if (saved) document.getElementById(id).value = saved; } catch { /* no storage */ }
+  document.getElementById(id).addEventListener('change', e => {
+    try { localStorage.setItem('mp_' + id, e.target.value); } catch { /* no storage */ }
+    if (mpIsSignedIn) mpRenderExpenses();
+  });
+}
 document.getElementById('exp_ccy').addEventListener('change', e => {
   try { localStorage.setItem('mp_exp_ccy', e.target.value); } catch { /* no storage */ }
   if (mpIsSignedIn) mpRenderExpenses();
