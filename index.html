@@ -7737,6 +7737,13 @@ const MP_EXP_SKIP = [
   // bought for someone else, who paid it back (to an account or in cash, not in the
   // statements): the two Pixel orders from New York, 02 and 05.11.2021
   ['Bought for others', r => /GOOGLE \*SELLER/.test(r.description) && r.day >= '2021-11-01' && r.day <= '2021-11-06'],
+  // cash out of a bank from 24.02.2022 on is a move into the cash on hand: its
+  // spending is in the cash ledger (cash_csv -- what's recorded and the extrapolated
+  // rest), so the withdrawal itself counted too would count it twice. Before the
+  // ledger, a withdrawal stays spent cash (the rent in Moscow, ...).
+  ['To cash', r => r.account !== 'cash' && r.day >= '2022-02-24'
+    && /cash withdrawal|cash withdrawn|withdrawn in cash|снятие наличных|выдача наличных|\batm\b|банкомат|bankomat|para çekme|nakit çekim|isplata gotovine/i.test(r.description)
+    && !/\bfee\b|bsmv|komisyon|комисси/i.test(r.description)],  // the ATM's fee is spent
   ['Crypto', r => /crypto\.com|mercuryo|\bMRCR\b|bybit|binance|\bokx\b|kraken/i.test(r.description)],
   ['Own accounts', r => ['internal_transfer', 'brokerage_funding', 'top_up', 'salary'].includes(r.category)
     || /^Deposited at |6012 ?Revolut|Wise PURCHASE|^Wise$|top-?up|между (своими )?счетами|^Внутрибанковский перевод/i.test(r.description)],
@@ -7745,6 +7752,8 @@ const MP_EXP_CATS = [
   // [name, icon, colour, test on "description category"]
   ['Rent & housing', '🏠', '#ff7a45', /\brent\b|MPE PROPERTIES|TEPLOENERGO|ЖКХ|JKH|My Home|My house|Moj Dom|Capital Repair|Cap\. Repair|TNS-Energo|cleaning lady|Paid for the flat/i],
   ['Bills & utilities', '💡', '#ffb020', /Cyta|\bEAC\b|Municipality|Water Board|Primetel|Epic\b|Beeline|\bMTS\b|Megafon|Yota|Tele2|\bEE Ltd\b|1global|airalo|Rostelecom|A-3|CLK AKDEN|utilit|osiguranje|insurance|страхов/i],
+  // partners: gifts, flowers, the cash given to live on, debts paid for them
+  ['Relationships', '💝', '#ff6b9d', /dyson|bouquet|flowers|букет|цвет(ы|ов)\b|cash to \S+ for living expenses/i],
   ['Food delivery', '🛵', '#7ee787', /wolt|foody|glovo|deliveroo|bolt food|yandex\W*eda|яндекс еда|delivery\W*club|papajohns|getir|yemeksepeti|food_delivery/i],
   ['Restaurants & cafés', '🍽', '#3fb950', /restaurant|^Hide$|sushi|\bcaf[eé]\b|kafe|coffee|costa|starbucks|\bpaul\b|mcdonald|burger|kfc|pizza|\bbar\b|\bpub\b|bistro|tavern|grill|bakery|restoran|\bRSTR\b|steakhou|Le Bol|SOLO NA GOROHOVOY|vend ?servi|bread|cuisine|kitchen|ramen|malatang|indian|fish & chips|cinnabon|wagamama|brewdog|greene king|\barms\b|Lángosh|Cocorico|Fix Choc|ресторан|кафе|кофе/i],
   ['Groceries', '🛒', '#1a7f37', /groceries|Bakalicom|Berezka|\bSPAR\b|Lidl|Alphamega|Sklavenitis|Carrefour|Kiosk|supermarket|markets?\b|\bOKEY\b|MIGRO|\bMAXI\b|GIDA\b|Sainsbury|Monoprix|Tesco|Пятер|Перекр|Магнит|ВкусВилл|Lenta|Ашан|Migros|\bBIM\b|A101|Şok|Univerexport|Shopping Plaza|Bazaar/i],
@@ -7754,9 +7763,9 @@ const MP_EXP_CATS = [
   ['Entertainment', '🎟', '#00c2c7', /disney|headout|viator|theatre|theater|театр|cinema|кино|museum|aquaventure|theme park|tickets|kassir\.ru|dream-aero|parter\.ru|luzhniki|\bFIFA\b|at the top|stalinskie vysotki|\batg\b|concert|punting|Széchenyi|\bspa\b|entertainment|steam|playstation/i],
   ['Education', '🎓', '#ffa198', /leetcode|hello ?interview|skyeng|skylingua|getcourse|udemy|coursera/i],
   ['Subscriptions & services', '🧾', '#79c0ff', /anthropic|openai|chatgpt|adobe|itunes|parallels|patreon|netflix|spotify|youtube|google \*(?!seller)|google one|nordvp|g\.co\/|apple\.com\/bill|icloud|microsoft|github|notion|cursor|teamlogs|podpiska|prodamus|subscription|T-Bundle|sberprime|yandex\W.*plus/i],
-  ['Shopping', '🛍', '#d29922', /pixel|google store|google \*seller|apple\.com\/us|apple store|iphone|ipad|macbook|airpods|bought in cash|superdry|lafayette|rip curl|tommy hilfiger|teknosa|sportmaster|sephora|lee wrangler|povolzhe- ?sport|AMZN|svyaznoy|m\.video|\bDNS\b|adidas|quiksilver|sunglass hut|lego|kotsovolos|istyle|ikea|3F HOME|mediamarkt|whsmith|retail|zara|h&m|uniqlo|decathlon|amazon|ozon|wildberries|aliexpress|\bshop|store\b|\bmall\b|SANAL POS/i],
+  ['Shopping', '🛍', '#d29922', /clothes|одежд|pixel|google store|google \*seller|apple\.com\/us|apple store|iphone|ipad|macbook|airpods|bought in cash|superdry|lafayette|rip curl|tommy hilfiger|teknosa|sportmaster|sephora|lee wrangler|povolzhe- ?sport|AMZN|svyaznoy|m\.video|\bDNS\b|adidas|quiksilver|sunglass hut|lego|kotsovolos|istyle|ikea|3F HOME|mediamarkt|whsmith|retail|zara|h&m|uniqlo|decathlon|amazon|ozon|wildberries|aliexpress|\bshop|store\b|\bmall\b|SANAL POS/i],
   ['Government & visas', '🏛', '#8b949e', /\bvisas?\b|visapro|embassy|konsulprime|\bvfs\b|immigration|consulate|\bgov\b|\btax\b|налог|НДФЛ|штраф/i],
-  ['Fees', '🏦', '#6e7681', /\bfees?\b|commission|комисси|maintenance|naknad|provizij|обслуживан|ücret|masraf|bank_fee/i],
+  ['Fees', '🏦', '#6e7681', /\bfees?\b|bsmv|commission|комисси|maintenance|naknad|provizij|обслуживан|ücret|masraf|bank_fee/i],
   ['Cash', '💵', '#d0d7de', /\batm\b|\bcash\b|банкомат|наличн|bankomat|para çekme/i],
   ['Transfers to people', '👥', '#c297ff', /^transfer( to|$)|^to \S|sent money to|^Internal transfer to contract|^Внутренний перевод на договор|Mobil Havale|перевод|p2p_transfer|^Revolut( Ltd| Bank UAB)?$/i],
   ['Other', '•', '#4b5560', /[\s\S]*/],
@@ -7771,6 +7780,9 @@ const MP_EXP_BY_HAND = [
   // the 60k and 90k withdrawals of 09.2019 and 01.2020 aren't known, they stay cash
   ['Rent & housing', r => r.account === 'T-Bank' && /^Cash withdrawal in ATM\.Tinkoff/.test(r.description)
     && r.day >= '2018-06-01' && r.day <= '2020-03-31' && r.amt >= 17000 && r.amt <= 45000],
+  // a debt of a partner's paid off, by Ziraat transfer 30.01.2023
+  ['Relationships', r => r.account === 'Ziraat Bank' && /Mobil Havale/.test(r.description)
+    && r.day === '2023-01-30' && r.amt === 3756],
   // mock interviews for Meta, paid through PayPal in March 2025
   ['Education', r => r.account === 'Raiffeisen' && /^PAYPAL \*/.test(r.description)
     && r.day >= '2025-03-01' && r.day <= '2025-03-31'],
@@ -7803,7 +7815,7 @@ async function mpExpLoad() {
     page(() => sb.from('bank_transactions')
       .select('id, tx_date, account, description, amount, currency, category, external_source, external_id, synthetic_kind')
       .lt('amount', 0).order('tx_date')),
-    page(() => sb.from('internal_transfers').select('out_source, out_id, kind').neq('matched_by', 'rejected').order('id')),
+    page(() => sb.from('internal_transfers').select('out_source, out_id, kind, amount, currency, in_at').neq('matched_by', 'rejected').order('id')),
   ]);
   // the pairs' rows out: own accounts, or money lent and given back (kind 'returned', migration 130)
   const own = new Map(pairs.map(p => [p.out_source + '\u0000' + p.out_id, p.kind === 'returned' ? 'Returned' : 'Own accounts']));
@@ -7846,6 +7858,20 @@ async function mpExpLoad() {
       return { ...row, parts: null, day, tx_date: day, amt: row.amt / spread.n, usd: row.usd / spread.n,
         description: `${row.description} -- ${k + 1}/${spread.n}, paid ${row.day}` };
     });
+  }
+  // A pair from one currency into another (a withdrawal in lira off a rouble card,
+  // KoronaPay, an exchanger) loses on the rate and the fees: what left less what
+  // arrived, both at their days' rates, is spent -- "Fees". A gain, or a gap past a
+  // third (an estimate on one side), is left alone.
+  const outRows = new Map(skipped.map(r => [r.external_source + '\u0000' + r.external_id, r]));
+  for (const p of pairs) {
+    const o = outRows.get(p.out_source + '\u0000' + p.out_id);
+    if (!o || p.kind !== 'transfer' || p.currency.toUpperCase() === o.ccy) continue;
+    const arrived = Number(p.amount) * usdPer(p.currency.toUpperCase(), p.in_at.slice(0, 10));
+    const loss = o.usd - arrived;
+    if (!(loss > 0) || loss > o.usd / 3) continue;
+    spent.push({ ...o, cat: 'Fees', usd: loss, amt: loss / usdPer(o.ccy, o.day),
+      description: `Lost on the exchange: ${o.description} -> ${Number(p.amount).toLocaleString('en-US')} ${p.currency}` });
   }
   return { spent, skipped, usdPer, periods: periods || [] };
 }
