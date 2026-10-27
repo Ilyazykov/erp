@@ -190,18 +190,22 @@ Deno.serve(async (req) => {
     }
     // The file is the whole history: a stored row it no longer has was
     // replaced (XAUT's monthly totals by its daily rewards) -- drop it.
-    const inFile = new Set(rows.map(r => r.tx_hash));
-    const stale: string[] = [];
+    // A row is its tx_hash, kind and seq (the upsert's key): the same move can
+    // change kind between uploads ("Transfer to Earn" is 'earn_move' until the
+    // coin has Earn rows, 'earn_internal' after), and the old kind must go too.
+    const key = (r: { tx_hash: string; kind: string; seq: number }) => `${r.tx_hash}|${r.kind}|${r.seq}`;
+    const inFile = new Set(rows.map(key));
+    const stale: { tx_hash: string; kind: string; seq: number }[] = [];
     for (let from = 0; ; from += 1000) {
-      const { data, error } = await supabase.from('wallet_transactions').select('tx_hash')
-        .eq('wallet_id', wallet!.id).order('tx_hash').range(from, from + 999);
+      const { data, error } = await supabase.from('wallet_transactions').select('tx_hash, kind, seq')
+        .eq('wallet_id', wallet!.id).order('tx_hash').order('kind').order('seq').range(from, from + 999);
       if (error) throw new Error(error.message);
-      for (const r of data ?? []) if (!inFile.has(r.tx_hash)) stale.push(r.tx_hash);
+      for (const r of data ?? []) if (!inFile.has(key(r))) stale.push(r);
       if (!data || data.length < 1000) break;
     }
-    for (let i = 0; i < stale.length; i += 200) {
+    for (const r of stale) {
       const { error } = await supabase.from('wallet_transactions').delete()
-        .eq('wallet_id', wallet!.id).in('tx_hash', stale.slice(i, i + 200));
+        .eq('wallet_id', wallet!.id).eq('tx_hash', r.tx_hash).eq('kind', r.kind).eq('seq', r.seq);
       if (error) throw new Error(error.message);
     }
 
