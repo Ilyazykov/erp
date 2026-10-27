@@ -7339,9 +7339,9 @@ document.getElementById('mp_exchange_recalc').addEventListener('click', async ()
 // ---- Credit card payment reminder ----
 // A card in credit_card_reminders (migration ...123): its statement comes on
 // statement_day, the payment is due on the next due_day after it. From
-// remind_days before the due date a banner on top says how much is owed --
-// the card's latest balance_after from its statement, so as fresh as the last
-// upload -- until "Paid" marks that due date paid. A transfer can't be made on
+// remind_days before the due date a banner on top says what the grace period
+// wants paid -- from the card's statement rows, so as fresh as the last
+// upload -- until the statements show it paid. A transfer can't be made on
 // a day off: a due date at the weekend or on a Russian public holiday wants the
 // money by the working day before, and the banner turns red with 3 working days
 // or fewer left. The days off come from the Russian work calendar (isdayoff.ru:
@@ -7389,33 +7389,40 @@ async function mpRenderCardReminders() {
     const left = Math.round((pay - today) / 86400000);
     let work = 0;
     for (const d = new Date(today); d <= pay; d.setDate(d.getDate() + 1)) if (!mpIsDayOff(d)) work++;
-    if (left > r.remind_days || (r.paid_for && r.paid_for >= mpIsoDay(due))) continue;
-    const { data: last } = await sb.from('bank_transactions').select('tx_date, balance_after')
-      .eq('account', r.account).eq('product', 'credit_card').not('balance_after', 'is', null)
-      .order('tx_date', { ascending: false }).order('id', { ascending: false }).limit(1);
-    const row = last?.[0];
-    const debt = row ? -Number(row.balance_after) : null;
-    const asOf = row ? row.tx_date.slice(0, 10) : null;
-    const stale = !asOf || asOf < mpIsoDay(st);
-    if (debt !== null && debt <= 0 && !stale) continue;   // nothing owed on a fresh statement
+    if (left > r.remind_days) continue;
+    // the grace period's payment, as the bank counts it: the debt the statement
+    // shows (the balance at the end of the day before statement_day) less all
+    // that came onto the card since; the card's own debt now besides
+    const { data: rows } = await sb.from('bank_transactions').select('tx_date, amount, balance_after')
+      .eq('account', r.account).eq('product', 'credit_card').is('synthetic_kind', null).not('balance_after', 'is', null)
+      .gte('tx_date', mpIsoDay(new Date(st.getFullYear(), st.getMonth() - 3, 1)))
+      .order('tx_date', { ascending: true });
+    const stDay = mpIsoDay(st);
+    const lastOf = list => {   // of rows at one minute, the one after the others: no other row starts from its balance
+      const top = list.filter(x => x.tx_date === list[list.length - 1].tx_date);
+      return top.find(x => !top.some(y => y !== x && Number(y.balance_after) - Number(y.amount) === Number(x.balance_after))) || top[top.length - 1];
+    };
+    const before = (rows || []).filter(x => x.tx_date.slice(0, 10) < stDay);
+    const since = (rows || []).filter(x => x.tx_date.slice(0, 10) >= stDay);
+    const owedAtStatement = before.length ? Math.max(0, -Number(lastOf(before).balance_after)) : null;
+    const paidSince = since.reduce((t, x) => t + Math.max(0, Number(x.amount)), 0);
+    const grace = owedAtStatement === null ? null : Math.max(0, owedAtStatement - paidSince);
+    const debt = rows?.length ? -Number(lastOf(rows).balance_after) : null;
+    const asOf = rows?.length ? rows[rows.length - 1].tx_date.slice(0, 10) : null;
+    const stale = !asOf || asOf < stDay;
+    if (grace === 0 && !stale) continue;   // the grace period's payment made
     const fmt = d => d.toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long' });
     const when = fmt(due);
     const daysTxt = (pay < due ? `перевести до ${fmt(pay)} — срок в нерабочий день; ` : '')
       + (left < 0 ? 'последний рабочий день прошёл' : left === 0 ? 'перевести сегодня' : `рабочих дней: ${work}`);
-    const amount = debt !== null && debt > 0 ? `долг ≈ ${debt.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ${r.currency}` : 'долг неизвестен';
+    const money = v => `${v.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ${r.currency}`;
+    const amount = grace !== null ? `<b>${money(grace)}</b>${debt > 0 ? ` (весь долг ${money(debt)})` : ''}` : 'сумма неизвестна';
     out.push(`<div class="card-reminder${work <= 3 ? ' urgent' : ''}">
       <span>💳 <b>${mpEscapeHtml(r.account)}</b>: погасить кредитку до <b>${when}</b> (${daysTxt}) — ${amount}</span>
-      <span class="note">${asOf ? `по выписке на ${asOf.split('-').reverse().join('.')}` : 'выписок нет'}${stale ? ' — загрузите свежую' : ''}; точная сумма для льготного периода — в приложении банка</span>
-      <button class="btn" data-card-paid="${r.id}" data-due="${mpIsoDay(due)}">Оплачено</button>
+      <span class="note">${asOf ? `по выписке на ${asOf.split('-').reverse().join('.')}` : 'выписок нет'}${stale ? ' — загрузите свежую' : ''}</span>
     </div>`);
   }
   box.innerHTML = out.join('');
-  box.querySelectorAll('[data-card-paid]').forEach(b => b.addEventListener('click', async () => {
-    b.disabled = true;
-    const { error } = await sb.from('credit_card_reminders').update({ paid_for: b.dataset.due, updated_at: new Date().toISOString() }).eq('id', b.dataset.cardPaid);
-    if (error) { b.disabled = false; alert(error.message); return; }
-    mpRenderCardReminders();
-  }));
 }
 
 function mpUpdateAuthUi(session) {

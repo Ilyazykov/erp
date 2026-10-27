@@ -1,8 +1,9 @@
 -- When a credit card wants paying, for the reminder on top of the page
 -- (index.html, mpRenderCardReminders): the bank's statement comes on
 -- statement_day, the grace period's payment is due on the next due_day after
--- it. The debt is the card's latest balance_after in bank_transactions
--- (product 'credit_card'). paid_for: the due date already paid ("Paid" on the
+-- it. What it wants paid: the debt at the statement (balance_after in
+-- bank_transactions, product 'credit_card') less what came onto the card
+-- since. paid_for: the due date already paid ("Paid" on the
 -- reminder), so it stays quiet until the next statement.
 -- E.g. T-Bank: the statement on the 12th, due on the 5th of the next month.
 create table if not exists public.credit_card_reminders (
