@@ -470,7 +470,7 @@
         <option value="60">5 years</option><option value="all">all</option></select></label>
       <label>by <select id="exp_step"><option value="month">month</option><option value="quarter">quarter</option><option value="year">year</option></select></label>
     </div>
-    <div id="plot_exp_months" style="height:320px"></div>
+    <div id="plot_exp_months" style="height:520px"></div>
     <div id="exp_excluded"></div>
   </div>
 </div>
@@ -7926,13 +7926,13 @@ async function mpRenderExpenses() {
   }
   const order = MP_EXP_CATS.map(c => c[0]).filter(n => buckets.some(b => byBucket.has(n + '\u0000' + b)));
   await Plotly.react(bars, order.map(n => ({
-    type: 'bar', name: n, x: buckets, y: buckets.map(b => byBucket.get(n + '\u0000' + b) || 0),
+    type: 'bar', name: n, x: buckets, y: buckets.map(b => byBucket.get(n + '\u0000' + b) ?? null),  // null: no line in the hover
     marker: { color: meta[n].color }, hovertemplate: `${n}: %{y:,.0f} ${sym}<extra></extra>`,
   })), {
     barmode: 'stack', paper_bgcolor: '#0d1117', plot_bgcolor: '#0d1117', font: { color: '#8b949e' },
-    margin: { t: 10, b: 40, l: 60, r: 10 }, hovermode: 'x unified',
+    margin: { t: 10, b: 40, l: 60, r: 10 }, hovermode: 'x unified', hoverlabel: { font: { size: 11 } },
     xaxis: { type: 'category', gridcolor: '#1e2830' }, yaxis: { gridcolor: '#1e2830', ticksuffix: ccy === 'RUB' ? ' ₽' : '', tickprefix: ccy === 'RUB' ? '' : sym },
-    legend: { orientation: 'h', y: -0.15 },
+    legend: { orientation: 'h', y: -0.1 },
   }, CONFIG);
   bars.removeAllListeners?.('plotly_click');
   bars.on('plotly_click', ev => {
