@@ -7730,7 +7730,7 @@ const MP_EXP_SKIP = [
   ['Funds & savings', r => /Flexible Cash Funds|Instant Access Savings|investment account|\bSavings\b|\bPocket\b|\bVault\b/i.test(r.description)],
   // "Exchanged to TRY and paid for the flat" is rent, not an exchange
   ['Currency exchange', r => !/paid for the flat/i.test(r.description)
-    && (/^fx_/.test(r.category || '') || /^Exchanged |Döviz (Alış|Satış)|Currency (buy|sell)|KORONAPAY|QIWI P2P|menjacnica|обмен валют|конвертац/i.test(r.description))],
+    && (/^fx_/.test(r.category || '') || /^Exchanged |Döviz (Alış|Satış)|Currency (buy|sell)|KORONAPAY|QIWI P2P|menjacnica|обмен валют|конвертац|^Spent in cash: \d+ dollars/i.test(r.description))],
   // T-Bank's transfers to a contract: one's own cards and accounts only -- the rest
   // are other people's T-Bank accounts (spending, "Transfers to people")
   ['Own accounts', r => /^(Internal transfer to contract|Внутренний перевод на договор) (0643044746|5040156423|5063173370|5063173388|8219282925|5152956495)\b/.test(r.description)],
@@ -7755,12 +7755,12 @@ const MP_EXP_CATS = [
   // partners: gifts, flowers, the cash given to live on, debts paid for them
   ['Relationships', '💝', '#ff6b9d', /dyson|bouquet|flowers|букет|цвет(ы|ов)\b|cash to \S+ for living expenses/i],
   ['Food delivery', '🛵', '#7ee787', /wolt|foody|glovo|deliveroo|bolt food|yandex\W*eda|яндекс еда|delivery\W*club|papajohns|getir|yemeksepeti|food_delivery/i],
-  ['Restaurants & cafés', '🍽', '#3fb950', /restaurant|^Hide$|sushi|\bcaf[eé]\b|kafe|coffee|costa|starbucks|\bpaul\b|mcdonald|burger|kfc|pizza|\bbar\b|\bpub\b|bistro|tavern|grill|bakery|restoran|\bRSTR\b|steakhou|Le Bol|SOLO NA GOROHOVOY|vend ?servi|bread|cuisine|kitchen|ramen|malatang|indian|fish & chips|cinnabon|wagamama|brewdog|greene king|\barms\b|Lángosh|Cocorico|Fix Choc|ресторан|кафе|кофе/i],
-  ['Groceries', '🛒', '#1a7f37', /groceries|Bakalicom|Berezka|\bSPAR\b|Lidl|Alphamega|Sklavenitis|Carrefour|Kiosk|supermarket|markets?\b|\bOKEY\b|MIGRO|\bMAXI\b|GIDA\b|Sainsbury|Monoprix|Tesco|Пятер|Перекр|Магнит|ВкусВилл|Lenta|Ашан|Migros|\bBIM\b|A101|Şok|Univerexport|Shopping Plaza|Bazaar/i],
-  ['Transport', '🚕', '#58a6ff', /\bbolt\b|uber|ubr\*|taxi|такси|transport|\btfl\b|sncf|eurostar|metro|\bbus\b|railway|trainline|shuttle|megabus|\bgrab\b|flixbus|JFK TRANSFER|\bRATP\b|BKK|Mobilités|parking|fuel|petrol|lukoil|Siticard|Mos\.Tr/i],
-  ['Travel', '✈️', '#a371f7', /booking|airbnb|hotel|hostel|inter ?continental|atlantis|marriott|hilton|wizz|easyjet|ryanair|aegean|airline|airways|aviasales|kiwi\.com|trip\.com|skyscanner|swissport|airport|T-BankAir|travel|belavia|kupibilet|iraero|\bS7\.RU|homy central|aviakassa|\bavia\b|flyone|utair|biletik|aerobilet|clickavia|onetwotrip|ostrovok|trip\.ru|mytrip|go2see|golden tours|short lets|otelcilik|seyahat|lucky house|apartment/i],
-  ['Health & sport', '💊', '#db61a2', /pharm|аптек|apteka|eczane|clinic|hospital|dental|dentist|doctor|chemist|optic|vision express|fitness|\bgym\b|climbing|health|yasno/i],
-  ['Entertainment', '🎟', '#00c2c7', /disney|headout|viator|theatre|theater|театр|cinema|кино|museum|aquaventure|theme park|tickets|kassir\.ru|dream-aero|parter\.ru|luzhniki|\bFIFA\b|at the top|stalinskie vysotki|\batg\b|concert|punting|Széchenyi|\bspa\b|entertainment|steam|playstation/i],
+  ['Restaurants & cafés', '🍽', '#3fb950', /restaurant|^Hide$|sushi|roberto?s?\b|nusr-?et|salt bae|обед|lunch|breakfast|döner|kebab|shashlik|шашлык|khinkali|khachapuri|kharcho|borscht|\bblin|falafel|shakshuka|octopus|salmon|pastr|baklava|\btea\b|chocolate|chestnut|pasta|\bsalo\b|okroshka|yogurt|\bfood\b|drinks|şalgam|yedigün|чипсы|\bcaf[eé]\b|kafe|coffee|costa|starbucks|\bpaul\b|mcdonald|burger|kfc|pizza|\bbar\b|\bpub\b|bistro|tavern|grill|bakery|restoran|\bRSTR\b|steakhou|Le Bol|SOLO NA GOROHOVOY|vend ?servi|bread|cuisine|kitchen|ramen|malatang|indian|fish & chips|cinnabon|wagamama|brewdog|greene king|\barms\b|Lángosh|Cocorico|Fix Choc|ресторан|кафе|кофе/i],
+  ['Groceries', '🛒', '#1a7f37', /groceries|Bakalicom|Berezka|\bSPAR\b|Lidl|Alphamega|Sklavenitis|Carrefour|Kiosk|supermarket|markets?\b|продукты|молок|арбуз|vegetables|\bOKEY\b|MIGRO|\bMAXI\b|GIDA\b|Sainsbury|Monoprix|Tesco|Пятер|Перекр|Магнит|ВкусВилл|Lenta|Ашан|Migros|\bBIM\b|A101|Şok|Univerexport|Shopping Plaza|Bazaar/i],
+  ['Transport', '🚕', '#58a6ff', /\bbolt\b|uber|ubr\*|taxi|такси|transport|\btfl\b|sncf|eurostar|metro|\bbus\b|railway|trainline|shuttle|ferry|\btrain\b|\btram\b|funicular|rental for a day|megabus|\bgrab\b|flixbus|JFK TRANSFER|\bRATP\b|BKK|Mobilités|parking|fuel|petrol|lukoil|Siticard|Mos\.Tr/i],
+  ['Travel', '✈️', '#a371f7', /booking|airbnb|hotel|hostel|inter ?continental|atlantis|marriott|hilton|wizz|easyjet|ryanair|aegean|airline|airways|aviasales|kiwi\.com|trip\.com|skyscanner|swissport|airport|T-BankAir|travel|belavia|kupibilet|guest ?house|\binn\b|\bvilla\b|studios?\b|\brooms\b|\bflats\b|suites|apartman|\bpal\b|european sun|iberia|iraero|\bS7\.RU|homy central|aviakassa|\bavia\b|flyone|utair|biletik|aerobilet|clickavia|onetwotrip|ostrovok|trip\.ru|mytrip|go2see|golden tours|short lets|otelcilik|seyahat|lucky house|apartment/i],
+  ['Health & sport', '💊', '#db61a2', /pharm|аптек|apteka|eczane|clinic|hospital|dental|dentist|doctor|chemist|optic|vision express|fitness|\bgym\b|climbing|health|yasno|haircut/i],
+  ['Entertainment', '🎟', '#00c2c7', /disney|headout|viator|theatre|theater|театр|cinema|кино|museum|aquaventure|theme park|tickets|amusement|land of legends|hamam|baths|excursion|\btour\b|quad bikes|boat trip|ferris|\blift\b|observation|waterfall|borjomi|kassir\.ru|dream-aero|parter\.ru|luzhniki|\bFIFA\b|at the top|stalinskie vysotki|\batg\b|concert|punting|Széchenyi|\bspa\b|entertainment|steam|playstation/i],
   ['Education', '🎓', '#ffa198', /leetcode|hello ?interview|skyeng|skylingua|getcourse|udemy|coursera/i],
   ['Subscriptions & services', '🧾', '#79c0ff', /anthropic|openai|chatgpt|adobe|itunes|parallels|patreon|netflix|spotify|youtube|google \*(?!seller)|google one|nordvp|g\.co\/|apple\.com\/bill|icloud|microsoft|github|notion|cursor|teamlogs|podpiska|prodamus|subscription|T-Bundle|sberprime|yandex\W.*plus/i],
   ['Shopping', '🛍', '#d29922', /clothes|одежд|pixel|google store|google \*seller|apple\.com\/us|apple store|iphone|ipad|macbook|airpods|bought in cash|superdry|lafayette|rip curl|tommy hilfiger|teknosa|sportmaster|sephora|lee wrangler|povolzhe- ?sport|AMZN|svyaznoy|m\.video|\bDNS\b|adidas|quiksilver|sunglass hut|lego|kotsovolos|istyle|ikea|3F HOME|mediamarkt|whsmith|retail|zara|h&m|uniqlo|decathlon|amazon|ozon|wildberries|aliexpress|\bshop|store\b|\bmall\b|SANAL POS/i],
@@ -7845,9 +7845,13 @@ async function mpExpLoad() {
     for (const [why, test] of MP_EXP_SKIP) { if (skip) break; if (test(row)) skip = why; }
     if (skip) { row.cat = skip; skipped.push(row); continue; }
     // the importers' own guess helps, except their catch-all utilities_or_shopping
-    const text = `${r.description} ${r.category === 'utilities_or_shopping' ? '' : r.category || ''}`.trim();
-    row.cat = MP_EXP_BY_HAND.find(([, test]) => test(row))?.[0] ?? MP_EXP_CATS.find(c => c[3].test(text))[0];
-    if (row.cat === 'Other' && r.category === 'utilities_or_shopping') row.cat = 'Shopping';
+    // a cash purchase of the ledger ("Spent in cash: Xiaomi scales (Antalya)") goes by
+    // what it bought, not as cash; one that names nothing known is a purchase
+    const bought = r.description.match(/^Spent in cash: (.*?)(?:\s*\([^)]*\))?$/)?.[1];
+    const text = bought ?? `${r.description} ${r.category === 'utilities_or_shopping' ? '' : r.category || ''}`.trim();
+    row.cat = MP_EXP_BY_HAND.find(([, test]) => test(row))?.[0]
+      ?? MP_EXP_CATS.find(c => !(bought && c[0] === 'Cash') && c[3].test(text))[0];
+    if (row.cat === 'Other' && (bought || r.category === 'utilities_or_shopping')) row.cat = 'Shopping';
     spent.push(row);
     // paid for several months at once: a share in each of them, shown when "spread" is on
     const spread = mpExpSpread(row);
