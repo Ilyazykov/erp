@@ -7987,8 +7987,10 @@ async function mpRenderExpenses() {
   })), {
     barmode: 'stack', paper_bgcolor: '#0d1117', plot_bgcolor: '#0d1117', font: { color: '#8b949e' },
     margin: { t: 10, b: 40, l: 60, r: 10 }, hovermode: 'x unified', hoverlabel: { font: { size: 11 } },
-    xaxis: { type: 'category', gridcolor: '#1e2830' }, yaxis: { gridcolor: '#1e2830', ticksuffix: ccy === 'RUB' ? ' ₽' : '', tickprefix: ccy === 'RUB' ? '' : sym },
-    legend: { orientation: 'h', y: -0.1 },
+    // labels at an angle, the margin grown to fit them; the legend above, out of their way
+    xaxis: { type: 'category', gridcolor: '#1e2830', tickangle: -45, automargin: true },
+    yaxis: { gridcolor: '#1e2830', ticksuffix: ccy === 'RUB' ? ' ₽' : '', tickprefix: ccy === 'RUB' ? '' : sym },
+    legend: { orientation: 'h', x: 0, y: 1.02, yanchor: 'bottom' },
     ...mpExpLifeBands(periods, buckets, bucket, lifeName),
   }, CONFIG);
   bars.removeAllListeners?.('plotly_click');
