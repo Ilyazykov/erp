@@ -2075,7 +2075,7 @@ const mpPartPeriod = p => {
 // the bank's own file goes straight into Upload; "to Claude": a PDF /
 // screenshots turned into this project's CSV first.
 const MP_ACCOUNT_SOURCE = {
-  Revolut: 'Revolut app → Profile → Statements → Account statement → CSV; also the Flexible Cash Funds and savings statements. Upload as is.',
+  Revolut: 'Revolut app → avatar → Documents & statements → by type: account, Flexible Cash Funds, savings, stocks, crypto, gold -- CSV each. Upload as is.',
   'Bank of Cyprus': '1Bank → Accounts → Transaction history → Export (CSV). Upload as is.',
   IBKR: 'Synced every morning through the Flex Web Service (IBKR automatic sync, below the uploads); or the IBKR Activity Statement, CSV, for the period since the last one, uploaded as is.',
   Bybit: 'Synced every morning through a read-only API key (Bybit automatic sync, below the uploads); or Bybit → Data Export → Transaction Log → Account Change Details: the Funding and the Unified Trading file, uploaded as is.',
@@ -2119,12 +2119,12 @@ const MP_PART_SOURCE = {
   'Alfa|Broker': 'Screenshots of Alfa-Investments → History → to Claude.',
   'Yandex Bank|Cards & current accounts': 'Yandex Bank app → statement of the current account (PDF) → to Claude.',
   'Yandex Bank|Deposits & savings': 'Yandex Bank app → statement of «Сейв» (PDF) → to Claude.',
-  'Revolut|Broker': 'Revolut app → Invest → More → Documents → Stocks → Account statement → CSV (not P&L). Upload as is.',
-  'Revolut|Crypto': 'Checked every morning through Revolut X (automatic check, below the uploads); or Revolut app → Crypto → More → Documents → Account statement → CSV. Upload as is.',
-  'Revolut|Metals': 'Revolut app → Profile → Statements → Account statement → the XAU (gold) account → CSV. Upload as is.',
-  'Revolut|Cards & current accounts':'Revolut app → Profile → Statements → Account statement → CSV. Upload as is.',
-  'Revolut|Flexible Cash Funds': 'Revolut app → Flexible Cash Funds statement. Upload as is.',
-  'Revolut|Deposits & savings': 'Revolut app → savings statement. Upload as is.',
+  'Revolut|Broker': 'Revolut app → avatar → Documents & statements → stocks: account statement, CSV (not P&L). Upload as is.',
+  'Revolut|Crypto': 'Checked every morning through Revolut X (automatic check, below the uploads); or Revolut app → avatar → Documents & statements → crypto: account statement, CSV. Upload as is.',
+  'Revolut|Metals': 'Revolut app → avatar → Documents & statements → gold (XAU): account statement, CSV. Upload as is.',
+  'Revolut|Cards & current accounts': 'Revolut app → avatar → Documents & statements → account statement, CSV. Upload as is.',
+  'Revolut|Flexible Cash Funds': 'Revolut app → avatar → Documents & statements → Flexible Cash Funds statement, CSV. Upload as is.',
+  'Revolut|Deposits & savings': 'Revolut app → avatar → Documents & statements → savings statement, CSV. Upload as is.',
 };
 const MP_SPLIT_ACCOUNTS = new Set(['T-Bank', 'Sber', 'Alfa', 'Yandex Bank', 'Ozon Bank', 'Finuslugi', 'Revolut']);
 const MP_PART_ORDER = ['Broker', 'ЦФА (Atomyze)', 'Flexible Cash Funds', 'Crypto', 'Metals', 'Cards & current accounts', 'Credit card', 'Deposits & savings'];

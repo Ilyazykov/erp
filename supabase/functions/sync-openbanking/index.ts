@@ -55,6 +55,12 @@ const BANKS: Record<string, { name: string; country: string; label: string; base
 const MAX_CONSENT_S = 180 * 86400;
 const CHECK_DAYS = 30, EDGE_DAYS = 3;
 const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+// the next Monday-to-Friday after a day
+const nextWorkday = (day: string) => {
+  let d = addDays(day, 1);
+  while ([0, 6].includes(new Date(`${d}T00:00:00Z`).getUTCDay())) d = addDays(d, 1);
+  return d;
+};
 const round2 = (x: number) => Math.round(x * 100) / 100;
 
 const b64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -97,7 +103,7 @@ type Tx = { day: string; amount: number; currency: string; ref: string; desc: st
 // trades -- a share is 1 of the currency, so the amount is the quantity --
 // and each fund's daily return and service fee are worked out on the units
 // held the day before (the fee at its fixed yearly rate, the return at the
-// fund's yield on the statement's last day), until their statements come, which take their days back: the
+// fund's average yield over the statement's last week), until their statements come, which take their days back: the
 // money leaving the account doesn't drop out of the capital meanwhile, nor
 // does the return go missing. All of them estimated = true, "ESTIMATED" in
 // the note; only the days after the fund's / savings' own latest statement.
@@ -147,14 +153,20 @@ async function revolutStandIns(db: any, userId: string, write: Tx[]): Promise<{ 
     const fcf = /^(To|From)\s+(?:[A-Z]{3}\s+)?Flexible Cash Funds/i.exec(x.desc);
     const ias = /^(To|From)\s+Instant Access Savings/i.exec(x.desc);
     if (!fcf && !ias) continue;
-    if (fcf && (x.day <= fundEnd || !fundOf.has(x.currency))) continue;
+    // The fund deals the next working day (a weekend's on the Monday): the
+    // fund statement's 20.10 SELL for the account's 19.10 "From Flexible Cash
+    // Funds", its 26.10 for 24.10 (a Saturday). Only a move made in the small
+    // hours of a working day goes the same day -- the API gives no time, so
+    // those come out a day late.
+    const day = fcf ? nextWorkday(x.day) : x.day;
+    if (fcf && (day <= fundEnd || !fundOf.has(x.currency))) continue;
     if (ias && x.day <= savingsEnd) continue;
     const buy = /^to$/i.test((fcf ?? ias)![1]);
     const base = `revolut:${x.ref || `${x.day}:${x.currency}:${x.amount}`}`;
     const n = seen.get(base) ?? 0; seen.set(base, n + 1);
     rows.push({
       user_id: userId, account: 'Revolut', ticker: fcf ? fundOf.get(x.currency) : `SAVINGS:Revolut ${x.currency}`,
-      side: buy ? 'buy' : 'sell', quantity: Math.abs(x.amount), price: 1, trade_date: x.day, currency: x.currency,
+      side: buy ? 'buy' : 'sell', quantity: Math.abs(x.amount), price: 1, trade_date: day, currency: x.currency,
       fee_tax: null, fee_currency: null, nkd: null, exchange: null, estimated: true,
       note: `ESTIMATED: ${x.desc} -- from the account's Open Banking transfer, until the ${fcf ? 'fund' : 'savings'} statement comes`,
       external_source: fcf ? OPENBANKING_TRADE_SOURCE.fund : OPENBANKING_TRADE_SOURCE.savings, external_id: n ? `${base}:dup${n}` : base,
@@ -232,18 +244,22 @@ async function revolutStandIns(db: any, userId: string, write: Tx[]): Promise<{ 
       // yearly rate (EUR 0.30%, USD 0.75%, GBP 0.50% when written) -- read off
       // the statement's last day and rounded to 0.01%, it gives the
       // statement's amounts exactly; the return is the fund's own daily yield,
-      // which moves every day: the statement's last day's is the best guess.
-      let perRet = 0, perFee = 0;
-      for (let d = fundEnd; d >= addDays(fundEnd, -6) && !perRet; d = addDays(d, -1)) {
+      // which moves, and rounds a cent up one day and down the next (GBP
+      // 0.2521 / 0.2621 on the same units): the average over the statement's
+      // last 7 days is the best guess.
+      let perFee = 0;
+      const rets: number[] = [];
+      for (let d = fundEnd; d >= addDays(fundEnd, -6); d = addDays(d, -1)) {
         const held = unitsBy(addDays(d, -1));
         if (held <= 0) continue;
         const day = fundRows.filter(r => r.ticker === ticker && r.side === 'dividend' && r.trade_date === d);
         const r = day.filter(x => /Return PAID/i.test(x.note)).reduce((a, x) => a + x.quantity, 0);
         const f = day.filter(x => /Service Fee/i.test(x.note)).reduce((a, x) => a + x.quantity, 0);
         if (!r) continue;
-        perRet = r / held;
-        perFee = Math.round(f / held * 365 * 10000) / 10000 / 365;
+        rets.push(r / held);
+        if (!perFee) perFee = Math.round(f / held * 365 * 10000) / 10000 / 365;
       }
+      const perRet = rets.length ? rets.reduce((a, x) => a + x, 0) / rets.length : 0;
       if (!perRet) continue;
       for (let d = addDays(fundEnd, 1); d <= yesterday; d = addDays(d, 1)) {
         const held = unitsBy(addDays(d, -1));
@@ -256,7 +272,7 @@ async function revolutStandIns(db: any, userId: string, write: Tx[]): Promise<{ 
             fee_tax: null, fee_currency: null, nkd: null, exchange: null, estimated: true,
             note: kind === 'fee'
               ? `ESTIMATED: ${label} ${ccy} Class ${ticker} -- ${held.toFixed(2)} units x ${(-per * 365 * 100).toFixed(2)}% a year / 365, until the fund statement comes`
-              : `ESTIMATED: ${label} ${ccy} Class R ${ticker} -- ${held.toFixed(2)} units x ${(per * 365 * 100).toFixed(4)}% a year / 365 (the fund's yield on the statement's last day), until the fund statement comes`,
+              : `ESTIMATED: ${label} ${ccy} Class R ${ticker} -- ${held.toFixed(2)} units x ${(per * 365 * 100).toFixed(4)}% a year / 365 (the fund's average yield over the statement's last week), until the fund statement comes`,
             external_source: OPENBANKING_TRADE_SOURCE.fund, external_id: `est:${ticker}:${d}:${kind}`,
           });
           returns++;
