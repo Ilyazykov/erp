@@ -164,7 +164,8 @@ Deno.serve(async (req) => {
     // short-lived projections, so actual rewards replace their estimates.
     const estimated = await rebuildCryptoComEstimates(supabase, wallet as ExchangeWallet);
     const r = await recompute(supabase, wallet as ExchangeWallet);
-    const { error: refresh } = await supabase.rpc('request_capital_refresh', { p_user: user.id });
+    // as the user: request_capital_refresh is the service role's, this one the user's own (...051)
+    const { error: refresh } = await supabase.rpc('request_my_capital_refresh');
     if (refresh) throw new Error(refresh.message);
     return json({ rows: rows.length, skipped_mirrored: parsed.skipped, total_rows_stored: r.rows, balances: r.balances, ...estimated });
   } catch (err) {
