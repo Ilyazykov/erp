@@ -7803,9 +7803,10 @@ async function mpExpLoad() {
     page(() => sb.from('bank_transactions')
       .select('id, tx_date, account, description, amount, currency, category, external_source, external_id, synthetic_kind')
       .lt('amount', 0).order('tx_date')),
-    page(() => sb.from('internal_transfers').select('out_source, out_id').neq('matched_by', 'rejected').order('id')),
+    page(() => sb.from('internal_transfers').select('out_source, out_id, kind').neq('matched_by', 'rejected').order('id')),
   ]);
-  const own = new Set(pairs.map(p => p.out_source + '\u0000' + p.out_id));
+  // the pairs' rows out: own accounts, or money lent and given back (kind 'returned', migration 130)
+  const own = new Map(pairs.map(p => [p.out_source + '\u0000' + p.out_id, p.kind === 'returned' ? 'Returned' : 'Own accounts']));
   // where one was, with whom (migration 128); none yet or no table: no bands
   const { data: periods } = await sb.from('life_periods').select('start_day, end_day, place, company, note').order('start_day');
   const ccys = [...new Set([...rows.map(r => r.currency.toUpperCase()), 'EUR', 'RUB'])].filter(c => c !== 'USD' && c !== 'XAU');
@@ -7828,7 +7829,7 @@ async function mpExpLoad() {
     const day = r.tx_date.slice(0, 10);
     const row = { ...r, day, ccy: r.currency.toUpperCase(), amt: -Number(r.amount) };
     row.usd = row.amt * usdPer(row.ccy, day);
-    let skip = own.has(r.external_source + '\u0000' + r.external_id) ? 'Own accounts' : null;
+    let skip = own.get(r.external_source + '\u0000' + r.external_id) ?? null;
     for (const [why, test] of MP_EXP_SKIP) { if (skip) break; if (test(row)) skip = why; }
     if (skip) { row.cat = skip; skipped.push(row); continue; }
     // the importers' own guess helps, except their catch-all utilities_or_shopping
