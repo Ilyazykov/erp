@@ -70,6 +70,10 @@
   .empty-note { color: #6a7381; font-size: 0.85rem; padding: 8px 0; }
   .icon-btn { background: none; border: none; color: #6a7381; cursor: pointer; font-size: 0.9rem; padding: 2px 6px; }
   .icon-btn:hover { color: #e05252; }
+  .card-reminder { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; padding: 10px 14px;
+    border: 1px solid #e0a83a; border-left-width: 4px; border-radius: 6px; background: #fff7e6; color: #5a3d00; font-size: 0.9rem; }
+  .card-reminder.urgent { border-color: #e05252; background: #fdecec; color: #6b1414; }
+  .card-reminder .note { color: inherit; opacity: 0.75; font-size: 0.8rem; }
 </style>
 </head>
 <body>
@@ -80,6 +84,7 @@
 <div class="auth-bar" id="auth_bar">
   <button class="btn primary" id="btn_login">Sign in with Google</button>
 </div>
+<div id="card_reminders"></div>
 
 <div class="tabs">
   <div class="tab active" data-tab="myportfolio">My Portfolio</div>
@@ -7331,6 +7336,56 @@ document.getElementById('mp_exchange_recalc').addEventListener('click', async ()
   mpRefreshAfterWalletChange();
 });
 
+// ---- Credit card payment reminder ----
+// A card in credit_card_reminders (migration ...123): its statement comes on
+// statement_day, the payment is due on the next due_day after it. From
+// remind_days before the due date a banner on top says how much is owed --
+// the card's latest balance_after from its statement, so as fresh as the last
+// upload -- until "Paid" marks that due date paid.
+const mpIsoDay = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+// the day in a month, or its last day when the month is shorter
+const mpDayIn = (y, m, day) => new Date(y, m, Math.min(day, new Date(y, m + 1, 0).getDate()));
+
+async function mpRenderCardReminders() {
+  const box = document.getElementById('card_reminders');
+  const { data: rules, error } = await sb.from('credit_card_reminders').select('*');
+  if (error || !rules?.length) { box.innerHTML = ''; return; }
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const out = [];
+  for (const r of rules) {
+    // the latest statement day not after today, and the due date after it
+    let st = mpDayIn(today.getFullYear(), today.getMonth(), r.statement_day);
+    if (st > today) st = mpDayIn(today.getFullYear(), today.getMonth() - 1, r.statement_day);
+    let due = mpDayIn(st.getFullYear(), st.getMonth(), r.due_day);
+    if (due <= st) due = mpDayIn(st.getFullYear(), st.getMonth() + 1, r.due_day);
+    const left = Math.round((due - today) / 86400000);
+    if (left > r.remind_days || (r.paid_for && r.paid_for >= mpIsoDay(due))) continue;
+    const { data: last } = await sb.from('bank_transactions').select('tx_date, balance_after')
+      .eq('account', r.account).eq('product', 'credit_card').not('balance_after', 'is', null)
+      .order('tx_date', { ascending: false }).order('id', { ascending: false }).limit(1);
+    const row = last?.[0];
+    const debt = row ? -Number(row.balance_after) : null;
+    const asOf = row ? row.tx_date.slice(0, 10) : null;
+    const stale = !asOf || asOf < mpIsoDay(st);
+    if (debt !== null && debt <= 0 && !stale) continue;   // nothing owed on a fresh statement
+    const when = due.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+    const daysTxt = left === 0 ? 'сегодня' : left === 1 ? 'завтра' : `через ${left} дн.`;
+    const amount = debt !== null && debt > 0 ? `долг ≈ ${debt.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ${r.currency}` : 'долг неизвестен';
+    out.push(`<div class="card-reminder${left <= 2 ? ' urgent' : ''}">
+      <span>💳 <b>${mpEscapeHtml(r.account)}</b>: погасить кредитку до <b>${when}</b> (${daysTxt}) — ${amount}</span>
+      <span class="note">${asOf ? `по выписке на ${asOf.split('-').reverse().join('.')}` : 'выписок нет'}${stale ? ' — загрузите свежую' : ''}; точная сумма для льготного периода — в приложении банка</span>
+      <button class="btn" data-card-paid="${r.id}" data-due="${mpIsoDay(due)}">Оплачено</button>
+    </div>`);
+  }
+  box.innerHTML = out.join('');
+  box.querySelectorAll('[data-card-paid]').forEach(b => b.addEventListener('click', async () => {
+    b.disabled = true;
+    const { error } = await sb.from('credit_card_reminders').update({ paid_for: b.dataset.due, updated_at: new Date().toISOString() }).eq('id', b.dataset.cardPaid);
+    if (error) { b.disabled = false; alert(error.message); return; }
+    mpRenderCardReminders();
+  }));
+}
+
 function mpUpdateAuthUi(session) {
   const btn = document.getElementById('btn_login');
   mpIsSignedIn = !!session;
@@ -7352,6 +7407,7 @@ function mpUpdateAuthUi(session) {
     document.getElementById('capitalbrokers_signed_in').style.display = '';
     document.getElementById('invested_signed_out').style.display = 'none';
     document.getElementById('invested_signed_in').style.display = '';
+    mpRenderCardReminders();
     mpRenderPortfolioPies();
     mpRenderLatestSources();
     mpRenderBrokerCurrency();
@@ -7374,6 +7430,7 @@ function mpUpdateAuthUi(session) {
     if (document.getElementById('invested').classList.contains('active')) mpRenderInvested();
   } else {
     btn.textContent = 'Sign in with Google';
+    document.getElementById('card_reminders').innerHTML = '';
     document.getElementById('mp_signed_out').style.display = '';
     document.getElementById('mp_signed_in').style.display = 'none';
     document.getElementById('auto_signed_out').style.display = '';
