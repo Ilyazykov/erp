@@ -442,8 +442,8 @@
     <div class="section-title">Expenses</div>
     <p class="note">Money out of the bank accounts, cards and cash over the period, each row at its day's rate. Not counted:
       transfers between your own accounts (the pairs on the Capital tab), currency exchanges, buying investments, funds, savings
-      and crypto, and top-ups of a broker or another own card -- they're listed below the categories. The category is guessed
-      from the row's description.</p>
+      and crypto, and top-ups of a broker or another own card -- they're listed below the categories. The database sorts each row
+      (bank_transactions.expense_category: set by hand, or by the rules in expense_rules) with every capital rebuild.</p>
     <div class="form-row" style="gap:12px">
       <button class="btn" id="exp_prev" type="button" title="Previous period">‹</button>
       <select id="exp_period">
@@ -7719,83 +7719,32 @@ async function mpRenderCapital() {
   }
   await mpRenderCapitalTypes(ccy, conv);
 }
-// Expenses over a period, by category, as in Revolut's spending view: every
-// row out of bank_transactions less what isn't spending (MP_EXP_SKIP) and the
-// legs of transfers between own accounts (internal_transfers), each at its
-// day's rate (fx_history). Categories are guessed from the description.
-const MP_EXP_SKIP = [
-  // [why not counted, test on the row]
-  ['Investments', r => /^(tbank_broker|ibkr|freedom24|sber_broker|atomyze|estimate_|tbank_api|finuslugi|revolut_invest)/.test(r.external_source)
-    || r.currency === 'XAU' || /^Покупка |Комиссия брокера|Пополнение брокерского|^(BUY|SELL) - |^(Buy|Sell) \S+ .*(units?|паёв|@)/.test(r.description)],
-  ['Funds & savings', r => /Flexible Cash Funds|Instant Access Savings|investment account|\bSavings\b|\bPocket\b|\bVault\b/i.test(r.description)],
-  // "Exchanged to TRY and paid for the flat" is rent, not an exchange
-  ['Currency exchange', r => !/paid for the flat/i.test(r.description)
-    && (/^fx_/.test(r.category || '') || /^Exchanged |Döviz (Alış|Satış)|Currency (buy|sell)|KORONAPAY|QIWI P2P|menjacnica|обмен валют|конвертац|^Spent in cash: \d+ dollars/i.test(r.description))],
-  // T-Bank's transfers to a contract: one's own cards and accounts only -- the rest
-  // are other people's T-Bank accounts (spending, "Transfers to people")
-  ['Own accounts', r => /^(Internal transfer to contract|Внутренний перевод на договор) (0643044746|5040156423|5063173370|5063173388|8219282925|5152956495)\b/.test(r.description)],
-  // bought for someone else, who paid it back (to an account or in cash, not in the
-  // statements): the two Pixel orders from New York, 02 and 05.11.2021
-  ['Bought for others', r => /GOOGLE \*SELLER/.test(r.description) && r.day >= '2021-11-01' && r.day <= '2021-11-06'],
-  // cash out of a bank from 24.02.2022 on is a move into the cash on hand: its
-  // spending is in the cash ledger (cash_csv -- what's recorded and the extrapolated
-  // rest), so the withdrawal itself counted too would count it twice. Before the
-  // ledger, a withdrawal stays spent cash (the rent in Moscow, ...).
-  ['To cash', r => r.account !== 'cash' && r.day >= '2022-02-24'
-    && /cash withdrawal|cash withdrawn|withdrawn in cash|снятие наличных|выдача наличных|\batm\b|банкомат|bankomat|para çekme|nakit çekim|isplata gotovine/i.test(r.description)
-    && !/\bfee\b|bsmv|komisyon|комисси/i.test(r.description)],  // the ATM's fee is spent
-  ['Crypto', r => /crypto\.com|mercuryo|\bMRCR\b|bybit|binance|\bokx\b|kraken/i.test(r.description)],
-  ['Own accounts', r => ['internal_transfer', 'brokerage_funding', 'top_up', 'salary'].includes(r.category)
-    || /^Deposited at |6012 ?Revolut|Wise PURCHASE|^Wise$|top-?up|между (своими )?счетами|^Внутрибанковский перевод/i.test(r.description)],
-];
+// Expenses over a period, by category, as in Revolut's spending view. The database
+// sorts them (migration 132: bank_transactions.expense_category, by hand or by the
+// rules in expense_rules; the tab's rows in `expenses`, in dollars at each day's
+// rate) -- the page only reads and draws.
+// [category, icon, colour], in the order the chart stacks them; the database's
+// labels of what isn't spending have no entry here.
 const MP_EXP_CATS = [
-  // [name, icon, colour, test on "description category"]
-  ['Rent & housing', '🏠', '#ff7a45', /\brent\b|MPE PROPERTIES|TEPLOENERGO|ЖКХ|JKH|My Home|My house|Moj Dom|Capital Repair|Cap\. Repair|TNS-Energo|cleaning lady|Paid for the flat/i],
-  ['Bills & utilities', '💡', '#ffb020', /Cyta|\bEAC\b|Municipality|Water Board|Primetel|Epic\b|Beeline|\bMTS\b|Megafon|Yota|Tele2|\bEE Ltd\b|1global|airalo|Rostelecom|A-3|CLK AKDEN|utilit|osiguranje|insurance|страхов/i],
-  // partners: gifts, flowers, the cash given to live on, debts paid for them
-  ['Relationships', '💝', '#ff6b9d', /dyson|bouquet|flowers|букет|цвет(ы|ов)\b|cash to \S+ for living expenses/i],
-  ['Food delivery', '🛵', '#7ee787', /wolt|foody|glovo|deliveroo|bolt food|yandex\W*eda|яндекс еда|delivery\W*club|papajohns|getir|yemeksepeti|food_delivery/i],
-  ['Restaurants & cafés', '🍽', '#3fb950', /restaurant|^Hide$|sushi|roberto?s?\b|nusr-?et|salt bae|обед|lunch|breakfast|döner|kebab|shashlik|шашлык|khinkali|khachapuri|kharcho|borscht|\bblin|falafel|shakshuka|octopus|salmon|pastr|baklava|\btea\b|chocolate|chestnut|pasta|\bsalo\b|okroshka|yogurt|\bfood\b|drinks|şalgam|yedigün|чипсы|\bcaf[eé]\b|kafe|coffee|costa|starbucks|\bpaul\b|mcdonald|burger|kfc|pizza|\bbar\b|\bpub\b|bistro|tavern|grill|bakery|restoran|\bRSTR\b|steakhou|Le Bol|SOLO NA GOROHOVOY|vend ?servi|bread|cuisine|kitchen|ramen|malatang|indian|fish & chips|cinnabon|wagamama|brewdog|greene king|\barms\b|Lángosh|Cocorico|Fix Choc|ресторан|кафе|кофе/i],
-  ['Groceries', '🛒', '#1a7f37', /groceries|Bakalicom|Berezka|\bSPAR\b|Lidl|Alphamega|Sklavenitis|Carrefour|Kiosk|supermarket|markets?\b|продукты|молок|арбуз|vegetables|\bOKEY\b|MIGRO|\bMAXI\b|GIDA\b|Sainsbury|Monoprix|Tesco|Пятер|Перекр|Магнит|ВкусВилл|Lenta|Ашан|Migros|\bBIM\b|A101|Şok|Univerexport|Shopping Plaza|Bazaar/i],
-  ['Transport', '🚕', '#58a6ff', /\bbolt\b|uber|ubr\*|taxi|такси|transport|\btfl\b|sncf|eurostar|metro|\bbus\b|railway|trainline|shuttle|ferry|\btrain\b|\btram\b|funicular|rental for a day|megabus|\bgrab\b|flixbus|JFK TRANSFER|\bRATP\b|BKK|Mobilités|parking|fuel|petrol|lukoil|Siticard|Mos\.Tr/i],
-  ['Travel', '✈️', '#a371f7', /booking|airbnb|hotel|hostel|inter ?continental|atlantis|marriott|hilton|wizz|easyjet|ryanair|aegean|airline|airways|aviasales|kiwi\.com|trip\.com|skyscanner|swissport|airport|T-BankAir|travel|belavia|kupibilet|guest ?house|\binn\b|\bvilla\b|studios?\b|\brooms\b|\bflats\b|suites|apartman|\bpal\b|european sun|iberia|iraero|\bS7\.RU|homy central|aviakassa|\bavia\b|flyone|utair|biletik|aerobilet|clickavia|onetwotrip|ostrovok|trip\.ru|mytrip|go2see|golden tours|short lets|otelcilik|seyahat|lucky house|apartment/i],
-  ['Health & sport', '💊', '#db61a2', /pharm|аптек|apteka|eczane|clinic|hospital|dental|dentist|doctor|chemist|optic|vision express|fitness|\bgym\b|climbing|health|yasno|haircut/i],
-  ['Entertainment', '🎟', '#00c2c7', /disney|headout|viator|theatre|theater|театр|cinema|кино|museum|aquaventure|theme park|tickets|amusement|land of legends|hamam|baths|excursion|\btour\b|quad bikes|boat trip|ferris|\blift\b|observation|waterfall|borjomi|kassir\.ru|dream-aero|parter\.ru|luzhniki|\bFIFA\b|at the top|stalinskie vysotki|\batg\b|concert|punting|Széchenyi|\bspa\b|entertainment|steam|playstation/i],
-  ['Education', '🎓', '#ffa198', /leetcode|hello ?interview|skyeng|skylingua|getcourse|udemy|coursera/i],
-  ['Subscriptions & services', '🧾', '#79c0ff', /anthropic|openai|chatgpt|adobe|itunes|parallels|patreon|netflix|spotify|youtube|google \*(?!seller)|google one|nordvp|g\.co\/|apple\.com\/bill|icloud|microsoft|github|notion|cursor|teamlogs|podpiska|prodamus|subscription|T-Bundle|sberprime|yandex\W.*plus/i],
-  ['Shopping', '🛍', '#d29922', /clothes|одежд|pixel|google store|google \*seller|apple\.com\/us|apple store|iphone|ipad|macbook|airpods|bought in cash|superdry|lafayette|rip curl|tommy hilfiger|teknosa|sportmaster|sephora|lee wrangler|povolzhe- ?sport|AMZN|svyaznoy|m\.video|\bDNS\b|adidas|quiksilver|sunglass hut|lego|kotsovolos|istyle|ikea|3F HOME|mediamarkt|whsmith|retail|zara|h&m|uniqlo|decathlon|amazon|ozon|wildberries|aliexpress|\bshop|store\b|\bmall\b|SANAL POS/i],
-  ['Government & visas', '🏛', '#8b949e', /\bvisas?\b|visapro|embassy|konsulprime|\bvfs\b|immigration|consulate|\bgov\b|\btax\b|налог|НДФЛ|штраф/i],
-  ['Fees', '🏦', '#6e7681', /\bfees?\b|bsmv|commission|комисси|maintenance|naknad|provizij|обслуживан|ücret|masraf|bank_fee/i],
-  ['Cash', '💵', '#d0d7de', /\batm\b|\bcash\b|банкомат|наличн|bankomat|para çekme/i],
-  ['Transfers to people', '👥', '#c297ff', /^transfer( to|$)|^to \S|sent money to|^Internal transfer to contract|^Внутренний перевод на договор|Mobil Havale|перевод|p2p_transfer|^Revolut( Ltd| Bank UAB)?$/i],
-  ['Other', '•', '#4b5560', /[\s\S]*/],
+  ['Rent & housing', '🏠', '#ff7a45'],
+  ['Bills & utilities', '💡', '#ffb020'],
+  ['Relationships', '💝', '#ff6b9d'],
+  ['Food delivery', '🛵', '#7ee787'],
+  ['Restaurants & cafés', '🍽', '#3fb950'],
+  ['Groceries', '🛒', '#1a7f37'],
+  ['Transport', '🚕', '#58a6ff'],
+  ['Travel', '✈️', '#a371f7'],
+  ['Health & sport', '💊', '#db61a2'],
+  ['Entertainment', '🎟', '#00c2c7'],
+  ['Education', '🎓', '#ffa198'],
+  ['Subscriptions & services', '🧾', '#79c0ff'],
+  ['Shopping', '🛍', '#d29922'],
+  ['Government & visas', '🏛', '#8b949e'],
+  ['Fees', '🏦', '#6e7681'],
+  ['Cash', '💵', '#d0d7de'],
+  ['Transfers to people', '👥', '#c297ff'],
+  ['Other', '•', '#4b5560'],
 ];
-// Rows no description tells apart, placed by hand: [category, test on the row].
-// (No names or phone numbers here -- the page is public.)
-const MP_EXP_BY_HAND = [
-  // the flat in Moscow, paid by phone number 20.04-23.09.2020
-  ['Rent & housing', r => r.account === 'T-Bank' && /^External transfer by phone number/.test(r.description)
-    && r.day >= '2020-04-01' && r.day <= '2020-09-30' && r.amt >= 40000 && r.amt <= 44000],
-  // the flat in Moscow before that, paid in cash from a Tinkoff ATM (35k and the bills);
-  // the 60k and 90k withdrawals of 09.2019 and 01.2020 aren't known, they stay cash
-  ['Rent & housing', r => r.account === 'T-Bank' && /^Cash withdrawal in ATM\.Tinkoff/.test(r.description)
-    && r.day >= '2018-06-01' && r.day <= '2020-03-31' && r.amt >= 17000 && r.amt <= 45000],
-  // a debt of a partner's paid off, by Ziraat transfer 30.01.2023
-  ['Relationships', r => r.account === 'Ziraat Bank' && /Mobil Havale/.test(r.description)
-    && r.day === '2023-01-30' && r.amt === 3756],
-  // mock interviews for Meta, paid through PayPal in March 2025
-  ['Education', r => r.account === 'Raiffeisen' && /^PAYPAL \*/.test(r.description)
-    && r.day >= '2025-03-01' && r.day <= '2025-03-31'],
-];
-// Rent paid for several months at once, spread over them: { n months, from day } or null.
-function mpExpSpread(r) {
-  // the cash rows of Turkey say it: "Paid for the flat (6 months from 07.05.2022)"
-  const m = r.description.match(/\((\d+) months from (\d\d)\.(\d\d)\.(\d{4})\)/);
-  if (m) return { n: Number(m[1]), from: `${m[4]}-${m[3]}-${m[2]}` };
-  // Novi Sad, January-March 2024 paid before leaving for Asia
-  if (r.account === 'cash' && /^Paid the flat rent/.test(r.description) && r.day === '2023-12-25') return { n: 3, from: '2024-01-03' };
-  return null;
-}
 // Categories shown side by side as one group (the food: shades of one green) --
 // in the donut and the list, ordered by the group's total, then each one's.
 const MP_EXP_GROUPS = { 'Food delivery': 'Food', 'Restaurants & cafés': 'Food', 'Groceries': 'Food' };
@@ -7811,22 +7760,16 @@ async function mpExpLoad() {
     }
     return out;
   };
-  const [rows, pairs] = await Promise.all([
-    page(() => sb.from('bank_transactions')
-      .select('id, tx_date, account, description, amount, currency, category, external_source, external_id, synthetic_kind')
-      .lt('amount', 0).order('tx_date')),
-    page(() => sb.from('internal_transfers').select('out_source, out_id, kind, amount, currency, in_at').neq('matched_by', 'rejected').order('id')),
+  const [rows, eur, rub] = await Promise.all([
+    page(() => sb.from('expenses')
+      .select('day, paid_day, account, description, amount, currency, usd, category, counted')
+      .order('day').order('id')),
+    // for showing in euros or roubles
+    ...['EUR', 'RUB'].map(c => page(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', c).order('day'))),
   ]);
-  // the pairs' rows out: own accounts, or money lent and given back (kind 'returned', migration 130)
-  const own = new Map(pairs.map(p => [p.out_source + '\u0000' + p.out_id, p.kind === 'returned' ? 'Returned' : 'Own accounts']));
   // where one was, with whom (migration 128); none yet or no table: no bands
   const { data: periods } = await sb.from('life_periods').select('start_day, end_day, place, company, note').order('start_day');
-  const ccys = [...new Set([...rows.map(r => r.currency.toUpperCase()), 'EUR', 'RUB'])].filter(c => c !== 'USD' && c !== 'XAU');
-  const rates = {};
-  await Promise.all(ccys.map(async c => {
-    rates[c] = (await page(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', c).order('day')))
-      .map(r => [r.day, Number(r.usd_per_unit)]);
-  }));
+  const rates = { EUR: eur.map(r => [r.day, Number(r.usd_per_unit)]), RUB: rub.map(r => [r.day, Number(r.usd_per_unit)]) };
   const usdPer = (c, day) => {
     if (c === 'USD') return 1;
     const rs = rates[c];
@@ -7837,45 +7780,9 @@ async function mpExpLoad() {
   };
   const spent = [], skipped = [];
   for (const r of rows) {
-    if (['balance_snapshot', 'account_closed', 'data_gap'].includes(r.synthetic_kind)) continue;
-    const day = r.tx_date.slice(0, 10);
-    const row = { ...r, day, ccy: r.currency.toUpperCase(), amt: -Number(r.amount) };
-    row.usd = row.amt * usdPer(row.ccy, day);
-    let skip = own.get(r.external_source + '\u0000' + r.external_id) ?? null;
-    for (const [why, test] of MP_EXP_SKIP) { if (skip) break; if (test(row)) skip = why; }
-    if (skip) { row.cat = skip; skipped.push(row); continue; }
-    // the importers' own guess helps, except their catch-all utilities_or_shopping
-    // a cash purchase of the ledger ("Spent in cash: Xiaomi scales (Antalya)") goes by
-    // what it bought, not as cash; one that names nothing known is a purchase
-    const bought = r.description.match(/^Spent in cash: (.*?)(?:\s*\([^)]*\))?$/)?.[1];
-    const text = bought ?? `${r.description} ${r.category === 'utilities_or_shopping' ? '' : r.category || ''}`.trim();
-    row.cat = MP_EXP_BY_HAND.find(([, test]) => test(row))?.[0]
-      ?? MP_EXP_CATS.find(c => !(bought && c[0] === 'Cash') && c[3].test(text))[0];
-    if (row.cat === 'Other' && (bought || r.category === 'utilities_or_shopping')) row.cat = 'Shopping';
-    spent.push(row);
-    // paid for several months at once: a share in each of them, shown when "spread" is on
-    const spread = mpExpSpread(row);
-    if (!spread) continue;
-    const [y, m, d] = spread.from.split('-').map(Number);
-    row.parts = Array.from({ length: spread.n }, (_, k) => {
-      const day = new Date(Date.UTC(y, m - 1 + k, Math.min(d, 28))).toISOString().slice(0, 10);
-      return { ...row, parts: null, day, tx_date: day, amt: row.amt / spread.n, usd: row.usd / spread.n,
-        description: `${row.description} -- ${k + 1}/${spread.n}, paid ${row.day}` };
-    });
-  }
-  // A pair from one currency into another (a withdrawal in lira off a rouble card,
-  // KoronaPay, an exchanger) loses on the rate and the fees: what left less what
-  // arrived, both at their days' rates, is spent -- "Fees". A gain, or a gap past a
-  // third (an estimate on one side), is left alone.
-  const outRows = new Map(skipped.map(r => [r.external_source + '\u0000' + r.external_id, r]));
-  for (const p of pairs) {
-    const o = outRows.get(p.out_source + '\u0000' + p.out_id);
-    if (!o || p.kind !== 'transfer' || p.currency.toUpperCase() === o.ccy) continue;
-    const arrived = Number(p.amount) * usdPer(p.currency.toUpperCase(), p.in_at.slice(0, 10));
-    const loss = o.usd - arrived;
-    if (!(loss > 0) || loss > o.usd / 3) continue;
-    spent.push({ ...o, cat: 'Fees', usd: loss, amt: loss / usdPer(o.ccy, o.day),
-      description: `Lost on the exchange: ${o.description} -> ${Number(p.amount).toLocaleString('en-US')} ${p.currency}` });
+    const row = { day: r.day, paid_day: r.paid_day, tx_date: r.day, account: r.account, description: r.description,
+      amt: Number(r.amount), ccy: r.currency, usd: r.usd == null ? NaN : Number(r.usd), cat: r.category };
+    (r.counted ? spent : skipped).push(row);
   }
   return { spent, skipped, usdPer, periods: periods || [] };
 }
@@ -7967,7 +7874,7 @@ async function mpRenderExpenses() {
   status.textContent = '';
   const { skipped, usdPer } = mpExpCache;
   const spreadOn = document.getElementById('exp_spread').checked;
-  const spent = spreadOn ? mpExpCache.spent.flatMap(r => r.parts || [r]) : mpExpCache.spent;
+  const spent = spreadOn ? mpExpCache.spent : mpExpCache.spent.map(r => ({ ...r, day: r.paid_day, tx_date: r.paid_day }));
   // a period with no end is where one still is: to today
   const periods = mpExpCache.periods.map(p => ({ ...p, end_day: p.end_day ?? new Date().toISOString().slice(0, 10) }));
   const lifeName = p => `${p.place}${p.company ? ' with ' + p.company : ''}`;
@@ -7991,7 +7898,9 @@ async function mpRenderExpenses() {
   const esc = s => String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
   const inPeriod = list => list.filter(r => r.day >= from && r.day <= to && Number.isFinite(r.usd));
   const rows = inPeriod(spent);
-  const meta = Object.fromEntries(MP_EXP_CATS.map(c => [c[0], { icon: c[1], color: c[2] }]));
+  const known = Object.fromEntries(MP_EXP_CATS.map(c => [c[0], { icon: c[1], color: c[2] }]));
+  // a category the page doesn't know yet (a new rule's): grey, like Other
+  const meta = new Proxy(known, { get: (t, k) => t[k] ?? { icon: '•', color: '#4b5560' } });
   const group = (list) => {
     const g = new Map();
     for (const r of list) {
@@ -8068,7 +7977,8 @@ async function mpRenderExpenses() {
     const k = r.cat + '\u0000' + bucket(mo);
     byBucket.set(k, (byBucket.get(k) || 0) + conv(r));
   }
-  const order = MP_EXP_CATS.map(c => c[0]).filter(n => buckets.some(b => byBucket.has(n + '\u0000' + b)));
+  const names = [...MP_EXP_CATS.map(c => c[0]), ...new Set(spent.map(r => r.cat).filter(c => !(c in known)))];
+  const order = names.filter(n => buckets.some(b => byBucket.has(n + '\u0000' + b)));
   const life = mpExpLifeBands(periods, buckets, lifeName);
   if (!document.getElementById('exp_bands').checked) { life.shapes = []; life.legend = []; }
   const totals = buckets.map(b => order.reduce((t, n) => t + (byBucket.get(n + '\u0000' + b) || 0), 0));
@@ -8109,7 +8019,7 @@ async function mpRenderExpenses() {
   const exWrap = document.getElementById('exp_excluded');
   exWrap.innerHTML = skip.length ? `<div class="section-title" style="margin-top:24px">Not counted: ${money(skipTotal)}</div>
     <p class="note">Money out over the same period that only moved between your own money. Click a line to see its rows --
-      something that is spending after all means a rule in MP_EXP_SKIP is too wide.</p>
+      something that is spending after all means a rule in expense_rules is too wide, or the row's expense_category is to be set by hand.</p>
     ${skip.map((c, i) => `<details><summary class="exp-cat" style="display:flex"><div class="exp-name"><b>${c.cat}</b>
       <span>${c.rows.length} transaction${c.rows.length === 1 ? '' : 's'}</span></div><div class="exp-amt"><b>${money(c.total)}</b></div></summary>
       ${rowsTable(c.rows)}</details>`).join('')}` : '';
