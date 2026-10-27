@@ -7725,9 +7725,6 @@ const MP_EXP_SKIP = [
     || r.currency === 'XAU' || /^Покупка |Комиссия брокера|Пополнение брокерского|^(BUY|SELL) - |^(Buy|Sell) \S+ .*(units?|паёв|@)/.test(r.description)],
   ['Funds & savings', r => /Flexible Cash Funds|Instant Access Savings|investment account|\bSavings\b|\bPocket\b|\bVault\b/i.test(r.description)],
   ['Currency exchange', r => /^fx_/.test(r.category || '') || /^Exchanged |Döviz (Alış|Satış)|Currency (buy|sell)|KORONAPAY|QIWI P2P|menjacnica|обмен валют|конвертац/i.test(r.description)],
-  // roubles sold by phone transfer to an exchanger, the lira in Ziraat from HIZLIPARA 25.03 and 28.03.2023
-  ['Currency exchange', r => r.account === 'T-Bank' && /^External transfer by phone number/.test(r.description)
-    && ((r.day === '2023-03-25' && r.amt === 50000) || (r.day === '2023-03-27' && r.amt === 59000))],
   ['Crypto', r => /crypto\.com|mercuryo|\bMRCR\b|bybit|binance|\bokx\b|kraken/i.test(r.description)],
   ['Own accounts', r => ['internal_transfer', 'brokerage_funding', 'top_up', 'salary'].includes(r.category)
     || /^Deposited at |6012 ?Revolut|Wise PURCHASE|^Wise$|top-?up|между (своими )?счетами|Internal transfer/i.test(r.description)],
