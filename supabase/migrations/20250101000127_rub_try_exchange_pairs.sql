@@ -36,5 +36,15 @@ join lateral (
 ) i on true
 on conflict do nothing;
 
+-- Dollars out of Revolut to a P2P exchanger 10.10.2025 20:24 UTC, the
+-- roubles in T-Bank by SBP an hour later (82 RUB/USD).
+insert into internal_transfers (user_id, out_source, out_id, in_source, in_id, amount, currency, out_at, in_at, matched_by)
+select o.user_id, o.external_source, o.external_id, i.external_source, i.external_id, i.amount, i.currency, o.tx_date, i.tx_date, 'manual'
+from bank_transactions o
+join bank_transactions i on i.user_id = o.user_id and i.account = 'T-Bank' and i.currency = 'RUB' and i.amount = 16000
+  and i.tx_date between o.tx_date and o.tx_date + interval '2 hours' and i.description ~ '^Replenishment by phone number'
+where o.account = 'Revolut' and o.currency = 'USD' and o.amount = -195.2 and o.tx_date::date = '2025-10-10'
+on conflict do nothing;
+
 select request_capital_refresh(u.user_id)
 from (select distinct user_id from bank_transactions where description ~ 'HIZLIPARA') u;
