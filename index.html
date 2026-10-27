@@ -471,6 +471,7 @@
       <label>last <select id="exp_span">
         <option value="12">12 months</option><option value="24">2 years</option><option value="36">3 years</option>
         <option value="60">5 years</option><option value="all">all</option></select></label>
+      <label title="Bands behind the bars for the periods spent with someone (life_periods)"><input type="checkbox" id="exp_bands"> who I was with</label>
       <label>by <select id="exp_step"><option value="month">month</option><option value="quarter">quarter</option><option value="year">year</option></select></label>
     </div>
     <div id="plot_exp_months" style="height:520px"></div>
@@ -8013,7 +8014,7 @@ async function mpRenderExpenses() {
   const span = document.getElementById('exp_span').value;
   const step = document.getElementById('exp_step').value;
   const bars = document.getElementById('plot_exp_months');
-  const barsKey = [span, step, ccy, spent.length, periods.length, spreadOn].join('|');
+  const barsKey = [span, step, ccy, spent.length, periods.length, spreadOn, document.getElementById('exp_bands').checked].join('|');
   if (bars.mpExpKey !== barsKey) {
   bars.mpExpKey = barsKey;
   const bucket = mo => step === 'year' ? mo.slice(0, 4)
@@ -8038,6 +8039,7 @@ async function mpRenderExpenses() {
   }
   const order = MP_EXP_CATS.map(c => c[0]).filter(n => buckets.some(b => byBucket.has(n + '\u0000' + b)));
   const life = mpExpLifeBands(periods, buckets, lifeName);
+  if (!document.getElementById('exp_bands').checked) { life.shapes = []; life.legend = []; }
   const totals = buckets.map(b => order.reduce((t, n) => t + (byBucket.get(n + '\u0000' + b) || 0), 0));
   await Plotly.react(bars, [...order.map(n => ({
     type: 'bar', name: n, x: buckets, y: buckets.map(b => byBucket.get(n + '\u0000' + b) ?? null),  // null: no line in the hover
@@ -8092,6 +8094,11 @@ try { const saved = localStorage.getItem('mp_exp_ccy'); if (saved) document.getE
 document.getElementById('exp_period').addEventListener('change', e => {
   try { localStorage.setItem('mp_exp_period', e.target.value); } catch { /* no storage */ }
   if (e.target.value !== 'custom') mpExpSetPeriod(e.target.value, document.getElementById('exp_to').value || new Date().toISOString().slice(0, 10));
+  if (mpIsSignedIn) mpRenderExpenses();
+});
+try { document.getElementById('exp_bands').checked = localStorage.getItem('mp_exp_bands') === '1'; } catch { /* no storage */ }
+document.getElementById('exp_bands').addEventListener('change', e => {
+  try { localStorage.setItem('mp_exp_bands', e.target.checked ? '1' : '0'); } catch { /* no storage */ }
   if (mpIsSignedIn) mpRenderExpenses();
 });
 for (const id of ['exp_span', 'exp_step']) {
