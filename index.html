@@ -8189,8 +8189,8 @@ async function mpRenderExpenses() {
       incomeBy.set(b, (incomeBy.get(b) || 0) + r.usd / mpExpCache.usdPer(ccy, r.day));
     }
   }
-  // a bar of a part only (the records start in it, or it isn't over yet): paler,
-  // its label with *, what part in the hover
+  // a bar of a part only (the records start in it, or it isn't over yet): a
+  // dashed frame around it, what part above it, its label with *
   const partial = buckets.map(b => {
     const [f, t] = mpExpBucketDays(b);
     const start = first > startDay ? first : startDay;
@@ -8200,7 +8200,7 @@ async function mpRenderExpenses() {
   const totals = buckets.map(b => order.reduce((t, n) => t + (byBucket.get(n + '\u0000' + b) || 0), 0));
   await Plotly.react(bars, [...order.map(n => ({
     type: 'bar', name: n, x: buckets, y: buckets.map(b => byBucket.get(n + '\u0000' + b) ?? null),  // null: no line in the hover
-    marker: { color: meta[n].color, opacity: partial.map(p => (p ? 0.5 : 1)) }, hovertemplate: `${n}: %{y:,.0f} ${sym}<extra></extra>`,
+    marker: { color: meta[n].color }, hovertemplate: `${n}: %{y:,.0f} ${sym}<extra></extra>`,
   })),
   ...life.legend,
   ...(incomeBy.size ? [{ type: 'scatter', mode: 'lines+markers', name: 'Income', x: buckets,
@@ -8222,7 +8222,12 @@ async function mpRenderExpenses() {
              tickvals: buckets, ticktext: buckets.map((b, i) => (partial[i] ? b + '*' : b)) },
     yaxis: { gridcolor: '#1e2830', ticksuffix: ccy === 'RUB' ? ' ₽' : '', tickprefix: ccy === 'RUB' ? '' : sym },
     legend: { orientation: 'h', x: 0, y: 1.02, yanchor: 'bottom' },
-    shapes: life.shapes,
+    shapes: [...life.shapes, ...buckets.flatMap((b, i) => partial[i] && totals[i] ? [{
+      type: 'rect', xref: 'x', yref: 'y', x0: i - 0.46, x1: i + 0.46, y0: 0, y1: totals[i],
+      line: { color: '#8b949e', width: 1.5, dash: 'dot' }, fillcolor: 'rgba(0,0,0,0)', layer: 'above' }] : [])],
+    annotations: buckets.flatMap((b, i) => partial[i] && totals[i] ? [{
+      x: b, y: totals[i], yref: 'y', text: partial[i], showarrow: false, yanchor: 'bottom', yshift: 2,
+      font: { size: 10, color: '#8b949e' } }] : []),
   }, CONFIG);
   bars.removeAllListeners?.('plotly_click');
   bars.on('plotly_click', ev => {
