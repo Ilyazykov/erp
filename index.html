@@ -7774,7 +7774,7 @@ async function mpExpLoad() {
   };
   const [rows, eur, rub] = await Promise.all([
     page(() => sb.from('expenses')
-      .select('day, paid_day, account, description, amount, currency, usd, category, counted, extrapolated')
+      .select('day, paid_day, account, description, amount, currency, usd, category, counted, extrapolated, note, external_source, external_id')
       .order('day').order('id')),
     // for showing in euros or roubles
     ...['EUR', 'RUB'].map(c => page(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', c).order('day'))),
@@ -7794,7 +7794,7 @@ async function mpExpLoad() {
   for (const r of rows) {
     const row = { day: r.day, paid_day: r.paid_day, tx_date: r.day, account: r.account, description: r.description,
       amt: Number(r.amount), ccy: r.currency, usd: r.usd == null ? NaN : Number(r.usd), cat: r.category,
-      extrapolated: r.extrapolated };
+      extrapolated: r.extrapolated, note: r.note, src: r.external_source, xid: r.external_id };
     (r.counted ? spent : skipped).push(row);
   }
   return { spent, skipped, usdPer, periods: periods || [] };
@@ -7868,6 +7868,24 @@ function mpExpLifeBands(periods, buckets, lifeName) {
   }
   return { shapes, legend, where };
 }
+// A note on a row out, written in the expenses tab's tables: saved to the row
+// itself (bank_transactions.expense_note) and kept in the tab's cache.
+document.getElementById('expenses').addEventListener('click', async e => {
+  const cell = e.target.closest('.exp-note');
+  if (!cell || !cell.dataset.src || !mpIsSignedIn) return;
+  e.stopPropagation();
+  const { src, xid } = cell.dataset;
+  const all = [...(mpExpCache?.spent || []), ...(mpExpCache?.skipped || [])].filter(r => r.src === src && r.xid === xid);
+  const text = prompt('Note', all[0]?.note || '');
+  if (text === null) return;
+  const note = text.trim() || null;
+  const { error } = await sb.from('bank_transactions').update({ expense_note: note }).eq('external_source', src).eq('external_id', xid);
+  if (error) { alert(error.message); return; }
+  all.forEach(r => { r.note = note; });
+  document.querySelectorAll('#expenses .exp-note').forEach(c => {
+    if (c.dataset.src === src && c.dataset.xid === xid) c.textContent = note || '✎';
+  });
+});
 document.getElementById('exp_life').addEventListener('change', e => {
   const p = mpExpCache?.periods[e.target.value];
   if (!p) return;
@@ -7949,8 +7967,11 @@ async function mpRenderExpenses() {
     ],
   }, { ...CONFIG, displayModeBar: false });
 
-  const rowsTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
-    list.slice().sort((a, b) => b.tx_date.localeCompare(a.tx_date)).map(r => `<tr><td>${r.day}</td><td style="text-align:left">${esc(r.description)}</td><td style="text-align:left">${esc(r.account)}</td>
+  // the note is one's own (bank_transactions.expense_note): click to write it
+  const rowsTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
+    list.slice().sort((a, b) => b.tx_date.localeCompare(a.tx_date)).map(r => `<tr><td>${r.day}</td><td style="text-align:left">${esc(r.description)}</td>
+      <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${r.note ? esc(r.note) : '✎'}</td>
+      <td style="text-align:left">${esc(r.account)}</td>
       <td>${r.amt.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${r.ccy}</td><td>${money(conv(r))}</td></tr>`).join('')}</tbody></table></div>`;
   const catList = document.getElementById('exp_categories');
   catList.innerHTML = cats.length ? cats.map((c, i) => `<div class="exp-cat" data-i="${i}">
