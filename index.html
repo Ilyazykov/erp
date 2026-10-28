@@ -7891,7 +7891,7 @@ async function mpExpLoad() {
   };
   const [rows, eur, rub] = await Promise.all([
     page(() => sb.from('expenses')
-      .select('day, paid_day, account, description, amount, currency, usd, category, counted, extrapolated, note, external_source, external_id')
+      .select('day, paid_day, paid_at, account, description, amount, currency, usd, category, counted, extrapolated, note, external_source, external_id')
       .order('day').order('id')),
     // for showing in euros or roubles
     ...['EUR', 'RUB'].map(c => page(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', c).order('day'))),
@@ -7909,7 +7909,10 @@ async function mpExpLoad() {
   };
   const spent = [], skipped = [];
   for (const r of rows) {
-    const row = { day: r.day, paid_day: r.paid_day, tx_date: r.day, account: r.account, description: r.description,
+    // the time as the statement gives it (stored as UTC, shown as is); none for
+    // 00:00 -- a statement with no time
+    const at = r.paid_at ? r.paid_at.slice(11, 16) : '';
+    const row = { day: r.day, paid_day: r.paid_day, tx_date: r.day, at: at === '00:00' ? '' : at, ts: r.paid_at || r.day, account: r.account, description: r.description,
       amt: Number(r.amount), ccy: r.currency, usd: r.usd == null ? NaN : Number(r.usd), cat: r.category,
       extrapolated: r.extrapolated, note: r.note, src: r.external_source, xid: r.external_id };
     (r.counted ? spent : skipped).push(row);
@@ -8160,7 +8163,9 @@ async function mpRenderExpenses() {
 
   // the note is one's own (bank_transactions.expense_note): click to write it
   const rowsTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
-    list.slice().sort((a, b) => b.tx_date.localeCompare(a.tx_date)).map(r => `<tr><td>${r.day}</td><td style="text-align:left">${esc(r.description)}${groupedTop && MP_EXP_GROUPS[r.cat] ? ` <span style="color:#6a7381">· ${esc(r.cat)}</span>` : ''}</td>
+    // newest first, to the second -- rows with no time in their statement too,
+    // by the importer's 00:00:SS (their order within the day)
+    list.slice().sort((a, b) => b.day.localeCompare(a.day) || String(b.ts).localeCompare(String(a.ts))).map(r => `<tr><td style="white-space:nowrap">${r.day}${r.at ? ` <span style="color:#6a7381">${r.at}</span>` : ''}</td><td style="text-align:left">${esc(r.description)}${groupedTop && MP_EXP_GROUPS[r.cat] ? ` <span style="color:#6a7381">· ${esc(r.cat)}</span>` : ''}</td>
       <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${r.note ? esc(r.note) : '✎'}</td>
       <td style="text-align:left">${esc(r.account)}</td>
       <td>${r.amt.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${r.ccy}</td><td>${money(conv(r))}</td></tr>`).join('')}</tbody></table></div>`;
