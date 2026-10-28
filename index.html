@@ -8157,7 +8157,7 @@ async function mpRenderExpenses() {
 
   // the note is one's own (bank_transactions.expense_note): click to write it
   const rowsTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
-    list.slice().sort((a, b) => b.tx_date.localeCompare(a.tx_date)).map(r => `<tr><td>${r.day}</td><td style="text-align:left">${esc(r.description)}</td>
+    list.slice().sort((a, b) => b.tx_date.localeCompare(a.tx_date)).map(r => `<tr><td>${r.day}</td><td style="text-align:left">${esc(r.description)}${groupedTop && MP_EXP_GROUPS[r.cat] ? ` <span style="color:#6a7381">· ${esc(r.cat)}</span>` : ''}</td>
       <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${r.note ? esc(r.note) : '✎'}</td>
       <td style="text-align:left">${esc(r.account)}</td>
       <td>${r.amt.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${r.ccy}</td><td>${money(conv(r))}</td></tr>`).join('')}</tbody></table></div>`;
