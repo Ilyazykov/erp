@@ -7875,15 +7875,12 @@ const MP_EXP_GROUPS = { 'Rent & housing': 'Housing', 'Nizhny flat bills': 'Housi
   'Flights': 'Travel', 'Hotels': 'Travel', 'Visas': 'Travel', 'Other travel': 'Travel',
   'Entertainment': 'Fun', 'Games': 'Fun',
   'Clothes': 'Shopping', 'Electronics': 'Shopping', 'Gifts & souvenirs': 'Shopping', 'Shopping': 'Shopping' };
-// A group's colour ("by group"): the most vivid shade among its categories'
-// (the largest spread between its strongest and weakest channel) -- neither
-// a pale one that runs into its neighbours nor the darkest, too gloomy
-const MP_EXP_GROUP_META = Object.fromEntries(Object.entries({ Housing: '🏠', Food: '🍽', Transport: '🚕', Travel: '✈️', Fun: '🎟', Shopping: '🛍' })
-  .map(([g, icon]) => {
-    const chroma = hex => { const ch = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)); return Math.max(...ch) - Math.min(...ch); };
-    const shades = MP_EXP_CATS.filter(c => MP_EXP_GROUPS[c[0]] === g).map(c => c[2]);
-    return [g, { icon, color: shades.reduce((v, c) => (chroma(c) > chroma(v) ? c : v)) }];
-  }));
+// A group's colour ("by group"): the colour of its main category -- the one
+// the group stands for (housing: the rent's orange, not the bills' yellow)
+const MP_EXP_GROUP_META = Object.fromEntries(Object.entries({
+  Housing: ['🏠', 'Rent & housing'], Food: ['🍽', 'Restaurants & cafés'], Transport: ['🚕', 'Public transport'],
+  Travel: ['✈️', 'Visas'], Fun: ['🎟', 'Entertainment'], Shopping: ['🛍', 'Clothes'],
+}).map(([g, [icon, main]]) => [g, { icon, color: MP_EXP_CATS.find(c => c[0] === main)[2] }]));
 let mpExpCache = null;
 async function mpExpLoad() {
   const page = async (q) => {
