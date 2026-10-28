@@ -447,9 +447,9 @@
     <div class="form-row" style="gap:12px">
       <button class="btn" id="exp_prev" type="button" title="Previous period">‹</button>
       <select id="exp_period">
-        <option value="month">month</option>
+        <option value="month">month to today</option>
         <option value="3m">3 months</option>
-        <option value="year">year</option>
+        <option value="year">year to today</option>
         <option value="12m">last 12 months</option>
         <option value="custom">from – to</option>
       </select>
@@ -473,7 +473,9 @@
         <option value="12">12 months</option><option value="24">2 years</option><option value="36">3 years</option>
         <option value="60">5 years</option><option value="all">all</option></select></label>
       <label title="Bands behind the bars for the periods spent with someone (life_periods)"><input type="checkbox" id="exp_bands"> who I was with</label>
-      <label>by <select id="exp_step"><option value="month">month</option><option value="quarter">quarter</option><option value="year">year</option></select></label>
+      <label title="One's own money coming in: a salary, a flat's rent (bank_transactions.income_category, by the rules in income_rules) -- a line over the bars"><input type="checkbox" id="exp_income"> income</label>
+      <label>by <select id="exp_step"><option value="month">month</option><option value="quarter">quarter</option><option value="year">year</option>
+        <option value="month_td">month to today</option><option value="year_td">year to today</option></select></label>
     </div>
     <div id="plot_exp_months" style="height:520px"></div>
     <div id="exp_excluded"></div>
@@ -7898,19 +7900,25 @@ async function mpExpLoad() {
       extrapolated: r.extrapolated, note: r.note, src: r.external_source, xid: r.external_id };
     (r.counted ? spent : skipped).push(row);
   }
-  return { spent, skipped, usdPer, periods: periods || [] };
+  // income (migration 141): none yet or no table -- no line
+  const { data: inc } = await sb.from('income').select('day, amount, currency, usd, category').order('day');
+  const income = (inc || []).map(r => ({ day: r.day, usd: r.usd == null ? NaN : Number(r.usd), cat: r.category }));
+  return { spent, skipped, usdPer, periods: periods || [], income };
 }
 function mpExpRange() {
   const mode = document.getElementById('exp_period').value;
   const from = document.getElementById('exp_from').value, to = document.getElementById('exp_to').value;
   return { mode, from, to };
 }
-// The period ending in the month of `anchor` (YYYY-MM-DD) for the chosen mode.
+// The period ending in the month of `anchor` (YYYY-MM-DD) for the chosen mode;
+// a month and a year end on the day of `anchor` itself (today: 29.09.2026 -
+// 28.10.2026, 29.10.2025 - 28.10.2026).
 function mpExpSetPeriod(mode, anchor) {
-  const [y, m] = anchor.split('-').map(Number);
+  const [y, m, d] = anchor.split('-').map(Number);
   const iso = (yy, mm, dd) => new Date(Date.UTC(yy, mm - 1, dd)).toISOString().slice(0, 10);
   let from, to;
-  if (mode === 'year') { from = iso(y, 1, 1); to = iso(y, 12, 31); }
+  if (mode === 'year') { from = iso(y - 1, m, d + 1); to = anchor; }
+  else if (mode === 'month') { from = iso(y, m - 1, d + 1); to = anchor; }
   else {
     const months = mode === '3m' ? 3 : mode === '12m' ? 12 : 1;
     from = iso(y, m - months + 1, 1); to = iso(y, m + 1, 0);
@@ -7928,8 +7936,11 @@ function mpExpShift(dir) {
     document.getElementById('exp_to').value = t.toISOString().slice(0, 10);
   } else {
     const months = mode === 'year' || mode === '12m' ? 12 : mode === '3m' ? 3 : 1;
-    const [y, m] = to.split('-').map(Number);
-    mpExpSetPeriod(mode, new Date(Date.UTC(y, m - 1 + dir * months, 1)).toISOString().slice(0, 10));
+    const [y, m, d] = to.split('-').map(Number);
+    // the same day of the month (the last one for a month too short: 31.03 -> 28.02)
+    const last = new Date(Date.UTC(y, m + dir * months, 0)).getUTCDate();
+    const day = mode === 'year' || mode === 'month' ? Math.min(d, last) : 1;
+    mpExpSetPeriod(mode, new Date(Date.UTC(y, m - 1 + dir * months, day)).toISOString().slice(0, 10));
   }
   mpRenderExpenses();
 }
@@ -7937,7 +7948,10 @@ function mpExpShift(dir) {
 // spent with someone (one colour per person, named in the legend), and in the
 // bar's hover where one was -- the names of the short trips wouldn't fit on it.
 const MP_EXP_LIFE_COLORS = ['#a371f7', '#f778ba', '#3dd68c', '#ffb020', '#58a6ff', '#ff7a45'];
+// The bars by month / year to today: "this year", "-1 year", ... -> their days
+const mpExpRollingDays = new Map();
 function mpExpBucketDays(b) {
+  if (mpExpRollingDays.has(b)) return mpExpRollingDays.get(b);
   const q = b.match(/^(\d{4}) Q(\d)$/);
   const [y, m0, n] = q ? [Number(q[1]), (q[2] - 1) * 3, 3] : /^\d{4}$/.test(b) ? [Number(b), 0, 12] : [Number(b.slice(0, 4)), b.slice(5, 7) - 1, 1];
   const iso = (mm, dd) => new Date(Date.UTC(y, mm, dd)).toISOString().slice(0, 10);
@@ -8015,12 +8029,28 @@ async function mpRenderExpenses() {
   const lifeName = p => `${p.place}${p.company ? ' with ' + p.company : ''}`;
   const dmy = d => d.slice(8, 10) + '.' + d.slice(5, 7) + '.' + d.slice(0, 4);
   const lifeSel = document.getElementById('exp_life');
-  if (lifeSel.options.length === 1 && periods.length) {
-    periods.forEach((p, i) => lifeSel.add(new Option(`${dmy(p.start_day)} – ${dmy(p.end_day)}: ${lifeName(p)}`, i)));
-  }
   const { from, to } = mpExpRange();
   const ccy = document.getElementById('exp_ccy').value;
   const sym = { EUR: '€', USD: '$', RUB: '₽' }[ccy];
+  // spending a day: periods of any length side by side -- the days up to today
+  // (none to come in a period not over yet)
+  const today = new Date().toISOString().slice(0, 10);
+  const daysIn = (f, t) => Math.max(0, Math.round((Date.parse(t < today ? t : today) - Date.parse(f)) / 86400000) + 1);
+  const perDay = (f, t) => {
+    const n = daysIn(f, t);
+    if (!n) return null;
+    let sum = 0;
+    for (const r of spent) if (r.day >= f && r.day <= t && Number.isFinite(r.usd)) sum += r.usd / usdPer(ccy, r.day);
+    return sum / n;
+  };
+  const perDayText = v => v == null ? '' : (ccy === 'RUB' ? `${Math.round(v).toLocaleString('en-US')} ₽` : sym + Math.round(v).toLocaleString('en-US')) + ' a day';
+  const lifeKey = [ccy, spreadOn, withExtrapolated, spent.length].join('|');
+  if (periods.length && lifeSel.mpKey !== lifeKey) {
+    lifeSel.mpKey = lifeKey;
+    lifeSel.length = 1;
+    periods.forEach((p, i) => lifeSel.add(new Option(
+      `${dmy(p.start_day)} – ${dmy(p.end_day)}: ${lifeName(p)} · ${perDayText(perDay(p.start_day, p.end_day))}`, i)));
+  }
   const here = periods.filter(p => p.start_day <= to && p.end_day >= from);
   document.getElementById('exp_life_now').textContent = here.length
     ? 'Where: ' + here.map(p => `${lifeName(p)} ${dmy(p.start_day)} – ${dmy(p.end_day)}`).join(' · ') : '';
@@ -8065,6 +8095,8 @@ async function mpRenderExpenses() {
       { text: 'Total spent', showarrow: false, x: 0.5, y: 0.58, font: { size: 14, color: '#8b949e' } },
       { text: `<b>${money(total)}</b>`, showarrow: false, x: 0.5, y: 0.46, font: { size: 30, color: '#e6edf3' } },
       { text: `${from} – ${to}`, showarrow: false, x: 0.5, y: 0.35, font: { size: 11, color: '#6a7381' } },
+      { text: daysIn(from, to) ? `${perDayText(total / daysIn(from, to))} · ${daysIn(from, to)} days` : '',
+        showarrow: false, x: 0.5, y: 0.28, font: { size: 13, color: '#8b949e' } },
     ],
   }, { ...CONFIG, displayModeBar: false });
 
@@ -8092,48 +8124,102 @@ async function mpRenderExpenses() {
   const span = document.getElementById('exp_span').value;
   const step = document.getElementById('exp_step').value;
   const bars = document.getElementById('plot_exp_months');
-  const barsKey = [span, step, ccy, spent.length, periods.length, spreadOn, withExtrapolated, document.getElementById('exp_bands').checked].join('|');
+  const barsKey = [new Date().toISOString().slice(0, 10), span, step, ccy, spent.length, periods.length, spreadOn, withExtrapolated, document.getElementById('exp_bands').checked,
+    document.getElementById('exp_income').checked].join('|');
   if (bars.mpExpKey !== barsKey) {
   bars.mpExpKey = barsKey;
-  const bucket = mo => step === 'year' ? mo.slice(0, 4)
-    : step === 'quarter' ? `${mo.slice(0, 4)} Q${Math.ceil(Number(mo.slice(5, 7)) / 3)}` : mo;
-  const endMo = new Date().toISOString().slice(0, 7);
-  const startMo = span === 'all'
-    ? spent.reduce((m, r) => (r.day < m ? r.day : m), endMo).slice(0, 7)
-    : (([y, m]) => new Date(Date.UTC(y, m - Number(span), 1)).toISOString().slice(0, 7))(endMo.split('-').map(Number));
+  const first = spent.reduce((m, r) => (r.day < m ? r.day : m), today);
   const buckets = [];
-  for (let [y, m] = startMo.split('-').map(Number); ; m++) {
-    const mo = new Date(Date.UTC(y, m - 1, 1)).toISOString().slice(0, 7);
-    if (mo > endMo) break;
-    const b = bucket(mo);
-    if (buckets[buckets.length - 1] !== b) buckets.push(b);
+  let bucket, startDay;
+  if (step === 'month_td' || step === 'year_td') {
+    // months / years ending today: 29.09 - 28.10, 29.08 - 28.09, ... (the same day
+    // of the month, the last one for a month too short)
+    const n = step === 'year_td' ? 12 : 1, unit = step === 'year_td' ? 'year' : 'month';
+    const [y, m, d] = today.split('-').map(Number);
+    const end = k => {
+      const last = new Date(Date.UTC(y, m - k * n, 0)).getUTCDate();
+      return new Date(Date.UTC(y, m - 1 - k * n, Math.min(d, last)));
+    };
+    const count = span === 'all' ? Infinity : Math.max(1, Math.round(Number(span) / n));
+    mpExpRollingDays.clear();
+    const ranges = [];
+    for (let k = 0; k < count; k++) {
+      const to = end(k).toISOString().slice(0, 10);
+      const from = new Date(end(k + 1).getTime() + 86400000).toISOString().slice(0, 10);
+      const label = k === 0 ? `this ${unit}` : `-${k} ${unit}${k === 1 ? '' : 's'}`;
+      mpExpRollingDays.set(label, [from, to]);
+      ranges.unshift([label, from]);
+      if (from <= first) break;
+    }
+    buckets.push(...ranges.map(r => r[0]));
+    startDay = ranges[0][1];
+    bucket = day => ranges.findLast(r => r[1] <= day)[0];
+  } else {
+    const monthOf = mo => step === 'year' ? mo.slice(0, 4)
+      : step === 'quarter' ? `${mo.slice(0, 4)} Q${Math.ceil(Number(mo.slice(5, 7)) / 3)}` : mo;
+    bucket = day => monthOf(day.slice(0, 7));
+    const endMo = today.slice(0, 7);
+    const startMo = span === 'all' ? first.slice(0, 7)
+      : (([y, m]) => new Date(Date.UTC(y, m - Number(span), 1)).toISOString().slice(0, 7))(endMo.split('-').map(Number));
+    startDay = startMo + '-01';
+    for (let [y, m] = startMo.split('-').map(Number); ; m++) {
+      const mo = new Date(Date.UTC(y, m - 1, 1)).toISOString().slice(0, 7);
+      if (mo > endMo) break;
+      const b = monthOf(mo);
+      if (buckets[buckets.length - 1] !== b) buckets.push(b);
+    }
   }
   const byBucket = new Map();
   for (const r of spent) {
-    const mo = r.day.slice(0, 7);
-    if (mo < startMo || mo > endMo || !Number.isFinite(r.usd)) continue;
-    const k = r.cat + '\u0000' + bucket(mo);
+    // to today, or to this month's end (a month of rent paid ahead is in it)
+    if (r.day < startDay || (/_td$/.test(step) ? r.day > today : r.day.slice(0, 7) > today.slice(0, 7)) || !Number.isFinite(r.usd)) continue;
+    const k = r.cat + '\u0000' + bucket(r.day);
     byBucket.set(k, (byBucket.get(k) || 0) + conv(r));
   }
   const names = [...MP_EXP_CATS.map(c => c[0]), ...new Set(spent.map(r => r.cat).filter(c => !(c in known)))];
   const order = names.filter(n => buckets.some(b => byBucket.has(n + '\u0000' + b)));
   const life = mpExpLifeBands(periods, buckets, lifeName);
+  // income: a line over the stacks -- the bars stay as wide as they are, and
+  // a bar above it is a period spent more than came in
+  const incomeBy = new Map();
+  if (document.getElementById('exp_income').checked) {
+    for (const r of mpExpCache.income || []) {
+      if (r.day < startDay || (/_td$/.test(step) ? r.day > today : r.day.slice(0, 7) > today.slice(0, 7)) || !Number.isFinite(r.usd)) continue;
+      const b = bucket(r.day);
+      incomeBy.set(b, (incomeBy.get(b) || 0) + r.usd / mpExpCache.usdPer(ccy, r.day));
+    }
+  }
+  // a bar of a part only (the records start in it, or it isn't over yet): paler,
+  // its label with *, what part in the hover
+  const partial = buckets.map(b => {
+    const [f, t] = mpExpBucketDays(b);
+    const start = first > startDay ? first : startDay;
+    return f < start ? `only from ${dmy(start)}` : t > today ? `only to ${dmy(today)}` : '';
+  });
   if (!document.getElementById('exp_bands').checked) { life.shapes = []; life.legend = []; }
   const totals = buckets.map(b => order.reduce((t, n) => t + (byBucket.get(n + '\u0000' + b) || 0), 0));
   await Plotly.react(bars, [...order.map(n => ({
     type: 'bar', name: n, x: buckets, y: buckets.map(b => byBucket.get(n + '\u0000' + b) ?? null),  // null: no line in the hover
-    marker: { color: meta[n].color }, hovertemplate: `${n}: %{y:,.0f} ${sym}<extra></extra>`,
+    marker: { color: meta[n].color, opacity: partial.map(p => (p ? 0.5 : 1)) }, hovertemplate: `${n}: %{y:,.0f} ${sym}<extra></extra>`,
   })),
   ...life.legend,
+  ...(incomeBy.size ? [{ type: 'scatter', mode: 'lines+markers', name: 'Income', x: buckets,
+    y: buckets.map(b => incomeBy.get(b) ?? 0), line: { color: '#e6edf3', width: 2 },
+    marker: { color: '#e6edf3', size: 7, line: { color: '#0d1117', width: 1 } },
+    hovertemplate: `<b>Income: %{y:,.0f} ${sym}</b><extra></extra>` }] : []),
   // the bar's total and where one was, in the hover only: first there -- the stack's
   // hover lists the traces last to first
   { type: 'scatter', mode: 'markers', marker: { opacity: 0 }, name: 'Total', showlegend: false,
-    x: buckets, y: totals, customdata: life.where,
+    x: buckets, y: totals,
+    customdata: buckets.map((b, i) => mpExpRollingDays.has(b) && /_td$/.test(step)
+      ? mpExpBucketDays(b).map(x => x.split('-').reverse().join('.')).join(' – ') + (life.where[i] ? '<br>' + life.where[i] : '')
+      : life.where[i]).map((w, i) => [partial[i] && `<i>${partial[i]}</i>`, w].filter(Boolean).join('<br>')),
     hovertemplate: `<b>Total: %{y:,.0f} ${sym}</b><br>%{customdata}<extra></extra>` }], {
     barmode: 'stack', paper_bgcolor: '#0d1117', plot_bgcolor: '#0d1117', font: { color: '#8b949e' },
     margin: { t: 10, b: 40, l: 60, r: 10 }, hovermode: 'x unified', hoverlabel: { font: { size: 11 } },
     // labels at an angle, the margin grown to fit them; the legend above, out of their way
-    xaxis: { type: 'category', gridcolor: '#1e2830', tickangle: -45, automargin: true },
+    xaxis: { type: 'category', gridcolor: '#1e2830', tickangle: -45, automargin: true,
+             tickvals: buckets, ticktext: buckets.map((b, i) => (partial[i] ? b + '*' : b)) },
     yaxis: { gridcolor: '#1e2830', ticksuffix: ccy === 'RUB' ? ' ₽' : '', tickprefix: ccy === 'RUB' ? '' : sym },
     legend: { orientation: 'h', x: 0, y: 1.02, yanchor: 'bottom' },
     shapes: life.shapes,
@@ -8142,12 +8228,15 @@ async function mpRenderExpenses() {
   bars.on('plotly_click', ev => {
     const b = ev.points?.[0]?.x;
     if (!b) return;
-    // a bar opens as the period: a month, a quarter's 3 months, a year
+    // a bar opens as the period: a quarter's 3 months, a calendar month or year
     const q = b.match(/^(\d{4}) Q(\d)$/);
-    const [mode, anchor] = q ? ['3m', `${q[1]}-${String(q[2] * 3).padStart(2, '0')}-01`]
-      : /^\d{4}$/.test(b) ? ['year', `${b}-01-01`] : ['month', `${b}-01`];
-    document.getElementById('exp_period').value = mode;
-    mpExpSetPeriod(mode, anchor);
+    if (q) {
+      document.getElementById('exp_period').value = '3m';
+      mpExpSetPeriod('3m', `${q[1]}-${String(q[2] * 3).padStart(2, '0')}-01`);
+    } else {
+      document.getElementById('exp_period').value = 'custom';
+      [document.getElementById('exp_from').value, document.getElementById('exp_to').value] = mpExpBucketDays(b);
+    }
     mpRenderExpenses();
   });
   }
@@ -8172,12 +8261,18 @@ try { const saved = localStorage.getItem('mp_exp_period'); if (saved) document.g
 try { const saved = localStorage.getItem('mp_exp_ccy'); if (saved) document.getElementById('exp_ccy').value = saved; } catch { /* no storage */ }
 document.getElementById('exp_period').addEventListener('change', e => {
   try { localStorage.setItem('mp_exp_period', e.target.value); } catch { /* no storage */ }
-  if (e.target.value !== 'custom') mpExpSetPeriod(e.target.value, document.getElementById('exp_to').value || new Date().toISOString().slice(0, 10));
+  const today = new Date().toISOString().slice(0, 10);
+  if (e.target.value !== 'custom') mpExpSetPeriod(e.target.value, ['year', 'month'].includes(e.target.value) ? today : document.getElementById('exp_to').value || today);
   if (mpIsSignedIn) mpRenderExpenses();
 });
 try { document.getElementById('exp_bands').checked = localStorage.getItem('mp_exp_bands') === '1'; } catch { /* no storage */ }
 document.getElementById('exp_bands').addEventListener('change', e => {
   try { localStorage.setItem('mp_exp_bands', e.target.checked ? '1' : '0'); } catch { /* no storage */ }
+  if (mpIsSignedIn) mpRenderExpenses();
+});
+try { document.getElementById('exp_income').checked = localStorage.getItem('mp_exp_income') === '1'; } catch { /* no storage */ }
+document.getElementById('exp_income').addEventListener('change', e => {
+  try { localStorage.setItem('mp_exp_income', e.target.checked ? '1' : '0'); } catch { /* no storage */ }
   if (mpIsSignedIn) mpRenderExpenses();
 });
 for (const id of ['exp_span', 'exp_step']) {
