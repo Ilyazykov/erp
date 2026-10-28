@@ -459,6 +459,7 @@
       <label title="Periods of life_periods: where you lived or travelled, and with whom">where I was <select id="exp_life"><option value="">—</option></select></label>
       <label title="Rent paid for several months at once (Antalya 2022, Novi Sad 01-03.2024): a share in each month it paid for, or all on the day it was paid"><input type="checkbox" id="exp_spread" checked> spread prepaid rent over its months</label>
       <label title="Spending worked out rather than recorded: the cash that left no trace (cash ledger, 2022-2025), card payments of months with no statement"><input type="checkbox" id="exp_extrapolated" checked> extrapolated spending</label>
+      <label title="The shades of one colour as one: food, transport, travel, fun, shopping"><input type="checkbox" id="exp_grouped_top"> by group</label>
       <label>in <select id="exp_ccy"><option value="USD">USD $</option><option value="EUR">EUR €</option><option value="RUB">RUB ₽</option></select></label>
     </div>
     <div id="exp_life_now" class="note" style="margin:0 0 6px"></div>
@@ -7847,6 +7848,7 @@ const MP_EXP_CATS = [
   ['Other travel', '🧳', '#d2a8ff'],
   ['Health & sport', '💊', '#db61a2'],
   ['Entertainment', '🎟', '#00c2c7'],
+  ['Games', '🎮', '#0a7d83'],
   ['Education', '🎓', '#ffa198'],
   ['Subscriptions & services', '🧾', '#ffdf5d'],
   ['Clothes', '👕', '#bb8009'],
@@ -7860,17 +7862,18 @@ const MP_EXP_CATS = [
   ['Other', '•', '#4b5560'],
 ];
 // Categories shown side by side as one group (the food: shades of one green; the
-// transport: of one blue; the travel: of one purple; the shopping: of one gold) --
+// transport: of one blue; the travel: of one purple; the fun: of one teal; the shopping: of one gold) --
 // in the donut and the list, ordered by the group's total, then each one's.
 const MP_EXP_GROUPS = { 'Food delivery': 'Food', 'Restaurants & cafés': 'Food', 'Groceries': 'Food',
   'Taxi': 'Transport', 'Public transport': 'Transport', 'Other transport': 'Transport',
   'Flights': 'Travel', 'Hotels': 'Travel', 'Visas': 'Travel', 'Other travel': 'Travel',
+  'Entertainment': 'Fun', 'Games': 'Fun',
   'Clothes': 'Shopping', 'Electronics': 'Shopping', 'Gifts & souvenirs': 'Shopping', 'Shopping': 'Shopping' };
 // A group's colour on the chart over time "by group": its main shade
 // -- light and dark by turns, so that groups side by side (transport and
 // travel; shopping and the yellow subscriptions) don't run together
-const MP_EXP_GROUP_META = { Food: { color: '#2ea043' }, Transport: { color: '#1f6feb' },
-  Travel: { color: '#c297ff' }, Shopping: { color: '#9a6700' } };
+const MP_EXP_GROUP_META = { Food: { icon: '🍽', color: '#2ea043' }, Transport: { icon: '🚕', color: '#1f6feb' },
+  Travel: { icon: '✈️', color: '#c297ff' }, Fun: { icon: '🎟', color: '#00c2c7' }, Shopping: { icon: '🛍', color: '#9a6700' } };
 let mpExpCache = null;
 async function mpExpLoad() {
   const page = async (q) => {
@@ -8114,18 +8117,21 @@ async function mpRenderExpenses() {
   const rows = inPeriod(spent);
   const known = Object.fromEntries(MP_EXP_CATS.map(c => [c[0], { icon: c[1], color: c[2] }]));
   // a category the page doesn't know yet (a new rule's): grey, like Other
-  const meta = new Proxy(known, { get: (t, k) => t[k] ?? { icon: '•', color: '#4b5560' } });
-  const group = (list) => {
+  const meta = new Proxy(known, { get: (t, k) => t[k] ?? MP_EXP_GROUP_META[k] ?? { icon: '•', color: '#4b5560' } });
+  // by group: the categories of one group (MP_EXP_GROUPS) as one line
+  const groupedTop = document.getElementById('exp_grouped_top').checked;
+  const group = (list, byGroup = false) => {
     const g = new Map();
     for (const r of list) {
-      if (!g.has(r.cat)) g.set(r.cat, { cat: r.cat, total: 0, rows: [] });
-      const e = g.get(r.cat);
+      const cat = byGroup ? MP_EXP_GROUPS[r.cat] ?? r.cat : r.cat;
+      if (!g.has(cat)) g.set(cat, { cat, total: 0, rows: [] });
+      const e = g.get(cat);
       e.total += conv(r);
       e.rows.push(r);
     }
     return [...g.values()].sort((a, b) => b.total - a.total);
   };
-  const cats = group(rows);
+  const cats = group(rows, groupedTop);
   const groupOf = c => MP_EXP_GROUPS[c.cat] ?? c.cat;
   const groupTotal = new Map();
   for (const c of cats) groupTotal.set(groupOf(c), (groupTotal.get(groupOf(c)) || 0) + c.total);
@@ -8342,6 +8348,11 @@ document.getElementById('exp_bands').addEventListener('change', e => {
 });
 try { document.getElementById('exp_income').checked = localStorage.getItem('mp_exp_income') === '1'; } catch { /* no storage */ }
 try { document.getElementById('exp_grouped').checked = localStorage.getItem('mp_exp_grouped') === '1'; } catch { /* no storage */ }
+try { document.getElementById('exp_grouped_top').checked = localStorage.getItem('mp_exp_grouped_top') === '1'; } catch { /* no storage */ }
+document.getElementById('exp_grouped_top').addEventListener('change', e => {
+  try { localStorage.setItem('mp_exp_grouped_top', e.target.checked ? '1' : '0'); } catch { /* no storage */ }
+  if (mpIsSignedIn) mpRenderExpenses();
+});
 document.getElementById('exp_grouped').addEventListener('change', e => {
   try { localStorage.setItem('mp_exp_grouped', e.target.checked ? '1' : '0'); } catch { /* no storage */ }
   if (mpIsSignedIn) mpRenderExpenses();
