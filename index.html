@@ -7837,8 +7837,8 @@ async function mpRenderCapital() {
 const MP_EXP_CATS = [
   ['Rent & housing', '🏠', '#ff7a45'],
   ['Nizhny flat bills', '🏢', '#c4501b'],
+  ['Phone & internet', '📱', '#ffa657'],
   ['Bills & utilities', '💡', '#ffb020'],
-  ['Phone & internet', '📱', '#c27c0e'],
   ['Relationships', '💝', '#ff6b9d'],
   ['Food delivery', '🛵', '#7ee787'],
   ['Restaurants & cafés', '🍽', '#3fb950'],
@@ -7868,8 +7868,7 @@ const MP_EXP_CATS = [
 // Categories shown side by side as one group (the food: shades of one green; the
 // transport: of one blue; the travel: of one purple; the fun: of one teal; the shopping: of one gold; the housing: of one orange) --
 // in the donut and the list, ordered by the group's total, then each one's.
-const MP_EXP_GROUPS = { 'Rent & housing': 'Housing', 'Nizhny flat bills': 'Housing',
-  'Bills & utilities': 'Bills', 'Phone & internet': 'Bills',
+const MP_EXP_GROUPS = { 'Rent & housing': 'Housing', 'Nizhny flat bills': 'Housing', 'Phone & internet': 'Housing',
   'Food delivery': 'Food', 'Restaurants & cafés': 'Food', 'Groceries': 'Food',
   'Taxi': 'Transport', 'Public transport': 'Transport', 'Other transport': 'Transport',
   'Flights': 'Travel', 'Hotels': 'Travel', 'Visas': 'Travel', 'Other travel': 'Travel',
@@ -7878,7 +7877,7 @@ const MP_EXP_GROUPS = { 'Rent & housing': 'Housing', 'Nizhny flat bills': 'Housi
 // A group's colour ("by group"): the most vivid shade among its categories'
 // (the largest spread between its strongest and weakest channel) -- neither
 // a pale one that runs into its neighbours nor the darkest, too gloomy
-const MP_EXP_GROUP_META = Object.fromEntries(Object.entries({ Housing: '🏠', Bills: '💡', Food: '🍽', Transport: '🚕', Travel: '✈️', Fun: '🎟', Shopping: '🛍' })
+const MP_EXP_GROUP_META = Object.fromEntries(Object.entries({ Housing: '🏠', Food: '🍽', Transport: '🚕', Travel: '✈️', Fun: '🎟', Shopping: '🛍' })
   .map(([g, icon]) => {
     const chroma = hex => { const ch = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)); return Math.max(...ch) - Math.min(...ch); };
     const shades = MP_EXP_CATS.filter(c => MP_EXP_GROUPS[c[0]] === g).map(c => c[2]);
