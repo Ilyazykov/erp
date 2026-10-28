@@ -457,6 +457,7 @@
       <input type="date" id="exp_from"> – <input type="date" id="exp_to">
       <label title="Periods of life_periods: where you lived or travelled, and with whom">where I was <select id="exp_life"><option value="">—</option></select></label>
       <label title="Rent paid for several months at once (Antalya 2022, Novi Sad 01-03.2024): a share in each month it paid for, or all on the day it was paid"><input type="checkbox" id="exp_spread" checked> spread prepaid rent over its months</label>
+      <label title="Spending worked out rather than recorded: the cash that left no trace (cash ledger, 2022-2025), card payments of months with no statement"><input type="checkbox" id="exp_extrapolated" checked> extrapolated spending</label>
       <label>in <select id="exp_ccy"><option value="USD">USD $</option><option value="EUR">EUR €</option><option value="RUB">RUB ₽</option></select></label>
     </div>
     <div id="exp_life_now" class="note" style="margin:0 0 6px"></div>
@@ -7762,7 +7763,7 @@ async function mpExpLoad() {
   };
   const [rows, eur, rub] = await Promise.all([
     page(() => sb.from('expenses')
-      .select('day, paid_day, account, description, amount, currency, usd, category, counted')
+      .select('day, paid_day, account, description, amount, currency, usd, category, counted, extrapolated')
       .order('day').order('id')),
     // for showing in euros or roubles
     ...['EUR', 'RUB'].map(c => page(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', c).order('day'))),
@@ -7781,7 +7782,8 @@ async function mpExpLoad() {
   const spent = [], skipped = [];
   for (const r of rows) {
     const row = { day: r.day, paid_day: r.paid_day, tx_date: r.day, account: r.account, description: r.description,
-      amt: Number(r.amount), ccy: r.currency, usd: r.usd == null ? NaN : Number(r.usd), cat: r.category };
+      amt: Number(r.amount), ccy: r.currency, usd: r.usd == null ? NaN : Number(r.usd), cat: r.category,
+      extrapolated: r.extrapolated };
     (r.counted ? spent : skipped).push(row);
   }
   return { spent, skipped, usdPer, periods: periods || [] };
@@ -7874,7 +7876,10 @@ async function mpRenderExpenses() {
   status.textContent = '';
   const { skipped, usdPer } = mpExpCache;
   const spreadOn = document.getElementById('exp_spread').checked;
-  const spent = spreadOn ? mpExpCache.spent : mpExpCache.spent.map(r => ({ ...r, day: r.paid_day, tx_date: r.paid_day }));
+  // worked out rather than recorded (the cash that left no trace, ...): shown or not
+  const withExtrapolated = document.getElementById('exp_extrapolated').checked;
+  const recorded = withExtrapolated ? mpExpCache.spent : mpExpCache.spent.filter(r => !r.extrapolated);
+  const spent = spreadOn ? recorded : recorded.map(r => ({ ...r, day: r.paid_day, tx_date: r.paid_day }));
   // a period with no end is where one still is: to today
   const periods = mpExpCache.periods.map(p => ({ ...p, end_day: p.end_day ?? new Date().toISOString().slice(0, 10) }));
   const lifeName = p => `${p.place}${p.company ? ' with ' + p.company : ''}`;
@@ -7954,7 +7959,7 @@ async function mpRenderExpenses() {
   const span = document.getElementById('exp_span').value;
   const step = document.getElementById('exp_step').value;
   const bars = document.getElementById('plot_exp_months');
-  const barsKey = [span, step, ccy, spent.length, periods.length, spreadOn, document.getElementById('exp_bands').checked].join('|');
+  const barsKey = [span, step, ccy, spent.length, periods.length, spreadOn, withExtrapolated, document.getElementById('exp_bands').checked].join('|');
   if (bars.mpExpKey !== barsKey) {
   bars.mpExpKey = barsKey;
   const bucket = mo => step === 'year' ? mo.slice(0, 4)
@@ -8049,6 +8054,11 @@ for (const id of ['exp_span', 'exp_step']) {
     if (mpIsSignedIn) mpRenderExpenses();
   });
 }
+try { const saved = localStorage.getItem('mp_exp_extrapolated'); if (saved) document.getElementById('exp_extrapolated').checked = saved === '1'; } catch { /* no storage */ }
+document.getElementById('exp_extrapolated').addEventListener('change', e => {
+  try { localStorage.setItem('mp_exp_extrapolated', e.target.checked ? '1' : '0'); } catch { /* no storage */ }
+  if (mpIsSignedIn) mpRenderExpenses();
+});
 try { const saved = localStorage.getItem('mp_exp_spread'); if (saved) document.getElementById('exp_spread').checked = saved === '1'; } catch { /* no storage */ }
 document.getElementById('exp_spread').addEventListener('change', e => {
   try { localStorage.setItem('mp_exp_spread', e.target.checked ? '1' : '0'); } catch { /* no storage */ }
