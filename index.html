@@ -8240,6 +8240,16 @@ async function mpRenderExpenses() {
   });
   if (!document.getElementById('exp_bands').checked) { life.shapes = []; life.legend = []; }
   const totals = buckets.map(b => order.reduce((t, n) => t + (byBucket.get(n + '\u0000' + b) || 0), 0));
+  // a part-only bar's frame: as high as the whole period at the same pace
+  // (the total over the days it has, times all its days)
+  const projected = buckets.map((b, i) => {
+    if (!partial[i]) return totals[i];
+    const [f, t] = mpExpBucketDays(b);
+    const start = first > startDay ? first : startDay;
+    const span = (a, z) => (Date.parse(z) - Date.parse(a)) / 86400000 + 1;
+    const had = span(f > start ? f : start, t < today ? t : today);
+    return had > 0 ? totals[i] * span(f, t) / had : totals[i];
+  });
   await Plotly.react(bars, [...order.map(n => ({
     type: 'bar', name: n, x: buckets, y: buckets.map(b => byBucket.get(n + '\u0000' + b) ?? null),  // null: no line in the hover
     marker: { color: meta[n].color }, hovertemplate: `${n}: %{y:,.0f} ${sym}<extra></extra>`,
@@ -8265,10 +8275,10 @@ async function mpRenderExpenses() {
     yaxis: { gridcolor: '#1e2830', ticksuffix: ccy === 'RUB' ? ' ₽' : '', tickprefix: ccy === 'RUB' ? '' : sym },
     legend: { orientation: 'h', x: 0, y: 1.02, yanchor: 'bottom' },
     shapes: [...life.shapes, ...buckets.flatMap((b, i) => partial[i] && totals[i] ? [{
-      type: 'rect', xref: 'x', yref: 'y', x0: i - 0.46, x1: i + 0.46, y0: 0, y1: totals[i],
+      type: 'rect', xref: 'x', yref: 'y', x0: i - 0.46, x1: i + 0.46, y0: 0, y1: projected[i],
       line: { color: '#8b949e', width: 1.5, dash: 'dot' }, fillcolor: 'rgba(0,0,0,0)', layer: 'above' }] : [])],
     annotations: buckets.flatMap((b, i) => partial[i] && totals[i] ? [{
-      x: i, xref: 'x', y: totals[i], yref: 'y', text: partial[i],  // the index: "2017" would be read as position 2017 showarrow: false, yanchor: 'bottom', yshift: 2,
+      x: i, xref: 'x', y: projected[i], yref: 'y', text: `${partial[i]}<br>≈ ${money(projected[i])} for all of it`,  // the index: "2017" would be read as position 2017 showarrow: false, yanchor: 'bottom', yshift: 2,
       font: { size: 10, color: '#8b949e' } }] : []),
   }, CONFIG);
   bars.removeAllListeners?.('plotly_click');
