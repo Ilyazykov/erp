@@ -4245,7 +4245,7 @@ function mpFormatCurrency(n, currency, withCode = false, unitPriceUsd = null, ke
   // dim, small "0" instead of repeating the symbol/code -- keeps the wide
   // broker x currency row from being cluttered with empty-currency noise.
   if (n === 0 && !keepZero) return '<span class="zero">0</span>';
-  const isCrypto = MP_CURRENCY_COLUMN_ORDER.slice(7).includes(currency) || !MP_ISO_CURRENCIES.has(currency);
+  const isCrypto = MP_CURRENCY_COLUMN_ORDER.slice(MP_CURRENCY_COLUMN_ORDER.indexOf('Others') + 1).includes(currency) || !MP_ISO_CURRENCIES.has(currency);
   if (isCrypto) {
     const digits = unitPriceUsd > 0 ? Math.min(8, Math.max(0, Math.floor(Math.log10(unitPriceUsd * 1000)))) : 8;
     const amount = n.toLocaleString('en-US', { maximumFractionDigits: digits });
@@ -4695,8 +4695,48 @@ async function mpRenderBrokerCurrency() {
   let base;
   try { base = await mpLoadPortfolioBase(); }
   catch (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
-  mpRenderBrokerPivot(wrap, await mpCurrencyRows(base), 'currency', 'No holdings yet — import trades above.', base.fxByCurrency,
-    await mpEverHeld('currency'));
+  let rows = await mpCurrencyRows(base);
+  const everHeld = await mpEverHeld('currency');
+  const render = () => mpRenderBrokerPivot(wrap, rows, 'currency', 'No holdings yet — import trades above.', base.fxByCurrency, everHeld);
+  render();
+  // Too wide for the page: the column holding the least (in USD) folds into
+  // "others" (a fiat currency) or "Altcoins" (a coin), one at a time until the
+  // table fits. USD, EUR, RUB, BTC and ETH always keep their own columns, as
+  // do XAU and the two folded columns themselves. (Hidden -- width 0 -- it's
+  // left as is.)
+  const keep = new Set(['USD', 'EUR', 'RUB', 'BTC', 'ETH', 'XAU', MP_OTHER_CURRENCIES_COLUMN, MP_ALTCOINS_COLUMN]);
+  const tooWide = () => wrap.clientWidth > 0 && (wrap.querySelector('table')?.offsetWidth ?? 0) > wrap.clientWidth;
+  while (tooWide()) {
+    const sums = new Map();
+    for (const r of rows) {
+      if (keep.has(r.currency) || !r.value_usd) continue;
+      const fiat = !MP_UNIT_QUOTED_ASSET_CLASSES.has(r.asset_class);
+      if (!fiat && r.asset_class !== 'crypto') continue;   // a metal stays
+      const s = sums.get(r.currency) ?? { usd: 0, fiat };
+      s.usd += Math.abs(r.value_usd);
+      sums.set(r.currency, s);
+    }
+    if (!sums.size) break;
+    const [ccy, { fiat }] = [...sums].sort((a, b) => a[1].usd - b[1].usd)[0];
+    const to = fiat ? MP_OTHER_CURRENCIES_COLUMN : MP_ALTCOINS_COLUMN;
+    rows = rows.map(r => (r.currency === ccy ? { ...r, currency: to } : r));
+    for (const k of [...everHeld]) if (k.endsWith(` ${ccy}`)) everHeld.add(`${k.slice(0, -ccy.length)}${to}`);
+    render();
+  }
+}
+// a narrower window folds more columns, a wider one brings them back; also
+// redrawn when the tab that holds it is first shown (its width was 0)
+{
+  const wrap = document.getElementById('mp_broker_currency_wrap');
+  let width = wrap.clientWidth, timer;
+  new ResizeObserver(() => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (wrap.clientWidth === width || !wrap.clientWidth || !wrap.innerHTML) return;
+      width = wrap.clientWidth;
+      mpRenderBrokerCurrency();
+    }, 300);
+  }).observe(wrap);
 }
 
 // Funds whose value is split across currency columns by what they hold
