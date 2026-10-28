@@ -475,6 +475,7 @@
         <option value="60">5 years</option><option value="all">all</option></select></label>
       <label title="Bands behind the bars for the periods spent with someone (life_periods)"><input type="checkbox" id="exp_bands"> who I was with</label>
       <label title="One's own money coming in: a salary, a flat's rent (bank_transactions.income_category, by the rules in income_rules) -- a line over the bars"><input type="checkbox" id="exp_income"> income</label>
+      <label title="The shades of one colour as one: food, transport, travel, shopping"><input type="checkbox" id="exp_grouped"> by group</label>
       <label>by <select id="exp_step"><option value="month">month</option><option value="quarter">quarter</option><option value="year">year</option>
         <option value="month_td">month to today</option><option value="year_td">year to today</option></select></label>
     </div>
@@ -7842,6 +7843,7 @@ const MP_EXP_CATS = [
   ['Other transport', '⛽', '#a5d6ff'],
   ['Flights', '✈️', '#a371f7'],
   ['Hotels', '🏨', '#6e40c9'],
+  ['Visas', '🛂', '#8957e5'],
   ['Other travel', '🧳', '#d2a8ff'],
   ['Health & sport', '💊', '#db61a2'],
   ['Entertainment', '🎟', '#00c2c7'],
@@ -7851,7 +7853,7 @@ const MP_EXP_CATS = [
   ['Electronics', '💻', '#7d4e00'],
   ['Gifts & souvenirs', '🎁', '#e0b660'],
   ['Shopping', '🛍', '#d29922'],
-  ['Government & visas', '🏛', '#8b949e'],
+  ['Government & taxes', '🏛', '#8b949e'],
   ['Fees', '🏦', '#6e7681'],
   ['Cash', '💵', '#d0d7de'],
   ['Transfers to people', '👥', '#f85149'],
@@ -7862,8 +7864,11 @@ const MP_EXP_CATS = [
 // in the donut and the list, ordered by the group's total, then each one's.
 const MP_EXP_GROUPS = { 'Food delivery': 'Food', 'Restaurants & cafés': 'Food', 'Groceries': 'Food',
   'Taxi': 'Transport', 'Public transport': 'Transport', 'Other transport': 'Transport',
-  'Flights': 'Travel', 'Hotels': 'Travel', 'Other travel': 'Travel',
+  'Flights': 'Travel', 'Hotels': 'Travel', 'Visas': 'Travel', 'Other travel': 'Travel',
   'Clothes': 'Shopping', 'Electronics': 'Shopping', 'Gifts & souvenirs': 'Shopping', 'Shopping': 'Shopping' };
+// A group's colour on the chart over time "by group": its main shade
+const MP_EXP_GROUP_META = { Food: { color: '#3fb950' }, Transport: { color: '#58a6ff' },
+  Travel: { color: '#a371f7' }, Shopping: { color: '#d29922' } };
 let mpExpCache = null;
 async function mpExpLoad() {
   const page = async (q) => {
@@ -8167,7 +8172,7 @@ async function mpRenderExpenses() {
   const step = document.getElementById('exp_step').value;
   const bars = document.getElementById('plot_exp_months');
   const barsKey = [new Date().toISOString().slice(0, 10), span, step, ccy, spent.length, periods.length, spreadOn, withExtrapolated, document.getElementById('exp_bands').checked,
-    document.getElementById('exp_income').checked].join('|');
+    document.getElementById('exp_income').checked, document.getElementById('exp_grouped').checked].join('|');
   if (bars.mpExpKey !== barsKey) {
   bars.mpExpKey = barsKey;
   const first = spent.reduce((m, r) => (r.day < m ? r.day : m), today);
@@ -8211,14 +8216,16 @@ async function mpRenderExpenses() {
       if (buckets[buckets.length - 1] !== b) buckets.push(b);
     }
   }
+  // by group: the shades of one colour (MP_EXP_GROUPS) as one bar part
+  const catOf = document.getElementById('exp_grouped').checked ? c => MP_EXP_GROUPS[c] ?? c : c => c;
   const byBucket = new Map();
   for (const r of spent) {
     // to today, or to this month's end (a month of rent paid ahead is in it)
     if (r.day < startDay || (/_td$/.test(step) ? r.day > today : r.day.slice(0, 7) > today.slice(0, 7)) || !Number.isFinite(r.usd)) continue;
-    const k = r.cat + '\u0000' + bucket(r.day);
+    const k = catOf(r.cat) + '\u0000' + bucket(r.day);
     byBucket.set(k, (byBucket.get(k) || 0) + conv(r));
   }
-  const names = [...MP_EXP_CATS.map(c => c[0]), ...new Set(spent.map(r => r.cat).filter(c => !(c in known)))];
+  const names = [...new Set([...MP_EXP_CATS.map(c => catOf(c[0])), ...spent.map(r => r.cat).filter(c => !(c in known))])];
   const order = names.filter(n => buckets.some(b => byBucket.has(n + '\u0000' + b)));
   const life = mpExpLifeBands(periods, buckets, lifeName);
   // income: a line over the stacks -- the bars stay as wide as they are, and
@@ -8252,7 +8259,7 @@ async function mpRenderExpenses() {
   });
   await Plotly.react(bars, [...order.map(n => ({
     type: 'bar', name: n, x: buckets, y: buckets.map(b => byBucket.get(n + '\u0000' + b) ?? null),  // null: no line in the hover
-    marker: { color: meta[n].color }, hovertemplate: `${n}: %{y:,.0f} ${sym}<extra></extra>`,
+    marker: { color: (MP_EXP_GROUP_META[n] ?? meta[n]).color }, hovertemplate: `${n}: %{y:,.0f} ${sym}<extra></extra>`,
   })),
   ...life.legend,
   ...(incomeBy.size ? [{ type: 'scatter', mode: 'lines+markers', name: 'Income', x: buckets,
@@ -8332,6 +8339,11 @@ document.getElementById('exp_bands').addEventListener('change', e => {
   if (mpIsSignedIn) mpRenderExpenses();
 });
 try { document.getElementById('exp_income').checked = localStorage.getItem('mp_exp_income') === '1'; } catch { /* no storage */ }
+try { document.getElementById('exp_grouped').checked = localStorage.getItem('mp_exp_grouped') === '1'; } catch { /* no storage */ }
+document.getElementById('exp_grouped').addEventListener('change', e => {
+  try { localStorage.setItem('mp_exp_grouped', e.target.checked ? '1' : '0'); } catch { /* no storage */ }
+  if (mpIsSignedIn) mpRenderExpenses();
+});
 document.getElementById('exp_income').addEventListener('change', e => {
   try { localStorage.setItem('mp_exp_income', e.target.checked ? '1' : '0'); } catch { /* no storage */ }
   if (mpIsSignedIn) mpRenderExpenses();
