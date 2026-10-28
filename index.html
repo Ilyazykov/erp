@@ -7743,6 +7743,9 @@ const MP_EXP_CATS = [
   ['Entertainment', '🎟', '#00c2c7'],
   ['Education', '🎓', '#ffa198'],
   ['Subscriptions & services', '🧾', '#ffdf5d'],
+  ['Clothes', '👕', '#bb8009'],
+  ['Electronics', '💻', '#7d4e00'],
+  ['Gifts & souvenirs', '🎁', '#e0b660'],
   ['Shopping', '🛍', '#d29922'],
   ['Government & visas', '🏛', '#8b949e'],
   ['Fees', '🏦', '#6e7681'],
@@ -7751,11 +7754,12 @@ const MP_EXP_CATS = [
   ['Other', '•', '#4b5560'],
 ];
 // Categories shown side by side as one group (the food: shades of one green; the
-// transport: of one blue; the travel: of one purple) --
+// transport: of one blue; the travel: of one purple; the shopping: of one gold) --
 // in the donut and the list, ordered by the group's total, then each one's.
 const MP_EXP_GROUPS = { 'Food delivery': 'Food', 'Restaurants & cafés': 'Food', 'Groceries': 'Food',
   'Taxi': 'Transport', 'Public transport': 'Transport', 'Other transport': 'Transport',
-  'Flights': 'Travel', 'Hotels': 'Travel', 'Other travel': 'Travel' };
+  'Flights': 'Travel', 'Hotels': 'Travel', 'Other travel': 'Travel',
+  'Clothes': 'Shopping', 'Electronics': 'Shopping', 'Gifts & souvenirs': 'Shopping', 'Shopping': 'Shopping' };
 let mpExpCache = null;
 async function mpExpLoad() {
   const page = async (q) => {
