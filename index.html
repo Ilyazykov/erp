@@ -4219,7 +4219,7 @@ const mpFractionDigits = n => (Math.abs(n) >= 1000000 ? { minimumFractionDigits:
 // as "CN¥" (we prefer the bare "¥") -- keeps the broker x currency
 // table's body cells compact. RSD has no widely-recognized single glyph,
 // so it's left to fall through to the bare-number path below.
-const MP_CURRENCY_SYMBOLS = { RUB: '₽', TRY: '₺', CNY: '¥' };
+const MP_CURRENCY_SYMBOLS = { RUB: '₽', TRY: '₺', CNY: '¥', GEL: '₾' };
 
 // withCode=false (the default, used for the broker x currency table's own
 // body cells, which already have a column header naming the unit) omits
@@ -4267,7 +4267,7 @@ function mpFormatCurrency(n, currency, withCode = false, unitPriceUsd = null, ke
     return withCode ? `${currency} ${amount}` : amount;
   }
 }
-const MP_ISO_CURRENCIES = new Set(['USD', 'EUR', 'GBP', 'RUB', 'TRY', 'RSD', 'CNY']);
+const MP_ISO_CURRENCIES = new Set(['USD', 'EUR', 'GBP', 'RUB', 'TRY', 'RSD', 'GEL', 'CNY']);
 
 // Builds a broker(row) x category(column) pivot table from an array of
 // {account, [categoryField], value_usd} rows -- shared by
@@ -4287,7 +4287,7 @@ const MP_ISO_CURRENCIES = new Set(['USD', 'EUR', 'GBP', 'RUB', 'TRY', 'RSD', 'CN
 // currency/ticker not listed here (a new one showing up in the data)
 // falls back after these, alphabetically.
 const MP_CURRENCY_COLUMN_ORDER = [
-  'USD', 'EUR', 'GBP', 'RUB', 'TRY', 'RSD', 'CNY', 'Others',
+  'USD', 'EUR', 'GBP', 'RUB', 'TRY', 'RSD', 'GEL', 'CNY', 'Others',
   'XAU', 'BTC', 'ETH', 'SOL', 'GRAM', 'TAO', 'TRX', 'DOGE', 'Altcoins',
 ];
 
@@ -4307,7 +4307,7 @@ const MP_ASSET_CLASS_LABELS = {
 // EUR has no single issuing country, so it gets the EU flag; crypto/metal
 // tickers (BTC, XAU, ...) aren't tied to a country and are left unflagged.
 const MP_CURRENCY_FLAGS = {
-  USD: '🇺🇸', EUR: '🇪🇺', GBP: '🇬🇧', RUB: '🇷🇺', TRY: '🇹🇷', RSD: '🇷🇸', CNY: '🇨🇳',
+  USD: '🇺🇸', EUR: '🇪🇺', GBP: '🇬🇧', RUB: '🇷🇺', TRY: '🇹🇷', RSD: '🇷🇸', GEL: '🇬🇪', CNY: '🇨🇳',
   AED: '🇦🇪', HUF: '🇭🇺', ILS: '🇮🇱',
 };
 
@@ -4654,7 +4654,7 @@ function mpBrokerCurrencyUnit(r) {
 async function mpLoadPortfolioBase() {
   const { data, error } = await sb.from('portfolio_value_usd_by_account').select('*');
   if (error) throw error;
-  const currencies = [...new Set(data.map(r => r.underlying_currency || r.currency)), 'USD', 'EUR', 'GBP', 'RUB', 'CNY', 'TRY', 'RSD'];
+  const currencies = [...new Set(data.map(r => r.underlying_currency || r.currency)), 'USD', 'EUR', 'GBP', 'RUB', 'CNY', 'TRY', 'RSD', 'GEL'];
   const fxByCurrency = await mpFetchFxByCurrency(currencies);
   // Fold in a USD-per-unit rate for each crypto/metal ticker too, straight
   // from this same query's own price_usd -- no second round-trip needed,
@@ -4703,9 +4703,9 @@ async function mpRenderBrokerCurrency() {
 // (fund_currency_weights: the trading currency of each holding) instead of
 // sitting whole in the fund's own quote currency.
 const MP_SPLIT_BY_CURRENCY_FUNDS = new Set(['VWRA', 'VWCE', 'XSX6']);
-const MP_MAIN_CURRENCIES = new Set(['USD', 'EUR', 'GBP', 'RUB', 'TRY', 'RSD', 'CNY']);
+const MP_MAIN_CURRENCIES = new Set(['USD', 'EUR', 'GBP', 'RUB', 'TRY', 'RSD', 'GEL', 'CNY']);
 const MP_OTHER_CURRENCIES_COLUMN = 'Others';
-// European currencies other than GBP (and RSD / TRY, which have columns of their own).
+// European currencies other than GBP (and RSD / TRY / GEL, which have columns of their own).
 const MP_EUROPEAN_AS_EUR = new Set(['CHF', 'DKK', 'SEK', 'NOK', 'PLN', 'CZK', 'HUF', 'RON', 'BGN', 'ISK', 'HRK']);
 async function mpSplitFundsByCurrency(rows) {
   if (!rows.some(r => MP_SPLIT_BY_CURRENCY_FUNDS.has(r.ticker))) return rows;
@@ -4730,7 +4730,7 @@ async function mpRenderBrokerAssetClass() {
   const wrap = document.getElementById('mp_broker_assetclass_wrap');
   const { data, error } = await sb.from('portfolio_value_usd_by_account').select('*');
   if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
-  const fxByCurrency = await mpFetchFxByCurrency(['USD', 'EUR', 'GBP', 'RUB', 'CNY', 'TRY', 'RSD']);
+  const fxByCurrency = await mpFetchFxByCurrency(['USD', 'EUR', 'GBP', 'RUB', 'CNY', 'TRY', 'RSD', 'GEL']);
   const cashRows = await mpFetchCashRows(fxByCurrency);
   const realEstateRows = await mpFetchRealEstateRows(fxByCurrency);
   const split = await mpSplitFundsCash(data);
@@ -4761,7 +4761,7 @@ const MP_COLORS = {
   // currencies & coins
   currency: {
     USD: '#86e04a', EUR: '#3a9bf7', RUB: '#8e8e93', GBP: '#f2452b', CNY: '#d42a7a', JPY: '#ff7eb6', TRY: '#ff6a13',
-    RSD: '#4f7dff', CHF: '#e3242b', CAD: '#ff8a80', TWD: '#3d6bff', KRW: '#6fa8ff', HKD: '#ff6f61', AUD: '#ffd000',
+    RSD: '#4f7dff', GEL: '#00aeef', CHF: '#e3242b', CAD: '#ff8a80', TWD: '#3d6bff', KRW: '#6fa8ff', HKD: '#ff6f61', AUD: '#ffd000',
     INR: '#ff9933', BRL: '#00c853', ZAR: '#7cd322', SGD: '#ff5c5c', SAR: '#00a86b', ILS: '#3f8cff', MXN: '#00b86b',
     AED: '#c08457', MYR: '#5a78ff',
     XAU: '#f5c542', BTC: '#ff7a1a', ETH: '#9b6bff', SOL: '#00d9a3', GRAM: '#29b6f6', TON: '#29b6f6', TAO: '#c3c9d1',
@@ -5421,7 +5421,7 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     status.textContent = salary ? `After the salary plan (+${mpFormatUsd(salary)}) — the steps are below the charts.` : '';
   }
   // Slice order as in the user's own charts (clockwise from 12 o'clock).
-  const currencyOrder = ['EUR', 'USD', 'RUB', 'GBP', 'CNY', 'JPY', 'TRY', 'RSD', MP_OTHER_CURRENCIES_COLUMN,
+  const currencyOrder = ['EUR', 'USD', 'RUB', 'GBP', 'CNY', 'JPY', 'TRY', 'RSD', 'GEL', MP_OTHER_CURRENCIES_COLUMN,
     'XAU', 'BTC', 'ETH', 'SOL', 'TAO', 'GRAM', MP_ALTCOINS_COLUMN]
     .map(c => (c === 'JPY' ? `JPY ${mpFlagOf('JP')}` : currencyLabel(c)));
   const brokerOrder = ['Freedom24', 'Bank of Cyprus', 'Revolut', 'Wise', 'Raiffeisen', 'UniCredit', 'Credo Bank', 'TBC Bank', 'Ziraat Bank', 'IBKR',
