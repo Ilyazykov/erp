@@ -192,8 +192,9 @@ function parseRows(text: string): BankRow[] {
 // Best-effort keyword categorization, same style/purpose as the other
 // importers' CATEGORY_RULES.
 const CATEGORY_RULES: [RegExp, string][] = [
+  [/^currency exchange\b/i, 'fx_conversion'],
   [/капитализация процентов|выплата процентов|interest on the balance/i, 'interest'],
-  [/перевод между счетами одного клиента|внутрибанковский перевод между счетами|intrabank transfer from contract|internal transfer to contract/i, 'internal_transfer'],
+  [/перевод между счетами одного клиента|внутрибанковский перевод между счетами|intrabank transfer from contract|internal transfer to contract|transfer between (your|own) accounts/i, 'internal_transfer'],
   [/перевод сбп|систем\S* быстрых платежей|external bank transfer|via fps|перевод (на|с) карт|(inbound|outbound) card transfer/i, 'transfer'],
   [/transfer fee/i, 'bank_fee'],
   [/taxi|siticard|metro|aeroexpress|rzd|russian\s+railways|^транспорт$|\btransport\b/i, 'transport'],

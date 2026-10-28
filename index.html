@@ -267,7 +267,7 @@
       currency), a Revolut brokerage (Invest) statement (CSV), a Revolut crypto account statement (CSV), an IBKR Activity Statement (CSV, one per period), a Freedom24 cash-movement report
       (tradernet_table.xlsx, from the account's opening) and broker report (JSON), a T-Bank broker report
       (broker_report.xlsx, one per agreement), an Atomyze (ЦФА) platform report (.xlsx), a Sber broker report (.html, one per month), a Bank of Cyprus transaction
-      history export, a Ziraat Bank account activity export (.xlsx), or this project's own combined
+      history export, a Ziraat Bank account activity export (.xlsx), a TBC Bank account statement (CSV, one per account and currency), or this project's own combined
       Raiffeisen Bank Serbia transaction CSV, its generic bank CSV (Yandex Bank, T-Bank), a Bybit transaction log
       (Data Export → Transaction Log → Account Change Details: upload each Funding and Unified Trading file), or a
       Crypto.com App export (Accounts → History → Export → Crypto Wallet), a Binance transaction export (Orders → Assets
@@ -2032,6 +2032,7 @@ function mpDetectCsvKind(headerLine, fullText) {
   if (/^Date,Description,Transaction type,/im.test(fullText)) return 'boc_account';
   if (/^account_number,currency,date_executed,/i.test(h)) return 'raiffeisen_account';
   if (/^bank,account_number,product,/i.test(h)) return 'bank_csv';
+  if (/^\uFEFF?თარიღი,დანიშნულება,/.test(h) && /^Date,Description,Additional Information,Paid Out,Paid In,Balance,/m.test(fullText)) return 'tbc_account';
   if (/^\uFEFF?broker,account_number,date,operation,/i.test(h)) return 'broker_csv';
   if (/^UID:\s*\d+,Company Name:/i.test(h)
       && /^Uid,(Date & Time\(UTC\),Coin|Currency,Contract),/m.test(fullText)) return 'bybit_log';
@@ -2119,7 +2120,7 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', () => {
 // 4 real transactions per 30 days over the 90 days before its newest record --
 // else monthly.
 const MP_ACCOUNT_SCHEDULE = {
-  UniCredit: 'closed', Finuslugi: 'closed', cash: 365, Wise: 365, 'Credo Bank': 365,
+  UniCredit: 'closed', Finuslugi: 'closed', cash: 365, Wise: 365, 'Credo Bank': 365, 'TBC Bank': 30,
   IBKR: 30, Freedom24: 30, Raiffeisen: 30, 'Ziraat Bank': 30, 'Yandex Bank': 30,
   Bybit: 30, 'Crypto.com': 30, Telegram: 30, Binance: 365,
 };
@@ -2149,6 +2150,7 @@ const MP_ACCOUNT_SOURCE = {
   Alfa: 'Alfa-Online → statements of the current, salary and Alfa-Account (PDF); broker account: screenshots of Alfa-Investments → History → to Claude.',
   'Yandex Bank': 'Yandex Bank app → statement for each contract (current account, «Сейв») (PDF) → to Claude.',
   'Ozon Bank': 'Ozon Bank app → Ещё → Получить справку → О движении средств → language → основной / накопительный / кредитная карта (PDF, one each) → to Claude.',
+  'TBC Bank': 'tbconline.ge → Transactions / the account → statement (CSV), one for each account and currency (GEL, EUR, My Safe); keep the file name. Upload as is.',
   'Credo Bank': 'mycredo.ge → Transactions (screenshots or the statement) → to Claude, who builds the Credo Bank CSV (import-bank-csv).',
   Wise: 'Wise → balance statement, CSV, one per currency. Upload as is.',
   'Crypto.com': 'Crypto.com App → Accounts → History → Export → Crypto Wallet. Upload as is.',
@@ -2542,6 +2544,60 @@ async function mpLogUpload(kind, fileName, csvText, result) {
   } catch { /* the log is a convenience -- an import stays done without it */ }
 }
 
+// TBC Bank (Georgia): tbconline.ge → account → statement, CSV. One file per
+// account and currency, named account_statement_<account>_<ddmmyyyy>_<ddmmyyyy>.csv;
+// the rows carry no currency and don't say which account they are, so both
+// come from the number in the file name. A new TBC account goes in here.
+const TBC_ACCOUNTS = {
+  19475881: { currency: 'GEL', product: 'current_account' },
+  19475897: { currency: 'EUR', product: 'current_account' },
+  19475906: { currency: 'GEL', product: 'savings_account' },   // My Safe
+};
+function mpParseCsvLine(line) {
+  const cells = [];
+  let cur = '', inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; } else if (ch === '"') inQuotes = false; else cur += ch;
+    } else if (ch === '"') inQuotes = true;
+    else if (ch === ',') { cells.push(cur); cur = ''; } else cur += ch;
+  }
+  cells.push(cur);
+  return cells;
+}
+// The bank's CSV (a Georgian header row, then an English one; dd/mm/yyyy,
+// Paid Out / Paid In unsigned, the running Balance) turned into this
+// project's generic bank CSV for import-bank-csv; the bank's Type
+// ("Transfer Between Own Accounts", "Currency Exchange", ...) goes in as its
+// category.
+function tbcToBankCsv(text, fileName) {
+  const accountNumber = fileName.match(/account_statement_(\d+)_/)?.[1];
+  const acc = TBC_ACCOUNTS[accountNumber];
+  if (!acc) throw new Error(`TBC account ${accountNumber ?? '(no number in the file name)'} is not in TBC_ACCOUNTS (index.html) -- its currency and kind are unknown. Keep the bank's file name.`);
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  const head = lines.findIndex(l => l.startsWith('Date,Description,Additional Information,'));
+  const header = mpParseCsvLine(lines[head]);
+  const col = name => header.indexOf(name);
+  const q = v => /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+  const rows = lines.slice(head + 1).map(mpParseCsvLine).map(c => {
+    const [d, m, y] = (c[col('Date')] || '').split('/');
+    const n = v => Number(v || 0);
+    return {
+      date: `${y}-${m}-${d}`,
+      // a cash-in reads ",28/10/2026,ანგარიშზე თანხის შეტანა,EUR, ..." -- the leading comma and date dropped
+      description: (c[col('Description')] || '').replace(/^,\d{2}\/\d{2}\/\d{4},/, '').trim() || c[col('Type')],
+      amount: Math.round((n(c[col('Paid In')]) - n(c[col('Paid Out')])) * 100) / 100,
+      balance: c[col('Balance')],
+      type: c[col('Type')] || '',
+    };
+  }).filter(r => /^\d{4}-\d{2}-\d{2}$/.test(r.date));
+  // oldest first: import-bank-csv orders a day's untimed rows as they come
+  if (rows.length > 1 && rows[0].date > rows[rows.length - 1].date) rows.reverse();
+  return ['bank,account_number,product,currency,date,time,card,description,amount,balance,category_bank,source_file',
+    ...rows.map(r => ['TBC Bank', accountNumber, acc.product, acc.currency, r.date, '', '', r.description, r.amount, r.balance, r.type, fileName].map(v => q(String(v))).join(','))].join('\n');
+}
+
 async function mpImportOneFile(file, statusEl, session) {
   try {
     // Ziraat Bank's own export is a real .xlsx, not CSV -- detected by
@@ -2557,11 +2613,15 @@ async function mpImportOneFile(file, statusEl, session) {
       csvText = await file.text();
       const headerLine = csvText.split(/\r\n|\r|\n/)[0] || '';
       kind = mpDetectCsvKind(headerLine, csvText);
+      if (kind === 'tbc_account') {
+        csvText = tbcToBankCsv(csvText, file.name);
+        kind = 'bank_csv';
+      }
     }
     if (!kind) {
       statusEl.textContent = 'Unrecognized CSV format — expected a Snowball trades export, '
         + 'a Revolut account statement, a Revolut Flexible Cash Funds statement, a Revolut '
-        + 'Instant Access Savings statement, a Wise balance statement, an IBKR Activity Statement, a Bank of Cyprus transaction history export, or '
+        + 'Instant Access Savings statement, a Wise balance statement, an IBKR Activity Statement, a Bank of Cyprus transaction history export, a TBC Bank account statement, or '
         + 'this project\'s own Raiffeisen Bank Serbia, generic bank transaction or broker operations CSV, a Bybit transaction log, '
         + 'a Crypto.com App export, a Binance transaction export, or this project\'s own Telegram wallet (Walt) CSV.';
       return;
@@ -3145,7 +3205,7 @@ async function mpXlsxZip(sheets) {
 // The names money.numbers shows: accounts in its order, currencies and indexes with flags.
 const MP_XLSX_ACCOUNT = {
   Revolut: 'Revolut 🇪🇺', Wise: 'Wise 🇪🇺', 'Bank of Cyprus': 'Банк Кипра 🇨🇾', IBKR: 'IBKR 🇺🇸', Freedom24: 'Freedom24 🇰🇿',
-  'Ziraat Bank': 'Зираат 🇹🇷', Raiffeisen: 'Райф 🇷🇸', 'Credo Bank': 'Credo 🇬🇪', Sber: 'Сбер 🇷🇺', 'T-Bank': 'Тиньков 🇷🇺',
+  'Ziraat Bank': 'Зираат 🇹🇷', Raiffeisen: 'Райф 🇷🇸', 'Credo Bank': 'Credo 🇬🇪', 'TBC Bank': 'TBC 🇬🇪', Sber: 'Сбер 🇷🇺', 'T-Bank': 'Тиньков 🇷🇺',
   Alfa: 'Альфа 🇷🇺', 'Ozon Bank': 'Ozon-Банк 🇷🇺', 'Yandex Bank': 'Яндекс 🇷🇺', Finuslugi: 'Финуслуги 🇷🇺',
   Binance: 'Binance', Bybit: 'Bybit', 'Crypto.com': 'Cryptocom', Telegram: 'Telegram', Trust: 'Trust', Nexo: 'Nexo', cash: 'cash 💵',
 };
@@ -4257,7 +4317,7 @@ const MP_CURRENCY_FLAGS = {
 // Any account not listed here falls back after these, alphabetically.
 const MP_BROKER_ROW_ORDER = [
   '(unspecified)', 'Revolut', 'Wise', 'Bank of Cyprus', 'IBKR', 'Freedom24',
-  'Ziraat Bank', 'Raiffeisen', 'UniCredit', 'Credo Bank', 'Sber', 'T-Bank', 'Alfa', 'Ozon Bank', 'Yandex Bank', 'Finuslugi', 'Binance', 'Bybit', 'Crypto.com', 'Telegram', 'Trust',
+  'Ziraat Bank', 'Raiffeisen', 'UniCredit', 'Credo Bank', 'TBC Bank', 'Sber', 'T-Bank', 'Alfa', 'Ozon Bank', 'Yandex Bank', 'Finuslugi', 'Binance', 'Bybit', 'Crypto.com', 'Telegram', 'Trust',
   'cash', 'real estate',
 ];
 
@@ -4266,7 +4326,7 @@ const MP_BROKER_ROW_ORDER = [
 // '(unspecified)', no flag since it names no actual broker).
 const MP_BROKER_FLAGS = {
   Revolut: '🇪🇺', Wise: '🇪🇺', 'Bank of Cyprus': '🇨🇾', IBKR: '🇺🇸',
-  Freedom24: '🇰🇿', 'Ziraat Bank': '🇹🇷', Raiffeisen: '🇷🇸', UniCredit: '🇷🇸', 'Credo Bank': '🇬🇪',
+  Freedom24: '🇰🇿', 'Ziraat Bank': '🇹🇷', Raiffeisen: '🇷🇸', UniCredit: '🇷🇸', 'Credo Bank': '🇬🇪', 'TBC Bank': '🇬🇪',
   Sber: '🇷🇺', 'T-Bank': '🇷🇺', Finuslugi: '🇷🇺', Alfa: '🇷🇺', 'Ozon Bank': '🇷🇺', 'Yandex Bank': '🇷🇺',
   cash: '💵', 'real estate': '🏠',
 };
@@ -4275,7 +4335,7 @@ const MP_BROKER_FLAGS = {
 // database stay as the importers write them).
 const MP_BROKER_SHORT_NAMES = {
   'Bank of Cyprus': 'BoC', Freedom24: 'Freedom', 'Ziraat Bank': 'Ziraat', Raiffeisen: 'Raif',
-  'Ozon Bank': 'Ozon', 'Yandex Bank': 'Yandex', 'Credo Bank': 'Credo',
+  'Ozon Bank': 'Ozon', 'Yandex Bank': 'Yandex', 'Credo Bank': 'Credo', 'TBC Bank': 'TBC',
 };
 
 // "<account> <category>" pairs that ever held a value (capital_ever_held), for
@@ -4708,7 +4768,7 @@ const MP_COLORS = {
   },
   broker: {
     Freedom24: '#00d1b2', 'Bank of Cyprus': '#4fc3f7', Revolut: '#8e8e93', Wise: '#9fe870', Raiffeisen: '#c9a400',
-    UniCredit: '#8c1c28', 'Credo Bank': '#e8562a', 'Ziraat Bank': '#ff1f2d', IBKR: '#a64dff', Sber: '#4fd05b', 'T-Bank': '#ffdd2d',
+    UniCredit: '#8c1c28', 'Credo Bank': '#e8562a', 'TBC Bank': '#00aeef', 'Ziraat Bank': '#ff1f2d', IBKR: '#a64dff', Sber: '#4fd05b', 'T-Bank': '#ffdd2d',
     'Ozon Bank': '#1f6bff', Alfa: '#ff2d2d', 'Yandex Bank': '#ff6a1f', Finuslugi: '#00b4ff', Telegram: '#29b6f6',
     Binance: '#b5651d', Bybit: '#ff9500', 'Crypto.com': '#1a5fb4', Trust: '#3b8cff', cash: '#86e04a',
     '(unspecified)': '#7b8494',
@@ -5364,7 +5424,7 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   const currencyOrder = ['EUR', 'USD', 'RUB', 'GBP', 'CNY', 'JPY', 'TRY', 'RSD', MP_OTHER_CURRENCIES_COLUMN,
     'XAU', 'BTC', 'ETH', 'SOL', 'TAO', 'GRAM', MP_ALTCOINS_COLUMN]
     .map(c => (c === 'JPY' ? `JPY ${mpFlagOf('JP')}` : currencyLabel(c)));
-  const brokerOrder = ['Freedom24', 'Bank of Cyprus', 'Revolut', 'Wise', 'Raiffeisen', 'UniCredit', 'Credo Bank', 'Ziraat Bank', 'IBKR',
+  const brokerOrder = ['Freedom24', 'Bank of Cyprus', 'Revolut', 'Wise', 'Raiffeisen', 'UniCredit', 'Credo Bank', 'TBC Bank', 'Ziraat Bank', 'IBKR',
     'Sber', 'T-Bank', 'Ozon Bank', 'Alfa', 'Yandex Bank', 'Finuslugi', 'Telegram', 'Binance', 'Bybit', 'Crypto.com', 'Trust', 'cash',
     '(unspecified)'].map(brokerName);
   const typeOrder = ['bond', 'cash', 'deposit', 'liquid', 'gold', 'crypto', 'stock', 'real_estate'].map(t => MP_ASSET_CLASS_LABELS[t]);
