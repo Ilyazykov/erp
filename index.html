@@ -7869,11 +7869,14 @@ const MP_EXP_GROUPS = { 'Food delivery': 'Food', 'Restaurants & cafés': 'Food',
   'Flights': 'Travel', 'Hotels': 'Travel', 'Visas': 'Travel', 'Other travel': 'Travel',
   'Entertainment': 'Fun', 'Games': 'Fun',
   'Clothes': 'Shopping', 'Electronics': 'Shopping', 'Gifts & souvenirs': 'Shopping', 'Shopping': 'Shopping' };
-// A group's colour on the chart over time "by group": its main shade
-// -- light and dark by turns, so that groups side by side (transport and
-// travel; shopping and the yellow subscriptions) don't run together
-const MP_EXP_GROUP_META = { Food: { icon: '🍽', color: '#2ea043' }, Transport: { icon: '🚕', color: '#1f6feb' },
-  Travel: { icon: '✈️', color: '#c297ff' }, Fun: { icon: '🎟', color: '#00c2c7' }, Shopping: { icon: '🛍', color: '#9a6700' } };
+// A group's colour ("by group"): the darkest shade among its categories' --
+// the deepest, so it stands out from the light ones next to it
+const MP_EXP_GROUP_META = Object.fromEntries(Object.entries({ Food: '🍽', Transport: '🚕', Travel: '✈️', Fun: '🎟', Shopping: '🛍' })
+  .map(([g, icon]) => {
+    const lum = hex => { const [r, gr, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)); return 0.2126 * r + 0.7152 * gr + 0.0722 * b; };
+    const shades = MP_EXP_CATS.filter(c => MP_EXP_GROUPS[c[0]] === g).map(c => c[2]);
+    return [g, { icon, color: shades.reduce((d, c) => (lum(c) < lum(d) ? c : d)) }];
+  }));
 let mpExpCache = null;
 async function mpExpLoad() {
   const page = async (q) => {
