@@ -50,6 +50,7 @@
   .btn { padding: 6px 14px; border-radius: 6px; border: 1px solid #1e2830; background: #13191f;
          color: #c9d1d9; cursor: pointer; font-size: 0.85rem; }
   .btn:hover { border-color: #4da8c8; }
+  .btn:disabled { opacity: 0.35; cursor: default; border-color: #1e2830; }
   .btn.primary { background: #1a2a3a; border-color: #4da8c8; color: #4da8c8; }
   .btn.danger:hover { border-color: #e05252; color: #e05252; }
   .form-row { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
@@ -7950,9 +7951,25 @@ function mpExpSetPeriod(mode, anchor) {
   document.getElementById('exp_from').value = from;
   document.getElementById('exp_to').value = to;
 }
+// The days with a record: from the first one to today -- a period wholly
+// outside them is empty, ‹ › don't go there
+function mpExpBounds() {
+  const today = new Date().toISOString().slice(0, 10);
+  const first = (mpExpCache?.spent || []).reduce((m, r) => (r.day < m ? r.day : m), today);
+  return { first, today };
+}
+function mpExpUpdateNav() {
+  const { from, to } = mpExpRange();
+  const { first, today } = mpExpBounds();
+  document.getElementById('exp_prev').disabled = !from || from <= first;
+  document.getElementById('exp_next').disabled = !to || to >= today;
+  // the date pickers: no day, month or year past today or before the first record
+  for (const id of ['exp_from', 'exp_to']) Object.assign(document.getElementById(id), { min: first, max: today });
+}
 function mpExpShift(dir) {
   const { mode, from, to } = mpExpRange();
   if (!from || !to) return;
+  if (dir > 0 ? to >= mpExpBounds().today : from <= mpExpBounds().first) return;
   if (mode === 'custom') {
     const len = Date.parse(to) - Date.parse(from) + 86400000;
     const f = new Date(Date.parse(from) + dir * len), t = new Date(Date.parse(to) + dir * len);
@@ -8042,6 +8059,7 @@ async function mpRenderExpenses() {
     try { mpExpCache = await mpExpLoad(); } catch (error) { status.textContent = error.message; return; }
   }
   status.textContent = '';
+  mpExpUpdateNav();
   const { skipped, usdPer } = mpExpCache;
   const spreadOn = document.getElementById('exp_spread').checked;
   // worked out rather than recorded (the cash that left no trace, ...): shown or not
@@ -8250,7 +8268,7 @@ async function mpRenderExpenses() {
       type: 'rect', xref: 'x', yref: 'y', x0: i - 0.46, x1: i + 0.46, y0: 0, y1: totals[i],
       line: { color: '#8b949e', width: 1.5, dash: 'dot' }, fillcolor: 'rgba(0,0,0,0)', layer: 'above' }] : [])],
     annotations: buckets.flatMap((b, i) => partial[i] && totals[i] ? [{
-      x: b, y: totals[i], yref: 'y', text: partial[i], showarrow: false, yanchor: 'bottom', yshift: 2,
+      x: i, xref: 'x', y: totals[i], yref: 'y', text: partial[i],  // the index: "2017" would be read as position 2017 showarrow: false, yanchor: 'bottom', yshift: 2,
       font: { size: 10, color: '#8b949e' } }] : []),
   }, CONFIG);
   bars.removeAllListeners?.('plotly_click');
@@ -8281,7 +8299,11 @@ async function mpRenderExpenses() {
       ${rowsTable(c.rows)}</details>`).join('')}` : '';
 }
 for (const id of ['exp_from', 'exp_to']) {
-  document.getElementById(id).addEventListener('change', () => {
+  document.getElementById(id).addEventListener('change', e => {
+    // typed in past the bounds: to the nearest day within them
+    const { first, today } = mpExpBounds();
+    if (e.target.value > today) e.target.value = today;
+    if (e.target.value && e.target.value < first) e.target.value = first;
     document.getElementById('exp_period').value = 'custom';
     if (mpIsSignedIn) mpRenderExpenses();
   });
