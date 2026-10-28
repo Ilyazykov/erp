@@ -7901,9 +7901,33 @@ async function mpExpLoad() {
     (r.counted ? spent : skipped).push(row);
   }
   // income (migration 141): none yet or no table -- no line
-  const { data: inc } = await sb.from('income').select('day, amount, currency, usd, category').order('day');
-  const income = (inc || []).map(r => ({ day: r.day, usd: r.usd == null ? NaN : Number(r.usd), cat: r.category }));
-  return { spent, skipped, usdPer, periods: periods || [], income };
+  const { data: inc } = await sb.from('income').select('day, account, usd, category').order('day');
+  return { spent, skipped, usdPer, periods: periods || [], incomeDays: mpExpIncomeDays(inc || []) };
+}
+// Income over the days it was earned in: each payment over the days since the
+// one before it from the same source (account and kind) -- a salary paid on
+// the 28th-30th would fall in one month twice and in the next not at all, a
+// month's back pay all in one; a first payment over the source's usual gap.
+// At most 120 days. -> [{day, usd, paid}], paid: the payment's day, for its rate.
+function mpExpIncomeDays(rows) {
+  const DAY = 86400000, out = [], bySource = new Map();
+  for (const r of rows) {
+    if (r.usd == null || !Number.isFinite(Number(r.usd))) continue;
+    const k = r.account + '\u0000' + r.category;
+    if (!bySource.has(k)) bySource.set(k, new Map());
+    const days = bySource.get(k);
+    days.set(r.day, (days.get(r.day) || 0) + Number(r.usd));
+  }
+  for (const days of bySource.values()) {
+    const list = [...days].sort((a, b) => a[0].localeCompare(b[0]));
+    const gaps = list.slice(1).map(([d], i) => (Date.parse(d) - Date.parse(list[i][0])) / DAY).sort((a, b) => a - b);
+    const usual = gaps.length ? gaps[gaps.length >> 1] : 1;
+    list.forEach(([d, usd], i) => {
+      const n = Math.max(1, Math.min(120, Math.round(i ? (Date.parse(d) - Date.parse(list[i - 1][0])) / DAY : usual)));
+      for (let k = 0; k < n; k++) out.push({ day: new Date(Date.parse(d) - k * DAY).toISOString().slice(0, 10), usd: usd / n, paid: d });
+    });
+  }
+  return out;
 }
 function mpExpRange() {
   const mode = document.getElementById('exp_period').value;
@@ -8183,10 +8207,10 @@ async function mpRenderExpenses() {
   // a bar above it is a period spent more than came in
   const incomeBy = new Map();
   if (document.getElementById('exp_income').checked) {
-    for (const r of mpExpCache.income || []) {
-      if (r.day < startDay || (/_td$/.test(step) ? r.day > today : r.day.slice(0, 7) > today.slice(0, 7)) || !Number.isFinite(r.usd)) continue;
+    for (const r of mpExpCache.incomeDays) {
+      if (r.day < startDay || (/_td$/.test(step) ? r.day > today : r.day.slice(0, 7) > today.slice(0, 7))) continue;
       const b = bucket(r.day);
-      incomeBy.set(b, (incomeBy.get(b) || 0) + r.usd / mpExpCache.usdPer(ccy, r.day));
+      incomeBy.set(b, (incomeBy.get(b) || 0) + r.usd / mpExpCache.usdPer(ccy, r.paid));
     }
   }
   // a bar of a part only (the records start in it, or it isn't over yet): a
@@ -8203,19 +8227,10 @@ async function mpRenderExpenses() {
     marker: { color: meta[n].color }, hovertemplate: `${n}: %{y:,.0f} ${sym}<extra></extra>`,
   })),
   ...life.legend,
-  // by month: the average of the last 3 -- a salary paid on the 28th-30th falls
-  // in one month twice and in the next not at all (a month to today ends on the
-  // 28th), the line would jump between them; the month's own sum in the hover
-  ...(incomeBy.size ? (() => {
-    const own = buckets.map(b => incomeBy.get(b) ?? 0);
-    const monthly = step === 'month' || step === 'month_td';
-    const avg = own.map((v, i) => { const w = own.slice(Math.max(0, i - 2), i + 1); return w.reduce((a, x) => a + x, 0) / w.length; });
-    return [{ type: 'scatter', mode: 'lines+markers', name: monthly ? 'Income (3-month average)' : 'Income', x: buckets,
-      y: monthly ? avg : own, customdata: own, line: { color: '#e6edf3', width: 2, shape: monthly ? 'spline' : 'linear' },
-      marker: { color: '#e6edf3', size: monthly ? 5 : 7, line: { color: '#0d1117', width: 1 } },
-      hovertemplate: monthly ? `<b>Income: %{customdata:,.0f} ${sym}</b> (3-month average %{y:,.0f})<extra></extra>`
-        : `<b>Income: %{y:,.0f} ${sym}</b><extra></extra>` }];
-  })() : []),
+  ...(incomeBy.size ? [{ type: 'scatter', mode: 'lines+markers', name: 'Income', x: buckets,
+    y: buckets.map(b => incomeBy.get(b) ?? 0), line: { color: '#e6edf3', width: 2 },
+    marker: { color: '#e6edf3', size: 7, line: { color: '#0d1117', width: 1 } },
+    hovertemplate: `<b>Income: %{y:,.0f} ${sym}</b><extra></extra>` }] : []),
   // the bar's total and where one was, in the hover only: first there -- the stack's
   // hover lists the traces last to first
   { type: 'scatter', mode: 'markers', marker: { opacity: 0 }, name: 'Total', showlegend: false,
