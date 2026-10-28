@@ -7867,8 +7867,10 @@ const MP_EXP_GROUPS = { 'Food delivery': 'Food', 'Restaurants & cafés': 'Food',
   'Flights': 'Travel', 'Hotels': 'Travel', 'Visas': 'Travel', 'Other travel': 'Travel',
   'Clothes': 'Shopping', 'Electronics': 'Shopping', 'Gifts & souvenirs': 'Shopping', 'Shopping': 'Shopping' };
 // A group's colour on the chart over time "by group": its main shade
-const MP_EXP_GROUP_META = { Food: { color: '#3fb950' }, Transport: { color: '#58a6ff' },
-  Travel: { color: '#a371f7' }, Shopping: { color: '#d29922' } };
+// -- light and dark by turns, so that groups side by side (transport and
+// travel; shopping and the yellow subscriptions) don't run together
+const MP_EXP_GROUP_META = { Food: { color: '#2ea043' }, Transport: { color: '#1f6feb' },
+  Travel: { color: '#c297ff' }, Shopping: { color: '#9a6700' } };
 let mpExpCache = null;
 async function mpExpLoad() {
   const page = async (q) => {
