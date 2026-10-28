@@ -7733,12 +7733,14 @@ const MP_EXP_CATS = [
   ['Food delivery', '🛵', '#7ee787'],
   ['Restaurants & cafés', '🍽', '#3fb950'],
   ['Groceries', '🛒', '#1a7f37'],
-  ['Transport', '🚕', '#58a6ff'],
+  ['Taxi', '🚕', '#58a6ff'],
+  ['Public transport', '🚇', '#1f6feb'],
+  ['Other transport', '⛽', '#a5d6ff'],
   ['Travel', '✈️', '#a371f7'],
   ['Health & sport', '💊', '#db61a2'],
   ['Entertainment', '🎟', '#00c2c7'],
   ['Education', '🎓', '#ffa198'],
-  ['Subscriptions & services', '🧾', '#79c0ff'],
+  ['Subscriptions & services', '🧾', '#ffdf5d'],
   ['Shopping', '🛍', '#d29922'],
   ['Government & visas', '🏛', '#8b949e'],
   ['Fees', '🏦', '#6e7681'],
@@ -7746,9 +7748,11 @@ const MP_EXP_CATS = [
   ['Transfers to people', '👥', '#c297ff'],
   ['Other', '•', '#4b5560'],
 ];
-// Categories shown side by side as one group (the food: shades of one green) --
+// Categories shown side by side as one group (the food: shades of one green; the
+// transport: of one blue) --
 // in the donut and the list, ordered by the group's total, then each one's.
-const MP_EXP_GROUPS = { 'Food delivery': 'Food', 'Restaurants & cafés': 'Food', 'Groceries': 'Food' };
+const MP_EXP_GROUPS = { 'Food delivery': 'Food', 'Restaurants & cafés': 'Food', 'Groceries': 'Food',
+  'Taxi': 'Transport', 'Public transport': 'Transport', 'Other transport': 'Transport' };
 let mpExpCache = null;
 async function mpExpLoad() {
   const page = async (q) => {
