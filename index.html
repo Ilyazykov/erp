@@ -9163,11 +9163,11 @@ async function mpRenderCapitalBrokers() {
   rows.forEach((r, i) => Object.entries(r.accounts || {}).forEach(([a, v]) => {
     if (Math.abs(Number(v)) >= 1 && !first.has(a)) first.set(a, i);
   }));
-  // ... except these, top down: cash, BoC, Revolut, IBKR, Freedom, UniCredit,
+  // ... except these, top down: cash, TBC, BoC, Revolut, IBKR, Freedom, UniCredit,
   // T-Bank, Sber, Finuslugi, Ozon, Yandex, Alfa -- then the rest -- then
   // Raiffeisen and Ziraat at the very bottom
   const BOTTOM = ['Ziraat Bank', 'Raiffeisen'];
-  const TOP = ['Alfa', 'Yandex Bank', 'Ozon Bank', 'Finuslugi', 'Sber', 'T-Bank', 'UniCredit', 'Freedom24', 'IBKR', 'Revolut', 'Bank of Cyprus', 'cash'];
+  const TOP = ['Alfa', 'Yandex Bank', 'Ozon Bank', 'Finuslugi', 'Sber', 'T-Bank', 'UniCredit', 'Freedom24', 'IBKR', 'Revolut', 'Bank of Cyprus', 'TBC Bank', 'cash'];
   const rank = a => (BOTTOM.includes(a) ? BOTTOM.indexOf(a) - BOTTOM.length : TOP.indexOf(a) + 1);
   const accounts = [...first.keys()].sort((a, b) => rank(a) - rank(b) || first.get(a) - first.get(b));
   let fallback = 0;
