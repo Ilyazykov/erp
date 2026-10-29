@@ -106,6 +106,25 @@ async function bondization(secid: string) {
 }
 // a payment due on a weekend comes on the Monday
 const workday = (day: string) => { const w = new Date(`${day}T00:00:00Z`).getUTCDay(); return w === 6 ? addDays(day, 2) : w === 0 ? addDays(day, 1) : day; };
+const workdaysLater = (day: string, n: number) => { let d = workday(day); for (let i = 0; i < n; i++) d = workday(addDays(d, 1)); return d; };
+// How many workdays after the MOEX date the account credits this bond's
+// coupons: what its own past coupons show most often (Alfa pays ВУШ, Медскан,
+// МегаФон, Яндекс 001P-02 the next workday, ГТЛК, Софтлайн, ОФЗ on the day --
+// by the bond, every time; Sber on the day), 0 with none to go by.
+function payLag(own: Trade[], coupons: Record<string, unknown>[]): number {
+  const scheduled = coupons.map(c => c.coupondate).filter((d): d is string => typeof d === 'string').map(workday);
+  const count = new Map<number, number>();
+  for (const r of own.filter(r => r.side === 'dividend')) {
+    const due = scheduled.filter(d => d <= r.trade_date && daysBetween(d, r.trade_date) <= 7).pop();
+    if (!due) continue;
+    let lag = 0;
+    while (lag < 5 && workdaysLater(due, lag) < r.trade_date) lag++;
+    if (workdaysLater(due, lag) === r.trade_date) count.set(lag, (count.get(lag) ?? 0) + 1);
+  }
+  let best = 0;
+  for (const [lag, n] of count) if (n > (count.get(best) ?? 0) || (n === (count.get(best) ?? 0) && lag < best)) best = lag;
+  return best;
+}
 const ccyOf = (unit: unknown) => { const u = String(unit ?? 'RUB').toUpperCase(); return u === 'SUR' ? 'RUB' : u; };
 
 const BOND_ACCOUNTS = ['Sber', 'Alfa'];
@@ -125,36 +144,39 @@ async function bondEstimates(db: any, userId: string, until: string) {
       const contract = contractOf(own);
       let moex;
       try { moex = await bondization(ticker); } catch (err) { skipped.push(String(err)); continue; }
-      const due = (d: unknown) => typeof d === 'string' && workday(d) > end && workday(d) <= until;
+      const lag = payLag(own, moex.coupons);
+      const when = ` MOEX schedule${lag ? ` + ${lag} workday${lag > 1 ? 's' : ''}, as its past coupons came` : ''}`;
+      const paidOn = (d: string) => workdaysLater(d, lag);
+      const due = (d: unknown) => typeof d === 'string' && paidOn(d) > end && paidOn(d) <= until;
       for (const c of moex.coupons) {
         const value = Number(c.value);
         if (!due(c.coupondate) || !(value > 0)) continue;
-        const day = workday(String(c.coupondate));
+        const day = paidOn(String(c.coupondate));
         const n = heldOn(own, String(c.recorddate ?? addDays(String(c.coupondate), -1)));
         if (n <= 0) continue;
         const amount = round2(n * value), currency = ccyOf(c.faceunit);
         trades.push({ account, ticker, side: 'dividend', quantity: amount, price: value, trade_date: day, currency,
-          note: `ESTIMATED: ${c.name} (coupon; ${n} bonds x ${value} ${currency}, MOEX schedule), until the broker report`,
+          note: `ESTIMATED: ${c.name} (coupon; ${n} bonds x ${value} ${currency},${when}), until the broker report`,
           external_id: `est:${account}:${ticker}:${day}:coupon` });
         cash.push({ account, contract, currency, day, amount, desc: `ESTIMATED: coupon ${c.name}` });
       }
       for (const a of moex.amortizations) {
         const value = Number(a.value);
         if (!due(a.amortdate) || !(value > 0)) continue;
-        const day = workday(String(a.amortdate));
+        const day = paidOn(String(a.amortdate));
         const n = heldOn(own, addDays(String(a.amortdate), -1));
         if (n <= 0) continue;
         const amount = round2(n * value), currency = ccyOf(a.faceunit);
         const maturity = a.data_source === 'maturity' || Number(a.facevalue) - value <= 0.0001;
         if (maturity) {
           trades.push({ account, ticker, side: 'repayment', quantity: amount, price: amount, trade_date: day, currency,
-            note: `ESTIMATED: ${a.name} (redemption; ${n} bonds x ${value} ${currency}, MOEX schedule), until the broker report`,
+            note: `ESTIMATED: ${a.name} (redemption; ${n} bonds x ${value} ${currency},${when}), until the broker report`,
             external_id: `est:${account}:${ticker}:${day}:repayment` });
           trades.push({ account, ticker, side: 'sell', quantity: n, price: 0, trade_date: day, currency,
             note: `ESTIMATED: ${a.name} redeemed, until the broker report`, external_id: `est:${account}:${ticker}:${day}:redeemed` });
         } else {
           trades.push({ account, ticker, side: 'amortisation', quantity: amount, price: value, trade_date: day, currency,
-            note: `ESTIMATED: ${a.name} (amortisation; ${n} bonds x ${value} ${currency}, MOEX schedule), until the broker report`,
+            note: `ESTIMATED: ${a.name} (amortisation; ${n} bonds x ${value} ${currency},${when}), until the broker report`,
             external_id: `est:${account}:${ticker}:${day}:amortisation` });
         }
         cash.push({ account, contract, currency, day, amount, desc: `ESTIMATED: ${maturity ? 'redemption' : 'amortisation'} ${a.name}` });
