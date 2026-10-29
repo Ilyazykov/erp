@@ -73,6 +73,8 @@
   @media (max-width: 800px) { .exp-layout { grid-template-columns: 1fr; } }
   .exp-cat { display: flex; align-items: center; gap: 12px; padding: 10px 8px; border-bottom: 1px solid #1e2830; cursor: pointer; }
   .exp-cat:hover { background: #13191f; }
+  .exp-cat.exp-sub { padding-left: 40px; }
+  .exp-cat.exp-sub .exp-dot { width: 26px; height: 26px; font-size: 12px; }
   .exp-dot { width: 32px; height: 32px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; font-size: 15px; }
   .exp-name { flex: 1; min-width: 0; }
   .exp-name b { display: block; color: #e6edf3; font-weight: 600; }
@@ -8181,7 +8183,19 @@ async function mpRenderExpenses() {
       <td style="text-align:left">${esc(r.account)}</td>
       <td>${r.amt.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${r.ccy}</td><td>${money(conv(r))}</td></tr>`).join('')}</tbody></table></div>`;
   const catList = document.getElementById('exp_categories');
-  catList.innerHTML = cats.length ? cats.map((c, i) => `<div class="exp-cat" data-i="${i}">
+  // the list: the groups always (food, travel, housing, ...), and without "by
+  // group" each one's categories under it, indented -- the same groups either way
+  const items = [];
+  for (const c of cats) {
+    const g = MP_EXP_GROUPS[c.cat];
+    if (groupedTop || !g) { items.push(c); continue; }
+    if (items.at(-1)?.group !== g && items.at(-1)?.cat !== g) {
+      const members = cats.filter(x => MP_EXP_GROUPS[x.cat] === g);
+      items.push({ cat: g, header: true, total: members.reduce((t, x) => t + x.total, 0), rows: members.flatMap(x => x.rows) });
+    }
+    items.push({ ...c, group: g });
+  }
+  catList.innerHTML = items.length ? items.map((c, i) => `<div class="exp-cat${c.group ? ' exp-sub' : ''}" data-i="${i}">
       <div class="exp-dot" style="background:${meta[c.cat].color}33;color:${meta[c.cat].color}">${meta[c.cat].icon}</div>
       <div class="exp-name"><b>${c.cat}</b><span>${c.rows.length} transaction${c.rows.length === 1 ? '' : 's'}</span></div>
       <div class="exp-amt"><b>${money(c.total)}</b><span>${total ? Math.round(c.total / total * 100) : 0}%</span></div>
@@ -8189,7 +8203,7 @@ async function mpRenderExpenses() {
     : '<p class="empty-note">No expenses in this period.</p>';
   catList.querySelectorAll('.exp-cat').forEach(el => el.addEventListener('click', () => {
     const box = catList.querySelector(`.exp-open[data-i="${el.dataset.i}"]`);
-    if (!box.innerHTML) box.innerHTML = rowsTable(cats[el.dataset.i].rows);
+    if (!box.innerHTML) box.innerHTML = rowsTable(items[el.dataset.i].rows);
     box.style.display = box.style.display === 'none' ? '' : 'none';
   }));
 
