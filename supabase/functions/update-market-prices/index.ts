@@ -229,6 +229,15 @@ function log(msg: string): void {
   console.log(msg);
 }
 
+// When this run started (runUpdate): the MOEX search stops taking new
+// tickers past MOEX_SEARCH_BUDGET_MS, so a slow MOEX day (its requests
+// hanging, 29.10.2026) still writes every price found -- the rest keep
+// yesterday's -- instead of the function being killed at 150 s with none.
+let runStarted = Date.now();
+// (60 s: a search in flight then may still take its ~20 s of retries, and
+// Yahoo and the writes come after)
+const MOEX_SEARCH_BUDGET_MS = 60_000;
+
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -698,8 +707,12 @@ async function fetchMoexPrices(tickers: string[]): Promise<Record<string, MoexRe
   };
   const queue = [...remaining];
   await Promise.all(Array.from({ length: 8 }, async () => {
-    for (let t = queue.shift(); t !== undefined; t = queue.shift()) await resolveOne(t);
+    for (let t = queue.shift(); t !== undefined; t = queue.shift()) {
+      if (Date.now() - runStarted > MOEX_SEARCH_BUDGET_MS) { queue.unshift(t); break; }
+      await resolveOne(t);
+    }
   }));
+  if (queue.length) log(`MOEX: out of time, ${queue.length} left at yesterday's price: ${queue.join(', ')}`);
 
   return results;
 }
@@ -932,6 +945,7 @@ async function upsertMarketPrices(supabase: any, rows: PriceRow[]): Promise<{ up
 // ---------------------------------------------------------------------------
 
 async function runUpdate(): Promise<Record<string, unknown>> {
+  runStarted = Date.now();
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const supabase = createClient(supabaseUrl, serviceKey);
