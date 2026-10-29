@@ -7837,12 +7837,14 @@ async function mpRenderCapital() {
 // rate) -- the page only reads and draws.
 // [category, icon, colour], in the order the chart stacks them; the database's
 // labels of what isn't spending have no entry here.
+// The order is the chart's over time (bottom to top) and its legend, the same
+// for every period: housing, food, transport, travel, then the rest; transfers
+// to people, cash and the unsorted last.
 const MP_EXP_CATS = [
   ['Rent & housing', '🏠', '#ff7a45'],
   ['Nizhny flat bills', '🏢', '#c4501b'],
   ['Bills & utilities', '💡', '#ffb020'],
   ['Phone & internet', '📱', '#ffa657'],
-  ['Relationships', '💝', '#ff6b9d'],
   ['Food delivery', '🛵', '#7ee787'],
   ['Restaurants & cafés', '🍽', '#3fb950'],
   ['Groceries', '🛒', '#1a7f37'],
@@ -7859,20 +7861,21 @@ const MP_EXP_CATS = [
   ['Travel taxi', '🚖', '#9a6cf0'],
   ['Travel public transport', '🚆', '#c9b3f7'],
   ['Other travel', '🧳', '#d2a8ff'],
-  ['Health & sport', '💊', '#db61a2'],
   ['Entertainment', '🎟', '#00c2c7'],
-  ['Games', '🎮', '#0a7d83'],
   ['Cinema', '🎬', '#39a0a6'],
-  ['Education', '🎓', '#ffa198'],
-  ['Subscriptions & services', '🧾', '#ffdf5d'],
+  ['Games', '🎮', '#0a7d83'],
   ['Clothes', '👕', '#bb8009'],
   ['Electronics', '💻', '#7d4e00'],
   ['Gifts & souvenirs', '🎁', '#e0b660'],
   ['Shopping', '🛍', '#d29922'],
+  ['Health & sport', '💊', '#db61a2'],
+  ['Education', '🎓', '#ffa198'],
+  ['Subscriptions & services', '🧾', '#ffdf5d'],
+  ['Relationships', '💝', '#ff6b9d'],
   ['Government & taxes', '🏛', '#8b949e'],
   ['Fees', '🏦', '#6e7681'],
-  ['Cash', '💵', '#d0d7de'],
   ['Transfers to people', '👥', '#f85149'],
+  ['Cash', '💵', '#d0d7de'],
   ['Other', '•', '#4b5560'],
 ];
 // Categories shown side by side as one group (the food: shades of one green; the
@@ -8287,7 +8290,10 @@ async function mpRenderExpenses() {
     const k = catOf(r.cat) + '\u0000' + bucket(r.day);
     byBucket.set(k, (byBucket.get(k) || 0) + conv(r));
   }
-  const names = [...new Set([...MP_EXP_CATS.map(c => catOf(c[0])), ...spent.map(r => r.cat).filter(c => !(c in known))])];
+  // a category the page doesn't know yet: before transfers to people, cash and the unsorted
+  const tail = ['Transfers to people', 'Cash', 'Other'];
+  const names = [...new Set([...MP_EXP_CATS.filter(c => !tail.includes(c[0])).map(c => catOf(c[0])),
+    ...spent.map(r => r.cat).filter(c => !(c in known)), ...tail])];
   const order = names.filter(n => buckets.some(b => byBucket.has(n + '\u0000' + b)));
   const life = mpExpLifeBands(periods, buckets, lifeName);
   // income: a line over the stacks -- the bars stay as wide as they are, and
