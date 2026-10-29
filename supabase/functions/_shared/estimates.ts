@@ -79,11 +79,26 @@ const heldOn = (rows: Trade[], day: string) =>
 
 // MOEX's coupons and amortisations of a bond (its secid -- the ticker here).
 const moexCache = new Map<string, { coupons: Record<string, unknown>[]; amortizations: Record<string, unknown>[] }>();
+// From Supabase's servers a MOEX request now and then hangs (~20 s, the next
+// one answers at once): with no limit one of them held the run past the
+// function's 150 s (sync-estimates, 28.10.2026 on) -- 6 s and again, 3 tries.
+async function moexJson(url: string) {
+  let last: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.json();
+    } catch (err) { last = err; }
+  }
+  throw last;
+}
 async function bondization(secid: string) {
   if (moexCache.has(secid)) return moexCache.get(secid)!;
-  const res = await fetch(`https://iss.moex.com/iss/securities/${encodeURIComponent(secid)}/bondization.json?iss.meta=off&iss.only=coupons,amortizations&limit=unlimited`);
-  if (!res.ok) throw new Error(`MOEX bondization ${secid}: HTTP ${res.status}`);
-  const j = await res.json();
+  let j;
+  try {
+    j = await moexJson(`https://iss.moex.com/iss/securities/${encodeURIComponent(secid)}/bondization.json?iss.meta=off&iss.only=coupons,amortizations&limit=unlimited`);
+  } catch (err) { throw new Error(`MOEX bondization ${secid}: ${err}`); }
   const table = (t: { columns: string[]; data: unknown[][] }) => (t?.data ?? []).map(r => Object.fromEntries(t.columns.map((c, i) => [c, r[i]])));
   const out = { coupons: table(j.coupons), amortizations: table(j.amortizations) };
   moexCache.set(secid, out);

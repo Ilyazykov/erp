@@ -87,7 +87,11 @@ const YAHOO_CHART_BASE = 'https://query1.finance.yahoo.com/v8/finance/chart';
 const CBR_DYNAMIC_URL = 'https://www.cbr.ru/scripts/XML_dynamic.asp';
 const CBR_USD_CODE = 'R01235';
 
-const REQUEST_TIMEOUT_MS = 20_000;
+// A MOEX request from Supabase's servers now and then hangs and the retry
+// answers at once: 20 s a hang put the run past the function's 150 s
+// (27.10.2026 on, a hang every few tickers over 107). Every source answers in well
+// under a second otherwise.
+const REQUEST_TIMEOUT_MS = 6_000;
 const HTTP_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
 };
