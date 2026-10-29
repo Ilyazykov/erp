@@ -5304,7 +5304,6 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
         ...e.stocks.map(b => `${rubTxt(b.usd)} → ${b.shares ? `${b.shares} × ` : ''}${b.ticker}`),
         e.rubToCny ? `${rubTxt(e.rubToCny.usd)} → ${buys(e.rubToCny)} (yuan bonds under their w_CNY target)` : '',
         e.rubFund ? `${rubTxt(e.rubFund.usd)} → ${buys(e.rubFund)}` : '',
-        (e.cnyFund && e.cnyFund.bonds.length) || (e.rubToCny && e.rubToCny.bonds.length) || (e.rubFund && e.rubFund.bonds.length) ? 'bonds at the clean price, plus accrued interest' : '',
         e.leftRub > 0.005 ? `${rubTxt(e.leftRub)} left` : '', e.leftCny > 0.005 ? `${cnyTxt(e.leftCny)} left` : '',
       ].filter(Boolean).join('; ');
       rows.push(['8', `${account}: ${what}`, null, does]);
