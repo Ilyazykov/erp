@@ -8163,10 +8163,14 @@ async function mpRenderExpenses() {
     return [...g.values()].sort((a, b) => b.total - a.total);
   };
   const cats = group(rows, groupedTop);
-  const groupOf = c => MP_EXP_GROUPS[c.cat] ?? c.cat;
-  const groupTotal = new Map();
-  for (const c of cats) groupTotal.set(groupOf(c), (groupTotal.get(groupOf(c)) || 0) + c.total);
-  cats.sort((a, b) => groupTotal.get(groupOf(b)) - groupTotal.get(groupOf(a)) || groupOf(a).localeCompare(groupOf(b)) || b.total - a.total);
+  // the fixed order of MP_EXP_CATS (housing, food, transport, travel, ...,
+  // transfers to people, cash, the unsorted), a group where its first
+  // category is; one the page doesn't know yet before that tail
+  const rank = cat => {
+    const i = MP_EXP_CATS.findIndex(c => c[0] === cat || MP_EXP_GROUPS[c[0]] === cat);
+    return i >= 0 ? i : MP_EXP_CATS.findIndex(c => c[0] === 'Transfers to people') - 0.5;
+  };
+  cats.sort((a, b) => rank(a.cat) - rank(b.cat) || b.total - a.total);
   const total = cats.reduce((s, c) => s + c.total, 0);
 
   const donut = document.getElementById('plot_exp_donut');
