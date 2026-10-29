@@ -483,7 +483,7 @@
       <label title="One's own money coming in: a salary, a flat's rent (bank_transactions.income_category, by the rules in income_rules) -- a line over the bars"><input type="checkbox" id="exp_income"> income</label>
       <label title="The shades of one colour as one: food, transport, travel, shopping"><input type="checkbox" id="exp_grouped"> by group</label>
       <label>by <select id="exp_step"><option value="month">month</option><option value="quarter">quarter</option><option value="year">year</option>
-        <option value="month_td">month to today</option><option value="year_td">year to today</option></select></label>
+        <option value="month_td">month to today</option><option value="quarter_td">quarter to today</option><option value="year_td">year to today</option></select></label>
     </div>
     <div id="plot_exp_months" style="height:520px"></div>
     <div id="exp_excluded"></div>
@@ -8244,10 +8244,10 @@ async function mpRenderExpenses() {
   const first = spent.reduce((m, r) => (r.day < m ? r.day : m), today);
   const buckets = [];
   let bucket, startDay;
-  if (step === 'month_td' || step === 'year_td') {
-    // months / years ending today: 29.09 - 28.10, 29.08 - 28.09, ... (the same day
+  if (/_td$/.test(step)) {
+    // months / quarters / years ending today: 29.09 - 28.10, 29.08 - 28.09, ... (the same day
     // of the month, the last one for a month too short)
-    const n = step === 'year_td' ? 12 : 1, unit = step === 'year_td' ? 'year' : 'month';
+    const unit = step.replace(/_td$/, ''), n = { month: 1, quarter: 3, year: 12 }[unit];
     const [y, m, d] = today.split('-').map(Number);
     const end = k => {
       const last = new Date(Date.UTC(y, m - k * n, 0)).getUTCDate();
