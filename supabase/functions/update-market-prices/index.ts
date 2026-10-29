@@ -1123,7 +1123,13 @@ async function runUpdate(): Promise<Record<string, unknown>> {
   }
 
   // --- MOEX (shares, ETFs, corp bonds, OFZ) ---
-  const moexHits = await fetchMoexPrices(moexCandidates);
+  // A ticker already priced by Yahoo (AAPL, VWCE, ...) isn't searched on MOEX
+  // again: one search each, ~90 of them, with MOEX hanging now and then, was
+  // most of the run and put it past the function's 150 s (27.10.2026). It
+  // falls through to Yahoo below, as a MOEX miss does.
+  const { data: onYahoo } = await supabase.from('market_prices').select('ticker').eq('source', 'yahoo_finance');
+  const elsewhere = new Set((onYahoo ?? []).map((r: { ticker: string }) => r.ticker));
+  const moexHits = await fetchMoexPrices(moexCandidates.filter((t) => !elsewhere.has(t)));
   for (const [ticker, info] of Object.entries(moexHits)) {
     const priceNative = info.price_rub;
     const quoteCurrency = normalizeCurrency(info.currency) ?? 'RUB';
