@@ -74,6 +74,7 @@
   .exp-cat { display: flex; align-items: center; gap: 12px; padding: 10px 8px; border-bottom: 1px solid #1e2830; cursor: pointer; }
   .exp-cat:hover { background: #13191f; }
   .exp-cat.exp-sub { padding-left: 40px; }
+  .exp-caret { color: #6a7381; font-weight: 400; display: inline !important; font-size: 0.8em !important; }
   .exp-cat.exp-sub .exp-dot { width: 26px; height: 26px; font-size: 12px; }
   .exp-dot { width: 32px; height: 32px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; font-size: 15px; }
   .exp-name { flex: 1; min-width: 0; }
@@ -7889,6 +7890,7 @@ const MP_EXP_GROUP_META = Object.fromEntries(Object.entries({
   Travel: ['✈️', 'Visas'], Fun: ['🎟', 'Entertainment'], Shopping: ['🛍', 'Clothes'],
 }).map(([g, [icon, main]]) => [g, { icon, color: MP_EXP_CATS.find(c => c[0] === main)[2] }]));
 let mpExpCache = null;
+const mpExpFolded = new Set();  // groups folded in the list of the expenses tab
 async function mpExpLoad() {
   const page = async (q) => {
     const out = [];
@@ -8198,13 +8200,26 @@ async function mpRenderExpenses() {
     }
     items.push({ ...c, group: g });
   }
-  catList.innerHTML = items.length ? items.map((c, i) => `<div class="exp-cat${c.group ? ' exp-sub' : ''}" data-i="${i}">
+  // a group's line (without "by group") folds its categories in and out, its
+  // rows are under them; folded or not stays across re-renders
+  const folded = c => c.group && mpExpFolded.has(c.group);
+  catList.innerHTML = items.length ? items.map((c, i) => `<div class="exp-cat${c.group ? ' exp-sub' : ''}" data-i="${i}"${c.group ? ` data-g="${c.group}"` : ''}${c.header ? ` data-head="${c.cat}"` : ''}${folded(c) ? ' style="display:none"' : ''}>
       <div class="exp-dot" style="background:${meta[c.cat].color}33;color:${meta[c.cat].color}">${meta[c.cat].icon}</div>
-      <div class="exp-name"><b>${c.cat}</b><span>${c.rows.length} transaction${c.rows.length === 1 ? '' : 's'}</span></div>
+      <div class="exp-name"><b>${c.header ? `<span class="exp-caret">${mpExpFolded.has(c.cat) ? '▸' : '▾'}</span> ` : ''}${c.cat}</b><span>${c.rows.length} transaction${c.rows.length === 1 ? '' : 's'}</span></div>
       <div class="exp-amt"><b>${money(c.total)}</b><span>${total ? Math.round(c.total / total * 100) : 0}%</span></div>
     </div><div class="exp-open" data-i="${i}" style="display:none"></div>`).join('')
     : '<p class="empty-note">No expenses in this period.</p>';
   catList.querySelectorAll('.exp-cat').forEach(el => el.addEventListener('click', () => {
+    if (el.dataset.head) {
+      const g = el.dataset.head, fold = !mpExpFolded.has(g);
+      fold ? mpExpFolded.add(g) : mpExpFolded.delete(g);
+      el.querySelector('.exp-caret').textContent = fold ? '▸' : '▾';
+      catList.querySelectorAll(`.exp-cat[data-g="${g}"]`).forEach(sub => {
+        sub.style.display = fold ? 'none' : '';
+        if (fold) catList.querySelector(`.exp-open[data-i="${sub.dataset.i}"]`).style.display = 'none';
+      });
+      return;
+    }
     const box = catList.querySelector(`.exp-open[data-i="${el.dataset.i}"]`);
     if (!box.innerHTML) box.innerHTML = rowsTable(items[el.dataset.i].rows);
     box.style.display = box.style.display === 'none' ? '' : 'none';
