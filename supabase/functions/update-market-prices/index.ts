@@ -643,11 +643,13 @@ async function fetchMoexPrices(tickers: string[]): Promise<Record<string, MoexRe
   const remaining = tickers.filter((t) => !(t in results));
 
   log(`MOEX: resolving ${remaining.length} remaining candidates via securities search...`);
-  for (const ticker of remaining) {
+  // Eight at a time: one by one, 2-3 requests each with MOEX hanging now and
+  // then, the ~45 bonds alone ran past the function's 150 s (29.10.2026).
+  const resolveOne = async (ticker: string) => {
     const info = await moexResolveViaSearch(ticker);
     if (info === null) {
       log(`  ${ticker}: not found on MOEX`);
-      continue;
+      return;
     }
     const secid = info.secid;
     const board = info.marketprice_boardid || info.primary_boardid;
@@ -655,12 +657,12 @@ async function fetchMoexPrices(tickers: string[]): Promise<Record<string, MoexRe
     if (group === 'stock_bonds') {
       if (!board) {
         log(`  ${ticker}: MOEX bond found (${secid}) but no board`);
-        continue;
+        return;
       }
       const bond = await moexFetchBond(secid, board);
       if (bond === null) {
         log(`  ${ticker}: MOEX bond found (${secid}/${board}) but no price data`);
-        continue;
+        return;
       }
       const assetClass = info.type === 'ofz_bond' ? 'moex_ofz' : 'moex_bond';
       results[ticker] = { ...bond, secid, asset_class: assetClass };
@@ -681,7 +683,7 @@ async function fetchMoexPrices(tickers: string[]): Promise<Record<string, MoexRe
       }
       if (!hit) {
         log(`  ${ticker}: MOEX security found (${secid}) but no market data on any board`);
-        continue;
+        return;
       }
       const assetClass = moexFundAssetClass(ticker);
       results[ticker] = { ...hit[secid], secid, asset_class: assetClass };
@@ -689,7 +691,11 @@ async function fetchMoexPrices(tickers: string[]): Promise<Record<string, MoexRe
       log(`  ${ticker}: MOEX group '${group}' not handled, skipping`);
     }
     await sleep(150);
-  }
+  };
+  const queue = [...remaining];
+  await Promise.all(Array.from({ length: 8 }, async () => {
+    for (let t = queue.shift(); t !== undefined; t = queue.shift()) await resolveOne(t);
+  }));
 
   return results;
 }
