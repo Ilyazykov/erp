@@ -292,6 +292,68 @@ async function revolutStandIns(db: any, userId: string, write: Tx[]): Promise<{ 
   return { transfers: transfers + invest.length, returns };
 }
 
+// A Revolut top-up from the Bank of Cyprus card (Apple Pay *2749) Revolut
+// credits at once; BoC books it 1-4 days later, and its API doesn't list the
+// card hold meanwhile -- the capital had the money twice (29.10.2026, the
+// salary moved on the day it came). Until BoC books it, a stand-in BoC row
+// takes it out: 'openbanking_boc' 'standin:<the top-up>', "PENDING: ...",
+// booked in 2999 -- refresh_capital_daily's bank_pending counts it from the
+// top-up's day on, the transfer matcher pairs it with the top-up. Every run
+// rewrites them after all the banks' syncs, so one goes once BoC's own row
+// (the amount, "Revolut", from 2 days before the top-up to a week after) is
+// there. Temporary: a stopgap for these card top-ups only.
+const TOPUP_RE = /top-?up by \*2749/i;
+const STANDIN_DAYS = 7;
+// deno-lint-ignore no-explicit-any
+async function bocTopUpStandIns(db: any, userId: string): Promise<number> {
+  const src = OPENBANKING_SOURCE['Bank of Cyprus'];
+  const { data: had, error: hErr } = await db.from('bank_transactions').select('external_id')
+    .eq('user_id', userId).eq('external_source', src).like('external_id', 'standin:%');
+  if (hErr) throw new Error(hErr.message);
+  const from = new Date(Date.now() - STANDIN_DAYS * 86400000).toISOString();
+  const { data: tops, error: tErr } = await db.from('bank_transactions').select('external_source, external_id, tx_date, amount, currency, description')
+    .eq('user_id', userId).eq('account', 'Revolut').gt('amount', 0).gte('tx_date', from).order('tx_date');
+  if (tErr) throw new Error(tErr.message);
+  const { data: boc, error: bErr } = await db.from('bank_transactions').select('tx_date, amount, currency')
+    .eq('user_id', userId).eq('account', 'Bank of Cyprus').lt('amount', 0).ilike('description', '%revolut%').not('external_id', 'like', 'standin:%')
+    .gte('tx_date', new Date(Date.parse(from) - 86400000).toISOString());
+  if (bErr) throw new Error(bErr.message);
+  const used = new Set<number>();
+  const { data: last } = await db.from('bank_transactions').select('balance_after, currency')
+    .eq('user_id', userId).eq('external_source', src).not('external_id', 'like', 'standin:%')
+    .order('booked_at', { ascending: false }).order('tx_date', { ascending: false });
+  const bal: Record<string, number> = {};
+  for (const r of last ?? []) if (!(r.currency in bal)) bal[r.currency] = Number(r.balance_after ?? 0);
+  const rows = [];
+  for (const t of (tops ?? []).filter((x: { description: string }) => TOPUP_RE.test(x.description))) {
+    const at = Date.parse(t.tx_date);
+    const i = (boc ?? []).findIndex((b: { tx_date: string; amount: number; currency: string }, n: number) => !used.has(n)
+      && b.currency === t.currency && Math.abs(Number(b.amount) + Number(t.amount)) < 0.005
+      && Date.parse(b.tx_date) >= at - 86400000 * 2 && Date.parse(b.tx_date) <= at + STANDIN_DAYS * 86400000);
+    if (i >= 0) { used.add(i); continue; }
+    bal[t.currency] = round2((bal[t.currency] ?? 0) - Number(t.amount));
+    rows.push({
+      user_id: userId, account: 'Bank of Cyprus', tx_date: t.tx_date, booked_at: '2999-12-31T00:00:00Z', authorized_on: String(t.tx_date).slice(0, 10),
+      description: `PENDING: Revolut top-up *2749 the bank hasn't booked yet (stand-in for ${t.external_id})`, counterparty: null,
+      amount: -Number(t.amount), currency: t.currency, category: null, balance_after: bal[t.currency], synthetic: false, synthetic_kind: null,
+      note: null, external_source: src, external_id: `standin:${t.external_source}:${t.external_id}`,
+    });
+  }
+  // the daily job comes every 10 minutes: the same stand-ins stay as they are
+  const key = (ids: string[]) => ids.sort().join('|');
+  if (key((had ?? []).map((r: { external_id: string }) => r.external_id)) === key(rows.map(r => r.external_id))) return rows.length;
+  const { error: dErr } = await db.from('bank_transactions').delete()
+    .eq('user_id', userId).eq('external_source', src).like('external_id', 'standin:%');
+  if (dErr) throw new Error(dErr.message);
+  if (rows.length) {
+    const { error } = await db.from('bank_transactions').insert(rows);
+    if (error) throw new Error(error.message);
+  }
+  const { error: rq } = await db.rpc('request_capital_refresh', { p_user: userId });
+  if (rq) throw new Error(rq.message);
+  return rows.length;
+}
+
 // One bank's session: checked against its statements, then its rows replaced.
 // deno-lint-ignore no-explicit-any
 async function syncBank(db: any, userId: string, jwt: string, bankKey: string, sessionId: string): Promise<Record<string, unknown>> {
@@ -579,6 +641,9 @@ Deno.serve(async (req) => {
         await db.from('broker_credentials').update({ last_sync_at: new Date().toISOString(), last_sync_result: kept })
           .eq('user_id', app.user_id).eq('broker', s.broker);
         results.push({ bank: s.broker.slice(3), ...result });
+      }
+      if ((sessions ?? []).some(s => s.broker === 'eb:boc')) {
+        try { await bocTopUpStandIns(db, app.user_id); } catch (err) { results.push({ bank: 'boc', standin_error: String(err) }); }
       }
     }
     if (userId) return json({ sessions: results });
