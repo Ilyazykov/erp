@@ -92,6 +92,7 @@ const CBR_USD_CODE = 'R01235';
 // (27.10.2026 on, a hang every few tickers over 107). Every source answers in well
 // under a second otherwise.
 const REQUEST_TIMEOUT_MS = 6_000;
+const CBR_TIMEOUT_MS = 20_000;
 const HTTP_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
 };
@@ -305,7 +306,9 @@ async function latestUsdRubRate(): Promise<number | null> {
 
   const url = `${CBR_DYNAMIC_URL}?date_req1=${ddmmyyyy(start)}&date_req2=${ddmmyyyy(end)}&VAL_NM_RQ=${CBR_USD_CODE}`;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  // (cbr.ru is slow, not hanging: 6 s missed it and every rouble price was
+  // skipped, 29.10.2026 -- it keeps its 20 s)
+  const timer = setTimeout(() => controller.abort(), CBR_TIMEOUT_MS);
   let buf: ArrayBuffer;
   try {
     const resp = await fetch(url, { headers: HTTP_HEADERS, signal: controller.signal });
@@ -965,7 +968,14 @@ async function runUpdate(): Promise<Record<string, unknown>> {
   // any user currently holds -- see TARGET_UNIVERSE_TICKERS.
   tickers = [...new Set([...tickers, ...TARGET_UNIVERSE_TICKERS])].sort();
 
-  const usdRubRate = await latestUsdRubRate();
+  let usdRubRate = await latestUsdRubRate();
+  // CBR down: the last rate fx_history has (a day old at most on a working
+  // day) -- else every rouble price is skipped
+  if (usdRubRate === null) {
+    const { data } = await supabase.from('fx_history').select('usd_per_unit, day').eq('currency', 'RUB').order('day', { ascending: false }).limit(1);
+    const per = Number(data?.[0]?.usd_per_unit);
+    if (per > 0) { usdRubRate = 1 / per; log(`  CBR unavailable: USD/RUB from fx_history ${data![0].day}`); }
+  }
   log(`Latest USD/RUB rate: ${usdRubRate}`);
 
   // --- classify ---
