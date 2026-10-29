@@ -109,6 +109,8 @@ const TARGET_UNIVERSE_TICKERS = [
   'JPM', 'BRK-B', 'JNJ', 'META', 'V', 'MA', 'HOOD', 'MSFT', 'AAPL', 'ABBV',
   'TSLA', 'HD', 'PG', 'KO', 'SHEL', 'CVX', 'SHW', 'DUK', 'AMT', 'SOFI', 'XYZ',
   'INTC', 'SPCX', 'FCX', 'SO', 'EQIX',
+  // Alfa's yuan funds, for the salary plan's brokers' cash (index.html MP_RU_BROKER_FUNDS)
+  'AKGP', 'AKMC',
 ];
 
 // Bootstrap/offline-dev ticker set only -- used solely as a fallback when
@@ -394,15 +396,15 @@ const MONEY_MARKET_FUND_ISINS = new Set(['IE000H9J0QX4', 'IE0002RUHW32', 'IE000A
 // name-based heuristics (e.g. matching "облигации") miss cases like SBBY
 // ("БПИФ Фонд Инструменты в юанях" -- no "bond" in the name at all, but
 // it's a bond fund) and would need constant upkeep as new funds list.
-const MOEX_BOND_ETF_TICKERS = new Set(['TBRU', 'SAFE', 'SBMM', 'AKMB', 'AKMM', 'TLCB', 'SBBY', 'AMNY']);
+const MOEX_BOND_ETF_TICKERS = new Set(['TBRU', 'SAFE', 'SBMM', 'AKMB', 'AKMM', 'TLCB', 'SBBY', 'AMNY', 'AKGP', 'AKMC']);
 
 // Of those, the money-market ones -- withdrawable at any time without loss,
 // so they go to the "liquid assets" column (instrument_type 'liquid',
 // asset_class 'money_market_fund', same as Revolut's funds) instead of
 // 'bond'. User-confirmed: SBMM (Первая Сберегательный), AKMM (Альфа
-// Денежный рынок), AMNY (АТОН Накопительный в юанях). SAFE / TBRU / AKMB /
-// TLCB / SBBY stay bonds.
-const MOEX_MONEY_MARKET_ETF_TICKERS = new Set(['SBMM', 'AKMM', 'AMNY']);
+// Денежный рынок), AMNY (АТОН Накопительный в юанях), AKMC (Альфа-Капитал
+// Денежный рынок Юани). SAFE / TBRU / AKMB / TLCB / SBBY / AKGP stay bonds.
+const MOEX_MONEY_MARKET_ETF_TICKERS = new Set(['SBMM', 'AKMM', 'AMNY', 'AKMC']);
 
 function moexFundAssetClass(ticker: string): string {
   const t = ticker.toUpperCase();
@@ -417,8 +419,10 @@ function moexFundAssetClass(ticker: string): string {
 // written to the separate `underlying_currency` column instead, so
 // RUB-vs-non-RUB groupings downstream (e.g. the My Portfolio "CNY weight"
 // chart) can tell the two apart without `currency` itself lying about the
-// quote. User-confirmed list.
-const UNDERLYING_CURRENCY_BY_TICKER: Record<string, string> = { SBBY: 'CNY', TLCB: 'CNY', AMNY: 'CNY' };
+// quote. User-confirmed list. AKGP (Альфа-Капитал Управляемые валютные
+// облигации -- replacement bonds in dollars / euros and yuan bonds) and AKMC
+// count as yuan too: Alfa's yuan side (30.10.2026).
+const UNDERLYING_CURRENCY_BY_TICKER: Record<string, string> = { SBBY: 'CNY', TLCB: 'CNY', AMNY: 'CNY', AKGP: 'CNY', AKMC: 'CNY' };
 
 function classifyTicker(ticker: string): TickerClass {
   const t = ticker.toUpperCase();

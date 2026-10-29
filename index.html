@@ -5204,21 +5204,30 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
     let cnyGap = cnyTarget === null ? 0 : Math.max(0, cnyTarget - (cell('bond', 'CNY') - parts.cnySold + parts.cnyBought));
     let stockGap = Math.max(0, ruStockTarget - cell('stock', 'RUB') - ruStocksSpent);
     let stocksHeld = ruStocksNow + ruStocksSpent;
-    const fundAt = (account, ccy) => {
-      const f = c.holdings.filter(r => r.account === account && r.asset_class === 'moex_bond_etf' && (r.underlying_currency || r.currency) === ccy && r.value_usd > 0)
-        .sort((a, b) => b.value_usd - a.value_usd)[0];
-      return f && c.priceUsdByTicker[f.ticker] ? { ticker: f.ticker, priceUsd: c.priceUsdByTicker[f.ticker] } : null;
+    // The account's bond fund in that currency: the one it holds most of, else
+    // the ones set for it (MP_RU_BROKER_FUNDS) in their order -- the first
+    // that `usd` buys a whole unit of.
+    const fundsAt = (account, ccy) => {
+      const held = c.holdings.filter(r => r.account === account && r.asset_class === 'moex_bond_etf' && (r.underlying_currency || r.currency) === ccy && r.value_usd > 0)
+        .sort((a, b) => b.value_usd - a.value_usd).map(r => r.ticker);
+      return [...new Set([...held, ...((MP_RU_BROKER_FUNDS[account] || {})[ccy] || [])])]
+        .filter(t => c.priceUsdByTicker[t]).map(t => ({ ticker: t, priceUsd: c.priceUsdByTicker[t] }));
+    };
+    const buyFund = (account, ccy, usd) => {
+      for (const f of fundsAt(account, ccy)) {
+        const units = Math.floor(usd / f.priceUsd);
+        if (units > 0) return { ticker: f.ticker, units, usd: units * f.priceUsd };
+      }
+      return null;
     };
     for (const account of [...new Set(c.ruBrokerCashRows.map(r => r.account))].sort()) {
       const own = ccy => c.ruBrokerCashRows.filter(r => r.account === account && r.currency === ccy).reduce((a, r) => a + r.usd, 0);
       const e = { account, rub: own('RUB'), cny: own('CNY'), cnyFund: null, cnyToRub: 0, stocks: [], rubToCny: null, rubFund: null, leftRub: 0, leftCny: 0 };
       // yuan
       if (e.cny > 0) {
-        const fund = fundAt(account, 'CNY');
-        if (yuanAbove || !fund) e.cnyToRub = e.cny;
+        if (yuanAbove || !fundsAt(account, 'CNY').length) e.cnyToRub = e.cny;
         else {
-          const units = Math.floor(e.cny / fund.priceUsd);
-          if (units > 0) e.cnyFund = { ticker: fund.ticker, units, usd: units * fund.priceUsd };
+          e.cnyFund = buyFund(account, 'CNY', e.cny);
           e.leftCny = e.cny - (e.cnyFund ? e.cnyFund.usd : 0);
           cnyGap = Math.max(0, cnyGap - (e.cnyFund ? e.cnyFund.usd : 0));
         }
@@ -5231,21 +5240,13 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
         rub -= spent; stockGap -= spent; stocksHeld += spent;
       }
       // then the yuan bonds while they're under their target: the account's yuan fund, for roubles
-      const cnyFund = fundAt(account, 'CNY');
-      if (rub > 0 && cnyGap > 0 && cnyFund) {
-        const units = Math.floor(Math.min(rub, cnyGap) / cnyFund.priceUsd);
-        if (units > 0) {
-          e.rubToCny = { ticker: cnyFund.ticker, units, usd: units * cnyFund.priceUsd };
-          rub -= e.rubToCny.usd; cnyGap -= e.rubToCny.usd;
-        }
+      if (rub > 0 && cnyGap > 0) {
+        e.rubToCny = buyFund(account, 'CNY', Math.min(rub, cnyGap));
+        if (e.rubToCny) { rub -= e.rubToCny.usd; cnyGap -= e.rubToCny.usd; }
       }
-      const fund = fundAt(account, 'RUB');
-      if (rub > 0 && fund) {
-        const units = Math.floor(rub / fund.priceUsd);
-        if (units > 0) {
-          e.rubFund = { ticker: fund.ticker, units, usd: units * fund.priceUsd };
-          rub -= e.rubFund.usd;
-        }
+      if (rub > 0) {
+        e.rubFund = buyFund(account, 'RUB', rub);
+        if (e.rubFund) rub -= e.rubFund.usd;
       }
       e.leftRub = rub;
       parts.brokerCash.push(e);
@@ -5352,8 +5353,10 @@ function mpSalaryDeltas(c, plan) {
     cashOut('RUB', e.rub - e.leftRub);
     for (const b of e.stocks) spread(b.usd, ru.filter(r => r.ticker === b.ticker && r.account === e.account), { ...ruStock, account: e.account, ticker: b.ticker });
     for (const [f, ccy] of [[e.cnyFund, 'CNY'], [e.rubToCny, 'CNY'], [e.rubFund, 'RUB']]) {
+      // (a money-market fund -- AKMC -- is liquid assets, as update-market-prices classes it)
+      const mm = ['AKMC', 'AMNY', 'SBMM', 'AKMM'].includes(f && f.ticker);
       if (f) spread(f.usd, ru.filter(r => r.ticker === f.ticker && r.account === e.account),
-        { ...ruStock, account: e.account, ticker: f.ticker, asset_class: 'moex_bond_etf', instrument_type: 'bond', underlying_currency: ccy });
+        { ...ruStock, account: e.account, ticker: f.ticker, asset_class: mm ? 'money_market_fund' : 'moex_bond_etf', instrument_type: mm ? 'liquid' : 'bond', underlying_currency: ccy });
     }
   }
   spread(p.rubBonds, ru.filter(r => r.instrument_type === 'bond' && ccy(r) === 'RUB'),
@@ -5841,7 +5844,8 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     if (r.value_usd) valueByTicker[r.ticker] = (valueByTicker[r.ticker] || 0) + r.value_usd;
     if (r.price_usd) priceUsdByTicker[r.ticker] = r.price_usd;
   }
-  const missingPrices = [...US_STOCK_TICKERS, ...RU_STOCK_TICKERS].filter(t => !(t in priceUsdByTicker));
+  const brokerFunds = Object.values(MP_RU_BROKER_FUNDS).flatMap(byCcy => Object.values(byCcy).flat());
+  const missingPrices = [...US_STOCK_TICKERS, ...RU_STOCK_TICKERS, ...brokerFunds].filter(t => !(t in priceUsdByTicker));
   if (missingPrices.length) {
     const { data: extra } = await sb.from('market_prices').select('ticker, price_usd').in('ticker', missingPrices);
     for (const r of extra || []) if (r.price_usd) priceUsdByTicker[r.ticker] = r.price_usd;
@@ -5935,6 +5939,12 @@ async function mpRenderLookThrough() {
 // left out. TRND's repo counts as liquid assets (mpSplitFundsCash).
 const MP_RU_ACCOUNTS = new Set(['Sber', 'T-Bank', 'Alfa', 'Ozon Bank', 'Yandex Bank', 'Finuslugi']);
 const MP_RU_INFRA_TYPES = ['stock', 'deposit', 'bond', 'liquid', 'cash'];
+// A Russian brokerage account's funds for its cash where it holds none of
+// that currency yet (the salary plan's step 8), in the order to try: Alfa's
+// own -- AKGP (Управляемые валютные облигации), else AKMC (Денежный рынок
+// Юани), both counted as yuan (30.10.2026). Priced daily by
+// update-market-prices (TARGET_UNIVERSE_TICKERS).
+const MP_RU_BROKER_FUNDS = { Alfa: { CNY: ['AKGP', 'AKMC'] } };
 const MP_RU_INFRA_LABELS = { stock: 'stock 📈', deposit: 'deposit 🏦', bond: 'bonds 🏛️', liquid: 'liquid assets 💧', cash: 'cash 💵' };
 const MP_RU_INFRA_CURRENCIES = { RUB: '🇷🇺', CNY: '🇨🇳' };
 async function mpRenderBondByType() {
