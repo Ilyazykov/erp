@@ -5218,9 +5218,9 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
         if (yuanAbove || !fund) e.cnyToRub = e.cny;
         else {
           const units = Math.floor(e.cny / fund.priceUsd);
-          e.cnyFund = { ticker: fund.ticker, units, usd: units * fund.priceUsd };
-          e.leftCny = e.cny - e.cnyFund.usd;
-          cnyGap = Math.max(0, cnyGap - e.cnyFund.usd);
+          if (units > 0) e.cnyFund = { ticker: fund.ticker, units, usd: units * fund.priceUsd };
+          e.leftCny = e.cny - (e.cnyFund ? e.cnyFund.usd : 0);
+          cnyGap = Math.max(0, cnyGap - (e.cnyFund ? e.cnyFund.usd : 0));
         }
       }
       // roubles (with the yuan sold)
@@ -5242,8 +5242,10 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
       const fund = fundAt(account, 'RUB');
       if (rub > 0 && fund) {
         const units = Math.floor(rub / fund.priceUsd);
-        e.rubFund = { ticker: fund.ticker, units, usd: units * fund.priceUsd };
-        rub -= e.rubFund.usd;
+        if (units > 0) {
+          e.rubFund = { ticker: fund.ticker, units, usd: units * fund.priceUsd };
+          rub -= e.rubFund.usd;
+        }
       }
       e.leftRub = rub;
       parts.brokerCash.push(e);
