@@ -5144,8 +5144,9 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
   // Yuan bonds' target: w_CNY of the non-stock part, less yuan deposits.
   const cnyTarget = c.wCny !== null ? Math.max(0, c.wCny * (ruNew - ruStockTarget) - cell('deposit', 'CNY')) : null;
   parts.cnySold = flags.sellYuan && cnyTarget !== null && c.wCny < 0.3 ? Math.max(0, cell('bond', 'CNY') - cnyTarget) : 0;
+  // (the Russian liquid assets are spent where they are, in step 8)
   parts.ruLiquid = flags.ruLiquid ? c.ruLiquidRaw : 0;
-  const ruPool = ruAdd + parts.cnySold + parts.ruLiquid;
+  const ruPool = ruAdd + parts.cnySold;
   const ruStockAdd = Math.max(0, Math.min(ruPool, ruStockTarget - cell('stock', 'RUB')));
   const ruStocksNow = RU_STOCK_TICKERS.reduce((s, t) => s + (c.valueByTicker[t] || 0), 0);
   parts.ruStocks = mpSalaryAllocate(DATA && DATA.ruTargetWeightsRaw, ruStocksNow, ruStockAdd, c, true, flags.sellStocks);
@@ -5186,17 +5187,25 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
   rows.push(['5', 'Russian stocks (ERP & Stocks/Bonds target)', ruStocksSpent, mpSalaryBuysText(parts.ruStocks)]);
   if (parts.cnySold) rows.push(['6', `Sell yuan bonds (w_CNY ${(c.wCny * 100).toFixed(1)}% < 30%)`, -parts.cnySold, '']);
   if (parts.cnyBought) rows.push(['7', 'Yuan bonds up to the w_CNY target', parts.cnyBought, '']);
-  rows.push(['7', 'Rouble bonds (the rest of Russian free money)', parts.rubBonds,
-    parts.ruLiquid ? `incl. ${mpFormatUsd(parts.ruLiquid)} from Russian liquid assets` : '']);
+  rows.push(['7', 'Rouble bonds (the rest of Russian free money)', parts.rubBonds, '']);
 
-  // 8. The Russian brokers' cash, each account's on that account, in its own
-  // currency. Yuan: into the account's yuan bond fund -- or, with yuan bonds
-  // at / above their w_CNY target (after steps 6-7), sold for roubles there.
-  // Roubles: Russian stocks while they're under their target (whole lots, by
-  // the target weights), then the account's yuan bond fund while yuan bonds
-  // are under theirs, the rest the account's rouble bond fund.
+  // 8. The Russian brokers' cash and the Russian liquid assets' free part
+  // (what the card debt netted against them leaves -- each holding its share
+  // by size), each account's on that account, in its own currency. Yuan:
+  // into the account's yuan bond fund -- or, with yuan bonds at / above their
+  // w_CNY target (after steps 6-7), sold for roubles there. Roubles: Russian
+  // stocks while they're under their target (whole lots, by the target
+  // weights), then the account's yuan bond fund while yuan bonds are under
+  // theirs, the rest the account's rouble bond fund.
   parts.brokerCash = [];
-  if (flags.ruCash) {
+  if (flags.ruCash || parts.ruLiquid > 0) {
+    const liqRows = c.holdings.filter(r => mpIsRuInfra(r) && r.instrument_type === 'liquid' && r.value_usd > 0);
+    const liqGross = liqRows.reduce((a, r) => a + r.value_usd, 0);
+    const liquidOf = account => liqGross > 0 ? liqRows.filter(r => r.account === account).map(r => ({
+      ticker: r.ticker, ccy: r.underlying_currency || r.currency, usd: parts.ruLiquid * r.value_usd / liqGross,
+      priceUsd: /^(SAVINGS|DEPOSIT):/.test(r.ticker) ? null : c.priceUsdByTicker[r.ticker] || null,
+    })).filter(l => l.usd > 0) : [];
+    const cashRows = flags.ruCash ? c.ruBrokerCashRows : [];
     const fx = c.fx || {};
     const native = (usd, ccy) => (fx[ccy] ? usd / fx[ccy] : 0);
     const yuanAbove = cnyTarget === null || cell('bond', 'CNY') - parts.cnySold + parts.cnyBought >= cnyTarget;
@@ -5213,16 +5222,43 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
       return [...new Set([...held, ...((MP_RU_BROKER_FUNDS[account] || {})[ccy] || [])])]
         .filter(t => c.priceUsdByTicker[t]).map(t => ({ ticker: t, priceUsd: c.priceUsdByTicker[t] }));
     };
-    const buyFund = (account, ccy, usd) => {
+    const fundBuy = (account, ccy, usd) => {
       for (const f of fundsAt(account, ccy)) {
         const units = Math.floor(usd / f.priceUsd);
         if (units > 0) return { ticker: f.ticker, units, usd: units * f.priceUsd };
       }
       return null;
     };
-    for (const account of [...new Set(c.ruBrokerCashRows.map(r => r.account))].sort()) {
-      const own = ccy => c.ruBrokerCashRows.filter(r => r.account === account && r.currency === ccy).reduce((a, r) => a + r.usd, 0);
-      const e = { account, rub: own('RUB'), cny: own('CNY'), cnyFund: null, cnyToRub: 0, stocks: [], rubToCny: null, rubFund: null, leftRub: 0, leftCny: 0 };
+    // Whole bonds first where the money reaches one: the bonds of that
+    // currency already held (any account), the smallest position first --
+    // a bond at a time, so the holdings even out; what's left under a bond's
+    // price goes to the fund. (The price is the clean one: the accrued
+    // interest comes on top -- 2% kept for it.)
+    const bondHeld = {};
+    for (const r of c.holdings) if (['moex_bond', 'moex_ofz'].includes(r.asset_class) && r.value_usd > 0) bondHeld[r.ticker] = (bondHeld[r.ticker] || 0) + r.value_usd;
+    const bondCcy = Object.fromEntries(c.holdings.filter(r => r.ticker in bondHeld).map(r => [r.ticker, r.underlying_currency || r.currency]));
+    const buyFund = (account, ccy, usd) => {
+      const bonds = [];
+      let left = usd;
+      for (;;) {
+        const can = Object.keys(bondHeld).filter(t => bondCcy[t] === ccy && c.priceUsdByTicker[t] && c.priceUsdByTicker[t] * 1.02 <= left);
+        if (!can.length) break;
+        const t = can.sort((a, b) => bondHeld[a] - bondHeld[b])[0];
+        const price = c.priceUsdByTicker[t];
+        const b = bonds.find(x => x.ticker === t) || (bonds.push({ ticker: t, units: 0, usd: 0 }), bonds[bonds.length - 1]);
+        b.units++; b.usd += price; left -= price; bondHeld[t] += price;
+      }
+      const fund = fundBuy(account, ccy, left);
+      const spent = bonds.reduce((a, b) => a + b.usd, 0) + (fund ? fund.usd : 0);
+      return spent > 0 ? { bonds, fund, usd: spent } : null;
+    };
+    const accounts = [...new Set([...cashRows.map(r => r.account), ...liqRows.filter(() => parts.ruLiquid > 0).map(r => r.account)])].sort();
+    for (const account of accounts) {
+      const own = ccy => cashRows.filter(r => r.account === account && r.currency === ccy).reduce((a, r) => a + r.usd, 0);
+      const liquid = liquidOf(account);
+      const liq = ccy => liquid.filter(l => l.ccy === ccy).reduce((a, l) => a + l.usd, 0);
+      const e = { account, rubCash: own('RUB'), cnyCash: own('CNY'), liquid, rub: own('RUB') + liq('RUB'), cny: own('CNY') + liq('CNY'),
+        cnyFund: null, cnyToRub: 0, stocks: [], rubToCny: null, rubFund: null, leftRub: 0, leftCny: 0 };
       // yuan
       if (e.cny > 0) {
         if (yuanAbove || !fundsAt(account, 'CNY').length) e.cnyToRub = e.cny;
@@ -5252,16 +5288,25 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
       parts.brokerCash.push(e);
       const rubTxt = v => `${Math.round(native(v, 'RUB')).toLocaleString('ru-RU')} ₽`;
       const cnyTxt = v => `${native(v, 'CNY').toFixed(2)} ¥`;
-      const what = [e.rub > 0 ? rubTxt(e.rub) : '', e.cny > 0 ? cnyTxt(e.cny) : ''].filter(Boolean).join(' + ');
+      const txt = (v, ccy) => (ccy === 'CNY' ? cnyTxt(v) : rubTxt(v));
+      const what = [
+        e.rubCash > 0 ? `${rubTxt(e.rubCash)} cash` : '', e.cnyCash > 0 ? `${cnyTxt(e.cnyCash)} cash` : '',
+        // a savings account: the amount to move to the brokerage account; a money-market fund: the units to sell
+        ...e.liquid.map(l => `${txt(l.usd, l.ccy)} from ${l.priceUsd ? `${l.ticker} (sell ${Math.round(l.usd / l.priceUsd)})` : l.ticker.replace(/^(SAVINGS|DEPOSIT):/, '')}`),
+      ].filter(Boolean).join(' + ');
+      // a purchase: whole bonds (by name) and / or fund units
+      const buys = x => [...x.bonds.map(b => `${b.units} × ${(c.bondNames || {})[b.ticker] || b.ticker}`),
+        x.fund ? `${x.fund.units} × ${x.fund.ticker}` : ''].filter(Boolean).join(', ');
       const does = [
-        e.cnyFund ? `${cnyTxt(e.cnyFund.usd)} → ${e.cnyFund.units} × ${e.cnyFund.ticker}` : '',
+        e.cnyFund ? `${cnyTxt(e.cnyFund.usd)} → ${buys(e.cnyFund)}` : '',
         e.cnyToRub ? `${cnyTxt(e.cnyToRub)} → sell for roubles${cnyTarget !== null ? ' (yuan bonds at their w_CNY target)' : ''}` : '',
         ...e.stocks.map(b => `${rubTxt(b.usd)} → ${b.shares ? `${b.shares} × ` : ''}${b.ticker}`),
-        e.rubToCny ? `${rubTxt(e.rubToCny.usd)} → ${e.rubToCny.units} × ${e.rubToCny.ticker} (yuan bonds under their w_CNY target)` : '',
-        e.rubFund ? `${rubTxt(e.rubFund.usd)} → ${e.rubFund.units} × ${e.rubFund.ticker}` : '',
+        e.rubToCny ? `${rubTxt(e.rubToCny.usd)} → ${buys(e.rubToCny)} (yuan bonds under their w_CNY target)` : '',
+        e.rubFund ? `${rubTxt(e.rubFund.usd)} → ${buys(e.rubFund)}` : '',
+        (e.cnyFund && e.cnyFund.bonds.length) || (e.rubToCny && e.rubToCny.bonds.length) || (e.rubFund && e.rubFund.bonds.length) ? 'bonds at the clean price, plus accrued interest' : '',
         e.leftRub > 0.005 ? `${rubTxt(e.leftRub)} left` : '', e.leftCny > 0.005 ? `${cnyTxt(e.leftCny)} left` : '',
       ].filter(Boolean).join('; ');
-      rows.push(['8', `${account} brokerage cash: ${what}`, null, does]);
+      rows.push(['8', `${account}: ${what}`, null, does]);
     }
   }
   return { rows, parts };
@@ -5348,11 +5393,16 @@ function mpSalaryDeltas(c, plan) {
   for (const e of p.brokerCash || []) {
     const cashOut = (ccy, usd) => spread(-usd, c.cashRows.filter(r => r.account === e.account && r.currency === ccy && r.instrument_type === 'cash'),
       { account: e.account, currency: ccy, instrument_type: 'cash' });
-    cashOut('CNY', (e.cnyFund ? e.cnyFund.usd : 0) + e.cnyToRub);
-    // (the yuan sold came in as roubles: what leaves the rouble cash is its own less what's left)
-    cashOut('RUB', e.rub - e.leftRub);
+    // (the liquid assets leave through the spread above; what isn't spent of
+    // all of it -- less than a unit -- stays as the account's cash)
+    cashOut('CNY', e.cnyCash - e.leftCny);
+    cashOut('RUB', e.rubCash - e.leftRub);
     for (const b of e.stocks) spread(b.usd, ru.filter(r => r.ticker === b.ticker && r.account === e.account), { ...ruStock, account: e.account, ticker: b.ticker });
-    for (const [f, ccy] of [[e.cnyFund, 'CNY'], [e.rubToCny, 'CNY'], [e.rubFund, 'RUB']]) {
+    for (const [x, ccy] of [[e.cnyFund, 'CNY'], [e.rubToCny, 'CNY'], [e.rubFund, 'RUB']]) {
+      if (!x) continue;
+      for (const b of x.bonds) spread(b.usd, ru.filter(r => r.ticker === b.ticker && r.account === e.account),
+        { ...ruStock, account: e.account, ticker: b.ticker, asset_class: 'moex_bond', instrument_type: 'bond', underlying_currency: ccy });
+      const f = x.fund;
       // (a money-market fund -- AKMC -- is liquid assets, as update-market-prices classes it)
       const mm = ['AKMC', 'AMNY', 'SBMM', 'AKMM'].includes(f && f.ticker);
       if (f) spread(f.usd, ru.filter(r => r.ticker === f.ticker && r.account === e.account),
@@ -5844,6 +5894,9 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     if (r.value_usd) valueByTicker[r.ticker] = (valueByTicker[r.ticker] || 0) + r.value_usd;
     if (r.price_usd) priceUsdByTicker[r.ticker] = r.price_usd;
   }
+  // the bonds' names for the salary plan (MOEX's, cached in this browser)
+  let bondNames = {};
+  try { bondNames = await mpBondNames(baseIn.data.filter(r => ['moex_bond', 'moex_ofz'].includes(r.asset_class)).map(r => r.ticker)); } catch { /* ISINs then */ }
   const brokerFunds = Object.values(MP_RU_BROKER_FUNDS).flatMap(byCcy => Object.values(byCcy).flat());
   const missingPrices = [...US_STOCK_TICKERS, ...RU_STOCK_TICKERS, ...brokerFunds].filter(t => !(t in priceUsdByTicker));
   if (missingPrices.length) {
@@ -5865,7 +5918,7 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     // each Russian brokerage account's cash, by currency (the salary plan's step 8)
     ruBrokerCashRows: baseIn.cashRows.filter(r => r.instrument_type === 'cash' && r.broker_usd > 0 && mpIsRuInfra(r))
       .map(r => ({ account: r.account, currency: r.currency, usd: r.broker_usd })),
-    fx: baseIn.fxByCurrency,
+    fx: baseIn.fxByCurrency, bondNames,
     total3,   // chart 3's total (gold / crypto 5% are of it)
   };
   if (!draw) return ctx;
