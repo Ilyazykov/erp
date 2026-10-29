@@ -248,10 +248,13 @@ async function fetchText(url: string, retries = 2): Promise<string | null> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
+      // (the timer runs on through the body: MOEX sends the headers and then,
+      // now and then, nothing -- with it cleared here a read hung for good and
+      // the run was killed at 150 s, 29.10.2026)
       const resp = await fetch(url, { headers: HTTP_HEADERS, signal: controller.signal });
-      clearTimeout(timer);
       if (!resp.ok) {
         lastErr = new Error(`HTTP ${resp.status}`);
+        await resp.body?.cancel();
       } else {
         return await resp.text();
       }
