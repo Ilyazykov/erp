@@ -549,6 +549,7 @@
         <input type="number" id="mp_salary_revolut_keep" min="0" step="100" placeholder="0" style="width:110px">
         <select id="mp_salary_revolut_keep_ccy"><option value="EUR" selected>EUR</option><option value="USD">USD</option></select></label>
       <label><input type="checkbox" id="mp_salary_ruliquid"> spend Russian liquid assets</label>
+      <label title="The money on the Russian brokerage accounts (Sber, T-Bank, Alfa -- the coupons, dividends and amortisations paid out), not the banks' cards: into Russian stocks, yuan and rouble bonds, as the salary plan's steps 5-7 do"><input type="checkbox" id="mp_salary_rucash"> spend Russian brokers' cash (coupons)</label>
     </div>
     <div class="form-row" style="gap:16px;flex-wrap:wrap">
       <label><input type="checkbox" id="mp_salary_sellyuan"> sell yuan bonds above the w_CNY target</label>
@@ -4602,13 +4603,18 @@ async function mpFetchCashRows(fxByCurrency) {
   // A credit card's balance goes to its own 'credit' column, which only
   // ever holds zero or negative amounts (debt); an overpaid card's positive
   // balance is just cash. Everything else is 'cash'.
+  // (of the cash, what sits on a brokerage account -- the broker's report or
+  // app rows, product brokerage_cash -- rather than a bank's card or account:
+  // the salary plan's "spend Russian brokers' cash")
   const totals = new Map();
-  const add = (account, currency, type, amount) => {
+  const add = (account, currency, type, amount, broker = false) => {
     const key = `${account} ${currency} ${type}`;
-    const t = totals.get(key) || { account, currency, type, balance: 0 };
+    const t = totals.get(key) || { account, currency, type, balance: 0, broker: 0 };
     t.balance += amount;
+    if (broker) t.broker += amount;
     totals.set(key, t);
   };
+  const isBroker = r => r.product === 'brokerage_cash' || /broker|^tbank_api:/.test(r.external_source || '');
   for (const r of data) {
     const bal = Number(r.balance_after);
     // Revolut's precious-metal pockets (currency XAU, ...) are holdings, not
@@ -4619,7 +4625,7 @@ async function mpFetchCashRows(fxByCurrency) {
       add(r.account, r.currency, 'credit', Math.min(bal, 0));
       if (bal > 0) add(r.account, r.currency, 'cash', bal);
     } else {
-      add(r.account, r.currency, 'cash', bal);
+      add(r.account, r.currency, 'cash', bal, isBroker(r));
     }
   }
   if (!totals.size) return [];
@@ -4629,6 +4635,7 @@ async function mpFetchCashRows(fxByCurrency) {
     currency: t.currency,
     instrument_type: t.type,
     value_usd: t.currency in fxByCurrency ? t.balance * fxByCurrency[t.currency] : null,
+    broker_usd: t.currency in fxByCurrency ? t.broker * fxByCurrency[t.currency] : null,
   }));
 }
 
@@ -5084,7 +5091,7 @@ function mpSalaryFlags() {
   const eurUsd = (mpChartsBase && mpChartsBase.fxByCurrency && mpChartsBase.fxByCurrency.EUR) || 1;
   const keep = keepCcy === 'USD' ? keepNative : keepNative * eurUsd;
   return {
-    cash: on('mp_salary_cash'), revolut: on('mp_salary_revolut'), revolutKeep: keep, ruLiquid: on('mp_salary_ruliquid'),
+    cash: on('mp_salary_cash'), revolut: on('mp_salary_revolut'), revolutKeep: keep, ruLiquid: on('mp_salary_ruliquid'), ruCash: on('mp_salary_rucash'),
     sellYuan: on('mp_salary_sellyuan'), sellStocks: on('mp_salary_sellstocks'),
   };
 }
@@ -5138,7 +5145,8 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
   const cnyTarget = c.wCny !== null ? Math.max(0, c.wCny * (ruNew - ruStockTarget) - cell('deposit', 'CNY')) : null;
   parts.cnySold = flags.sellYuan && cnyTarget !== null && c.wCny < 0.3 ? Math.max(0, cell('bond', 'CNY') - cnyTarget) : 0;
   parts.ruLiquid = flags.ruLiquid ? c.ruLiquidRaw : 0;
-  const ruPool = ruAdd + parts.cnySold + parts.ruLiquid;
+  parts.ruCash = flags.ruCash ? c.ruBrokerCash : 0;
+  const ruPool = ruAdd + parts.cnySold + parts.ruLiquid + parts.ruCash;
   const ruStockAdd = Math.max(0, Math.min(ruPool, ruStockTarget - cell('stock', 'RUB')));
   const ruStocksNow = RU_STOCK_TICKERS.reduce((s, t) => s + (c.valueByTicker[t] || 0), 0);
   parts.ruStocks = mpSalaryAllocate(DATA && DATA.ruTargetWeightsRaw, ruStocksNow, ruStockAdd, c, true, flags.sellStocks);
@@ -5176,6 +5184,7 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
   if (parts.vwce > 0) rows.push(['4.1', 'World fund — VWCE at Freedom (up to 20% of IBKR + Freedom)', parts.vwce, '']);
   if (parts.vwra > 0) rows.push(['4.1', 'World fund — VWRA at IBKR', parts.vwra, '']);
 
+  if (parts.ruCash) rows.push(['5', 'Russian brokers’ cash added to the Russian money', parts.ruCash, '']);
   rows.push(['5', 'Russian stocks (ERP & Stocks/Bonds target)', ruStocksSpent, mpSalaryBuysText(parts.ruStocks)]);
   if (parts.cnySold) rows.push(['6', `Sell yuan bonds (w_CNY ${(c.wCny * 100).toFixed(1)}% < 30%)`, -parts.cnySold, '']);
   if (parts.cnyBought) rows.push(['7', 'Yuan bonds up to the w_CNY target', parts.cnyBought, '']);
@@ -5261,6 +5270,9 @@ function mpSalaryDeltas(c, plan) {
   // Russian liquid assets: what's free of the card debt netted against them
   // (p.ruLiquid) moves into the rouble bonds; the part covering the debt stays.
   spread(-p.ruLiquid, ru.filter(r => r.instrument_type === 'liquid'), {});
+  // the brokers' cash (p.ruCash) out of each brokerage account by its size
+  spread(-p.ruCash, c.cashRows.filter(r => r.instrument_type === 'cash' && r.broker_usd > 0 && mpIsRuInfra(r))
+    .map(r => ({ ...r, value_usd: r.broker_usd })), {});
   spread(p.rubBonds, ru.filter(r => r.instrument_type === 'bond' && ccy(r) === 'RUB'),
     { ...ruStock, ticker: 'OFZ', asset_class: 'moex_bond', instrument_type: 'bond' });
   return out;
@@ -5275,7 +5287,7 @@ function mpSalaryDeltas(c, plan) {
     clearTimeout(timer);
     timer = setTimeout(() => mpDrawCharts(), 400);
   });
-  for (const id of ['mp_salary_cash', 'mp_salary_revolut', 'mp_salary_ruliquid', 'mp_salary_sellyuan', 'mp_salary_sellstocks']) {
+  for (const id of ['mp_salary_cash', 'mp_salary_revolut', 'mp_salary_ruliquid', 'mp_salary_rucash', 'mp_salary_sellyuan', 'mp_salary_sellstocks']) {
     document.getElementById(id).addEventListener('change', () => mpDrawCharts());
   }
   // The amount to keep at Revolut and its currency, remembered in this browser.
@@ -5763,6 +5775,7 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     cash: types[MP_ASSET_CLASS_LABELS.cash] || 0, cashRows: baseIn.cashRows,
     revolutLiquid: baseIn.data.filter(r => r.account === 'Revolut' && r.instrument_type === 'liquid' && r.value_usd > 0).reduce((a, r) => a + r.value_usd, 0),
     cashAbroad: baseIn.cashRows.filter(r => r.instrument_type === 'cash' && r.value_usd > 0 && !mpIsRuInfra(r)).reduce((a, r) => a + r.value_usd, 0),
+    ruBrokerCash: baseIn.cashRows.filter(r => r.instrument_type === 'cash' && r.broker_usd > 0 && mpIsRuInfra(r)).reduce((a, r) => a + r.broker_usd, 0),
     total3,   // chart 3's total (gold / crypto 5% are of it)
   };
   if (!draw) return ctx;
