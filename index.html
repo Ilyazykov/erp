@@ -5234,6 +5234,7 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
     // a bond at a time, so the holdings even out; what's left under a bond's
     // price goes to the fund. (The price is the clean one: the accrued
     // interest comes on top -- 2% kept for it.)
+    // TODO (TODO.md, section 22): the order to pick bonds in -- a stopgap.
     const bondHeld = {};
     for (const r of c.holdings) if (['moex_bond', 'moex_ofz'].includes(r.asset_class) && r.value_usd > 0) bondHeld[r.ticker] = (bondHeld[r.ticker] || 0) + r.value_usd;
     const bondCcy = Object.fromEntries(c.holdings.filter(r => r.ticker in bondHeld).map(r => [r.ticker, r.underlying_currency || r.currency]));
