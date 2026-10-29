@@ -549,7 +549,7 @@
         <input type="number" id="mp_salary_revolut_keep" min="0" step="100" placeholder="0" style="width:110px">
         <select id="mp_salary_revolut_keep_ccy"><option value="EUR" selected>EUR</option><option value="USD">USD</option></select></label>
       <label><input type="checkbox" id="mp_salary_ruliquid"> spend Russian liquid assets</label>
-      <label title="The money on the Russian brokerage accounts (Sber, T-Bank, Alfa -- the coupons, dividends and amortisations paid out), not the banks' cards: into Russian stocks, yuan and rouble bonds, as the salary plan's steps 5-7 do"><input type="checkbox" id="mp_salary_rucash"> spend Russian brokers' cash (coupons)</label>
+      <label title="The money on the Russian brokerage accounts (Sber, T-Bank, Alfa -- the coupons, dividends and amortisations paid out), not the banks' cards -- each account's on that account: yuan into its yuan bond fund (sold for roubles while yuan bonds are at their w_CNY target), roubles into Russian stocks while they're under target, then its yuan bond fund while yuan bonds are under theirs, the rest its rouble bond fund"><input type="checkbox" id="mp_salary_rucash"> spend Russian brokers' cash (coupons)</label>
     </div>
     <div class="form-row" style="gap:16px;flex-wrap:wrap">
       <label><input type="checkbox" id="mp_salary_sellyuan"> sell yuan bonds above the w_CNY target</label>
@@ -5145,8 +5145,7 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
   const cnyTarget = c.wCny !== null ? Math.max(0, c.wCny * (ruNew - ruStockTarget) - cell('deposit', 'CNY')) : null;
   parts.cnySold = flags.sellYuan && cnyTarget !== null && c.wCny < 0.3 ? Math.max(0, cell('bond', 'CNY') - cnyTarget) : 0;
   parts.ruLiquid = flags.ruLiquid ? c.ruLiquidRaw : 0;
-  parts.ruCash = flags.ruCash ? c.ruBrokerCash : 0;
-  const ruPool = ruAdd + parts.cnySold + parts.ruLiquid + parts.ruCash;
+  const ruPool = ruAdd + parts.cnySold + parts.ruLiquid;
   const ruStockAdd = Math.max(0, Math.min(ruPool, ruStockTarget - cell('stock', 'RUB')));
   const ruStocksNow = RU_STOCK_TICKERS.reduce((s, t) => s + (c.valueByTicker[t] || 0), 0);
   parts.ruStocks = mpSalaryAllocate(DATA && DATA.ruTargetWeightsRaw, ruStocksNow, ruStockAdd, c, true, flags.sellStocks);
@@ -5184,12 +5183,84 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
   if (parts.vwce > 0) rows.push(['4.1', 'World fund — VWCE at Freedom (up to 20% of IBKR + Freedom)', parts.vwce, '']);
   if (parts.vwra > 0) rows.push(['4.1', 'World fund — VWRA at IBKR', parts.vwra, '']);
 
-  if (parts.ruCash) rows.push(['5', 'Russian brokers’ cash added to the Russian money', parts.ruCash, '']);
   rows.push(['5', 'Russian stocks (ERP & Stocks/Bonds target)', ruStocksSpent, mpSalaryBuysText(parts.ruStocks)]);
   if (parts.cnySold) rows.push(['6', `Sell yuan bonds (w_CNY ${(c.wCny * 100).toFixed(1)}% < 30%)`, -parts.cnySold, '']);
   if (parts.cnyBought) rows.push(['7', 'Yuan bonds up to the w_CNY target', parts.cnyBought, '']);
   rows.push(['7', 'Rouble bonds (the rest of Russian free money)', parts.rubBonds,
     parts.ruLiquid ? `incl. ${mpFormatUsd(parts.ruLiquid)} from Russian liquid assets` : '']);
+
+  // 8. The Russian brokers' cash, each account's on that account, in its own
+  // currency. Yuan: into the account's yuan bond fund -- or, with yuan bonds
+  // at / above their w_CNY target (after steps 6-7), sold for roubles there.
+  // Roubles: Russian stocks while they're under their target (whole lots, by
+  // the target weights), then the account's yuan bond fund while yuan bonds
+  // are under theirs, the rest the account's rouble bond fund.
+  parts.brokerCash = [];
+  if (flags.ruCash) {
+    const fx = c.fx || {};
+    const native = (usd, ccy) => (fx[ccy] ? usd / fx[ccy] : 0);
+    const yuanAbove = cnyTarget === null || cell('bond', 'CNY') - parts.cnySold + parts.cnyBought >= cnyTarget;
+    // what the yuan bonds still lack of their target (the yuan cash's fund buys count)
+    let cnyGap = cnyTarget === null ? 0 : Math.max(0, cnyTarget - (cell('bond', 'CNY') - parts.cnySold + parts.cnyBought));
+    let stockGap = Math.max(0, ruStockTarget - cell('stock', 'RUB') - ruStocksSpent);
+    let stocksHeld = ruStocksNow + ruStocksSpent;
+    const fundAt = (account, ccy) => {
+      const f = c.holdings.filter(r => r.account === account && r.asset_class === 'moex_bond_etf' && (r.underlying_currency || r.currency) === ccy && r.value_usd > 0)
+        .sort((a, b) => b.value_usd - a.value_usd)[0];
+      return f && c.priceUsdByTicker[f.ticker] ? { ticker: f.ticker, priceUsd: c.priceUsdByTicker[f.ticker] } : null;
+    };
+    for (const account of [...new Set(c.ruBrokerCashRows.map(r => r.account))].sort()) {
+      const own = ccy => c.ruBrokerCashRows.filter(r => r.account === account && r.currency === ccy).reduce((a, r) => a + r.usd, 0);
+      const e = { account, rub: own('RUB'), cny: own('CNY'), cnyFund: null, cnyToRub: 0, stocks: [], rubToCny: null, rubFund: null, leftRub: 0, leftCny: 0 };
+      // yuan
+      if (e.cny > 0) {
+        const fund = fundAt(account, 'CNY');
+        if (yuanAbove || !fund) e.cnyToRub = e.cny;
+        else {
+          const units = Math.floor(e.cny / fund.priceUsd);
+          e.cnyFund = { ticker: fund.ticker, units, usd: units * fund.priceUsd };
+          e.leftCny = e.cny - e.cnyFund.usd;
+          cnyGap = Math.max(0, cnyGap - e.cnyFund.usd);
+        }
+      }
+      // roubles (with the yuan sold)
+      let rub = e.rub + e.cnyToRub;
+      if (rub > 0 && stockGap > 0) {
+        e.stocks = mpSalaryAllocate(DATA && DATA.ruTargetWeightsRaw, stocksHeld, Math.min(rub, stockGap), c, false, false).filter(b => b.usd > 0);
+        const spent = e.stocks.reduce((a, b) => a + b.usd, 0);
+        rub -= spent; stockGap -= spent; stocksHeld += spent;
+      }
+      // then the yuan bonds while they're under their target: the account's yuan fund, for roubles
+      const cnyFund = fundAt(account, 'CNY');
+      if (rub > 0 && cnyGap > 0 && cnyFund) {
+        const units = Math.floor(Math.min(rub, cnyGap) / cnyFund.priceUsd);
+        if (units > 0) {
+          e.rubToCny = { ticker: cnyFund.ticker, units, usd: units * cnyFund.priceUsd };
+          rub -= e.rubToCny.usd; cnyGap -= e.rubToCny.usd;
+        }
+      }
+      const fund = fundAt(account, 'RUB');
+      if (rub > 0 && fund) {
+        const units = Math.floor(rub / fund.priceUsd);
+        e.rubFund = { ticker: fund.ticker, units, usd: units * fund.priceUsd };
+        rub -= e.rubFund.usd;
+      }
+      e.leftRub = rub;
+      parts.brokerCash.push(e);
+      const rubTxt = v => `${Math.round(native(v, 'RUB')).toLocaleString('ru-RU')} ₽`;
+      const cnyTxt = v => `${native(v, 'CNY').toFixed(2)} ¥`;
+      const what = [e.rub > 0 ? rubTxt(e.rub) : '', e.cny > 0 ? cnyTxt(e.cny) : ''].filter(Boolean).join(' + ');
+      const does = [
+        e.cnyFund ? `${cnyTxt(e.cnyFund.usd)} → ${e.cnyFund.units} × ${e.cnyFund.ticker}` : '',
+        e.cnyToRub ? `${cnyTxt(e.cnyToRub)} → sell for roubles${cnyTarget !== null ? ' (yuan bonds at their w_CNY target)' : ''}` : '',
+        ...e.stocks.map(b => `${rubTxt(b.usd)} → ${b.shares ? `${b.shares} × ` : ''}${b.ticker}`),
+        e.rubToCny ? `${rubTxt(e.rubToCny.usd)} → ${e.rubToCny.units} × ${e.rubToCny.ticker} (yuan bonds under their w_CNY target)` : '',
+        e.rubFund ? `${rubTxt(e.rubFund.usd)} → ${e.rubFund.units} × ${e.rubFund.ticker}` : '',
+        e.leftRub > 0.005 ? `${rubTxt(e.leftRub)} left` : '', e.leftCny > 0.005 ? `${cnyTxt(e.leftCny)} left` : '',
+      ].filter(Boolean).join('; ');
+      rows.push(['8', `${account} brokerage cash: ${what}`, null, does]);
+    }
+  }
   return { rows, parts };
 }
 
@@ -5270,9 +5341,19 @@ function mpSalaryDeltas(c, plan) {
   // Russian liquid assets: what's free of the card debt netted against them
   // (p.ruLiquid) moves into the rouble bonds; the part covering the debt stays.
   spread(-p.ruLiquid, ru.filter(r => r.instrument_type === 'liquid'), {});
-  // the brokers' cash (p.ruCash) out of each brokerage account by its size
-  spread(-p.ruCash, c.cashRows.filter(r => r.instrument_type === 'cash' && r.broker_usd > 0 && mpIsRuInfra(r))
-    .map(r => ({ ...r, value_usd: r.broker_usd })), {});
+  // 8. each brokerage account's cash into what it buys there
+  for (const e of p.brokerCash || []) {
+    const cashOut = (ccy, usd) => spread(-usd, c.cashRows.filter(r => r.account === e.account && r.currency === ccy && r.instrument_type === 'cash'),
+      { account: e.account, currency: ccy, instrument_type: 'cash' });
+    cashOut('CNY', (e.cnyFund ? e.cnyFund.usd : 0) + e.cnyToRub);
+    // (the yuan sold came in as roubles: what leaves the rouble cash is its own less what's left)
+    cashOut('RUB', e.rub - e.leftRub);
+    for (const b of e.stocks) spread(b.usd, ru.filter(r => r.ticker === b.ticker && r.account === e.account), { ...ruStock, account: e.account, ticker: b.ticker });
+    for (const [f, ccy] of [[e.cnyFund, 'CNY'], [e.rubToCny, 'CNY'], [e.rubFund, 'RUB']]) {
+      if (f) spread(f.usd, ru.filter(r => r.ticker === f.ticker && r.account === e.account),
+        { ...ruStock, account: e.account, ticker: f.ticker, asset_class: 'moex_bond_etf', instrument_type: 'bond', underlying_currency: ccy });
+    }
+  }
   spread(p.rubBonds, ru.filter(r => r.instrument_type === 'bond' && ccy(r) === 'RUB'),
     { ...ruStock, ticker: 'OFZ', asset_class: 'moex_bond', instrument_type: 'bond' });
   return out;
@@ -5340,7 +5421,7 @@ async function mpDrawCharts(run = ++mpChartsRun) {
   // (the plan runs with no salary too: it still moves the free money)
   const plan = mpSalaryPlan(ctx, salary);
   // (no table when nothing is moved)
-  mpRenderSalaryTable(salary || plan.rows.some(r => r[2] && Math.abs(r[2]) >= 0.005) ? plan : null);
+  mpRenderSalaryTable(salary || plan.rows.some(r => r[2] && Math.abs(r[2]) >= 0.005) || plan.parts.brokerCash.length ? plan : null);
   await mpBuildCharts(mpChartsBase, mpSalaryDeltas(ctx, plan), true, run, salary, ctx.before, plan);
 }
 
@@ -5775,7 +5856,10 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     cash: types[MP_ASSET_CLASS_LABELS.cash] || 0, cashRows: baseIn.cashRows,
     revolutLiquid: baseIn.data.filter(r => r.account === 'Revolut' && r.instrument_type === 'liquid' && r.value_usd > 0).reduce((a, r) => a + r.value_usd, 0),
     cashAbroad: baseIn.cashRows.filter(r => r.instrument_type === 'cash' && r.value_usd > 0 && !mpIsRuInfra(r)).reduce((a, r) => a + r.value_usd, 0),
-    ruBrokerCash: baseIn.cashRows.filter(r => r.instrument_type === 'cash' && r.broker_usd > 0 && mpIsRuInfra(r)).reduce((a, r) => a + r.broker_usd, 0),
+    // each Russian brokerage account's cash, by currency (the salary plan's step 8)
+    ruBrokerCashRows: baseIn.cashRows.filter(r => r.instrument_type === 'cash' && r.broker_usd > 0 && mpIsRuInfra(r))
+      .map(r => ({ account: r.account, currency: r.currency, usd: r.broker_usd })),
+    fx: baseIn.fxByCurrency,
     total3,   // chart 3's total (gold / crypto 5% are of it)
   };
   if (!draw) return ctx;
