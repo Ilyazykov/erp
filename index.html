@@ -555,6 +555,7 @@
     <div class="form-row" style="gap:16px;flex-wrap:wrap">
       <label><input type="checkbox" id="mp_salary_sellyuan"> sell yuan bonds above the w_CNY target</label>
       <label><input type="checkbox" id="mp_salary_sellstocks"> sell overweight stocks with Z &lt; −1.5</label>
+      <label title="Chart 3: the $10,000 emergency fund as a slice of its own (the cash at Bank of Cyprus, Ziraat, Raiffeisen and Wise, TBC's savings account, Revolut's euro liquid assets up to the rest) -- its target the cash's $10,000"><input type="checkbox" id="mp_charts_cushion"> emergency fund 🛟</label>
     </div>
     <p class="empty-note" id="mp_charts_status"></p>
     <div id="mp_charts_grid" class="pie-grid"></div>
@@ -4871,7 +4872,7 @@ const MP_COLORS = {
   },
   // asset types (liquid assets the same grey as deposits, as asked)
   type: {
-    bond: '#3a9bf7', cash: '#86e04a', deposit: '#8e8e93', liquid: '#8e8e93', gold: '#f5c542', crypto: '#f2452b',
+    bond: '#3a9bf7', cash: '#86e04a', cushion: '#2bb5a8', deposit: '#8e8e93', liquid: '#8e8e93', gold: '#f5c542', crypto: '#f2452b',
     stock: '#d6307f', real_estate: '#e0864a',
   },
   // countries: those whose currency is on chart 1 in that colour; EU states in blues
@@ -5464,6 +5465,13 @@ function mpSalaryDeltas(c, plan) {
   for (const id of ['mp_salary_cash', 'mp_salary_revolut', 'mp_salary_ruliquid', 'mp_salary_rucash', 'mp_salary_sellyuan', 'mp_salary_sellstocks']) {
     document.getElementById(id).addEventListener('change', () => mpDrawCharts());
   }
+  // chart 3's emergency fund switch, remembered in this browser
+  const cushion = document.getElementById('mp_charts_cushion');
+  try { cushion.checked = localStorage.getItem('mp_charts_cushion') === '1'; } catch { /* no storage */ }
+  cushion.addEventListener('change', () => {
+    try { localStorage.setItem('mp_charts_cushion', cushion.checked ? '1' : '0'); } catch { /* no storage */ }
+    mpDrawCharts();
+  });
   // The amount to keep at Revolut and its currency, remembered in this browser.
   const keep = document.getElementById('mp_salary_revolut_keep');
   const keepCcy = document.getElementById('mp_salary_revolut_keep_ccy');
@@ -5664,7 +5672,7 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   const brokerOrder = ['Freedom24', 'Bank of Cyprus', 'Revolut', 'Wise', 'Raiffeisen', 'UniCredit', 'Credo Bank', 'TBC Bank', 'Ziraat Bank', 'IBKR',
     'Sber', 'T-Bank', 'Ozon Bank', 'Alfa', 'Yandex Bank', 'Finuslugi', 'Telegram', 'Binance', 'Bybit', 'Crypto.com', 'Trust', 'cash',
     '(unspecified)'].map(brokerName);
-  const typeOrder = ['bond', 'cash', 'deposit', 'liquid', 'gold', 'crypto', 'stock', 'real_estate'].map(t => MP_ASSET_CLASS_LABELS[t]);
+  const typeOrder = ['bond', 'cash', 'cushion', 'deposit', 'liquid', 'gold', 'crypto', 'stock', 'real_estate'].map(t => MP_ASSET_CLASS_LABELS[t]);
   const cryptoOrder = ['TON', 'GRAM', 'TAO', 'ETH', 'BTC', 'SOL'];
   const ruOrder = [['stock', 'RUB'], ['bond', 'RUB'], ['deposit', 'RUB'], ['liquid', 'RUB'], ['cash', 'RUB'],
     ['bond', 'CNY'], ['deposit', 'CNY'], ['liquid', 'CNY'], ['cash', 'CNY'], ['stock', 'CNY']]
@@ -5698,25 +5706,26 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   // salary plan when one is typed in).
   //   8: stocks at the US ERP tab's target share of chart 8's own total,
   //      bonds / deposits / liquid assets the rest in their current proportions;
-  //   3: those four at chart 8's dollars, cash $10,000, gold 5%, crypto 5%.
-  const CASH_TARGET_USD = 10000, GOLD_TARGET_PCT = 5, CRYPTO_TARGET_PCT = 5;
+  //   3: those four at chart 8's dollars, the emergency fund $10,000, gold 5%, crypto 5%.
+  const GOLD_TARGET_PCT = 5, CRYPTO_TARGET_PCT = 5;
   const total3 = Object.values(types).reduce((s, v) => s + v, 0);
   const types8 = mpAssetBuckets(assetRows.filter(r => !isRealEstate(r)), ['stock', 'bond', 'deposit', 'liquid']);
   const total8 = Object.values(types8).reduce((s, v) => s + v, 0);
-  // The group's share of chart 3: its total less the cash / gold / crypto
-  // targets (gold and crypto 5% each) -- so chart 3's targets add up to its total.
+  // The group's share of chart 3: its total less the emergency fund / gold /
+  // crypto targets (gold and crypto 5% each) -- so chart 3's targets add up to its total.
   const goldTarget = GOLD_TARGET_PCT / 100 * total3;
   const cryptoTarget = CRYPTO_TARGET_PCT / 100 * total3;
-  const targetTotal8 = total3 - CASH_TARGET_USD - goldTarget - cryptoTarget;
+  const targetTotal8 = total3 - MP_CUSHION_USD - goldTarget - cryptoTarget;
   const usAlloc = DATA && DATA.usAllocTargetRaw;
   // Stocks at the US ERP share of `whole`, the other three the rest in
-  // today's proportions.
-  const splitGroup = whole => {
-    if (!(usAlloc && (usAlloc.Stocks + usAlloc.Bonds) > 0 && total8 > 0 && whole > 0)) return null;
+  // today's proportions (of `now`: chart 8's figures).
+  const splitGroup = (whole, now = types8) => {
+    const nowTotal = Object.values(now).reduce((s, v) => s + v, 0);
+    if (!(usAlloc && (usAlloc.Stocks + usAlloc.Bonds) > 0 && nowTotal > 0 && whole > 0)) return null;
     const stockLabel = MP_ASSET_CLASS_LABELS.stock;
     const stockUsd = usAlloc.Stocks / (usAlloc.Stocks + usAlloc.Bonds) * whole;
-    const restNow = total8 - (types8[stockLabel] || 0);
-    const out = Object.fromEntries(Object.entries(types8).map(([l, v]) =>
+    const restNow = nowTotal - (now[stockLabel] || 0);
+    const out = Object.fromEntries(Object.entries(now).map(([l, v]) =>
       [l, l === stockLabel ? stockUsd : (whole - stockUsd) * (restNow ? v / restNow : 0)]));
     if (!(stockLabel in out)) out[stockLabel] = stockUsd;
     return out;
@@ -5724,13 +5733,20 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   // Chart 9's target total is what chart 3's cash / gold / crypto targets
   // leave of its total; chart 3 takes the same four targets.
   const target8 = splitGroup(targetTotal8);
-  const group3 = target8;
-  const target3 = group3 && {
-    ...group3,
-    [MP_ASSET_CLASS_LABELS.cash]: CASH_TARGET_USD,
-    [MP_ASSET_CLASS_LABELS.gold]: goldTarget,
-    [MP_ASSET_CLASS_LABELS.crypto]: cryptoTarget,
-  };
+  // Chart 3's $10,000 is the emergency fund's, the cash's target 0
+  // (30.10.2026 -- the $10,000 used to be the cash's: the cash was the
+  // fund), the fund's money out of the liquid assets the group's targets are
+  // split by. With the switch above the charts on, the fund is a slice of its
+  // own; off, its money stays in the cash / liquid assets columns it sits in,
+  // its $10,000 with the liquid assets. (Chart 3 only: the others as before.)
+  const cushionOn = !!(document.getElementById('mp_charts_cushion') || {}).checked;
+  const withCushion = mpWithCushion(assetRows.filter(r => !isRealEstate(r)));
+  const types3 = cushionOn ? mpAssetBuckets(withCushion) : types;
+  const group3 = splitGroup(targetTotal8, mpAssetBuckets(withCushion, ['stock', 'bond', 'deposit', 'liquid']));
+  const L = MP_ASSET_CLASS_LABELS;
+  const target3 = group3 && (cushionOn
+    ? { ...group3, [L.cash]: 0, [L.cushion]: MP_CUSHION_USD, [L.gold]: goldTarget, [L.crypto]: cryptoTarget }
+    : { ...group3, [L.cash]: 0, [L.liquid]: (group3[L.liquid] || 0) + MP_CUSHION_USD, [L.gold]: goldTarget, [L.crypto]: cryptoTarget });
 
   // Currencies first (the listed ones in order, then the rest largest first),
   // then gold and crypto (listed ones in order, then the rest).
@@ -5741,13 +5757,13 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   pie(grid, '1. Currencies', byCurrency, '', currencyRank, true, l => (isFiatLabel(l) ? 0 : 1), currencyColor);
   pie(grid, '2. Banks & brokers', brokerBuckets, '', brokerOrder, true, () => 0, brokerColor);
   if (target3) {
-    const labels = [...new Set([...Object.keys(types), ...Object.keys(target3)])].sort((a, b) => typeOrder.indexOf(a) - typeOrder.indexOf(b));
+    const labels = [...new Set([...Object.keys(types3), ...Object.keys(target3)])].sort((a, b) => typeOrder.indexOf(a) - typeOrder.indexOf(b));
     const sum3 = Object.values(target3).reduce((s, v) => s + v, 0);
     tpie(grid, '3. Asset types', labels.map(l => ({
-      label: l, usd: types[l] || 0, color: typeColor(l) || MP_OTHER_COLOR, target: (target3[l] || 0) / total3 * 100,
+      label: l, usd: types3[l] || 0, color: typeColor(l) || MP_OTHER_COLOR, target: (target3[l] || 0) / total3 * 100,
     })), '', sum3);
   } else {
-    pie(grid, '3. Asset types', types, '', typeOrder, true, () => 0, typeColor);
+    pie(grid, '3. Asset types', types3, '', typeOrder, true, () => 0, typeColor);
   }
   pie(grid, '4. Stocks by country', countries, 'Funds split by the countries of what they hold.', null, true, () => 0, countryColor);
   // (chart 5 is drawn further down, once the Russian targets are known; this keeps its place)
