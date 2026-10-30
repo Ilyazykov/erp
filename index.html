@@ -5146,10 +5146,17 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
   parts.liquidFree = flags.liquid ? c.liquidFree : 0;
   parts.cashFree = flags.liquid ? c.cashFree : 0;
   left += parts.cashFree + parts.liquidFree;
+  // (what to sell: each fund its share, in its own currency)
+  const liqSum = c.liquidFreeRows.reduce((a, r) => a + r.value_usd, 0);
+  const sellText = liqSum > 0 ? c.liquidFreeRows.map(r => {
+    const ccy = r.underlying_currency || r.currency, usd = parts.liquidFree * r.value_usd / liqSum;
+    return `${r.account} ${ccy} fund ${mpFormatCurrency(c.fx && c.fx[ccy] ? usd / c.fx[ccy] : usd, c.fx && c.fx[ccy] ? ccy : 'USD')}`;
+  }).join(', ') : '';
   if (parts.liquidFree) rows.push(['0', 'Liquidity funds above their target added to the salary', parts.liquidFree,
-    `target ${mpFormatUsd(c.liquidTarget)}, the emergency fund’s part kept`]);
+    `sell: ${sellText} (target ${mpFormatUsd(c.liquidTarget)}, the emergency fund’s part kept)`]);
   if (parts.cashFree) rows.push(['0', 'Brokerage accounts’ cash added to the salary', parts.cashFree,
-    c.cashFreeRows.map(r => `${r.account} ${mpFormatUsd(r.value_usd)}`).join(', ')]);
+    [...new Set(c.cashFreeRows.map(r => r.account))].map(a =>
+      `${a} ${mpFormatUsd(c.cashFreeRows.filter(r => r.account === a).reduce((s, r) => s + r.value_usd, 0))}`).join(', ')]);
   // 1-3. Gold, crypto, Russian infrastructure up to 5% each of the new total.
   // (gold / crypto of chart 3's total, Russia of chart 10's -- as the charts measure them)
   const newTotal3 = c.total3 + salary;
@@ -5220,6 +5227,20 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
   parts.vwra = fundAdd - parts.vwce;
   if (parts.vwce > 0) rows.push(['4.1', 'World fund — VWCE at Freedom (up to 20% of IBKR + Freedom)', parts.vwce, '']);
   if (parts.vwra > 0) rows.push(['4.1', 'World fund — VWRA at IBKR', parts.vwra, '']);
+  // The money to move: what each broker abroad buys less the cash it has
+  // (when that cash is in the plan), from the money freed / the salary.
+  const cashAt = account => (parts.cashFree ? c.cashFreeRows.filter(r => r.account === account).reduce((a, r) => a + r.value_usd, 0) : 0);
+  const usStocksUsd = parts.usStocks.filter(b => b.usd > 0).reduce((a, b) => a + b.usd, 0);
+  const moves = [
+    ['Freedom24', parts.vwce + parts.usBondsFreedom, ['VWCE', parts.vwce], ['US Treasuries', parts.usBondsFreedom]],
+    ['IBKR', parts.vwra + parts.usBonds - parts.usBondsFreedom + usStocksUsd,
+      ['VWRA', parts.vwra], ['US Treasuries', parts.usBonds - parts.usBondsFreedom], ['stocks', usStocksUsd]],
+  ];
+  for (const [account, buys, ...what] of moves) {
+    const move = buys - cashAt(account);
+    if (move > 0.5) rows.push(['→', `Move to ${account}`, move, [what.filter(([, v]) => v > 0.5).map(([l, v]) => `${l} ${mpFormatUsd(v)}`).join(' + '),
+      cashAt(account) > 0.005 ? `less its cash ${mpFormatUsd(cashAt(account))}` : ''].filter(Boolean).join(', ')]);
+  }
 
   rows.push(['5', 'Russian stocks (ERP & Stocks/Bonds target)', ruStocksSpent, mpSalaryBuysText(parts.ruStocks)]);
   if (parts.cnySold) rows.push(['6', `Sell yuan bonds (w_CNY ${(c.wCny * 100).toFixed(1)}% < 30%)`, -parts.cnySold, '']);
