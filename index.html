@@ -5690,13 +5690,23 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   //   3: those four at chart 8's dollars, the emergency fund $10,000, gold 5%, crypto 5%.
   const GOLD_TARGET_PCT = 5, CRYPTO_TARGET_PCT = 5;
   const total3 = Object.values(types).reduce((s, v) => s + v, 0);
-  const types8 = mpAssetBuckets(assetRows.filter(r => !isRealEstate(r)), ['stock', 'bond', 'deposit', 'liquid']);
+  // The emergency fund's money (30.10.2026) is out of chart 9 and the group
+  // its targets are split over: Revolut's euro fund and TBC's savings in it
+  // aren't liquid assets to invest.
+  const withCushion = mpWithCushion(assetRows.filter(r => !isRealEstate(r)));
+  const L = MP_ASSET_CLASS_LABELS;
+  const buckets3 = mpAssetBuckets(withCushion);
+  const types8 = mpAssetBuckets(withCushion, ['stock', 'bond', 'deposit', 'liquid']);
   const total8 = Object.values(types8).reduce((s, v) => s + v, 0);
-  // The group's share of chart 3: its total less the emergency fund / gold /
-  // crypto targets (gold and crypto 5% each) -- so chart 3's targets add up to its total.
+  // The cash outside the fund: money to spend on things, its target what it is.
+  const cashOutside = buckets3[L.cash] || 0;
+  const fundCash = (types[L.cash] || 0) - cashOutside;
+  // The group's share of chart 3: its total less the emergency fund / that
+  // cash / gold / crypto targets (gold and crypto 5% each) -- so chart 3's
+  // targets add up to its total.
   const goldTarget = GOLD_TARGET_PCT / 100 * total3;
   const cryptoTarget = CRYPTO_TARGET_PCT / 100 * total3;
-  const targetTotal8 = total3 - MP_CUSHION_USD - goldTarget - cryptoTarget;
+  const targetTotal8 = total3 - MP_CUSHION_USD - cashOutside - goldTarget - cryptoTarget;
   const usAlloc = DATA && DATA.usAllocTargetRaw;
   // Stocks at the US ERP share of `whole`, the other three the rest in
   // today's proportions (of `now`: chart 8's figures).
@@ -5711,25 +5721,18 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     if (!(stockLabel in out)) out[stockLabel] = stockUsd;
     return out;
   };
-  // Chart 9's target total is what chart 3's cash / gold / crypto targets
-  // leave of its total; chart 3 takes the same four targets.
+  // Chart 9's target total is what chart 3's fund / cash / gold / crypto
+  // targets leave of its total; chart 3 takes the same four targets.
   const target8 = splitGroup(targetTotal8);
   // Chart 3 (30.10.2026 -- the $10,000 used to be the cash's: the cash was
-  // the emergency fund): the fund $10,000; the cash outside it at what it is
-  // (money to spend on things, not to invest); the group's targets split
-  // what's left, the fund's money out of the liquid assets they're split by.
-  // With the switch above the charts on, the fund is a slice of its own; off,
-  // its money stays in the cash / liquid assets columns it sits in, and so
-  // does its $10,000 -- the cash its cash part, the liquid assets the rest.
-  // (Chart 3 only: the others as before.)
+  // the emergency fund): the fund $10,000, the cash outside it at what it is,
+  // the group as chart 9. With the switch above the charts on, the fund is a
+  // slice of its own; off, its money stays in the cash / liquid assets
+  // columns it sits in, and so does its $10,000 -- the cash its cash part, the
+  // liquid assets the rest.
   const cushionOn = !!(document.getElementById('mp_charts_cushion') || {}).checked;
-  const withCushion = mpWithCushion(assetRows.filter(r => !isRealEstate(r)));
-  const L = MP_ASSET_CLASS_LABELS;
-  const buckets3 = mpAssetBuckets(withCushion);
   const types3 = cushionOn ? buckets3 : types;
-  const cashOutside = buckets3[L.cash] || 0;
-  const fundCash = (types[L.cash] || 0) - cashOutside;
-  const group3 = splitGroup(targetTotal8 - cashOutside, mpAssetBuckets(withCushion, ['stock', 'bond', 'deposit', 'liquid']));
+  const group3 = target8;
   const target3 = group3 && (cushionOn
     ? { ...group3, [L.cash]: cashOutside, [L.cushion]: MP_CUSHION_USD, [L.gold]: goldTarget, [L.crypto]: cryptoTarget }
     : { ...group3, [L.cash]: cashOutside + fundCash, [L.liquid]: (group3[L.liquid] || 0) + MP_CUSHION_USD - fundCash,
