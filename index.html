@@ -4305,13 +4305,36 @@ const MP_CURRENCY_COLUMN_ORDER = [
 // Fixed display order for the broker x asset-class table's columns,
 // matching the user's own tracking spreadsheet (Акции, Облигации,
 // Вклады, Кэш, Золото, Крипта) rather than alphabetical.
-const MP_ASSET_CLASS_COLUMN_ORDER = ['stock', 'bond', 'deposit', 'liquid', 'cash', 'credit', 'gold', 'crypto', 'real_estate'];
+const MP_ASSET_CLASS_COLUMN_ORDER = ['stock', 'bond', 'deposit', 'liquid', 'cushion', 'cash', 'credit', 'gold', 'crypto', 'real_estate'];
 // Column headers for the broker x asset-class table (raw instrument_type
 // value -> display label).
 const MP_ASSET_CLASS_LABELS = {
-  stock: 'stock 📈', bond: 'bond 🏛️', deposit: 'deposit 🏦', liquid: 'liquid assets 💧',
+  stock: 'stock 📈', bond: 'bond 🏛️', deposit: 'deposit 🏦', liquid: 'liquid assets 💧', cushion: 'emergency fund 🛟',
   cash: 'cash 💵', credit: 'credit 💳', gold: 'gold 🥇', crypto: 'crypto ₿', real_estate: 'real estate 🏠',
 };
+
+// The safety cushion -- $10,000 not to be touched (30.10.2026): the cash at
+// Bank of Cyprus, Ziraat, Raiffeisen and Wise and TBC's savings account,
+// whole, and Revolut's euro liquid assets (its EUR money-market fund) up to
+// what that leaves of the $10,000. Not new money: those rows' amounts move
+// from their column (cash / liquid assets) to 'cushion' -- the totals stay.
+const MP_CUSHION_USD = 10000;
+const MP_CUSHION_CASH_ACCOUNTS = new Set(['Bank of Cyprus', 'Ziraat Bank', 'Raiffeisen', 'Wise']);
+function mpWithCushion(rows) {
+  const whole = r => r.value_usd > 0 && ((r.instrument_type === 'cash' && MP_CUSHION_CASH_ACCOUNTS.has(r.account))
+    || (r.instrument_type === 'liquid' && r.account === 'TBC Bank'));
+  const out = rows.map(r => (whole(r) ? { ...r, instrument_type: 'cushion' } : r));
+  let need = MP_CUSHION_USD - out.filter(r => r.instrument_type === 'cushion').reduce((a, r) => a + r.value_usd, 0);
+  const euro = out.filter(r => r.account === 'Revolut' && r.instrument_type === 'liquid' && r.value_usd > 0
+    && (r.underlying_currency || r.currency) === 'EUR').sort((a, b) => b.value_usd - a.value_usd);
+  for (const r of euro) {
+    if (need <= 0) break;
+    const take = Math.min(need, r.value_usd);
+    out.splice(out.indexOf(r), 1, { ...r, value_usd: r.value_usd - take }, { ...r, instrument_type: 'cushion', value_usd: take, quantity: null });
+    need -= take;
+  }
+  return out;
+}
 
 // Country flag shown next to each ISO currency's column header in the
 // broker x currency table, matching the user's own tracking spreadsheet.
@@ -4795,7 +4818,7 @@ async function mpRenderBrokerAssetClass() {
   // in roubles at today's rate when chosen (the choice kept in this browser)
   const rub = document.getElementById('assetclass_ccy').value === 'RUB' && fxByCurrency.RUB;
   const money = rub ? Object.assign(usd => mpFormatCurrency(usd / fxByCurrency.RUB, 'RUB'), { unit: 'RUB' }) : mpFormatUsd;
-  mpRenderBrokerPivot(wrap, [...split, ...cashRows, ...realEstateRows], 'instrument_type', 'No holdings yet — import trades above.',
+  mpRenderBrokerPivot(wrap, mpWithCushion([...split, ...cashRows, ...realEstateRows]), 'instrument_type', 'No holdings yet — import trades above.',
     undefined, await mpEverHeld('instrument_type'), money);
 }
 try { const v = localStorage.getItem('mp_assetclass_ccy'); if (v) document.getElementById('assetclass_ccy').value = v; } catch { /* no storage */ }
