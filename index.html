@@ -4306,7 +4306,7 @@ const MP_CURRENCY_COLUMN_ORDER = [
 // Fixed display order for the broker x asset-class table's columns,
 // matching the user's own tracking spreadsheet (Акции, Облигации,
 // Вклады, Кэш, Золото, Крипта) rather than alphabetical.
-const MP_ASSET_CLASS_COLUMN_ORDER = ['stock', 'bond', 'deposit', 'liquid', 'cushion', 'cash', 'credit', 'gold', 'crypto', 'real_estate'];
+const MP_ASSET_CLASS_COLUMN_ORDER = ['cushion', 'stock', 'bond', 'deposit', 'liquid', 'cash', 'credit', 'gold', 'crypto', 'real_estate'];
 // Column headers for the broker x asset-class table (raw instrument_type
 // value -> display label).
 const MP_ASSET_CLASS_LABELS = {
@@ -4321,10 +4321,11 @@ const MP_ASSET_CLASS_LABELS = {
 // from their column (cash / liquid assets) to 'cushion' -- the totals stay.
 const MP_CUSHION_USD = 10000;
 const MP_CUSHION_CASH_ACCOUNTS = new Set(['Bank of Cyprus', 'Ziraat Bank', 'Raiffeisen', 'Wise']);
+// (a row the fund takes whole -- its cell then shows a grey zero)
+const mpCushionWhole = r => r.value_usd > 0 && ((r.instrument_type === 'cash' && MP_CUSHION_CASH_ACCOUNTS.has(r.account))
+  || (r.instrument_type === 'liquid' && r.account === 'TBC Bank'));
 function mpWithCushion(rows) {
-  const whole = r => r.value_usd > 0 && ((r.instrument_type === 'cash' && MP_CUSHION_CASH_ACCOUNTS.has(r.account))
-    || (r.instrument_type === 'liquid' && r.account === 'TBC Bank'));
-  const out = rows.map(r => (whole(r) ? { ...r, instrument_type: 'cushion' } : r));
+  const out = rows.map(r => (mpCushionWhole(r) ? { ...r, instrument_type: 'cushion' } : r));
   let need = MP_CUSHION_USD - out.filter(r => r.instrument_type === 'cushion').reduce((a, r) => a + r.value_usd, 0);
   const euro = out.filter(r => r.account === 'Revolut' && r.instrument_type === 'liquid' && r.value_usd > 0
     && (r.underlying_currency || r.currency) === 'EUR').sort((a, b) => b.value_usd - a.value_usd);
@@ -4821,8 +4822,14 @@ async function mpRenderBrokerAssetClass() {
   const money = rub ? Object.assign(usd => mpFormatCurrency(usd / fxByCurrency.RUB, 'RUB'), { unit: 'RUB' }) : mpFormatUsd;
   // the emergency fund in a column of its own when switched on (kept in this browser)
   const rows = [...split, ...cashRows, ...realEstateRows];
-  mpRenderBrokerPivot(wrap, document.getElementById('assetclass_cushion').checked ? mpWithCushion(rows) : rows,
-    'instrument_type', 'No holdings yet — import trades above.', undefined, await mpEverHeld('instrument_type'), money);
+  const cushion = document.getElementById('assetclass_cushion').checked;
+  const everHeld = await mpEverHeld('instrument_type');
+  // (a cell the fund emptied -- all of Wise's cash -- shows a grey 0, not an
+  // ever-held "$0.00": nothing's gone, it's all in the fund)
+  const moved = new Set(rows.filter(mpCushionWhole).map(r => `${r.account} ${r.instrument_type}`));
+  const shown = cushion ? new Set([...everHeld].filter(k => !moved.has(k))) : everHeld;
+  mpRenderBrokerPivot(wrap, cushion ? mpWithCushion(rows) : rows,
+    'instrument_type', 'No holdings yet — import trades above.', undefined, shown, money);
 }
 try { const v = localStorage.getItem('mp_assetclass_ccy'); if (v) document.getElementById('assetclass_ccy').value = v; } catch { /* no storage */ }
 try { document.getElementById('assetclass_cushion').checked = localStorage.getItem('mp_assetclass_cushion') === '1'; } catch { /* no storage */ }
