@@ -347,7 +347,8 @@
     <div id="mp_broker_currency_wrap"></div>
 
     <div class="section-title">Portfolio by broker × asset class</div>
-    <div class="form-row"><label>in <select id="assetclass_ccy"><option value="USD">USD $</option><option value="RUB">RUB ₽</option></select></label></div>
+    <div class="form-row"><label>in <select id="assetclass_ccy"><option value="USD">USD $</option><option value="RUB">RUB ₽</option></select></label>
+      <label title="$10,000 not to be touched: the cash at Bank of Cyprus, Ziraat, Raiffeisen and Wise, TBC's savings account, and Revolut's euro liquid assets up to the rest -- moved out of their columns into one of its own"><input type="checkbox" id="assetclass_cushion"> emergency fund 🛟</label></div>
     <div id="mp_broker_assetclass_wrap"></div>
 
 
@@ -4818,12 +4819,19 @@ async function mpRenderBrokerAssetClass() {
   // in roubles at today's rate when chosen (the choice kept in this browser)
   const rub = document.getElementById('assetclass_ccy').value === 'RUB' && fxByCurrency.RUB;
   const money = rub ? Object.assign(usd => mpFormatCurrency(usd / fxByCurrency.RUB, 'RUB'), { unit: 'RUB' }) : mpFormatUsd;
-  mpRenderBrokerPivot(wrap, mpWithCushion([...split, ...cashRows, ...realEstateRows]), 'instrument_type', 'No holdings yet — import trades above.',
-    undefined, await mpEverHeld('instrument_type'), money);
+  // the emergency fund in a column of its own when switched on (kept in this browser)
+  const rows = [...split, ...cashRows, ...realEstateRows];
+  mpRenderBrokerPivot(wrap, document.getElementById('assetclass_cushion').checked ? mpWithCushion(rows) : rows,
+    'instrument_type', 'No holdings yet — import trades above.', undefined, await mpEverHeld('instrument_type'), money);
 }
 try { const v = localStorage.getItem('mp_assetclass_ccy'); if (v) document.getElementById('assetclass_ccy').value = v; } catch { /* no storage */ }
+try { document.getElementById('assetclass_cushion').checked = localStorage.getItem('mp_assetclass_cushion') === '1'; } catch { /* no storage */ }
 document.getElementById('assetclass_ccy').addEventListener('change', e => {
   try { localStorage.setItem('mp_assetclass_ccy', e.target.value); } catch { /* no storage */ }
+  if (mpIsSignedIn) mpRenderBrokerAssetClass();
+});
+document.getElementById('assetclass_cushion').addEventListener('change', e => {
+  try { localStorage.setItem('mp_assetclass_cushion', e.target.checked ? '1' : '0'); } catch { /* no storage */ }
   if (mpIsSignedIn) mpRenderBrokerAssetClass();
 });
 
