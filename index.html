@@ -4500,7 +4500,7 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
   </tr>`).join('')}
   ${nativeTotalRow}
   <tr class="total-row"><td class="ticker"><b>Total (${money.unit || 'USD'})</b></td>
-    ${categories.map(c => `<td><b>${money(colTotal(c))}</b></td>`).join('')}
+    ${categories.map(c => `<td${c === 'cushion' && colTotal(c) < MP_CUSHION_USD - 0.005 ? ' class="neg" title="under its $10,000"' : ''}><b>${money(colTotal(c))}</b></td>`).join('')}
     <td><b>${money(grandTotal)}</b></td>
   </tr></tbody></table>
   ${anyMissing ? '<p class="empty-note">Some tickers have no price yet — totals are a partial sum.</p>' : ''}`;
