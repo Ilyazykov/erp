@@ -636,6 +636,22 @@ async function moexFetchBond(secid: string, board: string): Promise<MoexPriceInf
     return null;
   }
 
+  // ACCRUEDINT is in the board's settlement currency (CURRENCYID), not the
+  // face's: a yuan bond on a rouble board (РУСАЛ БО05 on TQCB) gave 264.95
+  // roubles of NKD, added to a yuan price as yuan -- 1262.87 CNY for a bond
+  // at 100.12% (01.11.2026). Then the NKD is the one of a board settling in
+  // the face's currency (TQOY: 21.92 CNY), or none.
+  const ccyOf = (c: unknown) => (String(c ?? '').toUpperCase() === 'SUR' ? 'RUB' : String(c ?? '').toUpperCase());
+  const settle = data?.securities?.data?.length
+    ? ccyOf(rowsToObjects(data.securities.columns, data.securities.data)[0].CURRENCYID) : '';
+  if (accrued !== null && settle && settle !== ccyOf(currency)) {
+    const all = await fetchJson(`${MOEX_ISS_BASE}/engines/stock/markets/${market}/securities/${encodeURIComponent(secid)}.json` +
+      '?iss.meta=off&iss.only=securities&securities.columns=BOARDID,CURRENCYID,ACCRUEDINT');
+    const same = all ? rowsToObjects(all.securities?.columns ?? [], all.securities?.data ?? [])
+      .find((r) => ccyOf(r.CURRENCYID) === ccyOf(currency) && r.ACCRUEDINT !== null) : undefined;
+    accrued = same ? same.ACCRUEDINT : null;
+  }
+
   const priceNative = Number(facevalue) * Number(pricePct) / 100.0 + (Number(accrued) || 0);
   return { price_rub: priceNative, currency: currency === null ? null : String(currency), as_of: asOf === null ? null : String(asOf) };
 }

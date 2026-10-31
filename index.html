@@ -4561,11 +4561,26 @@ function mpSetRealEstateIncluded(id, on) {
   } catch (_) { /* no storage: stays off */ }
 }
 
+// The same read asked for by several tables of one load (the holdings, the
+// balances -- three times each, ~0.2 s a round trip from Tbilisi) goes to the
+// database once: its answer is kept for MP_ONCE_MS, each caller getting its
+// own copy of the rows (they're changed in place downstream). An error isn't
+// kept.
+const MP_ONCE_MS = 5000;
+const mpOnceCache = new Map();
+async function mpOnce(key, query) {
+  const hit = mpOnceCache.get(key);
+  if (!hit || Date.now() - hit.at > MP_ONCE_MS) mpOnceCache.set(key, { at: Date.now(), result: Promise.resolve(query()) });
+  const res = await mpOnceCache.get(key).result;
+  if (res.error) mpOnceCache.delete(key);
+  return { ...res, data: Array.isArray(res.data) ? res.data.map(r => ({ ...r })) : res.data };
+}
+
 // Real estate (real_estate_value view): one row per property, account 'real
 // estate', asset class 'real_estate', valued in its currency (RUB) and
 // converted with the same FX map.
 async function mpFetchRealEstateRows(fxByCurrency) {
-  const { data, error } = await sb.from('real_estate_value').select('id, name, currency, current_value');
+  const { data, error } = await mpOnce('real_estate_value:brief', () => sb.from('real_estate_value').select('id, name, currency, current_value'));
   if (error || !data?.length) return [];
   const missing = [...new Set(data.map(r => r.currency))].filter(c => !(c in fxByCurrency));
   if (missing.length) Object.assign(fxByCurrency, await mpFetchFxByCurrency(missing));
@@ -4630,8 +4645,8 @@ async function mpFetchCashRows(fxByCurrency) {
   // One row per (account, currency, external_source): its latest balance
   // (the bank_latest_balances view picks it -- reading every
   // bank_transactions row here instead would hit the API's 1000-row cap).
-  const { data, error } = await sb.from('bank_latest_balances')
-    .select('account, currency, balance_after, tx_date, external_source, product');
+  const { data, error } = await mpOnce('bank_latest_balances', () => sb.from('bank_latest_balances')
+    .select('account, currency, balance_after, tx_date, external_source, product'));
   if (error || !data) return [];
   // Rates for currencies the caller didn't ask for (Revolut's AED / HUF / ILS
   // pockets): fetched here and added to the caller's map, so its native-unit
@@ -4708,7 +4723,7 @@ function mpBrokerCurrencyUnit(r) {
 // Charts tab): holdings with prices, bank balances, real estate, and the
 // USD rate of every currency / crypto unit they're shown in.
 async function mpLoadPortfolioBase() {
-  const { data, error } = await sb.from('portfolio_value_usd_by_account').select('*');
+  const { data, error } = await mpOnce('portfolio_value_usd_by_account', () => sb.from('portfolio_value_usd_by_account').select('*'));
   if (error) throw error;
   const currencies = [...new Set(data.map(r => r.underlying_currency || r.currency)), 'USD', 'EUR', 'GBP', 'RUB', 'CNY', 'TRY', 'RSD', 'GEL'];
   const fxByCurrency = await mpFetchFxByCurrency(currencies);
@@ -4805,8 +4820,8 @@ const MP_OTHER_CURRENCIES_COLUMN = 'Others';
 const MP_EUROPEAN_AS_EUR = new Set(['CHF', 'DKK', 'SEK', 'NOK', 'PLN', 'CZK', 'HUF', 'RON', 'BGN', 'ISK', 'HRK']);
 async function mpSplitFundsByCurrency(rows) {
   if (!rows.some(r => MP_SPLIT_BY_CURRENCY_FUNDS.has(r.ticker))) return rows;
-  const { data: weights, error } = await sb.from('fund_currency_weights').select('*')
-    .in('fund', [...MP_SPLIT_BY_CURRENCY_FUNDS]);
+  const { data: weights, error } = await mpOnce('fund_currency_weights:split', () => sb.from('fund_currency_weights').select('*')
+    .in('fund', [...MP_SPLIT_BY_CURRENCY_FUNDS]));
   if (error || !weights?.length) return rows;
   const byFund = {};
   for (const w of weights) (byFund[w.fund] ??= []).push(w);
@@ -4824,7 +4839,7 @@ async function mpSplitFundsByCurrency(rows) {
 
 async function mpRenderBrokerAssetClass() {
   const wrap = document.getElementById('mp_broker_assetclass_wrap');
-  const { data, error } = await sb.from('portfolio_value_usd_by_account').select('*');
+  const { data, error } = await mpOnce('portfolio_value_usd_by_account', () => sb.from('portfolio_value_usd_by_account').select('*'));
   if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
   const fxByCurrency = await mpFetchFxByCurrency(['USD', 'EUR', 'GBP', 'RUB', 'CNY', 'TRY', 'RSD', 'GEL']);
   const cashRows = await mpFetchCashRows(fxByCurrency);
@@ -6095,7 +6110,7 @@ const MP_RU_INFRA_LABELS = { stock: 'stock 📈', deposit: 'deposit 🏦', bond:
 const MP_RU_INFRA_CURRENCIES = { RUB: '🇷🇺', CNY: '🇨🇳' };
 async function mpRenderBondByType() {
   const wrap = document.getElementById('mp_bond_subtype_wrap');
-  const { data, error } = await sb.from('portfolio_value_usd_by_account').select('*');
+  const { data, error } = await mpOnce('portfolio_value_usd_by_account', () => sb.from('portfolio_value_usd_by_account').select('*'));
   if (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
   const fx = await mpFetchFxByCurrency(['USD', 'RUB', 'CNY']);
   const cashRows = (await mpFetchCashRows(fx)).filter(r => r.instrument_type === 'cash');
