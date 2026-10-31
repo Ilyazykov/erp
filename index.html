@@ -761,8 +761,12 @@
 <script>
 const DATA_DIR = './data';
 
+// 'no-cache', not 'no-store': the browser keeps the file and only asks
+// whether it changed (a short 304 when not -- the data is rebuilt once a
+// day) instead of downloading it all again on every load: ~2 MB at the
+// ~20 KB/s GitHub Pages can give was minutes (01.11.2026).
 async function fetchCsv(path) {
-  const res = await fetch(path, { cache: 'no-store' });
+  const res = await fetch(path, { cache: 'no-cache' });
   const text = await res.text();
   const lines = text.trim().split(/\r\n|\r|\n/);
   const header = lines[0].split(',');
@@ -775,7 +779,7 @@ async function fetchCsv(path) {
 }
 
 async function fetchJson(path) {
-  const res = await fetch(path, { cache: 'no-store' });
+  const res = await fetch(path, { cache: 'no-cache' });
   return res.json();
 }
 
