@@ -204,6 +204,10 @@ const CATEGORY_RULES: [RegExp, string][] = [
 ];
 
 const DEPOSIT_PRODUCTS = new Set(['savings_account', 'term_deposit']);
+// Cash paid into an account at the bank's counter -- the matching row out of
+// the cash on hand is written with it (see the handler).
+const CASH_DEPOSIT_RE = /ანგარიშზე თანხის შეტანა/;
+const CASH_DEPOSIT_SOURCE = 'cash_auto:deposits';
 
 // This project's CSV is the record of each of its accounts over the days it
 // spans: a stored row of that account dated within them that the file no
@@ -384,6 +388,34 @@ Deno.serve(async (req) => {
     const droppedStale = await dropStale(supabase, user.id, 'bank_transactions', 'tx_date',
       rows.map(r => ({ external_source: r.external_source, external_id: r.external_id, day: r.tx_date.slice(0, 10) })));
 
+    // Cash paid in at the bank's counter (TBC: "ანგარიშზე თანხის შეტანა") came
+    // out of the cash on hand: its row there is written here, not by hand
+    // (31.10.2026) -- source CASH_DEPOSIT_SOURCE, keyed by the bank row (a
+    // statement uploaded again writes the same rows), a running balance per
+    // currency from 0 on top of the cash ledger's. The transfer matcher pairs
+    // the two.
+    const cashOut = rows.filter(r => !r.synthetic && r.amount > 0 && CASH_DEPOSIT_RE.test(r.description)).map(r => ({
+      user_id: user.id, account: 'cash', tx_date: r.tx_date, description: `Cash deposited to ${r.account}`, counterparty: null,
+      amount: -r.amount, currency: r.currency, category: null, balance_after: null, product: 'cash', synthetic: false,
+      synthetic_kind: null, data_gap_until: null, amount_approximate: false,
+      note: `${r.account} ${r.external_source.split(':')[1]}: "${r.description.slice(0, 120)}" +${r.amount} ${r.currency}`,
+      external_source: CASH_DEPOSIT_SOURCE, external_id: `${r.external_source}:${r.external_id}`,
+    }));
+    if (cashOut.length) {
+      const { error: cErr } = await supabase.from('bank_transactions')
+        .upsert(cashOut, { onConflict: 'user_id,external_source,external_id' });
+      if (cErr) return new Response(JSON.stringify({ error: cErr.message }), { status: 500, headers: corsHeaders });
+      const { data: all, error: aErr } = await supabase.from('bank_transactions').select('id, currency, amount')
+        .eq('user_id', user.id).eq('external_source', CASH_DEPOSIT_SOURCE).order('tx_date');
+      if (aErr) return new Response(JSON.stringify({ error: aErr.message }), { status: 500, headers: corsHeaders });
+      const bal: Record<string, number> = {};
+      for (const r of all ?? []) {
+        bal[r.currency] = Math.round(((bal[r.currency] ?? 0) + Number(r.amount)) * 100) / 100;
+        const { error } = await supabase.from('bank_transactions').update({ balance_after: bal[r.currency] }).eq('id', r.id);
+        if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: corsHeaders });
+      }
+    }
+
     let importedDeposit = 0;
     if (depositRows.length) {
       const { error: upsertErr, count } = await supabase
@@ -417,6 +449,7 @@ Deno.serve(async (req) => {
       removed_snowball_duplicates: removedSnowball,
       covered_by_report: coveredByReport,
       dropped_stale: droppedStale + droppedStaleDeposit,
+      cash_deposits: cashOut.length,
       total_rows: csvRows.length,
     }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (err) {

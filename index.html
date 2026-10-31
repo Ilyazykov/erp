@@ -2558,10 +2558,18 @@ async function mpLogUpload(kind, fileName, csvText, result) {
 // account and currency, named account_statement_<account>_<ddmmyyyy>_<ddmmyyyy>.csv;
 // the rows carry no currency and don't say which account they are, so both
 // come from the number in the file name. A new TBC account goes in here.
+// The number is the export's, not the account's: the same account comes
+// under a new one in a later export (31.10.2026: 19475881 -> 19526745, ...)
+// -- `same` names the number its rows are kept under, so a statement of the
+// same days again is the same rows, not new ones.
 const TBC_ACCOUNTS = {
   19475881: { currency: 'GEL', product: 'current_account' },
   19475897: { currency: 'EUR', product: 'current_account' },
   19475906: { currency: 'GEL', product: 'savings_account' },   // My Safe
+  19526745: { currency: 'GEL', product: 'current_account', same: 19475881 },
+  19526746: { currency: 'USD', product: 'current_account' },
+  19526747: { currency: 'EUR', product: 'current_account', same: 19475897 },
+  19526748: { currency: 'GEL', product: 'savings_account', same: 19475906 },   // My Safe
 };
 function mpParseCsvLine(line) {
   const cells = [];
@@ -2605,7 +2613,7 @@ function tbcToBankCsv(text, fileName) {
   // oldest first: import-bank-csv orders a day's untimed rows as they come
   if (rows.length > 1 && rows[0].date > rows[rows.length - 1].date) rows.reverse();
   return ['bank,account_number,product,currency,date,time,card,description,amount,balance,category_bank,source_file',
-    ...rows.map(r => ['TBC Bank', accountNumber, acc.product, acc.currency, r.date, '', '', r.description, r.amount, r.balance, r.type, fileName].map(v => q(String(v))).join(','))].join('\n');
+    ...rows.map(r => ['TBC Bank', acc.same || accountNumber, acc.product, acc.currency, r.date, '', '', r.description, r.amount, r.balance, r.type, fileName].map(v => q(String(v))).join(','))].join('\n');
 }
 
 async function mpImportOneFile(file, statusEl, session) {
