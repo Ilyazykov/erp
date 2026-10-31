@@ -424,6 +424,7 @@
     <p class="note">The gap between the two lines above: what the investments had earned by each day, from the same day counted
       from to the zoom's end. <b>%</b> is that over the capital that worked on average (Modified Dietz: the value at the start plus
       each put-in / taken-out weighted by how much of the period was left after it).</p>
+    <div class="form-row"><label title="Each day: what was earned by then over the capital that worked on average from the period's first day to it (Modified Dietz) -- the last day's is the title's"><input type="checkbox" id="invested_earned_pct"> in %</label></div>
     <div id="plot_invested_earned" style="height:360px"></div>
     <div class="section-title" style="margin-top:24px">Earned by asset</div>
     <p class="note">Over the same period as the chart above (from the day counted from, or the zoom's start, to its end): each
@@ -8800,19 +8801,45 @@ async function mpRenderInvested() {
     const pct = base > 0 ? total / base * 100 : null;
     const fmt = v => (v < 0 ? '−' : '+') + (ccy === 'RUB' ? `${Math.round(Math.abs(v)).toLocaleString('en-US')} ₽` : `$${Math.round(Math.abs(v)).toLocaleString('en-US')}`);
     const up = total >= 0;
+    // In %: each day what was earned by then over the capital that worked on
+    // average from i0 to that day (Modified Dietz, as the title's -- the money
+    // put in weighted by the share of those days left after it): with F the
+    // sum of the flows so far and S their days' sum, the weighted part is
+    // (j*F - S) / (j - i0).
+    const inPct = document.getElementById('invested_earned_pct').checked;
+    let shown = y;
+    if (inPct) {
+      let F = 0, S = 0;
+      shown = x.map((_, k) => {
+        const j = i0 + k;
+        if (k > 0) { const f = inv[j] - inv[j - 1]; F += f; S += f * j; }
+        const b = value[i0] + (k > 0 ? (j * F - S) / (j - i0) : 0);
+        return b > 0 ? y[k] / b * 100 : null;
+      });
+    }
     Plotly.react('plot_invested_earned', [{
-      x, y, type: 'scatter', mode: 'lines', line: { color: up ? '#3fb950' : '#f85149', width: 2 },
+      x, y: shown, type: 'scatter', mode: 'lines', line: { color: up ? '#3fb950' : '#f85149', width: 2 },
       fill: 'tozeroy', fillcolor: up ? 'rgba(63,185,80,0.12)' : 'rgba(248,81,73,0.12)',
-      hovertemplate: `${money}<extra>earned</extra>`,
+      hovertemplate: `${inPct ? '%{y:+.2f}%' : money}<extra>earned</extra>`,
     }], Object.assign({}, LAYOUT_BASE, {
       title: { text: `${x[0] ?? ''} → ${x[x.length - 1] ?? ''}: ${fmt(total)}${pct == null ? '' : ` (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`}`, font: { size: 13 } },
       showlegend: false, hovermode: 'x unified', margin: { t: 40, r: 20, b: 50, l: 70 },
       xaxis: Object.assign({}, LAYOUT_BASE.xaxis, { type: 'date', dtick: undefined, tickformat: undefined }),
-      yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { zeroline: true, zerolinecolor: '#6e7681', tickprefix: ccy === 'USD' ? '$' : '',
-        ticksuffix: ccy === 'RUB' ? ' ₽' : '' }),
+      yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { zeroline: true, zerolinecolor: '#6e7681',
+        tickprefix: !inPct && ccy === 'USD' ? '$' : '', ticksuffix: inPct ? '%' : ccy === 'RUB' ? ' ₽' : '' }),
     }), CONFIG);
   };
   el.mpInvestedEarned = drawEarned;
+  // the % switch, remembered in this browser (wired once)
+  const pctBox = document.getElementById('invested_earned_pct');
+  if (!pctBox.mpWired) {
+    pctBox.mpWired = true;
+    try { pctBox.checked = localStorage.getItem('mp_invested_earned_pct') === '1'; } catch { /* no storage */ }
+    pctBox.addEventListener('change', () => {
+      try { localStorage.setItem('mp_invested_earned_pct', pctBox.checked ? '1' : '0'); } catch { /* no storage */ }
+      if (el.mpInvestedEarned) el.mpInvestedEarned();
+    });
+  }
   el.mpInvestedLast = { inv: invested, i0: 0 };
   el.mpInvestedRebase = rebase;
   // the day counted from, marked by a vertical line
