@@ -7898,6 +7898,7 @@ async function mpRenderCardReminders() {
   if (error || !rules?.length) { box.innerHTML = out.join(''); return; }
   const today = new Date(); today.setHours(0, 0, 0, 0);
   for (const r of rules) {
+    if (r.grace_months) { out.push(...await mpGraceMonthsReminder(r, today)); continue; }
     // the latest statement day not after today, and the due date after it
     let st = mpDayIn(today.getFullYear(), today.getMonth(), r.statement_day);
     if (st > today) st = mpDayIn(today.getFullYear(), today.getMonth() - 1, r.statement_day);
@@ -7945,6 +7946,88 @@ async function mpRenderCardReminders() {
   }
   // the credit cards first, then the fainter Earn ones
   box.innerHTML = [...out.filter(h => !h.includes('faint')), ...out.filter(h => h.includes('faint'))].join('');
+}
+
+// A card whose purchases of a month are interest free until the end of the
+// grace_months-th month after it (Sber's "до 120 дней": November's by 28
+// February). What came onto the card pays the oldest month's purchases first;
+// the banner names the oldest month still owing and its last day (the working
+// day before when it falls on a day off), from remind_days before it.
+// Besides, every month the statement (on the 1st) shows a debt, a minimum
+// payment is due -- miss it and the grace period is gone. Its day (due_day)
+// the app shows after the statement; until it's set the banner says so, from
+// the 1st on. Paid once what came onto the card since the 1st is a tenth of
+// the statement's debt ("до 10%" -- the most the minimum payment is).
+async function mpGraceMonthsReminder(r, today) {
+  const banners = [];
+  const from = new Date(today.getFullYear(), today.getMonth() - r.grace_months - 1, 1);
+  const q = () => sb.from('bank_transactions').select('tx_date, amount, balance_after')
+    .eq('account', r.account).eq('product', 'credit_card').is('synthetic_kind', null).not('balance_after', 'is', null);
+  const [{ data: prev }, { data: rows }] = await Promise.all([
+    q().lt('tx_date', mpIsoDay(from)).order('tx_date', { ascending: false }).limit(1),
+    q().gte('tx_date', mpIsoDay(from)).order('tx_date', { ascending: true }),
+  ]);
+  // what's owed, by the month it was spent in (the debt before the window: its first month)
+  const owed = [];   // [first day of the month, amount]
+  const start = prev?.length ? Math.max(0, -Number(prev[0].balance_after)) : 0;
+  if (start > 0) owed.push([new Date(from.getFullYear(), from.getMonth() - 1, 1), start]);
+  for (const x of rows || []) {
+    const a = Number(x.amount), d = new Date(x.tx_date.slice(0, 10) + 'T00:00:00');
+    if (a < 0) {
+      const m = new Date(d.getFullYear(), d.getMonth(), 1);
+      const last = owed[owed.length - 1];
+      if (last && last[0].getTime() === m.getTime()) last[1] -= a; else owed.push([m, -a]);
+    } else {
+      let left = a;
+      for (const o of owed) { const p = Math.min(o[1], left); o[1] -= p; left -= p; if (left <= 0) break; }
+    }
+  }
+  const fmt = d => d.toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long' });
+  const money = v => `${v.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ${r.currency}`;
+  const debt = rows?.length ? -Number(rows[rows.length - 1].balance_after) : start;
+  const asOf = rows?.length ? rows[rows.length - 1].tx_date.slice(0, 10) : null;
+  const note = `<span class="note">${asOf ? `по выписке на ${asOf.split('-').reverse().join('.')}` : 'выписок нет'}</span>`;
+  // the last working day for a due date, the days and working days till it
+  const until = async due => {
+    await Promise.all([...new Set([today.getFullYear(), due.getFullYear()])].map(mpLoadRuDaysOff));
+    const pay = new Date(due);
+    while (mpIsDayOff(pay)) pay.setDate(pay.getDate() - 1);
+    const left = Math.round((pay - today) / 86400000);
+    let work = 0;
+    for (const d = new Date(today); d <= pay; d.setDate(d.getDate() + 1)) if (!mpIsDayOff(d)) work++;
+    const txt = (pay < due ? `перевести до ${fmt(pay)} — срок в нерабочий день; ` : '')
+      + (left < 0 ? 'последний рабочий день прошёл' : left === 0 ? 'перевести сегодня' : `рабочих дней: ${work}`);
+    return { left, work, txt };
+  };
+
+  // the minimum payment of this month's statement
+  const monthStart = mpIsoDay(new Date(today.getFullYear(), today.getMonth(), 1));
+  const before = (rows || []).filter(x => x.tx_date.slice(0, 10) < monthStart);
+  const atStatement = before.length ? Math.max(0, -Number(before[before.length - 1].balance_after)) : start;
+  const paidSince = (rows || []).filter(x => x.tx_date.slice(0, 10) >= monthStart).reduce((t, x) => t + Math.max(0, Number(x.amount)), 0);
+  if (atStatement > 0.005 && paidSince < atStatement * 0.1 - 0.005) {
+    const due = r.due_day ? mpDayIn(today.getFullYear(), today.getMonth(), r.due_day) : null;
+    const u = due ? await until(due) : null;
+    if (!u || u.left <= r.remind_days) {
+      banners.push(`<div class="card-reminder${u && u.work <= 3 ? ' urgent' : ''}">
+      <span>💳 <b>${mpEscapeHtml(r.account)}</b>: минимальный платёж по выписке на 1-е — ${due ? `до <b>${fmt(due)}</b> (${u.txt})` : '<b>дату смотрите в СберБанк Онлайн</b>'}; долг на 1-е <b>${money(atStatement)}</b>, внесённое целиком снимает вопрос</span>
+      ${note}
+    </div>`);
+    }
+  }
+
+  // the oldest month's purchases, due at the end of the grace period
+  const oldest = owed.find(o => o[1] > 0.005);
+  if (!oldest) return banners;
+  const due = new Date(oldest[0].getFullYear(), oldest[0].getMonth() + r.grace_months + 1, 0);
+  const u = await until(due);
+  if (u.left > r.remind_days) return banners;
+  const month = oldest[0].toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
+  banners.push(`<div class="card-reminder${u.work <= 3 ? ' urgent' : ''}">
+      <span>💳 <b>${mpEscapeHtml(r.account)}</b>: погасить покупки за ${month} до <b>${fmt(due)}</b> (${u.txt}) — <b>${money(oldest[1])}</b>${debt > oldest[1] + 0.005 ? ` (весь долг ${money(debt)})` : ''}</span>
+      ${note}
+    </div>`);
+  return banners;
 }
 
 // Crypto.com's Earn terms don't renew: 90 days after it's opened a term's BTC
