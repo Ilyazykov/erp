@@ -2576,22 +2576,39 @@ async function mpLogUpload(kind, fileName, csvText, result) {
 }
 
 // TBC Bank (Georgia): tbconline.ge → account → statement, CSV. One file per
-// account and currency, named account_statement_<account>_<ddmmyyyy>_<ddmmyyyy>.csv;
-// the rows carry no currency and don't say which account they are, so both
-// come from the number in the file name. A new TBC account goes in here.
-// The number is the export's, not the account's: the same account comes
-// under a new one in a later export (31.10.2026: 19475881 -> 19526745, ...)
-// -- `same` names the number its rows are kept under, so a statement of the
-// same days again is the same rows, not new ones.
+// account and currency, named account_statement_<n>_<ddmmyyyy>_<ddmmyyyy>.csv.
+// The rows carry no currency and don't say which account they are, and <n>
+// is the export's, not the account's -- every export gives the same accounts
+// new numbers (19475881, then 19526745, then 19540649, ... for the same GEL
+// account). So the account is told from its rows (tbcKindOf): its currency
+// and whether it's the savings account, and its rows are kept under the
+// number that kind of account had first (TBC_ACCOUNTS) -- a statement of the
+// same days again is the same rows, not new ones. A kind not there yet is a
+// new account: it goes in here with the number its first export had.
 const TBC_ACCOUNTS = {
   19475881: { currency: 'GEL', product: 'current_account' },
   19475897: { currency: 'EUR', product: 'current_account' },
   19475906: { currency: 'GEL', product: 'savings_account' },   // My Safe
-  19526745: { currency: 'GEL', product: 'current_account', same: 19475881 },
   19526746: { currency: 'USD', product: 'current_account' },
-  19526747: { currency: 'EUR', product: 'current_account', same: 19475897 },
-  19526748: { currency: 'GEL', product: 'savings_account', same: 19475906 },   // My Safe
 };
+// The account's kind from its rows: the savings account takes deposits in
+// ("დეპოზიტზე თანხის ჩარიცხვა") and pays interest ("დარიცხული პროცენტის
+// რეალიზაცია"); a cash-in names its currency (",ანგარიშზე თანხის შეტანა,EUR"),
+// and a currency exchange ("1 EUR = 2.8560 GEL") leaves the foreign account
+// and comes into the lari one.
+function tbcKindOf(rows) {
+  const product = rows.some(r => (r.amount > 0 && /დეპოზიტზე თანხის ჩარიცხვა/.test(r.description)) || /დარიცხული პროცენტის რეალიზაცია/.test(r.description))
+    ? 'savings_account' : 'current_account';
+  let currency = null;
+  for (const r of rows) {
+    const cash = r.description.match(/ანგარიშზე თანხის შეტანა,\s*([A-Z]{3})\b/);
+    const fx = r.description.match(/\b1 ([A-Z]{3}) = [\d.]+ GEL\b/);
+    currency = cash ? cash[1] : fx ? (r.amount < 0 ? fx[1] : 'GEL') : null;
+    if (currency) break;
+  }
+  if (!currency && product === 'savings_account') currency = 'GEL';
+  return currency ? { product, currency } : null;
+}
 function mpParseCsvLine(line) {
   const cells = [];
   let cur = '', inQuotes = false;
@@ -2611,9 +2628,7 @@ function mpParseCsvLine(line) {
 // ("Transfer Between Own Accounts", "Currency Exchange", ...) goes in as its
 // category.
 function tbcToBankCsv(text, fileName) {
-  const accountNumber = fileName.match(/account_statement_(\d+)_/)?.[1];
-  const acc = TBC_ACCOUNTS[accountNumber];
-  if (!acc) throw new Error(`TBC account ${accountNumber ?? '(no number in the file name)'} is not in TBC_ACCOUNTS (index.html) -- its currency and kind are unknown. Keep the bank's file name.`);
+  const fileNumber = fileName.match(/account_statement_(\d+)_/)?.[1];
   const lines = text.split(/\r?\n/).filter(l => l.trim());
   const head = lines.findIndex(l => l.startsWith('Date,Description,Additional Information,'));
   const header = mpParseCsvLine(lines[head]);
@@ -2633,8 +2648,13 @@ function tbcToBankCsv(text, fileName) {
   }).filter(r => /^\d{4}-\d{2}-\d{2}$/.test(r.date));
   // oldest first: import-bank-csv orders a day's untimed rows as they come
   if (rows.length > 1 && rows[0].date > rows[rows.length - 1].date) rows.reverse();
+  // the account: by its number if listed, else by its kind (see TBC_ACCOUNTS)
+  const kind = TBC_ACCOUNTS[fileNumber] || tbcKindOf(rows);
+  if (!kind) throw new Error(`TBC statement ${fileName}: which account it is can't be told from its rows (no currency exchange, no cash-in) -- add its number to TBC_ACCOUNTS (index.html)`);
+  const accountNumber = TBC_ACCOUNTS[fileNumber] ? fileNumber
+    : Object.keys(TBC_ACCOUNTS).find(n => TBC_ACCOUNTS[n].product === kind.product && TBC_ACCOUNTS[n].currency === kind.currency) || fileNumber;
   return ['bank,account_number,product,currency,date,time,card,description,amount,balance,category_bank,source_file',
-    ...rows.map(r => ['TBC Bank', acc.same || accountNumber, acc.product, acc.currency, r.date, '', '', r.description, r.amount, r.balance, r.type, fileName].map(v => q(String(v))).join(','))].join('\n');
+    ...rows.map(r => ['TBC Bank', accountNumber, kind.product, kind.currency, r.date, '', '', r.description, r.amount, r.balance, r.type, fileName].map(v => q(String(v))).join(','))].join('\n');
 }
 
 async function mpImportOneFile(file, statusEl, session) {
