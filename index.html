@@ -2351,7 +2351,10 @@ async function mpRenderLatestSources() {
         : a.bankDay && a.bankRows90 >= 12 ? 7   // a bank in active use
         : 30;                                     // a broker, or a bank in little use
     }
-    const today = Date.parse(new Date().toISOString().slice(0, 10) + 'T00:00:00Z');
+    // today's local date: in UTC it's still yesterday in the small hours east of
+    // Greenwich, and a statement dated today showed -1 days ago (02.11.2026, Tbilisi)
+    const now = new Date();
+    const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
     const ago = a => Math.round((today - Date.parse(a.day + 'T00:00:00Z')) / dayMs);
     // the split accounts' parts, in a fixed order
     const { data: partRows } = await sb.rpc('latest_data_per_part');
