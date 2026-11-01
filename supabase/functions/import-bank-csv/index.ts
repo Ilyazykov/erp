@@ -209,6 +209,115 @@ const DEPOSIT_PRODUCTS = new Set(['savings_account', 'term_deposit']);
 const CASH_DEPOSIT_RE = /ანგარიშზე თანხის შეტანა/;
 const CASH_DEPOSIT_SOURCE = 'cash_auto:deposits';
 
+// A transfer to oneself out of Sber another bank's statement already lists
+// (T-Bank, 30.10.2026: "External bank transfer PAO Sberbank" +70 000) while
+// the Sber statements don't reach that day yet -- the capital had the money
+// twice. Until they do, a stand-in takes it out of the Sber account that had
+// enough for it that day: the debit card if its balance covers it, else the
+// savings account holding the most (a sell of SAVINGS:Sber ...), else the
+// card anyway. Keyed by the incoming row; every upload rewrites them, so one
+// goes once a Sber statement brings its own row (the amount out of a Sber
+// card or savings account, from 2 days before to 3 days after). Only from
+// the first day Sber's card statements cover on -- older ones never had a
+// Sber side. They count as estimates (source 'estimate_standin:sber',
+// trades.estimated): a deleted one lands in estimate_archive, to check which
+// account the statement really took it from.
+const SBER_IN_RE = /sberbank|сбербанк/i;
+const SBER_SELF_RE = /^external bank transfer\b|^top-up from\b|Илья (Михайлович )?З\./i;
+const SBER_STANDIN_SOURCE = 'estimate_standin:sber';
+// deno-lint-ignore no-explicit-any
+async function sberStandIns(db: any, userId: string): Promise<number> {
+  const { data: first, error: fErr } = await db.from('bank_transactions').select('tx_date')
+    .eq('user_id', userId).eq('account', 'Sber').eq('product', 'debit_card').order('tx_date').limit(1);
+  if (fErr) throw new Error(fErr.message);
+  if (!first?.length) return 0;
+  const { data: ins, error: iErr } = await db.from('bank_transactions').select('external_source, external_id, tx_date, amount, currency, description, account')
+    .eq('user_id', userId).neq('account', 'Sber').gt('amount', 0).eq('synthetic', false)
+    .gte('tx_date', first[0].tx_date).or('description.ilike.%sberbank%,description.ilike.%сбербанк%').order('tx_date');
+  if (iErr) throw new Error(iErr.message);
+  const incoming = (ins ?? []).filter((t: { description: string }) => SBER_IN_RE.test(t.description) && SBER_SELF_RE.test(t.description));
+  const bankRows = [];
+  const tradeRows = [];
+  if (incoming.length) {
+    const from = new Date(Date.parse(incoming[0].tx_date) - 3 * 86400000).toISOString();
+    // the card's rows from the window on, and before them the last one per currency (its balance)
+    const cardQuery = () => db.from('bank_transactions').select('tx_date, amount, currency, balance_after')
+      .eq('user_id', userId).eq('account', 'Sber').eq('product', 'debit_card').neq('external_source', SBER_STANDIN_SOURCE);
+    const { data: recent, error: cErr } = await cardQuery().gte('tx_date', from).order('tx_date');
+    if (cErr) throw new Error(cErr.message);
+    const card = [];
+    for (const ccy of new Set(incoming.map((t: { currency: string }) => t.currency))) {
+      const { data: before, error } = await cardQuery().eq('currency', ccy).lt('tx_date', from).order('tx_date', { ascending: false }).limit(1);
+      if (error) throw new Error(error.message);
+      card.push(...(before ?? []));
+    }
+    card.push(...(recent ?? []));
+    const { data: savings, error: sErr } = await db.from('trades').select('ticker, side, trade_date, quantity, price, currency')
+      .eq('user_id', userId).eq('account', 'Sber').in('side', ['buy', 'sell']).neq('external_source', SBER_STANDIN_SOURCE)
+      .or('ticker.like.SAVINGS:%,ticker.like.DEPOSIT:%').order('trade_date');
+    if (sErr) throw new Error(sErr.message);
+    type Out = { at: number; amount: number; currency: string };
+    const sber: Out[] = [
+      ...card.filter((o: { amount: number; tx_date: string }) => Number(o.amount) < 0 && o.tx_date >= from)
+        .map((o: { tx_date: string; amount: number; currency: string }) => ({ at: Date.parse(o.tx_date.slice(0, 10)), amount: -Number(o.amount), currency: o.currency })),
+      ...(savings ?? []).filter((s: { side: string; trade_date: string }) => s.side === 'sell' && s.trade_date >= from.slice(0, 10))
+        .map((s: { trade_date: string; quantity: number; price: number; currency: string }) => ({ at: Date.parse(s.trade_date), amount: Number(s.quantity) * Number(s.price), currency: s.currency })),
+    ];
+    const used = new Set<number>();
+    // what the stand-ins already took, per card currency / savings ticker
+    const taken: Record<string, number> = {};
+    const cardBal: Record<string, number> = {};
+    for (const t of incoming) {
+      const day = Date.parse(String(t.tx_date).slice(0, 10));
+      const i = sber.findIndex((s, n) => !used.has(n) && s.currency === t.currency && Math.abs(s.amount - Number(t.amount)) < 0.005
+        && s.at >= day - 2 * 86400000 && s.at <= day + 3 * 86400000);
+      if (i >= 0) { used.add(i); continue; }
+      const amount = Number(t.amount);
+      const lastCard = card.filter((c: { tx_date: string; currency: string }) => c.currency === t.currency && c.tx_date <= t.tx_date).pop();
+      const cardHas = Number(lastCard?.balance_after ?? 0) - (taken[`card:${t.currency}`] ?? 0);
+      const held: Record<string, number> = {};
+      for (const s of savings ?? []) {
+        if (!String(s.ticker).startsWith('SAVINGS:') || s.currency !== t.currency || s.trade_date > String(t.tx_date).slice(0, 10)) continue;
+        held[s.ticker] = (held[s.ticker] ?? 0) + (s.side === 'buy' ? 1 : -1) * Number(s.quantity) * Number(s.price);
+      }
+      const best = Object.entries(held).map(([k, v]) => [k, v - (taken[k] ?? 0)] as [string, number]).sort((x, y) => y[1] - x[1])[0];
+      const note = `stand-in for ${t.account} ${t.external_source.split(':')[1] ?? ''}: "${String(t.description).slice(0, 120)}" +${amount} ${t.currency}`;
+      const externalId = `${t.external_source}:${t.external_id}`;
+      if (cardHas < amount - 0.005 && best && best[1] >= amount - 0.005) {
+        taken[best[0]] = (taken[best[0]] ?? 0) + amount;
+        tradeRows.push({
+          user_id: userId, ticker: best[0], side: 'sell', quantity: amount, price: 1, trade_date: String(t.tx_date).slice(0, 10),
+          currency: t.currency, account: 'Sber', note: `PENDING: transfer to ${t.account} the Sber statements don't have yet; ${note}`,
+          external_source: SBER_STANDIN_SOURCE, external_id: externalId, estimated: true,
+          fee_tax: null, fee_currency: null, nkd: null, exchange: null,
+        });
+        continue;
+      }
+      taken[`card:${t.currency}`] = (taken[`card:${t.currency}`] ?? 0) + amount;
+      cardBal[t.currency] = Math.round(((cardBal[t.currency] ?? 0) - amount) * 100) / 100;
+      bankRows.push({
+        user_id: userId, account: 'Sber', tx_date: t.tx_date, description: `PENDING: transfer to ${t.account} the Sber statements don't have yet`,
+        counterparty: null, amount: -amount, currency: t.currency, category: 'internal_transfer', balance_after: cardBal[t.currency],
+        product: 'debit_card', synthetic: false, synthetic_kind: null, data_gap_until: null, amount_approximate: false,
+        note, external_source: SBER_STANDIN_SOURCE, external_id: externalId,
+      });
+    }
+  }
+  for (const table of ['bank_transactions', 'trades']) {
+    const { error } = await db.from(table).delete().eq('user_id', userId).eq('external_source', SBER_STANDIN_SOURCE);
+    if (error) throw new Error(error.message);
+  }
+  if (bankRows.length) {
+    const { error } = await db.from('bank_transactions').insert(bankRows);
+    if (error) throw new Error(error.message);
+  }
+  if (tradeRows.length) {
+    const { error } = await db.from('trades').insert(tradeRows);
+    if (error) throw new Error(error.message);
+  }
+  return bankRows.length + tradeRows.length;
+}
+
 // This project's CSV is the record of each of its accounts over the days it
 // spans: a stored row of that account dated within them that the file no
 // longer has -- one taken from an app screenshot and since replaced by the
@@ -417,6 +526,7 @@ Deno.serve(async (req) => {
     }
 
     let importedDeposit = 0;
+    let sberPending = 0;
     if (depositRows.length) {
       const { error: upsertErr, count } = await supabase
         .from('trades')
@@ -430,6 +540,9 @@ Deno.serve(async (req) => {
 
     const droppedStaleDeposit = await dropStale(supabase, user.id, 'trades', 'trade_date',
       depositRows.map(r => ({ external_source: r.external_source, external_id: r.external_id, day: r.trade_date })));
+
+    // after both the bank rows and the savings trades: either can bring Sber's own row
+    sberPending = await sberStandIns(supabase, user.id);
 
     // Snowball rows of deposits this statement now covers (see header).
     let removedSnowball = 0;
@@ -450,6 +563,7 @@ Deno.serve(async (req) => {
       covered_by_report: coveredByReport,
       dropped_stale: droppedStale + droppedStaleDeposit,
       cash_deposits: cashOut.length,
+      sber_pending: sberPending,
       total_rows: csvRows.length,
     }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (err) {
