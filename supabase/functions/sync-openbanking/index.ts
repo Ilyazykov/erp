@@ -466,8 +466,15 @@ async function syncBank(db: any, userId: string, jwt: string, bankKey: string, s
     const id = (pend ? 'pending:' : '') + (x.ref ? `${bankKey}:${x.ref}` : `${bankKey}:${x.day}:${x.currency}:${x.amount}:${x.desc.slice(0, 60)}`);
     const n = seen.get(id) ?? 0; seen.set(id, n + 1);
     const at = new Date(Date.parse(`${x.day}T00:00:00Z`) + i).toISOString();
+    // the day a card payment was made, when the bank books it days later
+    // (BoC: "Card 4***7924 2026-10-29 4493.22 EUR ..." booked 02.11.2026) --
+    // as import-boc-statement has it: the capital counts it from then, and
+    // the transfer matcher pairs a Revolut top-up with it (it took the
+    // booking day and found none, 01.11.2026)
+    const made = x.desc.match(/\bCard \S+ (\d{4}-\d{2}-\d{2})\b/) ?? x.desc.match(/\bATM Cash (?:Withdrawal|Deposit) (\d{4}-\d{2}-\d{2})\b/);
     return {
-      user_id: userId, account: bank.label, tx_date: at, booked_at: at, description: (pend ? 'PENDING: ' : '') + (x.desc || '(no description)'), counterparty: null,
+      user_id: userId, account: bank.label, tx_date: at, booked_at: at, authorized_on: made && made[1] < x.day ? made[1] : null,
+      description: (pend ? 'PENDING: ' : '') + (x.desc || '(no description)'), counterparty: null,
       amount: x.amount, currency: x.currency, category: null, balance_after: bal[x.currency], synthetic: false, synthetic_kind: null,
       note: null, external_source: src, external_id: n ? `${id}:dup${n}` : id,
     };

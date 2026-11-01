@@ -801,10 +801,26 @@ function jsSeries(dates, values, name, color, opts) {
   };
 }
 
+// The area between the line and 0 on one side. Not the other side's points
+// set to null: Plotly's 'tozeroy' joins the pieces across such gaps anyway
+// (connectgaps or not) -- bands running diagonally across 0 (01.11.2026).
+// So the other side is clipped to 0 instead, with a point added where the
+// line crosses 0 (interpolated in time), so the fill's edge is the line's.
 function erpFill(dates, values, above) {
-  const yFill = values.map(v => (v !== null && ((above && v >= 0) || (!above && v < 0))) ? v : null);
+  const x = [], yFill = [];
+  const clip = v => (v === null ? null : above ? Math.max(v, 0) : Math.min(v, 0));
+  for (let i = 0; i < values.length; i++) {
+    const a = values[i - 1], b = values[i];
+    if (i > 0 && a !== null && b !== null && (a > 0) !== (b > 0) && a !== 0 && b !== 0) {
+      const t0 = Date.parse(dates[i - 1]), t1 = Date.parse(dates[i]);
+      x.push(new Date(t0 + (t1 - t0) * a / (a - b)).toISOString().slice(0, 10));
+      yFill.push(0);
+    }
+    x.push(dates[i]);
+    yFill.push(clip(b));
+  }
   return {
-    x: dates, y: yFill,
+    x, y: yFill,
     fill: 'tozeroy',
     fillcolor: above ? 'rgba(61,214,140,0.12)' : 'rgba(224,82,82,0.12)',
     line: { width: 0 },
