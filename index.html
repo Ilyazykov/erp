@@ -9033,6 +9033,13 @@ async function mpRenderInvested() {
 const MP_BOND_RE = /^(RU|SU)[0-9A-Z]{10}$/;
 // Funds known by their ISIN only: Revolut's Flexible Cash Funds -- Fidelity
 // Institutional Liquidity Fund, one share class per currency.
+// A mark before an asset's name in "what each asset earned": Revolut's
+// Flexible Cash Funds, and the S&P 500 funds (IBKR's CSPX / VUAA; T-Bank's
+// TSPX is "Т-Капитал США 50", not one)
+const MP_ASSET_MARKS = {
+  IE0002RUHW32: '💧🇬🇧', IE000AZVL3K0: '💧🇪🇺', IE000H9J0QX4: '💧🇺🇸',
+  CSPX: '📈🇺🇸', VUAA: '📈🇺🇸',
+};
 const MP_ASSET_NAMES = {
   IE0002RUHW32: 'Revolut Flexible Cash Funds GBP (Fidelity ILF)',
   IE000AZVL3K0: 'Revolut Flexible Cash Funds EUR (Fidelity ILF)',
@@ -9205,7 +9212,7 @@ async function mpRenderInvestedAssets() {
   if (!rows.length) { status.textContent = 'Nothing held in this period.'; Plotly.purge(el); return; }
   const names = { ...MP_ASSET_NAMES, ...await mpBondNames(rows.map(r => r.asset)) };
   const frozen = await mpLoadFrozen();
-  const label = r => `${names[r.asset] || r.asset}${frozen.has(r.asset) ? ' (blocked)' : ''}`;
+  const label = r => `${MP_ASSET_MARKS[r.asset] ? MP_ASSET_MARKS[r.asset] + ' ' : ''}${names[r.asset] || r.asset}${frozen.has(r.asset) ? ' (blocked)' : ''}`;
   const x = rows.map(r => r.v);
   // every asset, also one with no % (nothing at the start, nothing put in)
   const total = mpInvestedAssetsRows.reduce((t, r) => t + conv(to, Number(r.earned)), 0);
