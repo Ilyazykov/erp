@@ -9038,6 +9038,9 @@ const MP_BOND_RE = /^(RU|SU)[0-9A-Z]{10}$/;
 // TSPX is "Т-Капитал США 50", not one)
 const MP_ASSET_MARKS = {
   IE0002RUHW32: '💧🇬🇧', IE000AZVL3K0: '💧🇪🇺', IE000H9J0QX4: '💧🇺🇸',
+  // the Russian money-market funds: in roubles Sber's SBMM and Alfa-Capital's
+  // AKMM, in yuan Alfa-Capital's AKMC
+  SBMM: '💧🇷🇺', AKMM: '💧🇷🇺', AKMC: '💧🇨🇳',
   CSPX: '📈🇺🇸', VUAA: '📈🇺🇸',
 };
 const MP_ASSET_NAMES = {
