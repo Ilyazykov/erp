@@ -204,6 +204,19 @@ const CATEGORY_RULES: [RegExp, string][] = [
 ];
 
 const DEPOSIT_PRODUCTS = new Set(['savings_account', 'term_deposit']);
+// TBC dates a card payment by the day it's booked, 1-3 days after it was made;
+// the day it was made is in the description ("POS - SPAR, 29.78 GEL, Oct 30
+// 2026 12:00AM, ...") -- kept as authorized_on, which the capital and the
+// expenses count it from (as sync-openbanking does for Bank of Cyprus).
+const TBC_MADE_RE = /, (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2}) (\d{4}) \d{1,2}:\d{2}[AP]M,/;
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function madeOn(bank: string, description: string, date: string): string | null {
+  if (bank !== 'TBC Bank') return null;
+  const m = description.match(TBC_MADE_RE);
+  if (!m) return null;
+  const day = `${m[3]}-${String(MONTHS.indexOf(m[1]) + 1).padStart(2, '0')}-${m[2].padStart(2, '0')}`;
+  return day < date ? day : null;
+}
 // Cash paid into an account at the bank's counter -- the matching row out of
 // the cash on hand is written with it (see the handler).
 const CASH_DEPOSIT_RE = /ანგარიშზე თანხის შეტანა/;
@@ -464,6 +477,7 @@ Deno.serve(async (req) => {
         user_id: user.id,
         account: r.bank,
         tx_date: `${r.date}T${clock}Z`,
+        authorized_on: madeOn(r.bank, r.description, r.date),
         description: r.description,
         counterparty: null,
         amount: r.amount,
