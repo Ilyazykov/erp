@@ -182,6 +182,49 @@ async function nbgGelHistory(from: string): Promise<[string, number][]> {
   return out;
 }
 
+// MKD: the National Bank of North Macedonia's middle rates (its USD rate, MKD
+// per dollar), 60 days a request. Yahoo's MKDUSD ran ~0.7% off the official
+// rate (EUR 61.09 against 61.55, October 2025) -- a card payment made in denars
+// looked converted better than the market.
+async function nbrmMkdHistory(from: string): Promise<[string, number][]> {
+  const dmy = (d: string) => `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}`;
+  const out: [string, number][] = [];
+  for (let d = from; d <= today(); d = addDays(d, 60)) {
+    const to = addDays(d, 59) < today() ? addDays(d, 59) : today();
+    try {
+      const res = await fetch(`https://www.nbrm.mk/KLServiceNOV/GetExchangeRate?StartDate=${dmy(d)}&EndDate=${dmy(to)}&format=json`, { headers: UA });
+      if (!res.ok) continue;
+      // deno-lint-ignore no-explicit-any
+      for (const r of (await res.json()) as any[]) {
+        const rate = Number(r?.sreden) / (Number(r?.nomin) || 1);
+        if (r?.oznaka === 'USD' && rate > 0) out.push([String(r.datum).slice(0, 10), 1 / rate]);
+      }
+    } catch { /* the next chunk */ }
+  }
+  return out;
+}
+
+// ALL: fawazahmed0's daily currency-api (from March 2024; the Bank of Albania
+// has no machine-readable archive) -- 96.7 lek per euro on 27.10.2025, as the
+// official October average 96.74, where Yahoo's ALLUSD gave 94.1.
+async function fawazHistory(ccy: string, from: string): Promise<[string, number][]> {
+  const days: string[] = [];
+  for (let d = from < '2024-03-02' ? '2024-03-02' : from; d <= today(); d = addDays(d, 1)) days.push(d);
+  const out: [string, number][] = [];
+  for (let i = 0; i < days.length; i += 25) {
+    const got = await Promise.all(days.slice(i, i + 25).map(async day => {
+      try {
+        const res = await fetch(`https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@${day}/v1/currencies/usd.json`, { headers: UA });
+        if (!res.ok) return null;
+        const rate = Number((await res.json())?.usd?.[ccy.toLowerCase()]);
+        return rate > 0 ? [day, 1 / rate] as [string, number] : null;
+      } catch { return null; }
+    }));
+    for (const g of got) if (g) out.push(g);
+  }
+  return out;
+}
+
 // deno-lint-ignore no-explicit-any
 async function selectAll(q: () => any) {
   const out: any[] = [];
@@ -244,6 +287,8 @@ Deno.serve(async (req) => {
       const from = last?.[0] && (had ?? 0) > 1 ? addDays(last[0].day, -OVERLAP_DAYS) : addDays(start, -7);
       let rows: [string, number][] = [];
       if (ccy === 'RUB') rows = await cbrRubHistory(from);
+      else if (ccy === 'MKD') rows = await nbrmMkdHistory(from);
+      else if (ccy === 'ALL') rows = await fawazHistory(ccy, from);
       else if (ccy === 'GEL') {
         const { data: first } = await db.from('bank_transactions').select('tx_date').eq('currency', 'GEL').order('tx_date').limit(1);
         rows = await nbgGelHistory(first?.[0] && addDays(String(first[0].tx_date).slice(0, 10), -7) > from
