@@ -8297,12 +8297,12 @@ const MP_EXP_GROUPS = { 'Travel restaurants': 'Food', 'Travel groceries': 'Food'
   'Travel taxi': 'Travel', 'Travel public transport': 'Travel', 'Travel souvenirs': 'Travel', 'Other travel': 'Travel',
   'Entertainment': 'Fun', 'Games': 'Fun', 'Cinema': 'Fun',
   'Clothes': 'Shopping', 'Electronics': 'Shopping', 'Gifts': 'Shopping', 'Shopping': 'Shopping' };
-// What's spent day by day: a part-only bar (the records start in it, or it
-// isn't over yet) goes on at its pace for these alone. Not the rent, the bills,
-// the phone, the subscriptions: paid once a month, the month's one is in the
-// bar already -- or none at all, living in one's own flat or at grandma's
+// What's spent day by day, for a part-only bar's frame (the records start in it,
+// or it isn't over yet): see where the bars are drawn
 const MP_EXP_REGULAR = new Set(['Food delivery', 'Restaurants & cafés', 'Groceries',
   'Taxi', 'Public transport', 'Other transport', 'Health & sport']);
+// ... and once a month: the month's payment, or none (one's own flat, grandma's)
+const MP_EXP_MONTHLY = new Set(['Rent & housing', 'Nizhny flat bills', 'Bills & utilities', 'Phone & internet', 'Subscriptions & services']);
 // A group's colour ("by group"): the colour of its main category -- the one
 // the group stands for (housing: the rent's orange, not the bills' yellow)
 const MP_EXP_GROUP_META = Object.fromEntries(Object.entries({
@@ -8767,25 +8767,41 @@ async function mpRenderExpenses() {
   });
   if (!document.getElementById('exp_bands').checked) { life.shapes = []; life.legend = []; }
   const totals = buckets.map(b => order.reduce((t, n) => t + (byBucket.get(n + '\u0000' + b) || 0), 0));
-  // a part-only bar's frame: as high as the whole period at the same pace
-  // (the total over the days it has, times all its days)
-  // -- only what's spent every month goes at that pace (MP_EXP_REGULAR): a laptop
-  // bought in the first days of the records isn't bought again each week of the
-  // month (May 2017: one purchase made "≈ $3,207 for all of it", 03.11.2026)
-  const regularBy = new Map();
+  // a part-only bar's frame: the whole period as it would likely be. The
+  // one-offs (a laptop, a trip) as they are; the regular spending per category
+  // (03.11.2026: May 2017, the records starting on the 22nd, had food 20 $ and
+  // no rent, June 125 $ and 25 $ -- the 10 days' pace gave May 62 $ of food):
+  //  - the records start in it: as much as the next whole period, per day;
+  //  - it isn't over yet: the day-by-day ones (MP_EXP_REGULAR) at this
+  //    period's pace, the monthly ones (MP_EXP_MONTHLY) as much as the last
+  //    whole period, if not paid yet -- none then, none now (one's own flat);
+  //  never less than what's there.
+  const nDays = (a, z) => (Date.parse(z) - Date.parse(a)) / 86400000 + 1;
+  const regularBy = new Map();   // category \0 bucket -> spent
   for (const r of spent) {
-    if (!MP_EXP_REGULAR.has(r.cat) || r.day < startDay || (/_td$/.test(step) ? r.day > today : r.day.slice(0, 7) > today.slice(0, 7)) || !Number.isFinite(r.usd)) continue;
-    const b = bucket(r.day);
-    regularBy.set(b, (regularBy.get(b) || 0) + conv(r));
+    if (!(MP_EXP_REGULAR.has(r.cat) || MP_EXP_MONTHLY.has(r.cat)) || r.day < startDay
+      || (/_td$/.test(step) ? r.day > today : r.day.slice(0, 7) > today.slice(0, 7)) || !Number.isFinite(r.usd)) continue;
+    const k = r.cat + '\u0000' + bucket(r.day);
+    regularBy.set(k, (regularBy.get(k) || 0) + conv(r));
   }
   const projected = buckets.map((b, i) => {
     if (!partial[i]) return totals[i];
     const [f, t] = mpExpBucketDays(b);
     const start = first > startDay ? first : startDay;
-    const span = (a, z) => (Date.parse(z) - Date.parse(a)) / 86400000 + 1;
-    const had = span(f > start ? f : start, t < today ? t : today);
-    const regular = regularBy.get(b) || 0;
-    return had > 0 ? totals[i] - regular + regular * span(f, t) / had : totals[i];
+    const had = nDays(f > start ? f : start, t < today ? t : today);
+    const startsIn = f < start;
+    let ref = -1;
+    if (startsIn) { for (let k = i + 1; k < buckets.length; k++) if (!partial[k]) { ref = k; break; } }
+    else { for (let k = i - 1; k >= 0; k--) if (!partial[k]) { ref = k; break; } }
+    const refDays = ref >= 0 ? nDays(...mpExpBucketDays(buckets[ref])) : 0;
+    let extra = 0;
+    for (const cat of [...MP_EXP_REGULAR, ...MP_EXP_MONTHLY]) {
+      const a = regularBy.get(cat + '\u0000' + b) || 0;
+      const like = ref >= 0 ? (regularBy.get(cat + '\u0000' + buckets[ref]) || 0) / refDays * nDays(f, t) : 0;
+      const est = !startsIn && MP_EXP_REGULAR.has(cat) ? (had > 0 ? a * nDays(f, t) / had : a) : Math.max(a, like);
+      extra += Math.max(0, est - a);
+    }
+    return totals[i] + extra;
   });
   await Plotly.react(bars, [...order.map(n => ({
     type: 'bar', name: n, x: buckets, y: buckets.map(b => byBucket.get(n + '\u0000' + b) ?? null),  // null: no line in the hover
