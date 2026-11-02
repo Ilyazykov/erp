@@ -8353,6 +8353,14 @@ async function mpExpLoad() {
 // the 28th-30th would fall in one month twice and in the next not at all, a
 // month's back pay all in one; a first payment over the source's usual gap.
 // At most 120 days. -> [{day, usd, paid}], paid: the payment's day, for its rate.
+// A card payment's merchant alone, as Revolut shows it: TBC writes "POS - SPAR,
+// 29.78 GEL, Oct 30 2026 12:00AM, <its category>, MCC: 5411, VISA, 4315..." --
+// the row keeps it (the day it was made, the MCC come from it), the table shows
+// "SPAR", the whole text on hover.
+function mpShortDesc(d) {
+  const m = String(d || '').match(/^POS(?: wallet)? - (.+?), [\d.]+ [A-Z]{3}, [A-Z][a-z]{2}\s+\d{1,2} \d{4} \d{1,2}:\d{2}[AP]M,/);
+  return m ? m[1] : d;
+}
 function mpExpIncomeDays(rows) {
   const DAY = 86400000, out = [], bySource = new Map();
   for (const r of rows) {
@@ -8627,7 +8635,7 @@ async function mpRenderExpenses() {
   const rowsTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
     // newest first, to the second -- rows with no time in their statement too,
     // by the importer's 00:00:SS (their order within the day)
-    list.slice().sort((a, b) => b.day.localeCompare(a.day) || String(b.ts).localeCompare(String(a.ts))).map(r => `<tr><td style="white-space:nowrap">${r.day}${r.at ? ` <span style="color:#6a7381">${r.at}</span>` : ''}</td><td style="text-align:left">${esc(r.description)}${groupedTop && MP_EXP_GROUPS[r.cat] ? ` <span style="color:#6a7381">· ${esc(r.cat)}</span>` : ''}</td>
+    list.slice().sort((a, b) => b.day.localeCompare(a.day) || String(b.ts).localeCompare(String(a.ts))).map(r => `<tr><td style="white-space:nowrap">${r.day}${r.at ? ` <span style="color:#6a7381">${r.at}</span>` : ''}</td><td style="text-align:left"${mpShortDesc(r.description) !== r.description ? ` title="${esc(r.description)}"` : ''}>${esc(mpShortDesc(r.description))}${groupedTop && MP_EXP_GROUPS[r.cat] ? ` <span style="color:#6a7381">· ${esc(r.cat)}</span>` : ''}</td>
       <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${r.note ? esc(r.note) : '✎'}</td>
       <td style="text-align:left">${esc(r.account)}</td>
       <td>${r.amt.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${r.ccy}</td><td>${money(conv(r))}</td></tr>`).join('')}</tbody></table></div>`;
