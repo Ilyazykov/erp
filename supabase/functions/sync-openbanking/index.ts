@@ -96,7 +96,7 @@ async function eb(jwt: string, method: 'GET' | 'POST', path: string, body?: unkn
   return out;
 }
 
-type Tx = { day: string; amount: number; currency: string; ref: string; desc: string; status: string; code: string };
+type Tx = { day: string; made?: string; amount: number; currency: string; ref: string; desc: string; status: string; code: string };
 
 // Revolut's transfers to / from its Flexible Cash Funds ("To GBP Flexible Cash
 // Funds") and Instant Access Savings stand in as the fund's / savings' own
@@ -393,6 +393,8 @@ async function syncBank(db: any, userId: string, jwt: string, bankKey: string, s
         if (!Number.isFinite(a)) continue;
         txs.push({
           day: String(x.booking_date ?? x.value_date ?? x.transaction_date ?? '').slice(0, 10),
+          // the day it was made, when the bank gives it (Revolut books a card payment a day or two later)
+          made: x.transaction_date ? String(x.transaction_date).slice(0, 10) : undefined,
           amount: round2(x.credit_debit_indicator === 'DBIT' ? -Math.abs(a) : Math.abs(a)),
           currency: String(x.transaction_amount?.currency ?? ccy).toUpperCase(), ref: String(x.entry_reference ?? ''),
           desc: String((x.remittance_information ?? []).join(' ') || x.creditor?.name || x.debtor?.name || '').trim().slice(0, 500),
@@ -473,7 +475,7 @@ async function syncBank(db: any, userId: string, jwt: string, bankKey: string, s
     // booking day and found none, 01.11.2026)
     const made = x.desc.match(/\bCard \S+ (\d{4}-\d{2}-\d{2})\b/) ?? x.desc.match(/\bATM Cash (?:Withdrawal|Deposit) (\d{4}-\d{2}-\d{2})\b/);
     return {
-      user_id: userId, account: bank.label, tx_date: at, booked_at: at, authorized_on: made && made[1] < x.day ? made[1] : null,
+      user_id: userId, account: bank.label, tx_date: at, booked_at: at, authorized_on: [made?.[1], x.made].filter((m): m is string => !!m && m < x.day).sort()[0] ?? null,
       description: (pend ? 'PENDING: ' : '') + (x.desc || '(no description)'), counterparty: null,
       amount: x.amount, currency: x.currency, category: null, balance_after: bal[x.currency], synthetic: false, synthetic_kind: null,
       note: null, external_source: src, external_id: n ? `${id}:dup${n}` : id,
