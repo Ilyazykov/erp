@@ -8352,6 +8352,18 @@ function mpExpIncomeDays(rows) {
     const list = [...days].sort((a, b) => a[0].localeCompare(b[0]));
     const gaps = list.slice(1).map(([d], i) => (Date.parse(d) - Date.parse(list[i][0])) / DAY).sort((a, b) => a - b);
     const usual = gaps.length ? gaps[gaps.length >> 1] : 1;
+    // a monthly one (a salary) is the month it's paid in, whole: spread over
+    // the days since the one before, a payday moving between the 26th and the
+    // 30th put bits of two salaries into one month -- a steady 5 818 EUR showed
+    // as 5 433 to 6 163 (02.11.2026)
+    if (usual >= 25 && usual <= 35) {
+      for (const [d, usd] of list) {
+        const [y, m] = d.split('-').map(Number);
+        const n = new Date(Date.UTC(y, m, 0)).getUTCDate();
+        for (let k = 1; k <= n; k++) out.push({ day: `${d.slice(0, 8)}${String(k).padStart(2, '0')}`, usd: usd / n, paid: d });
+      }
+      continue;
+    }
     list.forEach(([d, usd], i) => {
       const n = Math.max(1, Math.min(120, Math.round(i ? (Date.parse(d) - Date.parse(list[i - 1][0])) / DAY : usual)));
       for (let k = 0; k < n; k++) out.push({ day: new Date(Date.parse(d) - k * DAY).toISOString().slice(0, 10), usd: usd / n, paid: d });
