@@ -8302,7 +8302,13 @@ const MP_EXP_GROUPS = { 'Travel restaurants': 'Food', 'Travel groceries': 'Food'
 const MP_EXP_REGULAR = new Set(['Food delivery', 'Restaurants & cafés', 'Groceries',
   'Taxi', 'Public transport', 'Other transport', 'Health & sport']);
 // ... and once a month: the month's payment, or none (one's own flat, grandma's)
-const MP_EXP_MONTHLY = new Set(['Rent & housing', 'Nizhny flat bills', 'Bills & utilities', 'Phone & internet', 'Subscriptions & services']);
+// (not the subscriptions: Anthropic's year isn't bought every month; the
+// Nizhny Novgorod flat's bills go on wherever one lives)
+const MP_EXP_MONTHLY = new Set(['Rent & housing', 'Nizhny flat bills', 'Bills & utilities', 'Phone & internet']);
+const MP_EXP_MONTHLY_ANYWHERE = new Set(['Nizhny flat bills']);
+// the first days at a new place, left out of the transport's pace: settling in
+const MP_EXP_SETTLE_DAYS = 7;
+const MP_EXP_TRANSPORT = new Set(['Taxi', 'Public transport', 'Other transport']);
 // A group's colour ("by group"): the colour of its main category -- the one
 // the group stands for (housing: the rent's orange, not the bills' yellow)
 const MP_EXP_GROUP_META = Object.fromEntries(Object.entries({
@@ -8363,6 +8369,21 @@ async function mpExpLoad() {
 // 29.78 GEL, Oct 30 2026 12:00AM, <its category>, MCC: 5411, VISA, 4315..." --
 // the row keeps it (the day it was made, the MCC come from it), the table shows
 // "SPAR", the whole text on hover.
+// A forecast of a period not over yet, into expense_forecasts (migration ...154):
+// one row a day per period and currency, the day's last drawing kept --
+// written once a drawing, not again for the same numbers.
+const mpExpForecastsKept = new Map();
+function mpExpKeepForecast(x) {
+  const madeOn = mpIsoDay(new Date());
+  const key = [madeOn, x.step, x.period, x.ccy].join('|');
+  const row = { made_on: madeOn, step: x.step, period: x.period, period_from: x.from, period_to: x.to, currency: x.ccy,
+    actual: +x.actual.toFixed(2), projected: +x.projected.toFixed(2), parts: x.parts };
+  const sig = JSON.stringify(row);
+  if (mpExpForecastsKept.get(key) === sig) return;
+  mpExpForecastsKept.set(key, sig);
+  sb.from('expense_forecasts').upsert(row, { onConflict: 'user_id,made_on,step,period,currency' })
+    .then(({ error }) => { if (error) console.warn('expense forecast not kept:', error.message); });
+}
 function mpShortDesc(d) {
   const m = String(d || '').match(/^POS(?: wallet)? - (.+?), [\d.]+ [A-Z]{3}, [A-Z][a-z]{2}\s+\d{1,2} \d{4} \d{1,2}:\d{2}[AP]M,/);
   return m ? m[1] : d;
@@ -8772,8 +8793,8 @@ async function mpRenderExpenses() {
   // (03.11.2026: May 2017, the records starting on the 22nd, had food 20 $ and
   // no rent, June 125 $ and 25 $ -- the 10 days' pace gave May 62 $ of food):
   //  - the records start in it: as much as the next whole period, per day;
-  //  - it isn't over yet: the day-by-day ones (MP_EXP_REGULAR) at this
-  //    period's pace, the monthly ones (MP_EXP_MONTHLY) as much as the last
+  //  - it isn't over yet: the day-by-day ones (MP_EXP_REGULAR) for the days
+  //    left at the pace where one lives now, the monthly ones (MP_EXP_MONTHLY) as much as the last
   //    whole period, if not paid yet -- none then, none now (one's own flat);
   //  never less than what's there.
   const nDays = (a, z) => (Date.parse(z) - Date.parse(a)) / 86400000 + 1;
@@ -8784,23 +8805,60 @@ async function mpRenderExpenses() {
     const k = r.cat + '\u0000' + bucket(r.day);
     regularBy.set(k, (regularBy.get(k) || 0) + conv(r));
   }
+  // the day-by-day pace now: spent a day where one lives now, since the place's
+  // first day or the last whole period's first, whichever is later (Tbilisi from
+  // 19.10.2026: October's days there, not November's first two alone), up to
+  // the day before yesterday -- TBC books a payment 1-3 days later, the last
+  // two days aren't all in yet
+  const lastWhole = buckets.map((x, k) => k).filter(k => !partial[k]).pop();
+  const here = periods.filter(p => p.start_day <= today && p.end_day >= today).sort((x, y) => y.start_day.localeCompare(x.start_day))[0];
+  const dayShift = (d, n) => new Date(Date.parse(d + 'T00:00:00Z') + n * 86400000).toISOString().slice(0, 10);
+  let paceFrom = lastWhole !== undefined ? mpExpBucketDays(buckets[lastWhole])[0] : today;
+  if (here && here.start_day > paceFrom) paceFrom = here.start_day;
+  // the transport's pace not from the first week at a new place: the airport,
+  // the papers (Tbilisi from 19.10.2026: 82 EUR of taxis in two days, 8 USD a
+  // day as a pace) -- unless that leaves under a week to go by. The food's
+  // goes on from the first day.
+  const settled = here ? dayShift(here.start_day, MP_EXP_SETTLE_DAYS) : null;
+  const transportFrom = settled && settled > paceFrom && dayShift(today, -2) >= dayShift(settled, 6) ? settled : paceFrom;
+  const paceTo = dayShift(today, -2) >= paceFrom ? dayShift(today, -2) : today;
+  const sumCat = (cat, from, to, after) => spent.reduce((x, r) => (r.cat === cat && r.day >= from && r.day <= to && (!after || r.day > after)
+    && Number.isFinite(r.usd) ? x + conv(r) : x), 0);
+  const paceStart = cat => (MP_EXP_TRANSPORT.has(cat) && transportFrom <= paceTo ? transportFrom : paceFrom);
+  const dailyRate = cat => sumCat(cat, paceStart(cat), paceTo) / nDays(paceStart(cat), paceTo);
   const projected = buckets.map((b, i) => {
     if (!partial[i]) return totals[i];
     const [f, t] = mpExpBucketDays(b);
     const start = first > startDay ? first : startDay;
-    const had = nDays(f > start ? f : start, t < today ? t : today);
     const startsIn = f < start;
     let ref = -1;
     if (startsIn) { for (let k = i + 1; k < buckets.length; k++) if (!partial[k]) { ref = k; break; } }
     else { for (let k = i - 1; k >= 0; k--) if (!partial[k]) { ref = k; break; } }
-    const refDays = ref >= 0 ? nDays(...mpExpBucketDays(buckets[ref])) : 0;
+    const [rf, rt] = ref >= 0 ? mpExpBucketDays(buckets[ref]) : [null, null];
     let extra = 0;
+    const parts = [];
     for (const cat of [...MP_EXP_REGULAR, ...MP_EXP_MONTHLY]) {
       const a = regularBy.get(cat + '\u0000' + b) || 0;
-      const like = ref >= 0 ? (regularBy.get(cat + '\u0000' + buckets[ref]) || 0) / refDays * nDays(f, t) : 0;
-      const est = !startsIn && MP_EXP_REGULAR.has(cat) ? (had > 0 ? a * nDays(f, t) / had : a) : Math.max(a, like);
+      let est, how;
+      if (startsIn) {
+        est = ref >= 0 ? sumCat(cat, rf, rt) / nDays(rf, rt) * nDays(f, t) : a;
+        how = ref >= 0 ? `as ${rf}..${rt}, per day` : 'as it is';
+      } else if (MP_EXP_REGULAR.has(cat)) {
+        const cut = paceTo < f ? dayShift(f, -1) : paceTo;
+        est = sumCat(cat, f, cut) + dailyRate(cat) * Math.max(0, nDays(dayShift(cut, 1), t));
+        how = `to ${cut} as it is, then ${dailyRate(cat).toFixed(2)} a day (the pace ${paceStart(cat)}..${paceTo})`;
+      } else {
+        // the last whole period's monthly payments -- made where one lives now
+        // (after the day one came: not Cyprus' or a trip's), the Nizhny flat's wherever
+        const after = MP_EXP_MONTHLY_ANYWHERE.has(cat) || !here ? null : here.start_day;
+        est = ref >= 0 ? sumCat(cat, rf, rt, after) : 0;
+        how = ref >= 0 ? `the payments of ${rf}..${rt}${after ? ` after ${after}` : ''}` : 'none';
+      }
       extra += Math.max(0, est - a);
+      if (a || est) parts.push({ cat, actual: +a.toFixed(2), estimate: +Math.max(a, est).toFixed(2), how });
     }
+    // kept day by day, to set against what the period comes to (migration ...154)
+    if (!startsIn) mpExpKeepForecast({ step, period: b, from: f, to: t, ccy, actual: totals[i], projected: totals[i] + extra, parts });
     return totals[i] + extra;
   });
   await Plotly.react(bars, [...order.map(n => ({
