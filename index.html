@@ -8358,10 +8358,14 @@ function mpExpIncomeDays(rows) {
     // payday moving by a few days put bits of two salaries into one month -- a
     // steady 5 818 EUR showed as 5 433 to 6 163, the December paid on the
     // 27th made a December of three and a January of one (02.11.2026)
+    // Paid in cash (EvenBet, on the 8th and the 25th) it's both halves of the
+    // month it's paid in: the cut from 2 x 1 900 to 2 x 900 EUR came in
+    // September 2024 at once, the 8th as the month before made August half and half
     if (key.endsWith('\u0000Salary')) {
+      const byPayMonth = key.startsWith('cash\u0000');
       for (const [d, usd] of list) {
         const [y, m, dd] = d.split('-').map(Number);
-        const first = new Date(Date.UTC(y, m - 1 - (dd <= 12 ? 1 : 0), 1));
+        const first = new Date(Date.UTC(y, m - 1 - (!byPayMonth && dd <= 12 ? 1 : 0), 1));
         const n = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
         const mo = first.toISOString().slice(0, 8);
         for (let k = 1; k <= n; k++) out.push({ day: `${mo}${String(k).padStart(2, '0')}`, usd: usd / n, paid: d });
