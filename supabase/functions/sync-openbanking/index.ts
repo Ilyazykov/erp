@@ -96,7 +96,7 @@ async function eb(jwt: string, method: 'GET' | 'POST', path: string, body?: unkn
   return out;
 }
 
-type Tx = { day: string; made?: string; amount: number; currency: string; ref: string; desc: string; status: string; code: string };
+type Tx = { day: string; made?: string; fx?: number; amount: number; currency: string; ref: string; desc: string; status: string; code: string };
 
 // Revolut's transfers to / from its Flexible Cash Funds ("To GBP Flexible Cash
 // Funds") and Instant Access Savings stand in as the fund's / savings' own
@@ -395,6 +395,16 @@ async function syncBank(db: any, userId: string, jwt: string, bankKey: string, s
           day: String(x.booking_date ?? x.value_date ?? x.transaction_date ?? '').slice(0, 10),
           // the day it was made, when the bank gives it (Revolut books a card payment a day or two later)
           made: x.transaction_date ? String(x.transaction_date).slice(0, 10) : undefined,
+          // a card payment in another currency: the rate it was converted at, as
+          // the other currency per unit of the account's (Revolut: "2.8798... EUR"
+          // for 40 GEL paid with 13.89 EUR) -- the expenses take what it cost over
+          // the market rate as a fee (migration ...151)
+          fx: (() => {
+            const r = Number(x.exchange_rate?.exchange_rate);
+            if (!Number.isFinite(r) || r <= 0) return undefined;
+            const unit = String(x.exchange_rate?.unit_currency ?? '').toUpperCase();
+            return !unit || unit === String(x.transaction_amount?.currency ?? ccy).toUpperCase() ? r : 1 / r;
+          })(),
           amount: round2(x.credit_debit_indicator === 'DBIT' ? -Math.abs(a) : Math.abs(a)),
           currency: String(x.transaction_amount?.currency ?? ccy).toUpperCase(), ref: String(x.entry_reference ?? ''),
           desc: String((x.remittance_information ?? []).join(' ') || x.creditor?.name || x.debtor?.name || '').trim().slice(0, 500),
@@ -475,7 +485,7 @@ async function syncBank(db: any, userId: string, jwt: string, bankKey: string, s
     // booking day and found none, 01.11.2026)
     const made = x.desc.match(/\bCard \S+ (\d{4}-\d{2}-\d{2})\b/) ?? x.desc.match(/\bATM Cash (?:Withdrawal|Deposit) (\d{4}-\d{2}-\d{2})\b/);
     return {
-      user_id: userId, account: bank.label, tx_date: at, booked_at: at, authorized_on: [made?.[1], x.made].filter((m): m is string => !!m && m < x.day).sort()[0] ?? null,
+      user_id: userId, account: bank.label, tx_date: at, booked_at: at, authorized_on: [made?.[1], x.made].filter((m): m is string => !!m && m < x.day).sort()[0] ?? null, fx_rate: x.fx ?? null,
       description: (pend ? 'PENDING: ' : '') + (x.desc || '(no description)'), counterparty: null,
       amount: x.amount, currency: x.currency, category: null, balance_after: bal[x.currency], synthetic: false, synthetic_kind: null,
       note: null, external_source: src, external_id: n ? `${id}:dup${n}` : id,
