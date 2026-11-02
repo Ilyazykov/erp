@@ -8348,22 +8348,28 @@ function mpExpIncomeDays(rows) {
     const days = bySource.get(k);
     days.set(r.day, (days.get(r.day) || 0) + Number(r.usd));
   }
-  for (const days of bySource.values()) {
+  for (const [key, days] of bySource) {
     const list = [...days].sort((a, b) => a[0].localeCompare(b[0]));
-    const gaps = list.slice(1).map(([d], i) => (Date.parse(d) - Date.parse(list[i][0])) / DAY).sort((a, b) => a - b);
-    const usual = gaps.length ? gaps[gaps.length >> 1] : 1;
-    // a monthly one (a salary) is the month it's paid in, whole: spread over
-    // the days since the one before, a payday moving between the 26th and the
-    // 30th put bits of two salaries into one month -- a steady 5 818 EUR showed
-    // as 5 433 to 6 163 (02.11.2026)
-    if (usual >= 25 && usual <= 35) {
+    // a salary is the month it's for, spread over that month: paid by the
+    // 12th, the month before (Russia's "расчёт" on the 5th-10th, Serbia's
+    // "zarada za" on the 4th-7th), else the month it's paid in (the advance on
+    // the 20th, Cyprus' payroll at the month's end, December's paid before the
+    // New Year). Spread over the days since the payment before instead, a
+    // payday moving by a few days put bits of two salaries into one month -- a
+    // steady 5 818 EUR showed as 5 433 to 6 163, the December paid on the
+    // 27th made a December of three and a January of one (02.11.2026)
+    if (key.endsWith('\u0000Salary')) {
       for (const [d, usd] of list) {
-        const [y, m] = d.split('-').map(Number);
-        const n = new Date(Date.UTC(y, m, 0)).getUTCDate();
-        for (let k = 1; k <= n; k++) out.push({ day: `${d.slice(0, 8)}${String(k).padStart(2, '0')}`, usd: usd / n, paid: d });
+        const [y, m, dd] = d.split('-').map(Number);
+        const first = new Date(Date.UTC(y, m - 1 - (dd <= 12 ? 1 : 0), 1));
+        const n = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
+        const mo = first.toISOString().slice(0, 8);
+        for (let k = 1; k <= n; k++) out.push({ day: `${mo}${String(k).padStart(2, '0')}`, usd: usd / n, paid: d });
       }
       continue;
     }
+    const gaps = list.slice(1).map(([d], i) => (Date.parse(d) - Date.parse(list[i][0])) / DAY).sort((a, b) => a - b);
+    const usual = gaps.length ? gaps[gaps.length >> 1] : 1;
     list.forEach(([d, usd], i) => {
       const n = Math.max(1, Math.min(120, Math.round(i ? (Date.parse(d) - Date.parse(list[i - 1][0])) / DAY : usual)));
       for (let k = 0; k < n; k++) out.push({ day: new Date(Date.parse(d) - k * DAY).toISOString().slice(0, 10), usd: usd / n, paid: d });
