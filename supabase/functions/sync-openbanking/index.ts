@@ -568,6 +568,72 @@ Deno.serve(async (req) => {
           return json({ url: r.url });
         } catch (err) { return json({ error: String(err) }, 400); }
       }
+      // The rates a bank converted card payments at, as far back as it gives them
+      // (03.11.2026: the expenses split such a payment into the purchase and the
+      // fee, migration ...151, but the rows from before the daily sync kept it,
+      // and the statements' CSV, have none): every transaction with an
+      // exchange_rate since body.from, onto the stored row -- the API's own by its
+      // reference, a statement's one by the account's currency, the amount and the
+      // day (the day before to two after). Run from the page: many pages of
+      // transactions, which the bank allows only with the user there.
+      if (body.action === 'fx_backfill') {
+        const bank = BANKS[body.bank];
+        if (!bank) return json({ error: `Unknown bank ${body.bank}` }, 400);
+        try {
+          const { data: sess } = await db.from('broker_credentials').select('query_id').eq('user_id', userId).eq('broker', `eb:${body.bank}`).maybeSingle();
+          if (!sess?.query_id) return json({ error: `${bank.label} isn't connected` }, 400);
+          const s = await eb(jwt, 'GET', `/sessions/${sess.query_id}`);
+          const from = /^\d{4}-\d{2}-\d{2}$/.test(String(body.from ?? '')) ? String(body.from) : '2023-01-01';
+          let api = 0, withFx = 0, updated = 0, earliest = '';
+          for (const uid of s.accounts ?? []) {
+            const d = await eb(jwt, 'GET', `/accounts/${uid}/details`);
+            const ccy = String(d.currency ?? '').toUpperCase();
+            let key = '';
+            for (let page = 0; page < 200; page++) {
+              const r = await eb(jwt, 'GET', `/accounts/${uid}/transactions?date_from=${from}${key ? `&continuation_key=${encodeURIComponent(key)}` : ''}`);
+              // deno-lint-ignore no-explicit-any
+              for (const x of r.transactions ?? [] as any[]) {
+                api++;
+                const day = String(x.booking_date ?? x.value_date ?? x.transaction_date ?? '').slice(0, 10);
+                if (day && (!earliest || day < earliest)) earliest = day;
+                const rate = Number(x.exchange_rate?.exchange_rate);
+                const a = Number(x.transaction_amount?.amount);
+                if (!day || !Number.isFinite(rate) || rate <= 0 || !Number.isFinite(a)) continue;
+                const txCcy = String(x.transaction_amount?.currency ?? ccy).toUpperCase();
+                const unit = String(x.exchange_rate?.unit_currency ?? '').toUpperCase();
+                const fx = !unit || unit === txCcy ? rate : 1 / rate;
+                const amount = round2(x.credit_debit_indicator === 'DBIT' ? -Math.abs(a) : Math.abs(a));
+                withFx++;
+                const ref = String(x.entry_reference ?? '');
+                let n = 0;
+                if (ref) {
+                  const { data, error } = await db.from('bank_transactions').update({ fx_rate: fx })
+                    .eq('user_id', userId).eq('external_source', bank.base).in('external_id', [`${body.bank}:${ref}`, `pending:${body.bank}:${ref}`]).select('id');
+                  if (error) throw new Error(error.message);
+                  n = data?.length ?? 0;
+                }
+                if (!n) {
+                  const { data: cand, error } = await db.from('bank_transactions').select('id')
+                    .eq('user_id', userId).eq('account', bank.label).eq('currency', txCcy).eq('amount', amount).is('fx_rate', null)
+                    .gte('tx_date', `${addDays(day, -1)}T00:00:00Z`).lte('tx_date', `${addDays(day, 2)}T23:59:59Z`).order('tx_date').limit(1);
+                  if (error) throw new Error(error.message);
+                  if (cand?.length) {
+                    const { error: uErr } = await db.from('bank_transactions').update({ fx_rate: fx }).eq('id', cand[0].id);
+                    if (uErr) throw new Error(uErr.message);
+                    n = 1;
+                  }
+                }
+                updated += n;
+              }
+              key = r.continuation_key ?? '';
+              if (!key) break;
+            }
+          }
+          const { error: rq } = await db.rpc('request_capital_refresh', { p_user: userId });
+          if (rq) throw new Error(rq.message);
+          return json({ bank: bank.label, api, with_fx: withFx, updated, earliest });
+        } catch (err) { return json({ error: String(err) }, 400); }
+      }
       // A look at one bank's raw transactions next to its statement's, the check
       // window -- kept as broker_credentials 'eb:<bank>:debug' to compare by hand
       // when the check fails.

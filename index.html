@@ -752,6 +752,7 @@
       <button class="btn" id="mp_eb_connect_wise">Connect Wise</button>
       <button class="btn" id="mp_eb_sync">Sync now</button>
       <button class="btn" id="mp_eb_debug" title="Keeps Revolut's raw transactions next to its statement's (the check window) for a look">Revolut details for Claude</button>
+      <button class="btn" id="mp_eb_fx" title="Revolut's card payments in another currency: the rate each was converted at, as far back as Revolut gives them -- the expenses split such a payment into the purchase and the exchange fee">Revolut exchange rates</button>
       <a class="btn" href="https://enablebanking.com/cp/applications" target="_blank" rel="noopener">Enable Banking Control Panel</a>
     </div>
     <div class="empty-note" id="mp_eb_status"></div>
@@ -7477,6 +7478,19 @@ document.getElementById('mp_eb_debug').addEventListener('click', async () => {
   try {
     const r = await mpEbCall({ action: 'debug', bank: 'revolut' });
     statusEl.textContent = `Saved: ${r.accounts} accounts, ${r.api} API transactions, ${r.stored} statement rows -- tell Claude.`;
+  } catch (err) {
+    statusEl.style.color = 'var(--red, #f85149)';
+    statusEl.textContent = `Error: ${err.message}`;
+  }
+});
+
+document.getElementById('mp_eb_fx').addEventListener('click', async () => {
+  const statusEl = document.getElementById('mp_eb_status');
+  statusEl.style.color = '';
+  statusEl.textContent = "Fetching the rates Revolut converted card payments at…";
+  try {
+    const r = await mpEbCall({ action: 'fx_backfill', bank: 'revolut' });
+    statusEl.textContent = `Revolut: ${r.api} transactions back to ${r.earliest || '—'}, ${r.with_fx} with an exchange rate, ${r.updated} matched to the rows here -- the expenses split them in a minute.`;
   } catch (err) {
     statusEl.style.color = 'var(--red, #f85149)';
     statusEl.textContent = `Error: ${err.message}`;

@@ -227,7 +227,10 @@ Deno.serve(async (req) => {
 
     // 1. FX
     const bankCcy = await db.rpc('distinct_bank_currencies').then(r => (r.data ?? []) as { currency: string }[], () => []);
-    const ccys = new Set<string>(['RUB', 'EUR', 'GBP', 'CNY', ...trades.map(t => (t.currency || '').toUpperCase()), ...bankCcy.map(r => r.currency)]);
+    // MKD, ALL: card payments in North Macedonia and Albania, made in them from a
+    // euro account -- no account holds them, the exchange fee wants their rate
+    // (migration ...151)
+    const ccys = new Set<string>(['RUB', 'EUR', 'GBP', 'CNY', 'MKD', 'ALL', ...trades.map(t => (t.currency || '').toUpperCase()), ...bankCcy.map(r => r.currency)]);
     ccys.delete(''); ccys.delete('USD');
     for (const x of ['XAU', 'XAG', 'XPT', 'XPD']) ccys.delete(x);
     const fxDone: string[] = [];
