@@ -139,9 +139,8 @@ end $mig$;
 -- card's interest on the balance); before the catch-all Other. Dividends are
 -- no income (03.11.2026: "это самообман" -- the share is worth that much less):
 -- the catch-all leaves them out too
-insert into public.income_rules (id, user_id, priority, category, description_re, source_re, exclude_re)
-select (select coalesce(max(id), 0) from public.income_rules) + row_number() over (order by u.user_id, r.priority),
-       u.user_id, r.priority, r.category, r.description_re, '^(?!estimate_)', r.exclude_re
+insert into public.income_rules (user_id, priority, category, description_re, source_re, exclude_re)
+select u.user_id, r.priority, r.category, r.description_re, '^(?!estimate_)', r.exclude_re
 from (select distinct user_id from public.income_rules) u
 cross join (values
   (101, 'Coupons', 'купон|coupon|Выплата дохода по облигациям|Периодическая выплата по ЦФА', 'возврат|refund|погашени|амортизац'),
