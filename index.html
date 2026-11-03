@@ -8861,6 +8861,13 @@ async function mpRenderExpenses() {
     if (!startsIn) mpExpKeepForecast({ step, period: b, from: f, to: t, ccy, actual: totals[i], projected: totals[i] + extra, parts });
     return totals[i] + extra;
   });
+  // where a new year starts: between the bars of December and January
+  const yearOf = b => mpExpBucketDays(b)[0].slice(0, 4);
+  const yearStarts = step === 'year' ? [] : buckets.map((b, i) => i).filter(i => i > 0 && yearOf(buckets[i]) !== yearOf(buckets[i - 1]));
+  const yearLines = yearStarts.map(i => ({ type: 'line', xref: 'x', yref: 'paper', x0: i - 0.5, x1: i - 0.5, y0: 0, y1: 1,
+    line: { color: '#6e7681', width: 2 }, layer: 'below' }));
+  const yearLabels = yearStarts.map(i => ({ x: i - 0.5, xref: 'x', y: 1, yref: 'paper', text: yearOf(buckets[i]), showarrow: false,
+    xanchor: 'left', yanchor: 'top', xshift: 3, font: { size: 11, color: '#8b949e' } }));
   await Plotly.react(bars, [...order.map(n => ({
     type: 'bar', name: n, x: buckets, y: buckets.map(b => byBucket.get(n + '\u0000' + b) ?? null),  // null: no line in the hover
     marker: { color: (MP_EXP_GROUP_META[n] ?? meta[n]).color }, hovertemplate: `${n}: %{y:,.0f} ${sym}<extra></extra>`,
@@ -8885,12 +8892,13 @@ async function mpRenderExpenses() {
              tickvals: buckets, ticktext: buckets.map((b, i) => (partial[i] ? b + '*' : b)) },
     yaxis: { gridcolor: '#1e2830', ticksuffix: ccy === 'RUB' ? ' ₽' : '', tickprefix: ccy === 'RUB' ? '' : sym },
     legend: { orientation: 'h', x: 0, y: 1.02, yanchor: 'bottom' },
-    shapes: [...life.shapes, ...buckets.flatMap((b, i) => partial[i] && totals[i] ? [{
+    // a line between the years (by month / quarter), the year above it
+    shapes: [...life.shapes, ...yearLines, ...buckets.flatMap((b, i) => partial[i] && totals[i] ? [{
       type: 'rect', xref: 'x', yref: 'y', x0: i - 0.46, x1: i + 0.46, y0: 0, y1: projected[i],
       line: { color: '#8b949e', width: 1.5, dash: 'dot' }, fillcolor: 'rgba(0,0,0,0)', layer: 'above' }] : [])],
-    annotations: buckets.flatMap((b, i) => partial[i] && totals[i] ? [{
+    annotations: [...yearLabels, ...buckets.flatMap((b, i) => partial[i] && totals[i] ? [{
       x: i, xref: 'x', y: projected[i], yref: 'y', text: `${partial[i]}<br>≈ ${money(projected[i])} for all of it`,  // the index: "2017" would be read as position 2017 showarrow: false, yanchor: 'bottom', yshift: 2,
-      font: { size: 10, color: '#8b949e' } }] : []),
+      font: { size: 10, color: '#8b949e' } }] : [])],
   }, CONFIG);
   bars.removeAllListeners?.('plotly_click');
   bars.on('plotly_click', ev => {
