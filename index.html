@@ -450,7 +450,8 @@
     <div class="section-title">Expenses</div>
     <p class="note">Money out of the bank accounts, cards and cash over the period, each row at its day's rate. Not counted:
       transfers between your own accounts (the pairs on the Capital tab), currency exchanges, buying investments, funds, savings
-      and crypto, and top-ups of a broker or another own card -- they're listed below the categories. The database sorts each row
+      and crypto, and top-ups of a broker or another own card -- they're listed below the income, each with the row in it became.
+      A refund takes off its purchase's category (a minus row). The database sorts each row
       (bank_transactions.expense_category: set by hand, or by the rules in expense_rules) with every capital rebuild.</p>
     <div class="form-row" style="gap:12px">
       <button class="btn" id="exp_prev" type="button" title="Previous period">‹</button>
@@ -8304,7 +8305,8 @@ const MP_EXP_GROUPS = { 'Travel restaurants': 'Food', 'Travel groceries': 'Food'
   'Entertainment': 'Fun', 'Games': 'Fun', 'Cinema': 'Fun',
   'Clothes': 'Shopping', 'Electronics': 'Shopping', 'Gifts': 'Shopping', 'Shopping': 'Shopping' };
 // The income bars' kinds (income_rules' categories), bottom to top
-const MP_INCOME_COLORS = { Salary: '#e6edf3', 'Flat rent': '#9ecbff' };
+const MP_INCOME_COLORS = { Salary: '#56d4a0', 'Flat rent': '#79c0ff', Interest: '#39c5cf', Coupons: '#e3b341',
+  Cashback: '#ff7b72', Other: '#d2a8ff' };
 // What's spent day by day, for a part-only bar's frame (the records start in it,
 // or it isn't over yet): see where the bars are drawn
 const MP_EXP_REGULAR = new Set(['Food delivery', 'Restaurants & cafés', 'Groceries',
@@ -8366,7 +8368,15 @@ async function mpExpLoad() {
   }
   // income (migration 141): none yet or no table -- no line
   const { data: inc } = await sb.from('income').select('day, account, usd, category, description, amount, currency').order('day');
-  return { spent, skipped, usdPer, periods: periods || [], incomeDays: mpExpIncomeDays(inc || []), incomeRows: inc || [] };
+  // the pairs that net out, and the money in that's no income, no refund, no
+  // pair's leg (migration 155): none yet -- the rows out alone
+  const ever = { p_from: '1990-01-01', p_to: '2100-01-01' };
+  const [pairs, unpairedIn] = await Promise.all([
+    page(() => sb.rpc('transfer_pairs', ever).order('pair_id')).catch(() => []),
+    page(() => sb.rpc('unpaired_in', ever).order('day').order('description').order('amount')).catch(() => []),
+  ]);
+  return { spent, skipped, usdPer, periods: periods || [], incomeDays: mpExpIncomeDays(inc || []), incomeRows: inc || [],
+    pairs, unpairedIn };
 }
 // Income over the days it was earned in: each payment over the days since the
 // one before it from the same source (account and kind) -- a salary paid on
@@ -9007,15 +9017,63 @@ async function mpRenderExpenses() {
   });
   }
 
+  // Not counted: each row out with the row in it went to (a pair, migration
+  // 155) under it, -out and +in -- the two net out
+  const signed = (v, s = v < 0 ? '−' : '+') => s + money(Math.abs(v));
+  const pairOf = new Map((mpExpCache.pairs || []).map(p => [`${p.out_source}|${p.out_id}`, p]));
+  const inConv = p => Number(p.in_usd) / usdPer(ccy, p.in_day);
+  const legRow = (day, description, account, amt, rowCcy, value, noteCell, leg) => `<tr${leg ? ' style="color:#8b949e"' : ''}>
+    <td style="white-space:nowrap">${day}</td>
+    <td style="text-align:left"${mpShortDesc(description) !== description ? ` title="${esc(description)}"` : ''}>${leg ? '↳ ' : ''}${esc(mpShortDesc(description))}</td>
+    ${noteCell}<td style="text-align:left">${esc(account)}</td>
+    <td>${amt < 0 ? '−' : '+'}${Math.abs(amt).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${rowCcy}</td><td>${signed(value)}</td></tr>`;
+  const inRow = p => legRow(p.in_day, p.in_description, p.in_account, Number(p.in_amount), p.in_currency, inConv(p), '<td></td>', true);
+  const pairsTable = (list, extra = []) => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
+    list.slice().sort((a, b) => b.day.localeCompare(a.day) || String(b.ts).localeCompare(String(a.ts))).map(r => {
+      const p = pairOf.get(`${r.src}|${r.xid}`);
+      return legRow(r.day + (r.at ? ` <span style="color:#6a7381">${r.at}</span>` : ''), r.description, r.account, -r.amt, r.ccy, -conv(r),
+        `<td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${r.note ? esc(r.note) : '✎'}</td>`)
+        + (p ? inRow(p) : '');
+    }).join('')}${extra.map(p => legRow(p.out_day, p.out_description, p.out_account, Number(p.out_amount), p.out_currency,
+      Number(p.out_usd) / usdPer(ccy, p.out_day), '<td></td>') + inRow(p)).join('')}</tbody></table></div>`;
   const skip = group(inPeriod(skipped));
+  const outKeys = new Set(skipped.map(r => `${r.src}|${r.xid}`));
+  // the pairs whose row out is no bank row (a savings account's, a deposit's,
+  // a broker's trade): the money back to a card, its own line
+  const backPairs = (mpExpCache.pairs || []).filter(p => p.out_day >= from && p.out_day <= to
+    && !outKeys.has(`${p.out_source}|${p.out_id}`) && Number.isFinite(Number(p.in_usd)));
+  const inOf = rows => rows.reduce((s, r) => { const p = pairOf.get(`${r.src}|${r.xid}`); return p ? s + inConv(p) : s; }, 0);
+  const sumLine = (out, back) => `<b>${signed(-out)}</b>${back ? ` <span style="color:#8b949e">${signed(back)} in · net ${signed(back - out)}</span>` : ''}`;
+  const inPeriodIn = (mpExpCache.unpairedIn || []).filter(r => r.day >= from && r.day <= to && Number.isFinite(Number(r.usd)));
+  // dividends: no income -- the share is worth as much less; their own line
+  const isDividend = r => /дивиденд|dividend/i.test(r.description);
+  const inGroup = (title, sub, list) => {
+    if (!list.length) return '';
+    const sum = list.reduce((s, r) => s + Number(r.usd) / usdPer(ccy, r.day), 0);
+    return `<details><summary class="exp-cat" style="display:flex"><div class="exp-name"><b>${title}</b>
+      <span>${list.length} transaction${list.length === 1 ? '' : 's'}${sub}</span></div>
+      <div class="exp-amt"><b>${signed(sum)}</b></div></summary>
+      <div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
+        list.slice().sort((a, b) => b.day.localeCompare(a.day)).map(r => `<tr><td style="white-space:nowrap">${r.day}</td>
+          <td style="text-align:left"${mpShortDesc(r.description) !== r.description ? ` title="${esc(r.description)}"` : ''}>${esc(mpShortDesc(r.description))}</td>
+          <td style="text-align:left">${esc(r.account)}</td><td>+${Number(r.amount).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${r.currency}</td>
+          <td>${signed(Number(r.usd) / usdPer(ccy, r.day))}</td></tr>`).join('')}</tbody></table></div></details>`;
+  };
   const skipTotal = skip.reduce((s, c) => s + c.total, 0);
   const exWrap = document.getElementById('exp_excluded');
-  exWrap.innerHTML = skip.length ? `<div class="section-title" style="margin-top:24px">Not counted: ${money(skipTotal)}</div>
-    <p class="note">Money out over the same period that only moved between your own money. Click a line to see its rows --
-      something that is spending after all means a rule in expense_rules is too wide, or the row's expense_category is to be set by hand.</p>
-    ${skip.map((c, i) => `<details><summary class="exp-cat" style="display:flex"><div class="exp-name"><b>${c.cat}</b>
-      <span>${c.rows.length} transaction${c.rows.length === 1 ? '' : 's'}</span></div><div class="exp-amt"><b>${money(c.total)}</b></div></summary>
-      ${rowsTable(c.rows)}</details>`).join('')}` : '';
+  exWrap.innerHTML = skip.length || backPairs.length || inPeriodIn.length ? `<div class="section-title" style="margin-top:24px">Not counted: ${signed(-skipTotal)}</div>
+    <p class="note">Money that only moved between your own money: each row out (−), and under it the row in (+) it became when
+      the two are paired -- they net out, the difference is what an exchange cost. Click a line to see its rows -- something
+      that is spending after all means a rule in expense_rules is too wide, or the row's expense_category is to be set by hand.</p>
+    ${skip.map(c => `<details><summary class="exp-cat" style="display:flex"><div class="exp-name"><b>${c.cat}</b>
+      <span>${c.rows.length} transaction${c.rows.length === 1 ? '' : 's'}</span></div><div class="exp-amt">${sumLine(c.total, inOf(c.rows))}</div></summary>
+      ${pairsTable(c.rows)}</details>`).join('')}
+    ${backPairs.length ? `<details><summary class="exp-cat" style="display:flex"><div class="exp-name"><b>Out of savings, deposits, brokers</b>
+      <span>${backPairs.length} pair${backPairs.length === 1 ? '' : 's'}</span></div><div class="exp-amt">${sumLine(
+        -backPairs.reduce((s, p) => s + Number(p.out_usd) / usdPer(ccy, p.out_day), 0), backPairs.reduce((s, p) => s + inConv(p), 0))}</div></summary>
+      ${pairsTable([], backPairs)}</details>` : ''}
+    ${inGroup('Dividends', ' -- not income: the share is worth as much less', inPeriodIn.filter(isDividend))}
+    ${inGroup('Money in, no pair and no income', ' -- a leg the matcher missed, or income no rule knows yet', inPeriodIn.filter(r => !isDividend(r)))}` : '';
 }
 for (const id of ['exp_from', 'exp_to']) {
   document.getElementById(id).addEventListener('change', e => {
