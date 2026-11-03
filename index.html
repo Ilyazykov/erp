@@ -9043,18 +9043,21 @@ async function mpRenderExpenses() {
   });
   const incomeFramed = i => sideBySide && incomeProjected[i] - (incomeBy.get(buckets[i]) || 0) > 0.5;
   const incomeBase = buckets.map(() => 0);
+  // in the hover a rule over the income (its first kind that bucket) and over the totals
+  const hoverRule = '<span style="color:#484f58">────────────────</span><br>';
+  const firstKindAt = buckets.map(b => incomeKinds.find(kind => incomeByCat.has(kind + '\u0000' + b)));
   const incomeTraces = !incomeBy.size ? [] : sideBySide
     ? incomeKinds.map(kind => {
       const y = buckets.map(b => incomeByCat.get(kind + '\u0000' + b) ?? null);
       const base = [...incomeBase];
       y.forEach((v, i) => { incomeBase[i] += v || 0; });
       return { type: 'bar', name: `Income: ${kind}`, x: buckets, y, base, offset: half.income.offset, width: half.income.width,
-        marker: { color: MP_INCOME_COLORS[kind] ?? '#8b949e' }, customdata: y,
-        hovertemplate: `<b>${kind}: %{customdata:,.0f} ${sym}</b><extra></extra>` };
+        marker: { color: MP_INCOME_COLORS[kind] ?? '#8b949e' }, customdata: y.map((v, i) => [v, firstKindAt[i] === kind ? hoverRule : '']),
+        hovertemplate: `%{customdata[1]}<b>${kind}: %{customdata[0]:,.0f} ${sym}</b><extra></extra>` };
     })
     : [{ type: 'scatter', mode: 'lines+markers', name: 'Income', x: buckets, y: incomeY, line: { color: '#e6edf3', width: 2 },
       marker: { color: '#e6edf3', size: 7, line: { color: '#0d1117', width: 1 } },
-      hovertemplate: `<b>Income: %{y:,.0f} ${sym}</b><extra></extra>` }];
+      hovertemplate: `${hoverRule}<b>Income: %{y:,.0f} ${sym}</b><extra></extra>` }];
   // a part-only bar's frame around the spending bar alone
   const frameX = i => (sideBySide ? [i + half.spent.offset, i + half.spent.offset + half.spent.width] : [i - 0.46, i + 0.46]);
   await Plotly.react(bars, [...spentTraces,
@@ -9073,7 +9076,7 @@ async function mpRenderExpenses() {
       const sums = incomeMode === 'off' ? [`<b>Total spent: ${amt(totals[i])}</b>`]
         : [`<b>Total income: ${amt(incomeY[i])}</b>`, `<b>Total spent: ${amt(totals[i])}</b>`,
           `<b>Net: ${incomeY[i] - totals[i] >= 0 ? '+' : ''}${amt(incomeY[i] - totals[i])}</b>`];
-      return [...sums, partial[i] && `<i>${partial[i]}</i>`, w].filter(Boolean).join('<br>');
+      return hoverRule + [...sums, partial[i] && `<i>${partial[i]}</i>`, w].filter(Boolean).join('<br>');
     }),
     hovertemplate: `%{customdata}<extra></extra>` }], {
     barmode: sideBySide ? 'overlay' : 'stack', paper_bgcolor: '#0d1117', plot_bgcolor: '#0d1117', font: { color: '#8b949e' },
