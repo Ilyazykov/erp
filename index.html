@@ -9062,12 +9062,20 @@ async function mpRenderExpenses() {
   ...incomeTraces,
   // the bar's total and where one was, in the hover only: first there -- the stack's
   // hover lists the traces last to first
+  // under the line: what came in, what went out, and the difference -- or the
+  // spending alone with the income off
   { type: 'scatter', mode: 'markers', marker: { opacity: 0 }, name: 'Total', showlegend: false,
     x: buckets, y: totals,
     customdata: buckets.map((b, i) => mpExpRollingDays.has(b) && /_td$/.test(step)
       ? mpExpBucketDays(b).map(x => x.split('-').reverse().join('.')).join(' – ') + (life.where[i] ? '<br>' + life.where[i] : '')
-      : life.where[i]).map((w, i) => [partial[i] && `<i>${partial[i]}</i>`, w].filter(Boolean).join('<br>')),
-    hovertemplate: `<b>Total: %{y:,.0f} ${sym}</b><br>%{customdata}<extra></extra>` }], {
+      : life.where[i]).map((w, i) => {
+      const amt = v => `${v < 0 ? '−' : ''}${Math.round(Math.abs(v)).toLocaleString('en-US')} ${sym}`;
+      const sums = incomeMode === 'off' ? [`<b>Total spent: ${amt(totals[i])}</b>`]
+        : [`<b>Total income: ${amt(incomeY[i])}</b>`, `<b>Total spent: ${amt(totals[i])}</b>`,
+          `<b>Net: ${incomeY[i] - totals[i] >= 0 ? '+' : ''}${amt(incomeY[i] - totals[i])}</b>`];
+      return [...sums, partial[i] && `<i>${partial[i]}</i>`, w].filter(Boolean).join('<br>');
+    }),
+    hovertemplate: `%{customdata}<extra></extra>` }], {
     barmode: sideBySide ? 'overlay' : 'stack', paper_bgcolor: '#0d1117', plot_bgcolor: '#0d1117', font: { color: '#8b949e' },
     margin: { t: 10, b: 40, l: 60, r: 10 }, hovermode: 'x unified', hoverlabel: { font: { size: 11 } },
     // labels at an angle, the margin grown to fit them; the legend above, out of their way
