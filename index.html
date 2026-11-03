@@ -9888,7 +9888,10 @@ async function mpLoadProvenCash(cashOnDay) {
     // need at the end of day d = need before the first event of the next day with events
     for (let t = Date.parse(countDay + 'T00:00:00Z'); k < days.length; t -= 86400000) {
       const d = new Date(t).toISOString().slice(0, 10);
-      if (d < countDay) out[d] = need;
+      // never more than the whole cash ledger holds that day: below zero (money
+      // borrowed and put on a card, 2021) the need is none, and isn't carried back
+      // to the first cash row as cash out of nowhere
+      if (d < countDay) out[d] = need = Math.min(need, Math.max(0, cashOnDay(d)));
       if (k < days.length && days[k] === d) {
         for (const r of byDay.get(d).slice().reverse()) {
           // an exchange within the cash (both legs here, in USD it nets out) brings no new money in
