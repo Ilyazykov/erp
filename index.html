@@ -8374,14 +8374,16 @@ async function mpExpLoad() {
   const inc = await page(() => sb.from('income').select('day, account, usd, category, description, amount, currency').order('day').order('id')).catch(() => []);
   // the pairs that net out, and the money in that's no income, no refund, no
   // pair's leg (kept by refresh_expenses, migration 156): none yet -- the rows out alone
-  const [pairs, unpairedIn, chains] = await Promise.all([
+  const [pairs, unpairedIn, chains, incomeExpect] = await Promise.all([
     page(() => sb.from('transfer_pair_rows').select('*').order('pair_id')).catch(() => []),
     page(() => sb.from('unpaired_in_rows').select('*').order('external_source').order('external_id')).catch(() => []),
     // rows that are one move in several steps (migration 160): none yet or no table -- no chains
     page(() => sb.from('expense_chains').select('external_source, external_id, chain')).catch(() => []),
+    // the income one expects (migration 161): none yet or no table -- the income bars unframed
+    page(() => sb.from('income_expectations').select('category, amount, currency, from_day, to_day')).catch(() => []),
   ]);
   return { spent, skipped, usdPer, periods: periods || [], incomeDays: mpExpIncomeDays(inc || []), incomeRows: inc || [],
-    pairs, unpairedIn, chainOf: new Map((chains || []).map(c => [`${c.external_source}|${c.external_id}`, c.chain])) };
+    pairs, unpairedIn, incomeExpect: incomeExpect || [], chainOf: new Map((chains || []).map(c => [`${c.external_source}|${c.external_id}`, c.chain])) };
 }
 // Income over the days it was earned in: each payment over the days since the
 // one before it from the same source (account and kind) -- a salary paid on
@@ -8985,6 +8987,61 @@ async function mpRenderExpenses() {
   // side by side: the income bar stacked by kind, the salary at the bottom
   const incomeKinds = [...new Set([...incomeByCat.keys()].map(k => k.split('\u0000')[0]))]
     .sort((x, y) => (MP_INCOME_COLORS[x] ? Object.keys(MP_INCOME_COLORS).indexOf(x) : 99) - (MP_INCOME_COLORS[y] ? Object.keys(MP_INCOME_COLORS).indexOf(y) : 99));
+  // an income bar of a period not over yet: what it will likely come to, framed
+  // as the spending bar is -- the expected salary (income_expectations) for each
+  // month whose last day, its pay day, is still ahead and none of it came in that
+  // month yet; the other kinds (interest, coupons, the flat's rent, ...) at the
+  // last whole period's pace a day for the days left. Not the salaries of the
+  // past: the job they came from may be over (Cyprus, 19.10.2026).
+  const monthEnd = m => new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7), 0)).toISOString().slice(0, 10);
+  const nextMonth = m => new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7), 1)).toISOString().slice(0, 7);
+  // the working days (Mon-Fri) of a..z
+  const workDays = (a, z) => {
+    let n = 0;
+    for (let d = a; d <= z; d = dayShift(d, 1)) if (![0, 6].includes(new Date(d + 'T00:00:00Z').getUTCDay())) n++;
+    return n;
+  };
+  // an expectation's pay days up to `until`, each with its share of the month's
+  // amount: a month paid on its last day; a first month begun after its 1st, its
+  // working days' share, paid with the next month (the new job from 20.10.2026:
+  // 9 of October's 22 working days on top of November's salary)
+  const expectedPays = (e, until) => {
+    const out = [];
+    for (let m = e.from_day.slice(0, 7); m <= until.slice(0, 7); m = nextMonth(m)) {
+      const a = m + '-01', z = monthEnd(m);
+      if (e.to_day && a > e.to_day) break;
+      const from = e.from_day > a ? e.from_day : a, to = e.to_day && e.to_day < z ? e.to_day : z;
+      const share = workDays(from, to) / workDays(a, z);
+      out.push([from > a ? monthEnd(nextMonth(m)) : z, share]);
+    }
+    return out;
+  };
+  const expect = mpExpCache.incomeExpect || [];
+  const expectKinds = new Set(['Salary', ...expect.map(e => e.category)]);
+  const incomeProjected = buckets.map((b, i) => {
+    const now = incomeBy.get(b) || 0;
+    const [f, t] = mpExpBucketDays(b);
+    if (!partial[i] || t <= today || incomeMode === 'off') return now;
+    let extra = 0;
+    for (const e of expect) {
+      for (const [pay, share] of expectedPays(e, t)) {
+        if (pay <= today || pay > t || pay < f) continue;
+        // none of it in the pay day's month yet (not the old job's last salary
+        // before from_day: Wheely's of 29.10.2026)
+        const came = (mpExpCache.incomeRows || []).some(r => r.category === e.category && r.day.slice(0, 7) === pay.slice(0, 7) && r.day >= e.from_day);
+        if (!came) extra += share * Number(e.amount) * mpExpCache.usdPer(e.currency, today) / mpExpCache.usdPer(ccy, today);
+      }
+    }
+    if (lastWhole !== undefined) {
+      const [rf, rt] = mpExpBucketDays(buckets[lastWhole]);
+      for (const kind of incomeKinds) {
+        if (expectKinds.has(kind)) continue;
+        extra += (incomeByCat.get(kind + '\u0000' + buckets[lastWhole]) || 0) / nDays(rf, rt) * nDays(dayShift(today, 1), t);
+      }
+    }
+    return now + extra;
+  });
+  const incomeFramed = i => sideBySide && incomeProjected[i] - (incomeBy.get(buckets[i]) || 0) > 0.5;
   const incomeBase = buckets.map(() => 0);
   const incomeTraces = !incomeBy.size ? [] : sideBySide
     ? incomeKinds.map(kind => {
@@ -9021,12 +9078,18 @@ async function mpRenderExpenses() {
     // a line between the years (by month / quarter), the year above it
     shapes: [...life.shapes, ...yearLines, ...buckets.flatMap((b, i) => partial[i] && totals[i] ? [{
       type: 'rect', xref: 'x', yref: 'y', x0: frameX(i)[0], x1: frameX(i)[1], y0: 0, y1: projected[i],
+      line: { color: '#8b949e', width: 1.5, dash: 'dot' }, fillcolor: 'rgba(0,0,0,0)', layer: 'above' }] : []),
+    ...buckets.flatMap((b, i) => incomeFramed(i) ? [{
+      type: 'rect', xref: 'x', yref: 'y', x0: i + half.income.offset, x1: i + half.income.offset + half.income.width, y0: 0, y1: incomeProjected[i],
       line: { color: '#8b949e', width: 1.5, dash: 'dot' }, fillcolor: 'rgba(0,0,0,0)', layer: 'above' }] : [])],
     annotations: [...yearLabels, ...buckets.flatMap((b, i) => partial[i] && totals[i] ? [{
       // x as the index: "2017" would be read as position 2017
       x: sideBySide ? i + half.spent.mid : i, xref: 'x', y: projected[i], yref: 'y', text: `${partial[i]}<br>≈ ${money(projected[i])} for all of it`,
       showarrow: false, yanchor: 'bottom', yshift: 2,
-      font: { size: 10, color: '#8b949e' } }] : [])],
+      font: { size: 10, color: '#8b949e' } }] : []),
+    ...buckets.flatMap((b, i) => incomeFramed(i) ? [{
+      x: i + half.income.offset + half.income.width / 2, xref: 'x', y: incomeProjected[i], yref: 'y', text: `≈ ${money(incomeProjected[i])}<br>coming in`,
+      showarrow: false, yanchor: 'bottom', yshift: 2, font: { size: 10, color: '#8b949e' } }] : [])],
   }, CONFIG);
   bars.removeAllListeners?.('plotly_click');
   bars.on('plotly_click', ev => {
