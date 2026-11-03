@@ -8287,6 +8287,7 @@ const MP_EXP_CATS = [
   ['Gifts', '🎁', '#e0b660'],
   ['Shopping', '🛍', '#d29922'],
   ['Health & sport', '💊', '#db61a2'],
+  ['Psychotherapy', '🛋', '#a0457e'],
   ['Education', '🎓', '#ffa198'],
   ['Subscriptions & services', '🧾', '#ffdf5d'],
   ['Relationships', '💝', '#ff6b9d'],
@@ -8297,7 +8298,7 @@ const MP_EXP_CATS = [
   ['Other', '•', '#4b5560'],
 ];
 // Categories shown side by side as one group (the food: shades of one green; the
-// transport: of one blue; the travel: of one purple; the fun: of one teal; the shopping: of one gold; the housing: of one orange) --
+// transport: of one blue; the travel: of one purple; the fun: of one teal; the shopping: of one gold; the housing: of one orange; the health: of one pink) --
 // in the donut and the list, ordered by the group's total, then each one's.
 const MP_EXP_GROUPS = { 'Travel restaurants': 'Food', 'Travel groceries': 'Food', 'Travel food delivery': 'Food', 'Rent & housing': 'Housing', 'Nizhny flat bills': 'Housing', 'Bills & utilities': 'Housing',
   'Phone & internet': 'Housing',
@@ -8306,7 +8307,8 @@ const MP_EXP_GROUPS = { 'Travel restaurants': 'Food', 'Travel groceries': 'Food'
   'Flights': 'Travel', 'Hotels': 'Travel', 'Visas': 'Travel', 'Travel entertainment': 'Travel',
   'Travel taxi': 'Travel', 'Travel public transport': 'Travel', 'Travel souvenirs': 'Travel', 'Other travel': 'Travel',
   'Entertainment': 'Fun', 'Games': 'Fun', 'Cinema': 'Fun',
-  'Clothes': 'Shopping', 'Electronics': 'Shopping', 'Gifts': 'Shopping', 'Shopping': 'Shopping' };
+  'Clothes': 'Shopping', 'Electronics': 'Shopping', 'Gifts': 'Shopping', 'Shopping': 'Shopping',
+  'Health & sport': 'Health', 'Psychotherapy': 'Health' };
 // The income bars' kinds (income_rules' categories), bottom to top
 const MP_INCOME_COLORS = { Salary: '#56d4a0', 'Flat rent': '#79c0ff', Interest: '#39c5cf', Coupons: '#e3b341',
   Cashback: '#ff7b72', Other: '#d2a8ff' };
@@ -8326,7 +8328,7 @@ const MP_EXP_TRANSPORT = new Set(['Taxi', 'Public transport', 'Other transport']
 // the group stands for (housing: the rent's orange, not the bills' yellow)
 const MP_EXP_GROUP_META = Object.fromEntries(Object.entries({
   Housing: ['🏠', 'Rent & housing'], Food: ['🍽', 'Restaurants & cafés'], Transport: ['🚕', 'Public transport'],
-  Travel: ['✈️', 'Visas'], Fun: ['🎟', 'Entertainment'], Shopping: ['🛍', 'Clothes'],
+  Travel: ['✈️', 'Visas'], Fun: ['🎟', 'Entertainment'], Shopping: ['🛍', 'Clothes'], Health: ['💊', 'Health & sport'],
 }).map(([g, [icon, main]]) => [g, { icon, color: MP_EXP_CATS.find(c => c[0] === main)[2] }]));
 let mpExpCache = null;
 const mpExpFolded = new Set();  // groups folded in the list of the expenses tab
