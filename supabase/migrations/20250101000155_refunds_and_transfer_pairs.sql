@@ -58,32 +58,32 @@ declare
 
   update bank_transactions b set refund_of = m.ref
   from (
-    select distinct on (r.id) r.id, o.external_source || '|' || o.external_id as ref
-    from refund_rows r
-    join bank_transactions o on o.user_id = p_user and o.account = r.account and upper(o.currency) = r.ccy
-      and o.amount < 0 and -o.amount >= r.amount - 0.005
+    select distinct on (rr.id) rr.id, o.external_source || '|' || o.external_id as ref
+    from refund_rows rr
+    join bank_transactions o on o.user_id = p_user and o.account = rr.account and upper(o.currency) = rr.ccy
+      and o.amount < 0 and -o.amount >= rr.amount - 0.005
       -- spending only: "Покупка/продажа" answering a trade is no refund
       and o.expense_category is not null and not expense_not_spending(o.expense_category)
-      and coalesce(o.authorized_on, o.tx_date::date) between r.day - 120 and r.day
-      and trim(regexp_replace(lower(regexp_replace(o.description, '^\s*(payment in|оплата в)\s+', '', 'i')), '[^[:alnum:]]+', ' ', 'g')) = r.merch
-    where r.merch <> ''
-    order by r.id, o.tx_date desc
+      and coalesce(o.authorized_on, o.tx_date::date) between rr.day - 120 and rr.day
+      and trim(regexp_replace(lower(regexp_replace(o.description, '^\s*(payment in|оплата в)\s+', '', 'i')), '[^[:alnum:]]+', ' ', 'g')) = rr.merch
+    where rr.merch <> ''
+    order by rr.id, o.tx_date desc
   ) m
   where b.id = m.id and not b.refund_manual;
   update bank_transactions b set refund_of = 'unmatched'
-  from refund_rows r where b.id = r.id and r.says_refund and b.refund_of is null;
+  from refund_rows rr where b.id = rr.id and rr.says_refund and b.refund_of is null;
 
   insert into expenses (user_id, day, paid_day, account, external_source, external_id, description, amount, currency, usd, category, counted)
-  select p_user, r.day, r.day, r.account, r.external_source, r.external_id, 'Refund: ' || r.description,
-         -r.amount, r.ccy, -r.amount * usd_per_unit_on(r.ccy, r.day), c.cat, true
-  from refund_rows r
-  join bank_transactions b on b.id = r.id and b.refund_of is not null
+  select p_user, rr.day, rr.day, rr.account, rr.external_source, rr.external_id, 'Refund: ' || rr.description,
+         -rr.amount, rr.ccy, -rr.amount * usd_per_unit_on(rr.ccy, rr.day), c.cat, true
+  from refund_rows rr
+  join bank_transactions b on b.id = rr.id and b.refund_of is not null
   cross join lateral (
     select coalesce(
       (select o.expense_category from bank_transactions o where b.refund_of <> 'unmatched'
          and o.user_id = p_user and o.external_source || '|' || o.external_id = b.refund_of),
       (select o.expense_category from bank_transactions o where o.user_id = p_user and o.amount < 0
-         and trim(regexp_replace(lower(regexp_replace(o.description, '^\s*(payment in|оплата в)\s+', '', 'i')), '[^[:alnum:]]+', ' ', 'g')) = r.merch
+         and trim(regexp_replace(lower(regexp_replace(o.description, '^\s*(payment in|оплата в)\s+', '', 'i')), '[^[:alnum:]]+', ' ', 'g')) = rr.merch
          and o.expense_category is not null order by o.tx_date desc limit 1),
       'Other') as cat
   ) c
