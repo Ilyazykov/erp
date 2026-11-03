@@ -30,6 +30,10 @@ alter table public.bank_transactions add column if not exists refund_manual bool
 -- split bill of the 68 £ of 06.04 (the user, 03.11.2026)
 update public.bank_transactions set refund_of = 'revolut_csv|2026-04-06 16:25:22:Scudamore''s Punting Company:-68:GBP', refund_manual = true
 where external_source = 'revolut_csv' and external_id = '2026-04-07 08:25:10:Revolut Bank UAB:28.46:GBP';
+-- 24.04.2023 Evgeniia Andolshchik's 202 TRY: the 200 TRY sent her that day back
+-- (the user, 03.11.2026: "считай возвратом")
+update public.bank_transactions set refund_of = 'ziraat_xlsx|24.04.2023:F25205:EVGENIIA ANDOLSHCHIK Ziraat Mobil Havale:-200', refund_manual = true
+where external_source = 'ziraat_xlsx' and external_id = '24.04.2023:F25009:EVGENIIA ANDOLSHCHIK Ziraat Mobil Havale:202';
 
 do $mig$
 declare
