@@ -28,6 +28,9 @@
   .data-table th:first-child, .data-table td:first-child { text-align: left; }
   .data-table th { color: #8b949e; font-weight: 600; font-size: 0.78rem; background: #171d25; }
   .data-table td.ticker { font-weight: 600; background: #171d25; }
+  /* Not counted: a gap between pairs, none between a pair's two rows */
+  .pair-rows tr.pair-out:not(:first-child) td { border-top: 10px solid #0d1117; }
+  .pair-rows tr.pair-out td { border-bottom: none; }
   .data-table td.pos { color: #3dd68c; }
   .data-table td.neg { color: #e05252; }
   .data-table td.muted { color: #6a7381; }
@@ -8369,11 +8372,10 @@ async function mpExpLoad() {
   // income (migration 141): none yet or no table -- no line
   const { data: inc } = await sb.from('income').select('day, account, usd, category, description, amount, currency').order('day');
   // the pairs that net out, and the money in that's no income, no refund, no
-  // pair's leg (migration 155): none yet -- the rows out alone
-  const ever = { p_from: '1990-01-01', p_to: '2100-01-01' };
+  // pair's leg (kept by refresh_expenses, migration 156): none yet -- the rows out alone
   const [pairs, unpairedIn] = await Promise.all([
-    page(() => sb.rpc('transfer_pairs', ever).order('pair_id')).catch(() => []),
-    page(() => sb.rpc('unpaired_in', ever).order('day').order('description').order('amount')).catch(() => []),
+    page(() => sb.from('transfer_pair_rows').select('*').order('pair_id')).catch(() => []),
+    page(() => sb.from('unpaired_in_rows').select('*').order('external_source').order('external_id')).catch(() => []),
   ]);
   return { spent, skipped, usdPer, periods: periods || [], incomeDays: mpExpIncomeDays(inc || []), incomeRows: inc || [],
     pairs, unpairedIn };
@@ -9022,13 +9024,13 @@ async function mpRenderExpenses() {
   const signed = (v, s = v < 0 ? '−' : '+') => s + money(Math.abs(v));
   const pairOf = new Map((mpExpCache.pairs || []).map(p => [`${p.out_source}|${p.out_id}`, p]));
   const inConv = p => Number(p.in_usd) / usdPer(ccy, p.in_day);
-  const legRow = (day, description, account, amt, rowCcy, value, noteCell, leg) => `<tr${leg ? ' style="color:#8b949e"' : ''}>
+  const legRow = (day, description, account, amt, rowCcy, value, noteCell, leg) => `<tr class="${leg ? 'pair-in' : 'pair-out'}"${leg ? ' style="color:#8b949e"' : ''}>
     <td style="white-space:nowrap">${day}</td>
     <td style="text-align:left"${mpShortDesc(description) !== description ? ` title="${esc(description)}"` : ''}>${leg ? '↳ ' : ''}${esc(mpShortDesc(description))}</td>
     ${noteCell}<td style="text-align:left">${esc(account)}</td>
     <td>${amt < 0 ? '−' : '+'}${Math.abs(amt).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${rowCcy}</td><td>${signed(value)}</td></tr>`;
   const inRow = p => legRow(p.in_day, p.in_description, p.in_account, Number(p.in_amount), p.in_currency, inConv(p), '<td></td>', true);
-  const pairsTable = (list, extra = []) => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
+  const pairsTable = (list, extra = []) => `<div class="exp-rows"><table class="data-table pair-rows"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
     list.slice().sort((a, b) => b.day.localeCompare(a.day) || String(b.ts).localeCompare(String(a.ts))).map(r => {
       const p = pairOf.get(`${r.src}|${r.xid}`);
       return legRow(r.day + (r.at ? ` <span style="color:#6a7381">${r.at}</span>` : ''), r.description, r.account, -r.amt, r.ccy, -conv(r),
