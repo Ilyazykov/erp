@@ -8298,6 +8298,8 @@ const MP_EXP_GROUPS = { 'Travel restaurants': 'Food', 'Travel groceries': 'Food'
   'Travel taxi': 'Travel', 'Travel public transport': 'Travel', 'Travel souvenirs': 'Travel', 'Other travel': 'Travel',
   'Entertainment': 'Fun', 'Games': 'Fun', 'Cinema': 'Fun',
   'Clothes': 'Shopping', 'Electronics': 'Shopping', 'Gifts': 'Shopping', 'Shopping': 'Shopping' };
+// The income bars' kinds (income_rules' categories), bottom to top
+const MP_INCOME_COLORS = { Salary: '#e6edf3', 'Flat rent': '#9ecbff' };
 // What's spent day by day, for a part-only bar's frame (the records start in it,
 // or it isn't over yet): see where the bars are drawn
 const MP_EXP_REGULAR = new Set(['Food delivery', 'Restaurants & cafés', 'Groceries',
@@ -8399,6 +8401,7 @@ function mpExpIncomeDays(rows) {
     days.set(r.day, (days.get(r.day) || 0) + Number(r.usd));
   }
   for (const [key, days] of bySource) {
+    const cat = key.split('\u0000')[1];
     const list = [...days].sort((a, b) => a[0].localeCompare(b[0]));
     // a salary is the month it's for, spread over that month: paid by the
     // 12th, the month before (Russia's "расчёт" on the 5th-10th, Serbia's
@@ -8422,7 +8425,7 @@ function mpExpIncomeDays(rows) {
         const first = new Date(Date.UTC(y, m - 1 + shift, 1));
         const n = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
         const mo = first.toISOString().slice(0, 8);
-        for (let k = 1; k <= n; k++) out.push({ day: `${mo}${String(k).padStart(2, '0')}`, usd: usd / n, paid: d });
+        for (let k = 1; k <= n; k++) out.push({ day: `${mo}${String(k).padStart(2, '0')}`, usd: usd / n, paid: d, cat });
       }
       continue;
     }
@@ -8430,7 +8433,7 @@ function mpExpIncomeDays(rows) {
     const usual = gaps.length ? gaps[gaps.length >> 1] : 1;
     list.forEach(([d, usd], i) => {
       const n = Math.max(1, Math.min(120, Math.round(i ? (Date.parse(d) - Date.parse(list[i - 1][0])) / DAY : usual)));
-      for (let k = 0; k < n; k++) out.push({ day: new Date(Date.parse(d) - k * DAY).toISOString().slice(0, 10), usd: usd / n, paid: d });
+      for (let k = 0; k < n; k++) out.push({ day: new Date(Date.parse(d) - k * DAY).toISOString().slice(0, 10), usd: usd / n, paid: d, cat });
     });
   }
   return out;
@@ -8775,11 +8778,14 @@ async function mpRenderExpenses() {
   const incomeMode = document.getElementById('exp_income').value;
   const sideBySide = incomeMode === 'bars';
   const incomeBy = new Map();
+  const incomeByCat = new Map();   // kind \0 bucket -> came in: the bars split by kind (a salary, a flat's rent, ...)
   if (incomeMode !== 'off') {
     for (const r of mpExpCache.incomeDays) {
       if (r.day < startDay || (/_td$/.test(step) ? r.day > today : r.day.slice(0, 7) > today.slice(0, 7))) continue;
-      const b = bucket(r.day);
-      incomeBy.set(b, (incomeBy.get(b) || 0) + r.usd / mpExpCache.usdPer(ccy, r.paid));
+      const b = bucket(r.day), v = r.usd / mpExpCache.usdPer(ccy, r.paid);
+      incomeBy.set(b, (incomeBy.get(b) || 0) + v);
+      const k = (r.cat || 'Other income') + '\u0000' + b;
+      incomeByCat.set(k, (incomeByCat.get(k) || 0) + v);
     }
   }
   // a bar of a part only (the records start in it, or it isn't over yet): a
@@ -8873,7 +8879,8 @@ async function mpRenderExpenses() {
     xanchor: 'left', yanchor: 'top', xshift: 3, font: { size: 11, color: '#8b949e' } }));
   // side by side: Plotly can't stack within a group, so the stack is laid by
   // hand (base) in the left half of the slot, the income in the right half
-  const half = { spent: { offset: -0.42, width: 0.4, mid: -0.22 }, income: { offset: 0.02, width: 0.4 } };
+  // income on the left, spending on the right (03.11.2026)
+  const half = { income: { offset: -0.42, width: 0.4 }, spent: { offset: 0.02, width: 0.4, mid: 0.22 } };
   const stackBase = buckets.map(() => 0);
   const spentTraces = order.map(n => {
     const y = buckets.map(b => byBucket.get(n + '\u0000' + b) ?? null);  // null: no line in the hover
@@ -8885,9 +8892,18 @@ async function mpRenderExpenses() {
     return { ...trace, base, offset: half.spent.offset, width: half.spent.width };
   });
   const incomeY = buckets.map(b => incomeBy.get(b) ?? 0);
+  // side by side: the income bar stacked by kind, the salary at the bottom
+  const incomeKinds = [...new Set([...incomeByCat.keys()].map(k => k.split('\u0000')[0]))]
+    .sort((x, y) => (MP_INCOME_COLORS[x] ? Object.keys(MP_INCOME_COLORS).indexOf(x) : 99) - (MP_INCOME_COLORS[y] ? Object.keys(MP_INCOME_COLORS).indexOf(y) : 99));
+  const incomeBase = buckets.map(() => 0);
   const incomeTraces = !incomeBy.size ? [] : sideBySide
-    ? [{ type: 'bar', name: 'Income', x: buckets, y: incomeY, base: 0, offset: half.income.offset, width: half.income.width,
-      marker: { color: '#e6edf3' }, hovertemplate: `<b>Income: %{y:,.0f} ${sym}</b><extra></extra>` }]
+    ? incomeKinds.map(kind => {
+      const y = buckets.map(b => incomeByCat.get(kind + '\u0000' + b) ?? null);
+      const base = [...incomeBase];
+      y.forEach((v, i) => { incomeBase[i] += v || 0; });
+      return { type: 'bar', name: `Income: ${kind}`, x: buckets, y, base, offset: half.income.offset, width: half.income.width,
+        marker: { color: MP_INCOME_COLORS[kind] ?? '#8b949e' }, hovertemplate: `<b>${kind}: %{y:,.0f} ${sym}</b><extra></extra>` };
+    })
     : [{ type: 'scatter', mode: 'lines+markers', name: 'Income', x: buckets, y: incomeY, line: { color: '#e6edf3', width: 2 },
       marker: { color: '#e6edf3', size: 7, line: { color: '#0d1117', width: 1 } },
       hovertemplate: `<b>Income: %{y:,.0f} ${sym}</b><extra></extra>` }];
