@@ -8435,11 +8435,32 @@ function mpExpIncomeDays(rows) {
     // Paid after the 25th it's the next month's early-month part, given ahead of
     // the New Year (458 EUR on 27.12.2024: no early-January one, a December of
     // three payments and a January of one)
-    if (key.endsWith('\u0000Salary')) {
+    // A flat's rent is a month's, the month it's paid in: spread over the days
+    // since the payment before, the 17 000 RUB of 04.12.2018 after three months
+    // with none on record made each of them a third of a rent (03.11.2026)
+    const rent = key.endsWith('\u0000Flat rent');
+    // Two rents in a month by a month with none: one of them is that month's
+    // ("бывало что сразу за несколько месяцев платили"): the later one the next
+    // month's, else the earlier one the month before's (07.03 and 20.03.2020
+    // with no February: 07.03 is February's)
+    const rentMonth = new Map();
+    if (rent) {
+      const monthPlus = (ym, k) => new Date(Date.UTC(+ym.slice(0, 4), +ym.slice(5, 7) - 1 + k, 1)).toISOString().slice(0, 7);
+      const byMonth = new Map();
+      list.forEach(([d]) => byMonth.set(d.slice(0, 7), [...(byMonth.get(d.slice(0, 7)) || []), d]));
+      const used = new Set(byMonth.keys());
+      for (const [ym, ds] of byMonth) {
+        if (ds.length < 2) continue;
+        const next = monthPlus(ym, 1), prev = monthPlus(ym, -1);
+        if (!used.has(next)) { rentMonth.set(ds.at(-1), next); used.add(next); }
+        else if (!used.has(prev)) { rentMonth.set(ds[0], prev); used.add(prev); }
+      }
+    }
+    if (key.endsWith('\u0000Salary') || rent) {
       const byPayMonth = key.startsWith('cash\u0000');
       for (const [d, usd] of list) {
-        const [y, m, dd] = d.split('-').map(Number);
-        const shift = byPayMonth ? (dd > 25 ? 1 : 0) : (dd <= 12 ? -1 : 0);
+        const [y, m, dd] = (rentMonth.get(d) ? rentMonth.get(d) + '-01' : d).split('-').map(Number);
+        const shift = rent ? 0 : byPayMonth ? (dd > 25 ? 1 : 0) : (dd <= 12 ? -1 : 0);
         const first = new Date(Date.UTC(y, m - 1 + shift, 1));
         const n = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
         const mo = first.toISOString().slice(0, 8);
@@ -8954,7 +8975,9 @@ async function mpRenderExpenses() {
     if (!sideBySide) return trace;
     const base = [...stackBase];
     y.forEach((v, i) => { stackBase[i] += v || 0; });
-    return { ...trace, base, offset: half.spent.offset, width: half.spent.width };
+    // with a base %{y} is the bar's top: its own value from customdata
+    return { ...trace, base, offset: half.spent.offset, width: half.spent.width, customdata: y,
+      hovertemplate: `${n}: %{customdata:,.0f} ${sym}<extra></extra>` };
   });
   const incomeY = buckets.map(b => incomeBy.get(b) ?? 0);
   // side by side: the income bar stacked by kind, the salary at the bottom
@@ -8967,7 +8990,8 @@ async function mpRenderExpenses() {
       const base = [...incomeBase];
       y.forEach((v, i) => { incomeBase[i] += v || 0; });
       return { type: 'bar', name: `Income: ${kind}`, x: buckets, y, base, offset: half.income.offset, width: half.income.width,
-        marker: { color: MP_INCOME_COLORS[kind] ?? '#8b949e' }, hovertemplate: `<b>${kind}: %{y:,.0f} ${sym}</b><extra></extra>` };
+        marker: { color: MP_INCOME_COLORS[kind] ?? '#8b949e' }, customdata: y,
+        hovertemplate: `<b>${kind}: %{customdata:,.0f} ${sym}</b><extra></extra>` };
     })
     : [{ type: 'scatter', mode: 'lines+markers', name: 'Income', x: buckets, y: incomeY, line: { color: '#e6edf3', width: 2 },
       marker: { color: '#e6edf3', size: 7, line: { color: '#0d1117', width: 1 } },
