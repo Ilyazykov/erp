@@ -482,7 +482,8 @@
         <option value="12">12 months</option><option value="24">2 years</option><option value="36">3 years</option>
         <option value="60">5 years</option><option value="all">all</option></select></label>
       <label title="Bands behind the bars for the periods spent with someone (life_periods)"><input type="checkbox" id="exp_bands"> who I was with</label>
-      <label title="One's own money coming in: a salary, a flat's rent (bank_transactions.income_category, by the rules in income_rules) -- a line over the bars"><input type="checkbox" id="exp_income"> income</label>
+      <label title="One's own money coming in: a salary, a flat's rent (bank_transactions.income_category, by the rules in income_rules) -- a line over the bars, or a bar of its own next to each one">income <select id="exp_income">
+        <option value="off">off</option><option value="line">line</option><option value="bars">bars</option></select></label>
       <label title="The shades of one colour as one: food, transport, travel, shopping"><input type="checkbox" id="exp_grouped"> by group</label>
       <label>by <select id="exp_step"><option value="month">month</option><option value="quarter">quarter</option><option value="year">year</option>
         <option value="month_td">month to today</option><option value="quarter_td">quarter to today</option><option value="year_td">year to today</option></select></label>
@@ -8710,7 +8711,7 @@ async function mpRenderExpenses() {
   const step = document.getElementById('exp_step').value;
   const bars = document.getElementById('plot_exp_months');
   const barsKey = [new Date().toISOString().slice(0, 10), span, step, ccy, spent.length, periods.length, spreadOn, withExtrapolated, document.getElementById('exp_bands').checked,
-    document.getElementById('exp_income').checked, document.getElementById('exp_grouped').checked].join('|');
+    document.getElementById('exp_income').value, document.getElementById('exp_grouped').checked].join('|');
   if (bars.mpExpKey !== barsKey) {
   bars.mpExpKey = barsKey;
   const first = spent.reduce((m, r) => (r.day < m ? r.day : m), today);
@@ -8769,10 +8770,12 @@ async function mpRenderExpenses() {
     ...spent.map(r => r.cat).filter(c => !(c in known)), ...tail])];
   const order = names.filter(n => buckets.some(b => byBucket.has(n + '\u0000' + b)));
   const life = mpExpLifeBands(periods, buckets, lifeName);
-  // income: a line over the stacks -- the bars stay as wide as they are, and
-  // a bar above it is a period spent more than came in
+  // income: a line over the stacks (a bar above it is a period spent more than
+  // came in), or a bar of its own to the right of each spending bar
+  const incomeMode = document.getElementById('exp_income').value;
+  const sideBySide = incomeMode === 'bars';
   const incomeBy = new Map();
-  if (document.getElementById('exp_income').checked) {
+  if (incomeMode !== 'off') {
     for (const r of mpExpCache.incomeDays) {
       if (r.day < startDay || (/_td$/.test(step) ? r.day > today : r.day.slice(0, 7) > today.slice(0, 7))) continue;
       const b = bucket(r.day);
@@ -8868,15 +8871,31 @@ async function mpRenderExpenses() {
     line: { color: '#6e7681', width: 2 }, layer: 'below' }));
   const yearLabels = yearStarts.map(i => ({ x: i - 0.5, xref: 'x', y: 1, yref: 'paper', text: yearOf(buckets[i]), showarrow: false,
     xanchor: 'left', yanchor: 'top', xshift: 3, font: { size: 11, color: '#8b949e' } }));
-  await Plotly.react(bars, [...order.map(n => ({
-    type: 'bar', name: n, x: buckets, y: buckets.map(b => byBucket.get(n + '\u0000' + b) ?? null),  // null: no line in the hover
-    marker: { color: (MP_EXP_GROUP_META[n] ?? meta[n]).color }, hovertemplate: `${n}: %{y:,.0f} ${sym}<extra></extra>`,
-  })),
+  // side by side: Plotly can't stack within a group, so the stack is laid by
+  // hand (base) in the left half of the slot, the income in the right half
+  const half = { spent: { offset: -0.42, width: 0.4, mid: -0.22 }, income: { offset: 0.02, width: 0.4 } };
+  const stackBase = buckets.map(() => 0);
+  const spentTraces = order.map(n => {
+    const y = buckets.map(b => byBucket.get(n + '\u0000' + b) ?? null);  // null: no line in the hover
+    const trace = { type: 'bar', name: n, x: buckets, y,
+      marker: { color: (MP_EXP_GROUP_META[n] ?? meta[n]).color }, hovertemplate: `${n}: %{y:,.0f} ${sym}<extra></extra>` };
+    if (!sideBySide) return trace;
+    const base = [...stackBase];
+    y.forEach((v, i) => { stackBase[i] += v || 0; });
+    return { ...trace, base, offset: half.spent.offset, width: half.spent.width };
+  });
+  const incomeY = buckets.map(b => incomeBy.get(b) ?? 0);
+  const incomeTraces = !incomeBy.size ? [] : sideBySide
+    ? [{ type: 'bar', name: 'Income', x: buckets, y: incomeY, base: 0, offset: half.income.offset, width: half.income.width,
+      marker: { color: '#e6edf3' }, hovertemplate: `<b>Income: %{y:,.0f} ${sym}</b><extra></extra>` }]
+    : [{ type: 'scatter', mode: 'lines+markers', name: 'Income', x: buckets, y: incomeY, line: { color: '#e6edf3', width: 2 },
+      marker: { color: '#e6edf3', size: 7, line: { color: '#0d1117', width: 1 } },
+      hovertemplate: `<b>Income: %{y:,.0f} ${sym}</b><extra></extra>` }];
+  // a part-only bar's frame around the spending bar alone
+  const frameX = i => (sideBySide ? [i + half.spent.offset, i + half.spent.offset + half.spent.width] : [i - 0.46, i + 0.46]);
+  await Plotly.react(bars, [...spentTraces,
   ...life.legend,
-  ...(incomeBy.size ? [{ type: 'scatter', mode: 'lines+markers', name: 'Income', x: buckets,
-    y: buckets.map(b => incomeBy.get(b) ?? 0), line: { color: '#e6edf3', width: 2 },
-    marker: { color: '#e6edf3', size: 7, line: { color: '#0d1117', width: 1 } },
-    hovertemplate: `<b>Income: %{y:,.0f} ${sym}</b><extra></extra>` }] : []),
+  ...incomeTraces,
   // the bar's total and where one was, in the hover only: first there -- the stack's
   // hover lists the traces last to first
   { type: 'scatter', mode: 'markers', marker: { opacity: 0 }, name: 'Total', showlegend: false,
@@ -8885,7 +8904,7 @@ async function mpRenderExpenses() {
       ? mpExpBucketDays(b).map(x => x.split('-').reverse().join('.')).join(' – ') + (life.where[i] ? '<br>' + life.where[i] : '')
       : life.where[i]).map((w, i) => [partial[i] && `<i>${partial[i]}</i>`, w].filter(Boolean).join('<br>')),
     hovertemplate: `<b>Total: %{y:,.0f} ${sym}</b><br>%{customdata}<extra></extra>` }], {
-    barmode: 'stack', paper_bgcolor: '#0d1117', plot_bgcolor: '#0d1117', font: { color: '#8b949e' },
+    barmode: sideBySide ? 'overlay' : 'stack', paper_bgcolor: '#0d1117', plot_bgcolor: '#0d1117', font: { color: '#8b949e' },
     margin: { t: 10, b: 40, l: 60, r: 10 }, hovermode: 'x unified', hoverlabel: { font: { size: 11 } },
     // labels at an angle, the margin grown to fit them; the legend above, out of their way
     xaxis: { type: 'category', gridcolor: '#1e2830', tickangle: -45, automargin: true,
@@ -8894,10 +8913,10 @@ async function mpRenderExpenses() {
     legend: { orientation: 'h', x: 0, y: 1.02, yanchor: 'bottom' },
     // a line between the years (by month / quarter), the year above it
     shapes: [...life.shapes, ...yearLines, ...buckets.flatMap((b, i) => partial[i] && totals[i] ? [{
-      type: 'rect', xref: 'x', yref: 'y', x0: i - 0.46, x1: i + 0.46, y0: 0, y1: projected[i],
+      type: 'rect', xref: 'x', yref: 'y', x0: frameX(i)[0], x1: frameX(i)[1], y0: 0, y1: projected[i],
       line: { color: '#8b949e', width: 1.5, dash: 'dot' }, fillcolor: 'rgba(0,0,0,0)', layer: 'above' }] : [])],
     annotations: [...yearLabels, ...buckets.flatMap((b, i) => partial[i] && totals[i] ? [{
-      x: i, xref: 'x', y: projected[i], yref: 'y', text: `${partial[i]}<br>≈ ${money(projected[i])} for all of it`,  // the index: "2017" would be read as position 2017 showarrow: false, yanchor: 'bottom', yshift: 2,
+      x: sideBySide ? i + half.spent.mid : i, xref: 'x', y: projected[i], yref: 'y', text: `${partial[i]}<br>≈ ${money(projected[i])} for all of it`,  // the index: "2017" would be read as position 2017 showarrow: false, yanchor: 'bottom', yshift: 2,
       font: { size: 10, color: '#8b949e' } }] : [])],
   }, CONFIG);
   bars.removeAllListeners?.('plotly_click');
@@ -8956,7 +8975,11 @@ document.getElementById('exp_bands').addEventListener('change', e => {
   try { localStorage.setItem('mp_exp_bands', e.target.checked ? '1' : '0'); } catch { /* no storage */ }
   if (mpIsSignedIn) mpRenderExpenses();
 });
-try { document.getElementById('exp_income').checked = localStorage.getItem('mp_exp_income') === '1'; } catch { /* no storage */ }
+try {
+  // '1' / '0': saved when income was a checkbox
+  const saved = localStorage.getItem('mp_exp_income');
+  document.getElementById('exp_income').value = { 1: 'line', 0: 'off' }[saved] ?? (['off', 'line', 'bars'].includes(saved) ? saved : 'off');
+} catch { /* no storage */ }
 try { document.getElementById('exp_grouped').checked = localStorage.getItem('mp_exp_grouped') === '1'; } catch { /* no storage */ }
 try { document.getElementById('exp_grouped_top').checked = localStorage.getItem('mp_exp_grouped_top') === '1'; } catch { /* no storage */ }
 document.getElementById('exp_grouped_top').addEventListener('change', e => {
@@ -8968,7 +8991,7 @@ document.getElementById('exp_grouped').addEventListener('change', e => {
   if (mpIsSignedIn) mpRenderExpenses();
 });
 document.getElementById('exp_income').addEventListener('change', e => {
-  try { localStorage.setItem('mp_exp_income', e.target.checked ? '1' : '0'); } catch { /* no storage */ }
+  try { localStorage.setItem('mp_exp_income', e.target.value); } catch { /* no storage */ }
   if (mpIsSignedIn) mpRenderExpenses();
 });
 for (const id of ['exp_span', 'exp_step']) {
