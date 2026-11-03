@@ -8370,7 +8370,8 @@ async function mpExpLoad() {
     (r.counted ? spent : skipped).push(row);
   }
   // income (migration 141): none yet or no table -- no line
-  const { data: inc } = await sb.from('income').select('day, account, usd, category, description, amount, currency').order('day');
+  // page by page: the interest a day (savings, money market funds) runs past 1000 rows
+  const inc = await page(() => sb.from('income').select('day, account, usd, category, description, amount, currency').order('day').order('id')).catch(() => []);
   // the pairs that net out, and the money in that's no income, no refund, no
   // pair's leg (kept by refresh_expenses, migration 156): none yet -- the rows out alone
   const [pairs, unpairedIn] = await Promise.all([
