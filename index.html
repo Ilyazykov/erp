@@ -10014,6 +10014,16 @@ async function mpRenderCapitalBrokers() {
       if (neg.some(y => y < -0.5)) traces.push(area(label, c, neg.map(y => Math.min(0, y)), 'debt', false));
     }
   }
+  // the hover: one list of what isn't zero that day, the largest first -- a line
+  // for each of the 40-odd layers, most of them $0, ran off the screen
+  const hoverValue = v => (pct ? `${v.toFixed(1)}%` : ccy === 'RUB' ? `${Math.round(v).toLocaleString('en-US')} ₽`
+    : `${v < 0 ? '−' : ''}$${Math.abs(Math.round(v)).toLocaleString('en-US')}`);
+  const hoverLines = days.map((_, i) => traces.map(t => [t.name, t.fillcolor, t.y[i]]).filter(([, , v]) => Math.abs(v) >= 0.5)
+    .sort((a, b) => b[2] - a[2])
+    .map(([n, c, v]) => `<span style="color:${c}">■</span> ${String(n).replace(/</g, '&lt;')}: ${hoverValue(v)}`).join('<br>') || 'nothing');
+  for (const t of traces) { t.hoverinfo = 'skip'; delete t.hovertemplate; }
+  traces.push({ x: days, y: days.map(() => 0), type: 'scatter', mode: 'lines', line: { width: 0 }, showlegend: false,
+    text: hoverLines, hovertemplate: '%{text}<extra></extra>' });
   const layout = mpCapitalLayout(ccy, { hovermode: 'x unified' });
   layout.xaxis = Object.assign({}, layout.xaxis, { griddash: 'dot' });
   layout.yaxis = Object.assign({}, layout.yaxis, { griddash: 'dot' },
