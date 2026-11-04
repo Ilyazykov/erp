@@ -8373,7 +8373,11 @@ async function mpExpLoad() {
   }
   // income (migration 141): none yet or no table -- no line
   // page by page: the interest a day (savings, money market funds) runs past 1000 rows
-  const inc = await page(() => sb.from('income').select('day, account, usd, category, description, amount, currency').order('day').order('id')).catch(() => []);
+  const inc = await page(() => sb.from('income').select('day, account, usd, category, description, amount, currency, external_source, external_id').order('day').order('id')).catch(() => []);
+  // a note on a row in, as on a row out (bank_transactions.expense_note): none -- no notes
+  const incNotes = await page(() => sb.from('bank_transactions').select('external_source, external_id, expense_note').not('expense_note', 'is', null).gt('amount', 0).order('id')).catch(() => []);
+  const incNoteOf = new Map((incNotes || []).map(n => [`${n.external_source}|${n.external_id}`, n.expense_note]));
+  for (const r of inc || []) { r.src = r.external_source; r.xid = r.external_id; r.note = incNoteOf.get(`${r.src}|${r.xid}`) || null; }
   // the pairs that net out, and the money in that's no income, no refund, no
   // pair's leg (kept by refresh_expenses, migration 156): none yet -- the rows out alone
   const [pairs, unpairedIn, chains, incomeExpect] = await Promise.all([
@@ -8582,14 +8586,14 @@ function mpExpLifeBands(periods, buckets, lifeName) {
   }
   return { shapes, legend, where };
 }
-// A note on a row out, written in the expenses tab's tables: saved to the row
+// A note on a row out or in, written in the expenses tab's tables: saved to the row
 // itself (bank_transactions.expense_note) and kept in the tab's cache.
 document.getElementById('expenses').addEventListener('click', async e => {
   const cell = e.target.closest('.exp-note');
   if (!cell || !cell.dataset.src || !mpIsSignedIn) return;
   e.stopPropagation();
   const { src, xid } = cell.dataset;
-  const all = [...(mpExpCache?.spent || []), ...(mpExpCache?.skipped || [])].filter(r => r.src === src && r.xid === xid);
+  const all = [...(mpExpCache?.spent || []), ...(mpExpCache?.skipped || []), ...(mpExpCache?.incomeRows || [])].filter(r => r.src === src && r.xid === xid);
   const text = prompt('Note', all[0]?.note || '');
   if (text === null) return;
   const note = text.trim() || null;
@@ -8784,9 +8788,11 @@ async function mpRenderExpenses() {
     ],
   }, { ...CONFIG, displayModeBar: false });
   const incList = document.getElementById('inc_categories');
-  const incTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
+  const incTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
     list.slice().sort((x, y) => y.day.localeCompare(x.day)).map(r => `<tr><td style="white-space:nowrap">${r.day}</td>
-      <td style="text-align:left">${esc(r.description || '')}</td><td style="text-align:left">${esc(r.account)}</td>
+      <td style="text-align:left">${esc(r.description || '')}</td>
+      <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${r.note ? esc(r.note) : '✎'}</td>
+      <td style="text-align:left">${esc(r.account)}</td>
       <td>${Number(r.amount).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${esc(r.currency || '')}</td><td>${money(incConv(r))}</td></tr>`).join('')}</tbody></table></div>`;
   incList.innerHTML = incCats.length ? incCats.map((c, i) => `<div class="exp-cat" data-i="${i}">
       <div class="exp-dot" style="background:${incColor(c.cat)}33;color:${incColor(c.cat)}">${incIcon(c.cat)}</div>
