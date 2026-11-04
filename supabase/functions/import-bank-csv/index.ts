@@ -221,19 +221,19 @@ function madeOn(bank: string, description: string, date: string): string | null 
 // goes in by hand as account_number 'pending' (source '<bank>_csv:pending',
 // its own running balance: the holds' sum, below zero). Once a statement
 // brings the payment -- same amount and currency, made the day the hold is
-// dated -- the statement's row takes the hold's note, place and hand-set category
+// dated -- the statement's row takes the hold's note, places and hand-set category
 // and the hold goes (05.11.2026). What's left is re-totalled.
 // deno-lint-ignore no-explicit-any
 async function settlePending(db: any, userId: string, bank: string, bankSlug: string): Promise<number> {
   const pendingSource = `${bankSlug}_csv:pending`;
   const { data: holds, error: hErr } = await db.from('bank_transactions')
-    .select('id, tx_date, amount, currency, expense_note, expense_category, expense_manual, place_id')
+    .select('id, tx_date, amount, currency, expense_note, expense_category, expense_manual, place_id, delivery_place_id')
     .eq('user_id', userId).eq('external_source', pendingSource).order('tx_date');
   if (hErr) throw new Error(hErr.message);
   if (!holds?.length) return 0;
   const from = holds[0].tx_date.slice(0, 10);
   const { data: real, error: rErr } = await db.from('bank_transactions')
-    .select('id, tx_date, authorized_on, amount, currency, expense_note, expense_manual, place_id')
+    .select('id, tx_date, authorized_on, amount, currency, expense_note, expense_manual, place_id, delivery_place_id')
     .eq('user_id', userId).eq('account', bank).neq('external_source', pendingSource).lt('amount', 0)
     .gte('tx_date', `${from}T00:00:00Z`).order('tx_date');
   if (rErr) throw new Error(rErr.message);
@@ -250,6 +250,7 @@ async function settlePending(db: any, userId: string, bank: string, bankSlug: st
     if (h.expense_note && !m.expense_note) patch.expense_note = h.expense_note;
     if (h.expense_manual && !m.expense_manual) { patch.expense_category = h.expense_category; patch.expense_manual = true; }
     if (h.place_id && !m.place_id) patch.place_id = h.place_id;
+    if (h.delivery_place_id && !m.delivery_place_id) patch.delivery_place_id = h.delivery_place_id;
     if (Object.keys(patch).length) {
       const { error } = await db.from('bank_transactions').update(patch).eq('id', m.id);
       if (error) throw new Error(error.message);

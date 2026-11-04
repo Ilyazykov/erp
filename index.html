@@ -8380,9 +8380,15 @@ async function mpExpLoad() {
   const incNoteOf = new Map((incNotes || []).map(n => [`${n.external_source}|${n.external_id}`, n.expense_note]));
   for (const r of inc || []) { r.src = r.external_source; r.xid = r.external_id; r.note = incNoteOf.get(`${r.src}|${r.xid}`) || null; }
   // where a payment was made (migration 163): no column yet -- no places
-  const places = await page(() => sb.from('bank_transactions').select('external_source, external_id, places(name, url)').not('place_id', 'is', null).order('id')).catch(() => []);
-  const placeOf = new Map((places || []).filter(p => p.places).map(p => [`${p.external_source}|${p.external_id}`, p.places]));
-  for (const r of [...spent, ...skipped, ...(inc || [])]) r.place = placeOf.get(`${r.src}|${r.xid}`) || null;
+  // and, a delivery, where it was brought to (migration 165): no column yet -- the place alone
+  const placed = await page(() => sb.from('bank_transactions').select('external_source, external_id, from:places!place_id(name, url), to:places!delivery_place_id(name, url)').or('place_id.not.is.null,delivery_place_id.not.is.null').order('id'))
+    .catch(() => page(() => sb.from('bank_transactions').select('external_source, external_id, from:places!place_id(name, url)').not('place_id', 'is', null).order('id')).catch(() => []));
+  const placeOf = new Map((placed || []).map(p => [`${p.external_source}|${p.external_id}`, p]));
+  for (const r of [...spent, ...skipped, ...(inc || [])]) {
+    const p = placeOf.get(`${r.src}|${r.xid}`);
+    r.place = p?.from || null;
+    r.deliveredTo = p?.to || null;
+  }
   // the pairs that net out, and the money in that's no income, no refund, no
   // pair's leg (kept by refresh_expenses, migration 156): none yet -- the rows out alone
   const [pairs, unpairedIn, chains, incomeExpect] = await Promise.all([
@@ -8603,9 +8609,13 @@ function mpPlaceFromLink(url) {
   const gid = [...url.matchAll(/!1s(0x[0-9a-f]+:0x[0-9a-f]+)/gi)].pop();
   return { name: decodeURIComponent(name[1].replace(/\+/g, ' ')), lat: pt ? Number(pt[1]) : null, lng: pt ? Number(pt[2]) : null, url: clean, google_id: gid ? gid[1] : null };
 }
-// A row's place, its own column: the name, a click opens the map.
-function mpPlaceHtml(place) {
-  return place ? `<a href="${mpEscapeHtml(place.url || '')}" target="_blank" rel="noopener" title="${mpEscapeHtml(place.name)}" style="color:#58a6ff">📍 ${mpEscapeHtml(place.name)}</a>` : '';
+// A row's place, its own column: the name, a click opens the map (when
+// there's a link); a delivery's also where it was brought to ("→ 🏠 ...").
+function mpPlaceHtml(place, to) {
+  const one = (p, icon) => p.url
+    ? `<a href="${mpEscapeHtml(p.url)}" target="_blank" rel="noopener" title="${mpEscapeHtml(p.name)}" style="color:#58a6ff">${icon} ${mpEscapeHtml(p.name)}</a>`
+    : `<span title="${mpEscapeHtml(p.name)}">${icon} ${mpEscapeHtml(p.name)}</span>`;
+  return [place && one(place, '📍'), to && one(to, '→ 🏠')].filter(Boolean).join(' ');
 }
 // A note's text with its links cut short: a Google Maps place shows as its
 // name ("📍 Mugsy's Burger"), any other link as its site; a click opens it.
@@ -8650,7 +8660,7 @@ document.getElementById('expenses').addEventListener('click', async e => {
   if (error) { alert(error.message); return; }
   all.forEach(r => { r.note = note; if (found) r.place = { name: found.name, url: found.url }; });
   document.querySelectorAll('#expenses .exp-note, #expenses .exp-place').forEach(c => {
-    if (c.dataset.src === src && c.dataset.xid === xid) c.innerHTML = c.classList.contains('exp-place') ? mpPlaceHtml(all[0]?.place) : mpNoteHtml(note);
+    if (c.dataset.src === src && c.dataset.xid === xid) c.innerHTML = c.classList.contains('exp-place') ? mpPlaceHtml(all[0]?.place, all[0]?.deliveredTo) : mpNoteHtml(note);
   });
 });
 document.getElementById('exp_life').addEventListener('change', e => {
@@ -8770,7 +8780,7 @@ async function mpRenderExpenses() {
     // newest first, to the second -- rows with no time in their statement too,
     // by the importer's 00:00:SS (their order within the day)
     list.slice().sort((a, b) => b.day.localeCompare(a.day) || String(b.ts).localeCompare(String(a.ts))).map(r => `<tr><td style="white-space:nowrap">${r.day}${r.at ? ` <span style="color:#6a7381">${r.at}</span>` : ''}</td><td style="text-align:left"${mpShortDesc(r.description) !== r.description ? ` title="${esc(r.description)}"` : ''}>${esc(mpShortDesc(r.description))}${groupedTop && MP_EXP_GROUPS[r.cat] ? ` <span style="color:#6a7381">· ${esc(r.cat)}</span>` : ''}</td>
-      <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" style="text-align:left;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis">${mpPlaceHtml(r.place)}</td>
+      <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" style="text-align:left;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis">${mpPlaceHtml(r.place, r.deliveredTo)}</td>
       <td style="text-align:left">${esc(r.account)}</td>
       <td>${r.amt.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${r.ccy}</td><td>${rowMoney(conv(r))}</td></tr>`).join('')}</tbody></table></div>`;
   const catList = document.getElementById('exp_categories');
@@ -8845,7 +8855,7 @@ async function mpRenderExpenses() {
   const incTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th style="width:1%;text-align:left">Place</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
     list.slice().sort((x, y) => y.day.localeCompare(x.day)).map(r => `<tr><td style="white-space:nowrap">${r.day}</td>
       <td style="text-align:left">${esc(r.description || '')}</td>
-      <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" style="text-align:left;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis">${mpPlaceHtml(r.place)}</td>
+      <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" style="text-align:left;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis">${mpPlaceHtml(r.place, r.deliveredTo)}</td>
       <td style="text-align:left">${esc(r.account)}</td>
       <td>${Number(r.amount).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${esc(r.currency || '')}</td><td>${rowMoney(incConv(r))}</td></tr>`).join('')}</tbody></table></div>`;
   incList.innerHTML = incCats.length ? incCats.map((c, i) => `<div class="exp-cat" data-i="${i}">
@@ -9199,7 +9209,7 @@ async function mpRenderExpenses() {
     list.slice().sort((a, b) => b.day.localeCompare(a.day) || String(b.ts).localeCompare(String(a.ts))).map(r => {
       const p = pairOf.get(`${r.src}|${r.xid}`);
       return legRow(r.day + (r.at ? ` <span style="color:#6a7381">${r.at}</span>` : ''), r.description, r.account, -r.amt, r.ccy, -conv(r),
-        `<td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" style="text-align:left;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis">${mpPlaceHtml(r.place)}</td>`)
+        `<td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" style="text-align:left;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis">${mpPlaceHtml(r.place, r.deliveredTo)}</td>`)
         + (p ? inRow(p) : '');
     }).join('')}${extra.map(p => legRow(p.out_day, p.out_description, p.out_account, Number(p.out_amount), p.out_currency,
       Number(p.out_usd) / usdPer(ccy, p.out_day), '<td></td><td></td>') + inRow(p)).join('')}</tbody></table></div>`;
