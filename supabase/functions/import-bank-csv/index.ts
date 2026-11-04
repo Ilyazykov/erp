@@ -217,6 +217,56 @@ function madeOn(bank: string, description: string, date: string): string | null 
   const day = `${m[3]}-${String(MONTHS.indexOf(m[1]) + 1).padStart(2, '0')}-${m[2].padStart(2, '0')}`;
   return day < date ? day : null;
 }
+// A card payment still held in the bank's app, not in its statement yet,
+// goes in by hand as account_number 'pending' (source '<bank>_csv:pending',
+// its own running balance: the holds' sum, below zero). Once a statement
+// brings the payment -- same amount and currency, made the day the hold is
+// dated -- the statement's row takes the hold's note and hand-set category
+// and the hold goes (05.11.2026). What's left is re-totalled.
+// deno-lint-ignore no-explicit-any
+async function settlePending(db: any, userId: string, bank: string, bankSlug: string): Promise<number> {
+  const pendingSource = `${bankSlug}_csv:pending`;
+  const { data: holds, error: hErr } = await db.from('bank_transactions')
+    .select('id, tx_date, amount, currency, expense_note, expense_category, expense_manual')
+    .eq('user_id', userId).eq('external_source', pendingSource).order('tx_date');
+  if (hErr) throw new Error(hErr.message);
+  if (!holds?.length) return 0;
+  const from = holds[0].tx_date.slice(0, 10);
+  const { data: real, error: rErr } = await db.from('bank_transactions')
+    .select('id, tx_date, authorized_on, amount, currency, expense_note, expense_manual')
+    .eq('user_id', userId).eq('account', bank).neq('external_source', pendingSource).lt('amount', 0)
+    .gte('tx_date', `${from}T00:00:00Z`).order('tx_date');
+  if (rErr) throw new Error(rErr.message);
+  const taken = new Set<string>();
+  const settled: string[] = [];
+  for (const h of holds) {
+    const day = h.tx_date.slice(0, 10);
+    const m = (real ?? []).find((r: { id: string; tx_date: string; authorized_on: string | null; amount: number; currency: string }) =>
+      !taken.has(r.id) && Number(r.amount) === Number(h.amount) && r.currency === h.currency
+      && (r.authorized_on ?? r.tx_date.slice(0, 10)) === day);
+    if (!m) continue;
+    taken.add(m.id);
+    const patch: Record<string, unknown> = {};
+    if (h.expense_note && !m.expense_note) patch.expense_note = h.expense_note;
+    if (h.expense_manual && !m.expense_manual) { patch.expense_category = h.expense_category; patch.expense_manual = true; }
+    if (Object.keys(patch).length) {
+      const { error } = await db.from('bank_transactions').update(patch).eq('id', m.id);
+      if (error) throw new Error(error.message);
+    }
+    settled.push(h.id);
+  }
+  if (!settled.length) return 0;
+  const { error: dErr } = await db.from('bank_transactions').delete().in('id', settled);
+  if (dErr) throw new Error(dErr.message);
+  let bal = 0;
+  for (const h of holds.filter((h: { id: string }) => !settled.includes(h.id))) {
+    bal = Math.round((bal + Number(h.amount)) * 100) / 100;
+    const { error } = await db.from('bank_transactions').update({ balance_after: bal }).eq('id', h.id);
+    if (error) throw new Error(error.message);
+  }
+  return settled.length;
+}
+
 // Cash paid into an account at the bank's counter -- the matching row out of
 // the cash on hand is written with it (see the handler).
 const CASH_DEPOSIT_RE = /ანგარიშზე თანხის შეტანა/;
@@ -511,6 +561,13 @@ Deno.serve(async (req) => {
     const droppedStale = await dropStale(supabase, user.id, 'bank_transactions', 'tx_date',
       rows.map(r => ({ external_source: r.external_source, external_id: r.external_id, day: r.tx_date.slice(0, 10) })));
 
+    // a statement (not the holds' own file) settles the bank's holds
+    let settledPending = 0;
+    for (const [bank, slug] of new Map(rows.filter(r => !r.external_source.endsWith(':pending'))
+      .map(r => [r.account, r.external_source.split(':')[0].replace(/_csv$/, '')]))) {
+      settledPending += await settlePending(supabase, user.id, bank, slug);
+    }
+
     // Cash paid in at the bank's counter (TBC: "ანგარიშზე თანხის შეტანა") came
     // out of the cash on hand: its row there is written here, not by hand
     // (31.10.2026) -- source CASH_DEPOSIT_SOURCE, keyed by the bank row (a
@@ -578,6 +635,7 @@ Deno.serve(async (req) => {
       dropped_stale: droppedStale + droppedStaleDeposit,
       cash_deposits: cashOut.length,
       sber_pending: sberPending,
+      settled_pending: settledPending,
       total_rows: csvRows.length,
     }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (err) {
