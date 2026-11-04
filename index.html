@@ -8591,23 +8591,27 @@ function mpExpLifeBands(periods, buckets, lifeName) {
   }
   return { shapes, legend, where };
 }
-// A row's place (migration 163) and note, the note's links cut short: a
-// Google Maps place shows as its name ("📍 Mugsy's Burger"), any other link
-// as its site; a click opens it.
+// A Google Maps link's place (migration 163): its name, point, Google's id.
 function mpPlaceFromLink(url) {
   const name = url.match(/\/maps\/place\/([^/]+)/);
   if (!name) return null;
-  // the place's own point (!3d<lat>!4d<lng>), else the map's centre (@lat,lng)
-  const pt = url.match(/!3d(-?[\d.]+)!4d(-?[\d.]+)/) || url.match(/@(-?[\d.]+),(-?[\d.]+)/);
+  // the place's own point (!3d<lat>!4d<lng>), else the map's centre (@lat,lng);
+  // a link from one place to another lists both -- the last is the one shown
+  const pt = [...url.matchAll(/!3d(-?[\d.]+)!4d(-?[\d.]+)/g)].pop() || url.match(/@(-?[\d.]+),(-?[\d.]+)/);
   let clean = url;
   try { const u = new URL(url); u.search = ''; clean = u.toString(); } catch { /* as written */ }
-  const gid = url.match(/!1s(0x[0-9a-f]+:0x[0-9a-f]+)/i);
+  const gid = [...url.matchAll(/!1s(0x[0-9a-f]+:0x[0-9a-f]+)/gi)].pop();
   return { name: decodeURIComponent(name[1].replace(/\+/g, ' ')), lat: pt ? Number(pt[1]) : null, lng: pt ? Number(pt[2]) : null, url: clean, google_id: gid ? gid[1] : null };
 }
-function mpNoteHtml(note, place) {
-  const pin = place ? `<a href="${mpEscapeHtml(place.url || '')}" target="_blank" rel="noopener" style="color:#58a6ff">📍 ${mpEscapeHtml(place.name)}</a>` : '';
-  if (!note) return pin || '✎';
-  return (pin ? pin + ' · ' : '') + note.split(/(https?:\/\/[^\s)]+)/).map((part, i) => {
+// A row's place, its own column: the name, a click opens the map.
+function mpPlaceHtml(place) {
+  return place ? `<a href="${mpEscapeHtml(place.url || '')}" target="_blank" rel="noopener" style="color:#58a6ff">📍 ${mpEscapeHtml(place.name)}</a>` : '';
+}
+// A note's text with its links cut short: a Google Maps place shows as its
+// name ("📍 Mugsy's Burger"), any other link as its site; a click opens it.
+function mpNoteHtml(note) {
+  if (!note) return '✎';
+  return note.split(/(https?:\/\/[^\s)]+)/).map((part, i) => {
     if (i % 2 === 0) return mpEscapeHtml(part);
     let label;
     try {
@@ -8645,8 +8649,8 @@ document.getElementById('expenses').addEventListener('click', async e => {
   const { error } = await sb.from('bank_transactions').update(patch).eq('external_source', src).eq('external_id', xid);
   if (error) { alert(error.message); return; }
   all.forEach(r => { r.note = note; if (found) r.place = { name: found.name, url: found.url }; });
-  document.querySelectorAll('#expenses .exp-note').forEach(c => {
-    if (c.dataset.src === src && c.dataset.xid === xid) c.innerHTML = mpNoteHtml(note, all[0]?.place);
+  document.querySelectorAll('#expenses .exp-note, #expenses .exp-place').forEach(c => {
+    if (c.dataset.src === src && c.dataset.xid === xid) c.innerHTML = c.classList.contains('exp-place') ? mpPlaceHtml(all[0]?.place) : mpNoteHtml(note);
   });
 });
 document.getElementById('exp_life').addEventListener('change', e => {
@@ -8762,11 +8766,11 @@ async function mpRenderExpenses() {
   }, { ...CONFIG, displayModeBar: false });
 
   // the note is one's own (bank_transactions.expense_note): click to write it
-  const rowsTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
+  const rowsTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th>Place</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
     // newest first, to the second -- rows with no time in their statement too,
     // by the importer's 00:00:SS (their order within the day)
     list.slice().sort((a, b) => b.day.localeCompare(a.day) || String(b.ts).localeCompare(String(a.ts))).map(r => `<tr><td style="white-space:nowrap">${r.day}${r.at ? ` <span style="color:#6a7381">${r.at}</span>` : ''}</td><td style="text-align:left"${mpShortDesc(r.description) !== r.description ? ` title="${esc(r.description)}"` : ''}>${esc(mpShortDesc(r.description))}${groupedTop && MP_EXP_GROUPS[r.cat] ? ` <span style="color:#6a7381">· ${esc(r.cat)}</span>` : ''}</td>
-      <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note, r.place)}</td>
+      <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" style="text-align:left;white-space:nowrap">${mpPlaceHtml(r.place)}</td>
       <td style="text-align:left">${esc(r.account)}</td>
       <td>${r.amt.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${r.ccy}</td><td>${rowMoney(conv(r))}</td></tr>`).join('')}</tbody></table></div>`;
   const catList = document.getElementById('exp_categories');
@@ -8838,10 +8842,10 @@ async function mpRenderExpenses() {
     ],
   }, { ...CONFIG, displayModeBar: false });
   const incList = document.getElementById('inc_categories');
-  const incTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
+  const incTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th>Place</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
     list.slice().sort((x, y) => y.day.localeCompare(x.day)).map(r => `<tr><td style="white-space:nowrap">${r.day}</td>
       <td style="text-align:left">${esc(r.description || '')}</td>
-      <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note, r.place)}</td>
+      <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" style="text-align:left;white-space:nowrap">${mpPlaceHtml(r.place)}</td>
       <td style="text-align:left">${esc(r.account)}</td>
       <td>${Number(r.amount).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${esc(r.currency || '')}</td><td>${rowMoney(incConv(r))}</td></tr>`).join('')}</tbody></table></div>`;
   incList.innerHTML = incCats.length ? incCats.map((c, i) => `<div class="exp-cat" data-i="${i}">
@@ -9190,15 +9194,15 @@ async function mpRenderExpenses() {
     <td style="text-align:left"${mpShortDesc(description) !== description ? ` title="${esc(description)}"` : ''}>${leg ? '↳ ' : ''}${esc(mpShortDesc(description))}</td>
     ${noteCell}<td style="text-align:left">${esc(account)}</td>
     <td>${amt < 0 ? '−' : '+'}${Math.abs(amt).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${rowCcy}</td><td>${signed(value)}</td></tr>`;
-  const inRow = p => legRow(p.in_day, p.in_description, p.in_account, Number(p.in_amount), p.in_currency, inConv(p), '<td></td>', true);
-  const pairsTable = (list, extra = []) => `<div class="exp-rows"><table class="data-table pair-rows"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
+  const inRow = p => legRow(p.in_day, p.in_description, p.in_account, Number(p.in_amount), p.in_currency, inConv(p), '<td></td><td></td>', true);
+  const pairsTable = (list, extra = []) => `<div class="exp-rows"><table class="data-table pair-rows"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th>Place</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
     list.slice().sort((a, b) => b.day.localeCompare(a.day) || String(b.ts).localeCompare(String(a.ts))).map(r => {
       const p = pairOf.get(`${r.src}|${r.xid}`);
       return legRow(r.day + (r.at ? ` <span style="color:#6a7381">${r.at}</span>` : ''), r.description, r.account, -r.amt, r.ccy, -conv(r),
-        `<td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note, r.place)}</td>`)
+        `<td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" style="text-align:left;white-space:nowrap">${mpPlaceHtml(r.place)}</td>`)
         + (p ? inRow(p) : '');
     }).join('')}${extra.map(p => legRow(p.out_day, p.out_description, p.out_account, Number(p.out_amount), p.out_currency,
-      Number(p.out_usd) / usdPer(ccy, p.out_day), '<td></td>') + inRow(p)).join('')}</tbody></table></div>`;
+      Number(p.out_usd) / usdPer(ccy, p.out_day), '<td></td><td></td>') + inRow(p)).join('')}</tbody></table></div>`;
   // chains (migration 160): a move in several steps, its rows out of the pairs
   // and the categories below into one block each
   const chainOf = mpExpCache.chainOf || new Map();
@@ -9220,13 +9224,13 @@ async function mpRenderExpenses() {
     const name = chainKey(p.out_source, p.out_id);
     if (!name || outKeys.has(`${p.out_source}|${p.out_id}`) || !Number.isFinite(Number(p.in_usd))) continue;
     const out = Number(p.out_usd) / usdPer(ccy, p.out_day);
-    chainAdd(name, p.out_day, legRow(p.out_day, p.out_description, p.out_account, Number(p.out_amount), p.out_currency, out, '<td></td>') + inRow(p), out + inConv(p));
+    chainAdd(name, p.out_day, legRow(p.out_day, p.out_description, p.out_account, Number(p.out_amount), p.out_currency, out, '<td></td><td></td>') + inRow(p), out + inConv(p));
   }
   for (const r of mpExpCache.unpairedIn || []) {
     const name = chainKey(r.external_source, r.external_id);
     if (!name || !Number.isFinite(Number(r.usd))) continue;
     const v = Number(r.usd) / usdPer(ccy, r.day);
-    chainAdd(name, r.day, legRow(r.day, r.description, r.account, Number(r.amount), r.currency, v, '<td></td>', true), v);
+    chainAdd(name, r.day, legRow(r.day, r.description, r.account, Number(r.amount), r.currency, v, '<td></td><td></td>', true), v);
   }
   // a chain shows when any step is in the period
   const chains = [...chained].map(([name, steps]) => ({ name, steps: steps.sort((a, b) => a.ts.localeCompare(b.ts)) }))
@@ -9265,7 +9269,7 @@ async function mpRenderExpenses() {
     ${chains.map(c => `<details><summary class="exp-cat" style="display:flex"><div class="exp-name"><b>${esc(c.name)}</b>
       <span>one move in ${c.steps.length} step${c.steps.length === 1 ? '' : 's'}</span></div>
       <div class="exp-amt"><span style="color:#8b949e">net ${signed(c.steps.reduce((s, x) => s + x.value, 0))}</span></div></summary>
-      <div class="exp-rows"><table class="data-table pair-rows"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead>
+      <div class="exp-rows"><table class="data-table pair-rows"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th>Place</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead>
       <tbody>${c.steps.map(s => s.html).join('')}</tbody></table></div></details>`).join('')}
     ${skip.map(c => `<details><summary class="exp-cat" style="display:flex"><div class="exp-name"><b>${c.cat}</b>
       <span>${c.rows.length} transaction${c.rows.length === 1 ? '' : 's'}</span></div><div class="exp-amt">${sumLine(c.total, inOf(c.rows))}</div></summary>
