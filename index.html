@@ -8665,6 +8665,11 @@ async function mpRenderExpenses() {
     const n = Math.round(v).toLocaleString('en-US');
     return ccy === 'RUB' ? `${n} ₽` : sym + n;
   };
+  // a single row's equivalent: to the cent (a coffee is $1.73, not $2)
+  const rowMoney = v => {
+    const n = v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return ccy === 'RUB' ? `${n} ₽` : sym + n;
+  };
   const esc = s => String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
   const inPeriod = list => list.filter(r => r.day >= from && r.day <= to && Number.isFinite(r.usd));
   const rows = inPeriod(spent);
@@ -8719,7 +8724,7 @@ async function mpRenderExpenses() {
     list.slice().sort((a, b) => b.day.localeCompare(a.day) || String(b.ts).localeCompare(String(a.ts))).map(r => `<tr><td style="white-space:nowrap">${r.day}${r.at ? ` <span style="color:#6a7381">${r.at}</span>` : ''}</td><td style="text-align:left"${mpShortDesc(r.description) !== r.description ? ` title="${esc(r.description)}"` : ''}>${esc(mpShortDesc(r.description))}${groupedTop && MP_EXP_GROUPS[r.cat] ? ` <span style="color:#6a7381">· ${esc(r.cat)}</span>` : ''}</td>
       <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${r.note ? esc(r.note) : '✎'}</td>
       <td style="text-align:left">${esc(r.account)}</td>
-      <td>${r.amt.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${r.ccy}</td><td>${money(conv(r))}</td></tr>`).join('')}</tbody></table></div>`;
+      <td>${r.amt.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${r.ccy}</td><td>${rowMoney(conv(r))}</td></tr>`).join('')}</tbody></table></div>`;
   const catList = document.getElementById('exp_categories');
   // the list: the groups always (food, travel, housing, ...), and without "by
   // group" each one's categories under it, indented -- the same groups either way
@@ -8794,7 +8799,7 @@ async function mpRenderExpenses() {
       <td style="text-align:left">${esc(r.description || '')}</td>
       <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${r.note ? esc(r.note) : '✎'}</td>
       <td style="text-align:left">${esc(r.account)}</td>
-      <td>${Number(r.amount).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${esc(r.currency || '')}</td><td>${money(incConv(r))}</td></tr>`).join('')}</tbody></table></div>`;
+      <td>${Number(r.amount).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${esc(r.currency || '')}</td><td>${rowMoney(incConv(r))}</td></tr>`).join('')}</tbody></table></div>`;
   incList.innerHTML = incCats.length ? incCats.map((c, i) => `<div class="exp-cat" data-i="${i}">
       <div class="exp-dot" style="background:${incColor(c.cat)}33;color:${incColor(c.cat)}">${incIcon(c.cat)}</div>
       <div class="exp-name"><b>${esc(c.cat)}</b><span>${c.rows.length} transaction${c.rows.length === 1 ? '' : 's'}</span></div>
