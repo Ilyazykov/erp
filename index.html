@@ -8715,10 +8715,12 @@ function mpEditPlace(src, xid) {
   const r = rows[0];
   if (!r) return;
   const list = mpExpCache?.placeList || [];
+  // where it was brought to: a delivery's only
+  const delivery = r.cat === 'Food delivery' || r.deliveredToId != null;
   const opts = sel => `<option value="">—</option>${list.map(p => `<option value="${p.id}"${p.id === sel ? ' selected' : ''}>${mpEscapeHtml(p.name)}</option>`).join('')}<option value="new">+ new place…</option>`;
   const form = mpDialog(`Place · ${r.day} · ${mpShortDesc(r.description)}`, `
     <label>📍 Where<select name="from" style="${MP_FIELD}">${opts(r.placeId)}</select></label>
-    <label>→ 🏠 Delivered to<select name="to" style="${MP_FIELD}">${opts(r.deliveredToId)}</select></label>
+    ${delivery ? `<label>→ 🏠 Delivered to<select name="to" style="${MP_FIELD}">${opts(r.deliveredToId)}</select></label>` : ''}
     <fieldset name="nw" style="display:none;border:1px solid #30363d;border-radius:6px;padding:8px;gap:6px;flex-direction:column">
       <legend>New place</legend>
       <input name="link" placeholder="Google Maps link -- fills the fields" style="${MP_FIELD}">
@@ -8729,7 +8731,7 @@ function mpEditPlace(src, xid) {
     </fieldset>`);
   let target = null;   // which select the new place is for
   const nw = form.querySelector('fieldset');
-  for (const name of ['from', 'to']) {
+  for (const name of delivery ? ['from', 'to'] : ['from']) {
     form[name].addEventListener('change', () => {
       if (form[name].value !== 'new') return;
       target = name;
@@ -8758,7 +8760,7 @@ function mpEditPlace(src, xid) {
       if (!list.some(p => p.id === data.id)) list.push(data);
     }
     const pick = name => (form[name].value === 'new' ? newId : form[name].value ? Number(form[name].value) : null);
-    const from = pick('from'), to = pick('to');
+    const from = pick('from'), to = delivery ? pick('to') : null;
     const { error } = await sb.from('bank_transactions').update({ place_id: from, delivery_place_id: to }).eq('external_source', src).eq('external_id', xid);
     if (error) { alert(error.message); return; }
     const byId = id => { const p = list.find(x => x.id === id); return p ? { name: p.name, url: p.url } : null; };
