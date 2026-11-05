@@ -5359,9 +5359,6 @@ async function mpRenderMaturities() {
     for (const f of r.face) add(faceBy, f.day, f.value * k);
     for (const c of r.coupons) add(couponBy, c.day, c.value * k);
   }
-  const ys = [...new Set([...faceBy.keys(), ...(withCoupons ? couponBy.keys() : []), ...rungs])].sort();
-  if (!withCoupons) couponBy.clear();
-  const tot = y => (faceBy.get(y) || 0) + (couponBy.get(y) || 0);
   // the target ladder (05.11.2026): the face of everything held, spread evenly
   // over its years -- each year's maturing money bought into the far end
   const from = Number(document.getElementById('mat_from').value), to = Number(document.getElementById('mat_to').value);
@@ -5370,6 +5367,9 @@ async function mpRenderMaturities() {
   const faceAll = [...faceBy.values()].reduce((t, v) => t + v, 0);
   const perRung = rungs.length ? faceAll / rungs.length : 0;
   for (const y of rungs) if (!faceBy.has(y)) faceBy.set(y, 0);
+  const ys = [...new Set([...faceBy.keys(), ...(withCoupons ? couponBy.keys() : []), ...rungs])].sort();
+  if (!withCoupons) couponBy.clear();
+  const tot = y => (faceBy.get(y) || 0) + (couponBy.get(y) || 0);
   Plotly.newPlot('plot_mat_years', [
     { type: 'bar', name: 'номинал (погашения, амортизации, вклад)', x: ys, y: ys.map(y => faceBy.get(y) || 0), marker: { color: '#58a6ff' }, hovertemplate: '%{y:$,.0f}' },
     { type: 'bar', name: 'купоны и проценты', x: ys, y: ys.map(y => couponBy.get(y) || 0), marker: { color: '#3dd68c' }, hovertemplate: '%{y:$,.0f}' },
