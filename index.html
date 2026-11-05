@@ -530,10 +530,10 @@
     AHR999 = (цена / средняя геометрическая 200 дневных закрытий) × (цена / 10<sup>5.84·log₁₀(дней с 03.01.2009) − 17.01</sup>),
     считается здесь каждое утро по BTC-USD с Yahoo — с CoinGlass может расходиться в сотых.</p>
   <div id="cs_cards" class="form-row" style="gap:12px;flex-wrap:wrap"></div>
-  <div class="form-row" style="gap:16px"><label>покупки и продажи на графике доли — в <select id="cs_label"><option value="pp">п.п. доли</option><option value="usd">долларах $</option></select></label></div>
   <p class="empty-note" id="cs_status"></p>
   <div id="plot_cs_ahr" style="height:420px"></div>
   <div id="plot_cs_price" style="height:360px"></div>
+  <div class="form-row" style="gap:16px;justify-content:flex-end;margin:16px 0 -8px"><label>покупки и продажи: <select id="cs_label"><option value="pp">п.п. доли</option><option value="usd">$</option></select></label></div>
   <div id="plot_cs_share" style="height:460px"></div>
 </div>
 
@@ -5486,6 +5486,21 @@ async function mpRenderCryptoStrategy() {
     };
     const marks = toMarks(buys), sellMarks = toMarks(sells);
     const inUsd = document.getElementById('cs_label').value === 'usd';
+    // labels in rows, stair-like: one goes a row up when the one before in
+    // its row is closer than a label's width (some 60 px, in days on this chart)
+    const spanDays = (Date.parse(shown[shown.length - 1].day) - Date.parse(shown[0].day)) / 86400000 || 1;
+    const plotPx = Math.max(300, (document.getElementById('plot_cs_share').clientWidth || 1000) - 80);
+    const labelDays = spanDays * 64 / plotPx;
+    const rowEnds = [];
+    for (const m of [...marks.map(x => ({ x, sell: false })), ...sellMarks.map(x => ({ x, sell: true }))].sort((a, b) => a.x.day.localeCompare(b.x.day))) {
+      const t = Date.parse(m.x.day) / 86400000;
+      let r = rowEnds.findIndex(end => t >= end);
+      if (r < 0) { r = rowEnds.length; rowEnds.push(0); }
+      rowEnds[r] = t + labelDays;
+      m.x.row = r;
+    }
+    const yMax = Math.max(MP_AHR.target, ...shown.map(x => x.pct)) * 1.12;
+    const rowY = r => 0.25 + r * yMax * 0.055;
     // the red and green zones shaded (the neutral left blank)
     const zoneShapes = [];
     let zStart = null, zZone = null;
@@ -5524,7 +5539,7 @@ async function mpRenderCryptoStrategy() {
         text: sellMarks.map(m => `−${m.pp.toFixed(2)} п.п. ($${Math.round(m.usd).toLocaleString('en-US')})`),
         customdata: sellMarks.map(m => `${shareBefore(m.day).toFixed(1)}%${m.days.length > 1 ? ` (${m.days.join(', ')})` : ''}`),
         hovertemplate: '%{text} при доле %{customdata}' },
-    ], { ...dark, title: 'Доля крипты в портфеле, %', yaxis: { gridcolor: '#1e2830', ticksuffix: '%', range: [0, Math.max(MP_AHR.target, ...shown.map(x => x.pct)) * 1.12], zeroline: true, zerolinecolor: '#8b949e' },
+    ], { ...dark, title: 'Доля крипты в портфеле, %', yaxis: { gridcolor: '#1e2830', ticksuffix: '%', range: [0, yMax], zeroline: true, zerolinecolor: '#8b949e' },
       xaxis: { gridcolor: '#1e2830' }, legend: { orientation: 'h', y: -0.15 },
       shapes: [...zoneShapes, hline(MP_AHR.target, '#8b949e'), hline(MP_AHR.floor, '#8b949e'),
         ...[[marks, '#58a6ff'], [sellMarks, '#e05252']].flatMap(([list, color]) =>
@@ -5533,7 +5548,7 @@ async function mpRenderCryptoStrategy() {
         ({ xref: 'paper', x: 0, xanchor: 'left', y, yanchor: 'bottom', text, showarrow: false, font: { color: '#8b949e', size: 11 } })),
         // the move, small, right of its marker at the bottom: kept off the line
         ...[[marks, '#58a6ff'], [sellMarks, '#e05252']].flatMap(([list, color]) =>
-          list.map(m => ({ x: m.day, y: 0.25, yanchor: 'middle', xanchor: 'left', xshift: 7, showarrow: false,
+          list.map(m => ({ x: m.day, y: rowY(m.row), yanchor: 'middle', xanchor: 'left', xshift: m.row ? 3 : 7, showarrow: false, bgcolor: '#0d1117',
             text: `${color === '#e05252' ? '−' : '+'}${inUsd ? '$' + Math.round(m.usd).toLocaleString('en-US') : m.pp.toFixed(2)}`, font: { color, size: 10 } })))] },
       { responsive: true, displaylogo: false });
   } else document.getElementById('plot_cs_share').innerHTML = '<p class="empty-note">Войдите, чтобы увидеть долю крипты в портфеле.</p>';
