@@ -123,6 +123,7 @@
   <div class="tab" data-tab="usstocks">US Stocks Z-score</div>
   <div class="tab" data-tab="userp">US ERP</div>
   <div class="tab" data-tab="cryptostrat">Crypto strategy</div>
+  <div class="tab" data-tab="maturities">Bonds &amp; deposits</div>
   <div class="tab" data-tab="automation">Automation</div>
 </div>
 
@@ -519,6 +520,16 @@
     <p class="empty-note" id="brokers_status"></p>
     <div id="plot_capital_brokers" style="height:620px"></div>
   </div>
+</div>
+
+<div id="maturities" class="chart-wrap">
+  <div class="section-title">Погашения облигаций и вкладов</div>
+  <p class="note">Каждая облигация и вклад — полоса от сегодня до погашения (синяя); оферта — оранжевая часть до её даты.
+    Толщина полосы — сколько в ней денег; справа — штук и сумма. Даты погашений и оферт — с MOEX.
+    Фонды облигаций (TBRU, SBBY, …) без срока не показаны. Срок вклада выписка не даёт: клик по вкладу — указать дату окончания.</p>
+  <p class="empty-note" id="mat_status"></p>
+  <div id="plot_mat_years" style="height:260px"></div>
+  <div id="plot_mat"></div>
 </div>
 
 <div id="cryptostrat" class="chart-wrap">
@@ -971,6 +982,7 @@ function showTab(id) {
   if (id === 'capital' && mpIsSignedIn) mpRenderCapital();
   if (id === 'capitalbrokers' && mpIsSignedIn) mpRenderCapitalBrokers();
   if (id === 'cryptostrat') mpRenderCryptoStrategy();
+  if (id === 'maturities' && mpIsSignedIn) mpRenderMaturities();
   if (id === 'invested' && mpIsSignedIn) mpRenderInvested();
   if (id === 'expenses' && mpIsSignedIn) mpRenderExpenses();
   if (DATA && !rendered[id]) {
@@ -5206,6 +5218,101 @@ function mpAssetBuckets(rows, keep = null) {
   for (const r of rows) if (r.value_usd) mpAdd(b, r.instrument_type, r.value_usd);
   return Object.fromEntries(Object.entries(b).filter(([k]) => !keep || keep.includes(k))
     .map(([k, v]) => [MP_ASSET_CLASS_LABELS[k] || k, v]));
+}
+
+// ---- Bonds & deposits tab (05.11.2026): when each bond held is redeemed or
+// has its offer (MOEX ISS, straight from the browser), and the term deposits'
+// ends (deposit_terms, set by hand: no statement gives them) -- a bar from
+// today to the date, its thickness the money in it. ----
+const MP_MAT_CACHE = 'mp_moex_bond_dates_v1';
+async function mpMoexBondDates(secids) {
+  let cache = {};
+  try { cache = JSON.parse(localStorage.getItem(MP_MAT_CACHE) || '{}'); } catch { /* none */ }
+  const today = new Date().toISOString().slice(0, 10);
+  const todo = secids.filter(s => cache[s]?.at !== today);
+  const one = async secid => {
+    const base = `https://iss.moex.com/iss/securities/${encodeURIComponent(secid)}`;
+    const [d, o] = await Promise.all([
+      fetch(`${base}.json?iss.meta=off&iss.only=description&description.columns=name,value`).then(r => r.json()).catch(() => null),
+      fetch(`${base}/bondization.json?iss.meta=off&iss.only=offers&limit=unlimited`).then(r => r.json()).catch(() => null),
+    ]);
+    const desc = Object.fromEntries((d?.description?.data || []).map(([k, v]) => [k, v]));
+    const cols = o?.offers?.columns || [];
+    const offers = (o?.offers?.data || []).map(r => r[cols.indexOf('offerdate')]).filter(x => x && x >= today).sort();
+    cache[secid] = { at: today, name: desc.NAME || desc.SHORTNAME || secid, mat: desc.MATDATE || null, offer: offers[0] || null };
+  };
+  for (let i = 0; i < todo.length; i += 6) await Promise.all(todo.slice(i, i + 6).map(one));
+  try { localStorage.setItem(MP_MAT_CACHE, JSON.stringify(cache)); } catch { /* no storage */ }
+  return cache;
+}
+async function mpRenderMaturities() {
+  const status = document.getElementById('mat_status');
+  status.textContent = 'Loading…';
+  const { data: held, error } = await sb.from('portfolio_value_usd_by_account').select('ticker, account, quantity, value_usd, asset_class, currency')
+    .gt('quantity', 0).or('asset_class.in.(moex_bond,moex_ofz),ticker.like.DEPOSIT:*');
+  if (error) { status.textContent = error.message; return; }
+  const { data: terms } = await sb.from('deposit_terms').select('ticker, end_day');
+  const endOf = new Map((terms || []).map(t => [t.ticker, t.end_day]));
+  // one row a security, its accounts together
+  const by = new Map();
+  for (const h of held || []) {
+    const r = by.get(h.ticker) || { ticker: h.ticker, qty: 0, usd: 0, accounts: new Set(), deposit: h.ticker.startsWith('DEPOSIT:'), currency: h.currency };
+    r.qty += Number(h.quantity); r.usd += Number(h.value_usd); r.accounts.add(h.account);
+    by.set(h.ticker, r);
+  }
+  const rows = [...by.values()];
+  const dates = await mpMoexBondDates(rows.filter(r => !r.deposit).map(r => r.ticker));
+  const today = new Date().toISOString().slice(0, 10);
+  for (const r of rows) {
+    if (r.deposit) { r.name = r.ticker.replace(/^DEPOSIT:/, 'Вклад '); r.mat = endOf.get(r.ticker) || null; r.offer = null; }
+    else Object.assign(r, { name: dates[r.ticker]?.name || r.ticker, mat: dates[r.ticker]?.mat || null, offer: dates[r.ticker]?.offer || null });
+    r.next = r.offer || r.mat;
+  }
+  const shown = rows.filter(r => r.next || r.deposit).sort((a, b) => (a.next || '9999').localeCompare(b.next || '9999'));
+  status.textContent = shown.some(r => !r.next) ? 'У вклада не указана дата окончания — клик по нему на графике.' : '';
+  const money = v => mpFormatUsd(v).replace(/\.\d+$/, '');
+  const label = r => `${r.name.length > 34 ? r.name.slice(0, 33) + '…' : r.name}`;
+  const maxUsd = Math.max(...shown.map(r => r.usd), 1);
+  const width = r => 0.25 + 0.6 * Math.sqrt(r.usd / maxUsd);
+  const y = shown.map(label);
+  const dark = { paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', font: { color: '#c9d1d9' } };
+  const span = (from, to) => (Date.parse(to) - Date.parse(from));
+  const endOrMax = r => r.mat || r.offer || today;
+  const traces = [
+    // to the offer: orange
+    { type: 'bar', orientation: 'h', name: 'до оферты', y, base: shown.map(() => today), x: shown.map(r => r.offer ? span(today, r.offer) : 0),
+      width: shown.map(width), marker: { color: '#f0a03c' }, hovertemplate: '%{y}: оферта %{customdata}<extra></extra>', customdata: shown.map(r => r.offer || '') },
+    // to the redemption: blue, dimmer past an offer
+    { type: 'bar', orientation: 'h', name: 'до погашения', y, base: shown.map(r => r.offer || today), x: shown.map(r => r.mat ? span(r.offer || today, r.mat) : 0),
+      width: shown.map(width), marker: { color: shown.map(r => r.deposit ? '#2bb5a8' : r.offer ? 'rgba(88,166,255,0.45)' : '#58a6ff') },
+      hovertemplate: '%{y}: погашение %{customdata}<extra></extra>', customdata: shown.map(r => r.mat || 'не указано') },
+  ];
+  const annotations = shown.map((r, i) => ({ x: endOrMax(r), y: y[i], xanchor: 'left', xshift: 6, showarrow: false, font: { size: 11, color: '#8b949e' },
+    text: `${r.deposit ? '' : `${Math.round(r.qty)} шт · `}${money(r.usd)}${r.next ? '' : ' · срок?'}` }));
+  const el = document.getElementById('plot_mat');
+  el.style.height = `${Math.max(300, shown.length * 26 + 80)}px`;
+  await Plotly.newPlot(el, traces, { ...dark, barmode: 'overlay', showlegend: false, margin: { l: 260, r: 120, t: 10, b: 30 },
+    xaxis: { type: 'date', gridcolor: '#1e2830', range: [today, [...shown.map(endOrMax)].sort().pop()] , side: 'top' },
+    yaxis: { autorange: 'reversed', automargin: true, tickfont: { size: 11 } }, annotations }, { responsive: true, displaylogo: false });
+  // a deposit's end, set by a click on its row
+  el.on('plotly_click', async ev => {
+    const r = shown[ev.points?.[0]?.pointIndex];
+    if (!r?.deposit) return;
+    const v = prompt(`${r.name}: дата окончания (ГГГГ-ММ-ДД)`, r.mat || '');
+    if (v === null) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(v.trim())) { alert('Формат даты: ГГГГ-ММ-ДД'); return; }
+    const { error: e } = await sb.from('deposit_terms').upsert({ ticker: r.ticker, end_day: v.trim(), updated_at: new Date().toISOString() });
+    if (e) { alert(e.message); return; }
+    mpRenderMaturities();
+  });
+  // the money coming back by year (the next date: an offer, else the redemption)
+  const years = new Map();
+  for (const r of shown.filter(r => r.next)) years.set(r.next.slice(0, 4), (years.get(r.next.slice(0, 4)) || 0) + r.usd);
+  const ys = [...years.keys()].sort();
+  Plotly.newPlot('plot_mat_years', [{ type: 'bar', x: ys, y: ys.map(k => years.get(k)), marker: { color: '#58a6ff' },
+    text: ys.map(k => money(years.get(k))), textposition: 'outside', hovertemplate: '%{x}: %{text}<extra></extra>' }],
+    { ...dark, title: 'Сколько вернётся по годам (ближайшая дата: оферта или погашение)', margin: { l: 50, r: 20, t: 40, b: 30 },
+      yaxis: { gridcolor: '#1e2830', tickprefix: '$' }, xaxis: { type: 'category' } }, { responsive: true, displaylogo: false });
 }
 
 // ---- Crypto strategy (05.11.2026): the crypto share's target by BTC's
