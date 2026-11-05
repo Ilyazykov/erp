@@ -535,7 +535,14 @@
     <label><select id="mat_weights"><option value="far">больше в дальние</option><option value="even">поровну</option></select></label>
   </div>
   <div id="plot_mat_years" style="height:280px;margin-bottom:24px"></div>
-  <div id="mat_pies" class="pie-grid" style="margin-bottom:24px"></div>
+  <div class="pie-grid" style="margin-bottom:24px"><div id="mat_pies" style="display:contents"></div>
+    <div class="pie-card"><h4>Доля флоатеров от ключевой ставки</h4><div id="plot_mat_floatfn" style="height:440px"></div></div></div>
+  <div class="pie-grid" style="margin-bottom:24px">
+    <div class="pie-card"><h4>Куда пошла ключевая за 1–3 года — от её уровня (история ЦБ с 2013)</h4><div id="plot_kr_odds" style="height:380px"></div></div>
+    <div class="pie-card"><h4>Без «не изменится»: флоатеры и постоянный купон</h4><div id="plot_kr_split" style="height:380px"></div></div>
+    <div class="pie-card"><h4>Инерция: поправка шансов повышения от изменения ставки за полгода</h4><div id="plot_kr_trend" style="height:380px"></div>
+      <p class="note" id="kr_formula" style="margin:8px 4px"></p></div>
+  </div>
   <div id="plot_mat_float" style="height:300px;margin-bottom:24px"></div>
   <div id="plot_mat"></div>
 </div>
@@ -5306,35 +5313,38 @@ for (const id of ['mat_deposits', 'mat_coupons']) {
     mpRenderMaturities();
   });
 }
-// The floaters' share of the bonds by where the key rate goes (asked
-// 05.11.2026): a floater's coupon follows it, a fixed one locks today's in --
-// in a cutting cycle the fixed one wins, in a hiking one the floater. The key
-// rate by RUSFAR (MOEX's overnight repo rate, a step from the key rate --
-// the CBR's own page has no CORS), its median over 20 trading days now
-// against half a year ago: down by 0.5 pp and more -- cutting, up -- hiking.
-const MP_FLOAT_SHARE = { cutting: 5, flat: 15, hiking: 30, step: 0.5 };
-async function mpKeyRateTrend() {
-  const KEY = 'mp_rusfar_v1', today = new Date().toISOString().slice(0, 10);
-  try { const c = JSON.parse(localStorage.getItem(KEY) || 'null'); if (c?.at === today) return c; } catch { /* none */ }
-  const from = new Date(Date.now() - 400 * 86400000).toISOString().slice(0, 10);
-  const rows = [];
-  for (let start = 0; start < 2000; start += 100) {
-    const j = await fetch(`https://iss.moex.com/iss/history/engines/stock/markets/index/securities/RUSFAR.json?iss.meta=off&from=${from}&start=${start}&history.columns=TRADEDATE,CLOSE`)
-      .then(r => r.json()).catch(() => null);
-    const d = j?.history?.data || [];
-    rows.push(...d.filter(([, v]) => v > 0));
-    if (d.length < 100) break;
-  }
-  if (rows.length < 150) return null;
-  const median = a => { const b = a.map(r => r[1]).sort((x, y) => x - y); return b[Math.floor(b.length / 2)]; };
-  const halfYear = new Date(Date.now() - 182 * 86400000).toISOString().slice(0, 10);
-  const i = rows.findIndex(([d]) => d >= halfYear);
-  const now = median(rows.slice(-20)), then = median(rows.slice(Math.max(0, i - 10), i + 10));
-  const change = Math.round((now - then) * 100) / 100;
-  const phase = change <= -MP_FLOAT_SHARE.step ? 'cutting' : change >= MP_FLOAT_SHARE.step ? 'hiking' : 'flat';
-  const res = { at: today, now, change, phase };
-  try { localStorage.setItem(KEY, JSON.stringify(res)); } catch { /* no storage */ }
-  return res;
+// The floaters' share of the bonds by the odds the CBR key rate goes up or
+// down from its level now (asked 05.11.2026): key_rate_odds (migration 174,
+// update-key-rate-odds, monthly) -- per 1 pp of the rate, from its history,
+// how often it was higher / lower a year, two, three later, made strictly
+// monotone; floaters = up / (up + down), the rest fixed coupons. Between two
+// buckets' points -- linear. The key rate now: key_rates' last day (every day
+// kept, daily).
+// The trend over it: the rate's change over the last 183 days, its bucket's
+// odds ratio (key_rate_trend_odds) times the level's odds of a rise.
+async function mpKeyRateOdds() {
+  const halfYear = new Date(Date.now() - 183 * 86400000).toISOString().slice(0, 10);
+  const [{ data: odds }, { data: last }, { data: before }, { data: trend }] = await Promise.all([
+    sb.from('key_rate_odds').select('rate_from, rate_to, rate, days, up, down, floaters_pct').order('rate'),
+    sb.from('key_rates').select('day, rate').order('day', { ascending: false }).limit(1),
+    sb.from('key_rates').select('day, rate').lte('day', halfYear).order('day', { ascending: false }).limit(1),
+    sb.from('key_rate_trend_odds').select('trend_from, trend_to, n, obs_up, exp_up, odds_ratio').order('trend_from'),
+  ]);
+  const pts = (odds || []).map(o => ({ ...o, rate: Number(o.rate), up: Number(o.up), down: Number(o.down), floaters_pct: Number(o.floaters_pct) }));
+  const share = x => {
+    if (!pts.length) return null;
+    if (x <= pts[0].rate) return pts[0].floaters_pct;
+    if (x >= pts.at(-1).rate) return pts.at(-1).floaters_pct;
+    const i = pts.findIndex(p => p.rate >= x), a = pts[i - 1], b = pts[i];
+    return a.floaters_pct + (b.floaters_pct - a.floaters_pct) * (x - a.rate) / (b.rate - a.rate);
+  };
+  const now = last?.[0] ? Number(last[0].rate) : null;
+  const change = now != null && before?.[0] ? Math.round((now - Number(before[0].rate)) * 100) / 100 : null;
+  const tb = change == null ? null : (trend || []).find(t => change > Number(t.trend_from) && change <= Number(t.trend_to));
+  const ratio = tb ? Number(tb.odds_ratio) : 1;
+  // the level's share, the trend's odds ratio over it
+  const withTrend = x => { const p = share(x) / 100; return p <= 0 || p >= 1 ? p * 100 : 100 * p * ratio / (p * ratio + 1 - p); };
+  return { pts, share, withTrend, ratio, change, trend: tb, trends: trend || [], now, since: last?.[0]?.day || null };
 }
 
 async function mpRenderMaturities() {
@@ -5426,13 +5436,15 @@ async function mpRenderMaturities() {
   // it fills no rung: the rungs count the fixed coupons and the deposits, and
   // a floater's money, at its redemption or offer, goes into the rungs short
   // of their target (asked 05.11.2026). The floaters have their own share by
-  // the key rate (mpKeyRateTrend); the rungs share the rest
+  // the key rate's odds (mpKeyRateOdds); the rungs share the rest
   const from = Number(document.getElementById('mat_from').value), to = Number(document.getElementById('mat_to').value);
   const rungs = [];
   for (let y = from; y <= to && to - from < 40; y++) rungs.push(String(y));
   const faceAll = [...faceBy.values()].reduce((t, v) => t + v, 0);
-  const key = await mpKeyRateTrend();
-  const floatPct = MP_FLOAT_SHARE[key?.phase || 'flat'];
+  const odds = await mpKeyRateOdds();
+  const key = odds.now != null ? { now: odds.now } : null;
+  const levelPct = key && odds.pts.length ? Math.round(odds.share(key.now) * 10) / 10 : 0;
+  const floatPct = key && odds.pts.length ? Math.round(odds.withTrend(key.now) * 10) / 10 : 0;
   const ladderAll = faceAll * (1 - floatPct / 100);
   const far = document.getElementById('mat_weights').value === 'far';
   const weightSum = far ? rungs.length * (rungs.length + 1) / 2 : rungs.length;
@@ -5450,14 +5462,81 @@ async function mpRenderMaturities() {
   mpTargetPie(pies, 'Постоянный и переменный купон (номинал)', [
     { label: 'постоянный купон и вклады', usd: faceAll - floatAll, target: 100 - floatPct, color: '#58a6ff' },
     { label: 'переменный купон', usd: floatAll, target: floatPct, color: '#a371f7' },
-  ], `${key ? `Ключевая ≈ ${key.now.toFixed(2)}% (RUSFAR), за полгода ${key.change > 0 ? '+' : ''}${key.change.toFixed(2)} пп. ` : ''}`
-    + `Флоатеров ${MP_FLOAT_SHARE.cutting}%, пока ключевую снижают (−${MP_FLOAT_SHARE.step} пп за полгода и больше), ${MP_FLOAT_SHARE.flat}% — пока стоит, ${MP_FLOAT_SHARE.hiking}% — пока повышают.`);
+  ], !key || !odds.pts.length ? 'Таблица вероятностей ключевой ещё не посчитана (update-key-rate-odds, раз в месяц).'
+    : `Ключевая ${key.now}% на ${odds.since}: по уровню флоатеров ${levelPct}%`
+      + (odds.change != null ? `; за полгода ${odds.change > 0 ? '+' : ''}${odds.change} пп — шансы повышения ×${odds.ratio}` : '')
+      + ` → ${floatPct}%. Вероятность, что за 1–3 года её повысят, против того, что понизят — по истории ЦБ с 2013 г.`);
+  // the share's function of the key rate, today's key rate on it
+  const op = odds.pts;
+  // the odds table: up / the same / down per bucket of the key rate, and
+  // without the same -- floaters / fixed; today's bucket outlined
+  if (op.length) {
+    const lbl = op.map(p => `${p.rate_from}–${p.rate_to}%`);
+    const cur = key ? op.findIndex(p => key.now >= p.rate_from && key.now < p.rate_to) : -1;
+    const outline = c => op.map((_, i) => i === cur ? '#f85149' : c);
+    const widths = op.map((_, i) => i === cur ? 3 : 0);
+    const pct = v => `${Math.round(v * 100)}%`;
+    const same = op.map(p => Math.max(0, 1 - p.up - p.down));
+    const barLayout = (yTitle) => ({ ...dark, barmode: 'stack', showlegend: true, legend: { orientation: 'h', y: -0.22 }, margin: { l: 45, r: 10, t: 10, b: 70 },
+      hovermode: 'x unified', hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
+      xaxis: { type: 'category', tickangle: -45, tickfont: { size: 10 } }, yaxis: { title: yTitle, tickformat: '.0%', range: [0, 1], gridcolor: '#1e2830' },
+      annotations: cur >= 0 ? [{ x: lbl[cur], y: 1, yanchor: 'bottom', showarrow: false, text: 'сейчас', font: { color: '#f85149', size: 11 } }] : [] });
+    const bar = (name, ys, color) => ({ type: 'bar', name, x: lbl, y: ys, marker: { color, line: { color: outline(color), width: widths } },
+      text: ys.map(v => v >= 0.08 ? pct(v) : ''), textposition: 'inside', insidetextanchor: 'middle', textfont: { size: 10 }, hovertemplate: `${name}: %{y:.0%}<extra></extra>` });
+    Plotly.newPlot('plot_kr_odds', [bar('повысят', op.map(p => p.up), '#a371f7'), bar('не изменится', same, '#6e7681'), bar('понизят', op.map(p => p.down), '#58a6ff')],
+      barLayout('вероятность'), { responsive: true, displaylogo: false, displayModeBar: false });
+    Plotly.newPlot('plot_kr_split', [bar('повысят → флоатеры', op.map(p => p.floaters_pct / 100), '#a371f7'), bar('понизят → постоянный купон', op.map(p => 1 - p.floaters_pct / 100), '#58a6ff')],
+      barLayout('доля облигаций'), { responsive: true, displaylogo: false, displayModeBar: false });
+  }
+  // the inertia: the odds ratio per bucket of the half year's change, on a
+  // log axis around x1 (no effect) -- above: a rise likelier than the level
+  // says, below: a cut; today's bucket outlined
+  const tr = odds.trends.map(t => ({ ...t, from: Number(t.trend_from), to: Number(t.trend_to), r: Number(t.odds_ratio) }));
+  if (tr.length) {
+    const tl = tr.map(t => t.from <= -50 ? `≤ ${t.to}` : t.to >= 50 ? `> ${t.from}` : `${t.from}…${t.to}`);
+    const curT = tr.findIndex(t => odds.change != null && odds.change > t.from && odds.change <= t.to);
+    Plotly.newPlot('plot_kr_trend', [{ type: 'bar', x: tl, y: tr.map(t => t.r), base: 0,
+      marker: { color: tr.map(t => t.r >= 1 ? '#a371f7' : '#58a6ff'), line: { color: tr.map((_, i) => i === curT ? '#f85149' : 'rgba(0,0,0,0)'), width: 3 } },
+      text: tr.map(t => `×${t.r.toFixed(2)}`), textposition: 'outside', textfont: { size: 11, color: '#c9d1d9' }, cliponaxis: false,
+      customdata: tr.map(t => [Math.round(Number(t.obs_up) * 100), Math.round(Number(t.exp_up) * 100), t.n]),
+      hovertemplate: 'за полгода %{x} пп: повышали в %{customdata[0]}% случаев, по уровню ожидалось %{customdata[1]}% → ×%{y:.2f}<extra></extra>' }],
+      { ...dark, showlegend: false, margin: { l: 45, r: 10, t: 20, b: 55 },
+        hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
+        xaxis: { type: 'category', title: 'изменение ключевой за полгода, пп' },
+        yaxis: { type: 'log', range: [Math.log10(0.15), Math.log10(7)], tickvals: [0.2, 0.5, 1, 2, 5], ticktext: ['×0.2', '×0.5', '×1', '×2', '×5'], gridcolor: '#1e2830' },
+        shapes: [{ type: 'line', xref: 'paper', x0: 0, x1: 1, y0: 1, y1: 1, line: { color: '#8b949e', width: 1, dash: 'dash' } }],
+        annotations: [
+          ...(curT >= 0 ? [{ x: tl[curT], y: Math.log10(7), yanchor: 'top', showarrow: false, text: `сейчас ${odds.change > 0 ? '+' : ''}${odds.change}`, font: { color: '#f85149', size: 11 } }] : []),
+          { xref: 'paper', x: 0, y: Math.log10(1.6), xanchor: 'left', showarrow: false, text: 'повышение вероятнее, чем по уровню', font: { size: 10, color: '#a371f7' } },
+          { xref: 'paper', x: 0, y: Math.log10(0.62), xanchor: 'left', showarrow: false, text: 'понижение вероятнее', font: { size: 10, color: '#58a6ff' } }] },
+      { responsive: true, displaylogo: false, displayModeBar: false });
+  }
+  // the formula, today's numbers in it
+  if (key && op.length) {
+    const p = levelPct / 100, k = odds.ratio;
+    document.getElementById('kr_formula').innerHTML = `Флоатеров = p·k / (p·k + 1 − p), где p — доля по уровню ключевой (средняя диаграмма), k — поправка за полгода (эта).
+      Сейчас: p = ${levelPct}%, k = ×${k} → ${p.toFixed(3)}·${k} / (${p.toFixed(3)}·${k} + ${(1 - p).toFixed(3)}) = <b>${floatPct}%</b>.
+      То есть шансы «повысят : понизят» по уровню (${levelPct} : ${(100 - levelPct).toFixed(1)}) умножаются на k.`;
+  }
+  Plotly.newPlot('plot_mat_floatfn', [
+    { x: op.map(p => p.rate), y: op.map(p => p.floaters_pct), type: 'scatter', mode: 'lines+markers', line: { color: '#a371f7', width: 2.5 }, marker: { size: 6 },
+      customdata: op.map(p => [`${p.rate_from}–${p.rate_to}%`, (p.up * 100).toFixed(0), (p.down * 100).toFixed(0), p.days]),
+      hovertemplate: 'ключевая %{customdata[0]}: повысят %{customdata[1]}%, понизят %{customdata[2]}% (%{customdata[3]} дн.)<br>→ флоатеров %{y:.1f}%<extra></extra>' },
+    ...(op.length && odds.ratio !== 1 ? [{ x: op.map(p => p.rate), y: op.map(p => odds.withTrend(p.rate)), type: 'scatter', mode: 'lines',
+      line: { color: '#f0a03c', width: 2, dash: 'dot' }, hovertemplate: `с нынешним трендом (×${odds.ratio}): %{y:.1f}%<extra></extra>` }] : []),
+    ...(key && op.length ? [{ x: [key.now], y: [floatPct], type: 'scatter', mode: 'markers+text', marker: { size: 12, color: '#f85149' },
+      text: [`сейчас ${key.now}% → ${floatPct}%`], textposition: 'middle right', textfont: { color: '#e6edf3' }, hoverinfo: 'skip' }] : []),
+  ], { ...dark, showlegend: false, margin: { l: 50, r: 20, t: 10, b: 45 },
+    hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
+    xaxis: { title: 'ключевая ставка', ticksuffix: '%', range: [3, 23], dtick: 1, gridcolor: '#1e2830', zeroline: false },
+    yaxis: { title: 'флоатеров = вероятность повышения', ticksuffix: '%', range: [-3, 103], dtick: 10, gridcolor: '#1e2830', zeroline: false } },
+    { responsive: true, displaylogo: false, displayModeBar: false });
   // The floaters by term and spread (asked 05.11.2026). A floater's coupon
   // follows the key rate, so its term hardly matters -- but its spread over the
   // key rate is fixed for the whole term: if the market's spreads widen by
   // 1 pp, a bond with N years left loses some N% of its price (a short one
   // little -- the green zone, up to 3 years); a long one is worth it at a
-  // bigger spread. The spread: the coupon now over the key rate (RUSFAR),
+  // bigger spread. The spread: the coupon now over the key rate (the CBR's),
   // plus the price's discount to the face spread over the years left.
   const floaters = shown.filter(r => r.floating && r.next);
   const plotFloat = document.getElementById('plot_mat_float');
@@ -5497,7 +5576,7 @@ async function mpRenderMaturities() {
     { type: 'scatter', mode: 'text', x: ys, y: ys.map(tot), text: ys.map(y => money(tot(y))), textposition: 'top center', showlegend: false, hoverinfo: 'skip', cliponaxis: false },
     // the ladder's target per year: a tick over the bar; outside the ladder 0
     { type: 'scatter', mode: 'markers', name: `цель лесенки ${from}–${to} (номинал с постоянным купоном)`, x: ys, y: ys.map(targetOf),
-      marker: { symbol: 'line-ew-open', size: 34, line: { width: 3, color: '#f85149' } },
+      marker: { symbol: 'line-ew-open', size: 34, color: '#d62728', line: { width: 3, color: '#d62728' } },
       customdata: ys.map(y => { const d = fixedOf(y) - targetOf(y); return `${d >= 0 ? 'перебор' : 'недобор'} ${money(Math.abs(d))}${floatFaceBy.get(y) ? ' (флоатеры не в счёт)' : ''}`; }),
       hovertemplate: '%{y:$,.0f} — %{customdata}' },
   ], { ...dark, barmode: 'stack', title: 'Сколько придёт по годам — по графику MOEX, по сегодняшнему курсу', margin: { l: 50, r: 20, t: 50, b: 30 },
