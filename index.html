@@ -5260,21 +5260,25 @@ async function mpRenderCryptoStrategy() {
   const ind = await mpLoadCryptoIndicators();
   if (!ind.length) { status.textContent = 'Нет данных AHR999 (update-crypto-indicators ещё не запускался).'; return; }
   // the crypto share by day (capital_daily_by_type: crypto of everything but real estate)
-  let shares = [];
+  // -- only from the move to Cyprus (life_periods), the chart's start: the whole
+  // history, page after page, timed out half-way and the line was gone
+  let shares = [], loadError = '';
+  const { data: periods } = await sb.from('life_periods').select('start_day, place').order('start_day');
+  const cyprus = (periods || []).find(p => /cyprus/i.test(p.place))?.start_day || '2025-01-01';
   if (mpIsSignedIn) {
     const rows = [];
     for (let from = 0; ; from += 1000) {
-      const { data, error } = await sb.from('capital_daily_by_type').select('*').order('day').range(from, from + 999);
-      if (error || !data) break;
+      const { data, error } = await sb.from('capital_daily_by_type').select('*').gte('day', cyprus).order('day').range(from, from + 999);
+      if (error || !data) { loadError = error?.message || 'no data'; break; }
       rows.push(...data);
       if (data.length < 1000) break;
     }
     shares = rows.map(r => {
       const total = Object.entries(r).filter(([k]) => /^(ru|fx)_/.test(k)).reduce((t, [, v]) => t + Number(v || 0), 0);
       return { day: r.day, pct: total > 0 ? (Number(r.ru_crypto || 0) + Number(r.fx_crypto || 0)) / total * 100 : 0 };
-    }).filter(x => x.pct > 0 || x.day >= '2020-01-01');
+    });
   }
-  status.textContent = '';
+  status.textContent = loadError ? `Доля крипты не загрузилась: ${loadError}` : '';
   const share = shares.length ? shares[shares.length - 1].pct : null;
   const plan = share === null ? mpCryptoPlan(0) : mpCryptoPlan(share);
   const last = ind[ind.length - 1];
@@ -5323,14 +5327,11 @@ async function mpRenderCryptoStrategy() {
     // on the strategy's back-test chart -- at the month's first buy, on the
     // share before it (the share the decision was taken at). Sales: crypto sold for money -- none
     // so far; they'd go down as ▼.
-    const [{ data: periods }, { data: buys }, { data: eur }] = await Promise.all([
-      sb.from('life_periods').select('start_day, place').order('start_day'),
+    const [{ data: buys }, { data: eur }] = await Promise.all([
       sb.from('expenses').select('day, usd').eq('category', 'Crypto').order('day'),
       sb.from('fx_history').select('day, usd_per_unit').eq('currency', 'EUR').gte('day', '2025-01-01').order('day'),
     ]);
-    const cyprus = (periods || []).find(p => /cyprus/i.test(p.place))?.start_day;
-    // from the move to Cyprus: the share still at zero, then the first buys
-    const start = cyprus || shares[0].day;
+    const start = shares[0].day;
     const shown = shares.filter(x => x.day >= start);
     // the share before a day: what the decision to buy was taken at
     const shareBefore = day => { let v = null; for (const x of shown) { if (x.day >= day) break; v = x.pct; } return v ?? shown[0]?.pct ?? 0; };
