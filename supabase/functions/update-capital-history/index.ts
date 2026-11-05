@@ -58,9 +58,12 @@ const today = () => iso(new Date());
 const started = Date.now();
 const timeLeft = () => TIME_BUDGET_MS - (Date.now() - started);
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+// Every outside call gives up after 15 s: one that hung kept the run going
+// past the platform's 150 s, and it was killed with nothing reported.
+const UA_TIMED = () => ({ headers: UA, signal: AbortSignal.timeout(15_000) });
 async function getJson(url: string) {
   try {
-    const res = await fetch(url, { headers: UA });
+    const res = await fetch(url, UA_TIMED());
     return res.ok ? await res.json() : null;
   } catch { return null; }
 }
@@ -154,7 +157,7 @@ async function moexByIsin(isin: string): Promise<{ secid: string; market: 'share
 // ---- FX: USD per unit ----
 async function cbrRubHistory(from: string): Promise<[string, number][]> {
   const dm = (day: string) => day.split('-').reverse().join('/');
-  const res = await fetch(`https://www.cbr.ru/scripts/XML_dynamic.asp?date_req1=${dm(from)}&date_req2=${dm(addDays(today(), 1))}&VAL_NM_RQ=R01235`, { headers: UA });
+  const res = await fetch(`https://www.cbr.ru/scripts/XML_dynamic.asp?date_req1=${dm(from)}&date_req2=${dm(addDays(today(), 1))}&VAL_NM_RQ=R01235`, UA_TIMED());
   if (!res.ok) return [];
   const text = new TextDecoder('windows-1251').decode(await res.arrayBuffer());
   return [...text.matchAll(/<Record Date="(\d{2})\.(\d{2})\.(\d{4})"[^>]*>[\s\S]*?<Value>([\d,]+)<\/Value>/g)]
@@ -171,7 +174,7 @@ async function nbgGelHistory(from: string): Promise<[string, number][]> {
   for (let i = 0; i < days.length; i += 25) {
     const got = await Promise.all(days.slice(i, i + 25).map(async day => {
       try {
-        const res = await fetch(`https://nbg.gov.ge/gw/api/ct/monetarypolicy/currencies/en/json/?currencies=USD&date=${day}`, { headers: UA });
+        const res = await fetch(`https://nbg.gov.ge/gw/api/ct/monetarypolicy/currencies/en/json/?currencies=USD&date=${day}`, UA_TIMED());
         if (!res.ok) return null;
         const rate = Number((await res.json())?.[0]?.currencies?.[0]?.rate);
         return rate > 0 ? [day, 1 / rate] as [string, number] : null;
@@ -192,7 +195,7 @@ async function nbrmMkdHistory(from: string): Promise<[string, number][]> {
   for (let d = from; d <= today(); d = addDays(d, 60)) {
     const to = addDays(d, 59) < today() ? addDays(d, 59) : today();
     try {
-      const res = await fetch(`https://www.nbrm.mk/KLServiceNOV/GetExchangeRate?StartDate=${dmy(d)}&EndDate=${dmy(to)}&format=json`, { headers: UA });
+      const res = await fetch(`https://www.nbrm.mk/KLServiceNOV/GetExchangeRate?StartDate=${dmy(d)}&EndDate=${dmy(to)}&format=json`, UA_TIMED());
       if (!res.ok) continue;
       // deno-lint-ignore no-explicit-any
       for (const r of (await res.json()) as any[]) {
@@ -214,7 +217,7 @@ async function fawazHistory(ccy: string, from: string): Promise<[string, number]
   for (let i = 0; i < days.length; i += 25) {
     const got = await Promise.all(days.slice(i, i + 25).map(async day => {
       try {
-        const res = await fetch(`https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@${day}/v1/currencies/usd.json`, { headers: UA });
+        const res = await fetch(`https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@${day}/v1/currencies/usd.json`, UA_TIMED());
         if (!res.ok) return null;
         const rate = Number((await res.json())?.usd?.[ccy.toLowerCase()]);
         return rate > 0 ? [day, 1 / rate] as [string, number] : null;
@@ -340,13 +343,21 @@ Deno.serve(async (req) => {
       if (['deposit', 'savings_account', 'money_market_fund', 'blocked'].includes(r.asset_class)) since.delete(t);
     }
     const done: string[] = [], failed: string[] = [], splitsFound: string[] = [];
-    // Least recently fetched first, so a partial run moves on next time.
+    // Least recently tried first, so a partial run moves on next time: by the
+    // last price it got, or the last try (price_sources.updated_at) when that's
+    // later -- ordered by the last price alone, the tickers that never get one
+    // (delisted: ICPT, DISCA, ...) came first every night and took the whole
+    // run; nothing else was priced from 26.10.2026 on.
     const lastDay = new Map<string, string>();
     for (const t of since.keys()) {
       const { data } = await db.from('price_history').select('day').eq('ticker', t).order('day', { ascending: false }).limit(1);
       if (data?.[0]) lastDay.set(t, data[0].day);
     }
-    const queue = [...since.keys()].sort((a, b) => (lastDay.get(a) ?? '') .localeCompare(lastDay.get(b) ?? ''));
+    const tried = (t: string) => {
+      const a = lastDay.get(t) ?? '', b = String(sources.get(t)?.updated_at ?? '').slice(0, 10);
+      return a > b ? a : b;
+    };
+    const queue = [...since.keys()].sort((a, b) => tried(a).localeCompare(tried(b)));
     for (const ticker of queue) {
       if (timeLeft() < 8000) break;
       const from = lastDay.has(ticker) ? addDays(lastDay.get(ticker)!, -OVERLAP_DAYS) : addDays(since.get(ticker)!, -7);
@@ -441,7 +452,11 @@ Deno.serve(async (req) => {
         if (!src) src = { ticker, source: 'none', symbol: null, currency: null };
         await db.from('price_sources').upsert({ ...src, updated_at: new Date().toISOString() });
       }
-      if (!points.length) { failed.push(ticker); continue; }
+      if (!points.length) {
+        failed.push(ticker);
+        if (src && src.source !== 'none') await db.from('price_sources').update({ updated_at: new Date().toISOString() }).eq('ticker', ticker);
+        continue;
+      }
       const rows = [];
       for (const p of points) {
         const rate = await fxOn(p.currency, p.day);

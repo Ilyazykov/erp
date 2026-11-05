@@ -54,6 +54,9 @@ const BANKS: Record<string, { name: string; country: string; label: string; base
 };
 const MAX_CONSENT_S = 180 * 86400;
 const CHECK_DAYS = 30, EDGE_DAYS = 3;
+// Revolut's metals price over the market: 0.2-1.2% on the gold buys of
+// 2025-10..2026-07 against the day's close; the middle of it.
+const REVOLUT_METAL_FEE = 1.007;
 const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
 // the next Monday-to-Friday after a day
 const nextWorkday = (day: string) => {
@@ -177,8 +180,8 @@ async function revolutStandIns(db: any, userId: string, write: Tx[]): Promise<{ 
   // in the account's own statement it's "Revolut Ltd", so that too when the
   // bank calls it an exchange -- gold is the only metal bought so far) as a
   // buy of the metal at the day's market price in the account's currency.
-  // Revolut's own price is some 0.5-1% higher (its fee): the units come out
-  // that much more than the metal statement's. Only after the metal pocket's
+  // Revolut's own price is some 0.5-1% higher (its fee): REVOLUT_METAL_FEE puts
+  // the middle of it on, so the units come out near the metal statement's. Only after the metal pocket's
   // latest statement.
   const { data: lastMetal } = await db.from('trades').select('trade_date').eq('user_id', userId)
     .eq('external_source', 'revolut_metal_csv').order('trade_date', { ascending: false }).limit(1);
@@ -187,13 +190,21 @@ async function revolutStandIns(db: any, userId: string, write: Tx[]): Promise<{ 
     const m = /^Exchanged to (XAU|XAG|XPT|XPD)\b/i.exec(x.desc);
     const metal = m ? m[1].toUpperCase() : /^Revolut Ltd$/i.test(x.desc) && x.code === 'EXCHANGE' ? 'XAU' : '';
     if (!metal || x.amount >= 0 || x.day <= metalEnd) continue;
-    const { data: px } = await db.from('price_history').select('price_usd').eq('ticker', metal).lte('day', x.day)
+    const { data: hist } = await db.from('price_history').select('day, price_usd').eq('ticker', metal).lte('day', x.day)
       .order('day', { ascending: false }).limit(1);
+    // the history more than 3 days behind (its nightly fill stood still from
+    // 26.10.2026 and the 05.11 buy came out at that price, 0.0057 XAU too
+    // much): today's price instead, for a buy of the last days
+    let px = hist;
+    if (!hist?.[0] || hist[0].day < addDays(x.day, -3)) {
+      const { data: live } = await db.from('market_prices').select('price_usd').eq('ticker', metal).maybeSingle();
+      if (live?.price_usd && x.day >= addDays(new Date().toISOString().slice(0, 10), -7)) px = [{ day: x.day, price_usd: live.price_usd }];
+    }
     const { data: fx } = await db.from('fx_history').select('usd_per_unit').eq('currency', x.currency).lte('day', x.day)
       .order('day', { ascending: false }).limit(1);
     const usd = Number(px?.[0]?.price_usd), perUnit = x.currency === 'USD' ? 1 : Number(fx?.[0]?.usd_per_unit);
     if (!(usd > 0) || !(perUnit > 0)) continue;
-    const price = usd / perUnit;
+    const price = usd / perUnit * REVOLUT_METAL_FEE;
     const base = `revolut:${x.ref || `${x.day}:${x.currency}:${x.amount}`}`;
     rows.push({
       user_id: userId, account: 'Revolut', ticker: metal, side: 'buy', quantity: Math.round(-x.amount / price * 1e6) / 1e6,
