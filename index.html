@@ -528,7 +528,7 @@
     Толщина полосы — сколько в ней денег; справа — штук и сумма. Даты погашений и оферт — с MOEX.
     Фонды облигаций (TBRU, SBBY, …) без срока не показаны. Срок вклада выписка не даёт: клик по вкладу — указать дату окончания.</p>
   <p class="empty-note" id="mat_status"></p>
-  <div id="plot_mat_years" style="height:260px"></div>
+  <div id="plot_mat_years" style="height:280px;margin-bottom:24px"></div>
   <div id="plot_mat"></div>
 </div>
 
@@ -5224,7 +5224,7 @@ function mpAssetBuckets(rows, keep = null) {
 // has its offer (MOEX ISS, straight from the browser), and the term deposits'
 // ends (deposit_terms, set by hand: no statement gives them) -- a bar from
 // today to the date, its thickness the money in it. ----
-const MP_MAT_CACHE = 'mp_moex_bond_dates_v1';
+const MP_MAT_CACHE = 'mp_moex_bond_dates_v2';
 async function mpMoexBondDates(secids) {
   let cache = {};
   try { cache = JSON.parse(localStorage.getItem(MP_MAT_CACHE) || '{}'); } catch { /* none */ }
@@ -5234,12 +5234,19 @@ async function mpMoexBondDates(secids) {
     const base = `https://iss.moex.com/iss/securities/${encodeURIComponent(secid)}`;
     const [d, o] = await Promise.all([
       fetch(`${base}.json?iss.meta=off&iss.only=description&description.columns=name,value`).then(r => r.json()).catch(() => null),
-      fetch(`${base}/bondization.json?iss.meta=off&iss.only=offers&limit=unlimited`).then(r => r.json()).catch(() => null),
+      fetch(`${base}/bondization.json?iss.meta=off&iss.only=offers,coupons,amortizations&limit=unlimited`).then(r => r.json()).catch(() => null),
     ]);
     const desc = Object.fromEntries((d?.description?.data || []).map(([k, v]) => [k, v]));
-    const cols = o?.offers?.columns || [];
-    const offers = (o?.offers?.data || []).map(r => r[cols.indexOf('offerdate')]).filter(x => x && x >= today).sort();
-    cache[secid] = { at: today, name: desc.NAME || desc.SHORTNAME || secid, mat: desc.MATDATE || null, offer: offers[0] || null };
+    const table = t => { const c = o?.[t]?.columns || []; return (o?.[t]?.data || []).map(r => Object.fromEntries(c.map((k, i) => [k, r[i]]))); };
+    const offers = table('offers').map(r => r.offerdate).filter(x => x && x >= today).sort();
+    // the money a bond still pays, per bond in its face currency: coupons (a
+    // floating one not fixed yet: at the last known), and the face back
+    let lastCoupon = 0;
+    const coupons = table('coupons').map(c => { if (c.value) lastCoupon = Number(c.value); return { day: c.coupondate, value: c.value ? Number(c.value) : lastCoupon }; })
+      .filter(c => c.day > today && c.value > 0);
+    const face = table('amortizations').filter(a => a.amortdate > today).map(a => ({ day: a.amortdate, value: Number(a.value) }));
+    cache[secid] = { at: today, name: desc.NAME || desc.SHORTNAME || secid, mat: desc.MATDATE || null, offer: offers[0] || null,
+      unit: (desc.FACEUNIT || 'RUB').replace('SUR', 'RUB'), coupons, face };
   };
   for (let i = 0; i < todo.length; i += 6) await Promise.all(todo.slice(i, i + 6).map(one));
   try { localStorage.setItem(MP_MAT_CACHE, JSON.stringify(cache)); } catch { /* no storage */ }
@@ -5265,7 +5272,8 @@ async function mpRenderMaturities() {
   const today = new Date().toISOString().slice(0, 10);
   for (const r of rows) {
     if (r.deposit) { r.name = r.ticker.replace(/^DEPOSIT:/, 'Вклад '); r.mat = endOf.get(r.ticker) || null; r.offer = null; }
-    else Object.assign(r, { name: dates[r.ticker]?.name || r.ticker, mat: dates[r.ticker]?.mat || null, offer: dates[r.ticker]?.offer || null });
+    else Object.assign(r, { name: dates[r.ticker]?.name || r.ticker, mat: dates[r.ticker]?.mat || null, offer: dates[r.ticker]?.offer || null,
+      unit: dates[r.ticker]?.unit || 'RUB', coupons: dates[r.ticker]?.coupons || [], face: dates[r.ticker]?.face || [] });
     r.next = r.offer || r.mat;
   }
   const shown = rows.filter(r => r.next || r.deposit).sort((a, b) => (a.next || '9999').localeCompare(b.next || '9999'));
@@ -5290,8 +5298,8 @@ async function mpRenderMaturities() {
   const annotations = shown.map((r, i) => ({ x: endOrMax(r), y: y[i], xanchor: 'left', xshift: 6, showarrow: false, font: { size: 11, color: '#8b949e' },
     text: `${r.deposit ? '' : `${Math.round(r.qty)} шт · `}${money(r.usd)}${r.next ? '' : ' · срок?'}` }));
   const el = document.getElementById('plot_mat');
-  el.style.height = `${Math.max(300, shown.length * 26 + 80)}px`;
-  await Plotly.newPlot(el, traces, { ...dark, barmode: 'overlay', showlegend: false, margin: { l: 260, r: 120, t: 10, b: 30 },
+  el.style.height = `${Math.max(300, shown.length * 26 + 110)}px`;
+  await Plotly.newPlot(el, traces, { ...dark, barmode: 'overlay', showlegend: false, margin: { l: 260, r: 120, t: 50, b: 30 },
     xaxis: { type: 'date', gridcolor: '#1e2830', range: [today, [...shown.map(endOrMax)].sort().pop()] , side: 'top' },
     yaxis: { autorange: 'reversed', automargin: true, tickfont: { size: 11 } }, annotations }, { responsive: true, displaylogo: false });
   // a deposit's end, set by a click on its row
@@ -5305,14 +5313,35 @@ async function mpRenderMaturities() {
     if (e) { alert(e.message); return; }
     mpRenderMaturities();
   });
-  // the money coming back by year (the next date: an offer, else the redemption)
-  const years = new Map();
-  for (const r of shown.filter(r => r.next)) years.set(r.next.slice(0, 4), (years.get(r.next.slice(0, 4)) || 0) + r.usd);
-  const ys = [...years.keys()].sort();
-  Plotly.newPlot('plot_mat_years', [{ type: 'bar', x: ys, y: ys.map(k => years.get(k)), marker: { color: '#58a6ff' },
-    text: ys.map(k => money(years.get(k))), textposition: 'outside', hovertemplate: '%{x}: %{text}<extra></extra>' }],
-    { ...dark, title: 'Сколько вернётся по годам (ближайшая дата: оферта или погашение)', margin: { l: 50, r: 20, t: 40, b: 30 },
-      yaxis: { gridcolor: '#1e2830', tickprefix: '$' }, xaxis: { type: 'category' } }, { responsive: true, displaylogo: false });
+  // the money coming in by year, as MOEX schedules it: the face back
+  // (redemptions, amortisations) and the coupons, times the bonds held, at
+  // today's rates; a deposit its sum and its interest at its end
+  const { data: fx } = await sb.from('fx_history').select('currency, usd_per_unit, day').in('currency', ['RUB', 'CNY', 'EUR']).order('day', { ascending: false }).limit(30);
+  const usdPer = c => c === 'USD' ? 1 : Number((fx || []).find(f => f.currency === c)?.usd_per_unit) || 0;
+  const faceBy = new Map(), couponBy = new Map();
+  const add = (m, day, usd) => { const y = day.slice(0, 4); m.set(y, (m.get(y) || 0) + usd); };
+  for (const r of shown) {
+    if (r.deposit) {
+      if (!r.mat) continue;
+      const rate = Number(r.ticker.match(/([\d.]+)%/)?.[1] || 0) / 100;
+      add(faceBy, r.mat, r.usd);
+      add(couponBy, r.mat, r.usd * rate * Math.max(0, Date.parse(r.mat) - Date.now()) / (365 * 86400000));
+      continue;
+    }
+    const k = r.qty * usdPer(r.unit);
+    for (const f of r.face) add(faceBy, f.day, f.value * k);
+    for (const c of r.coupons) add(couponBy, c.day, c.value * k);
+  }
+  const ys = [...new Set([...faceBy.keys(), ...couponBy.keys()])].sort();
+  const tot = y => (faceBy.get(y) || 0) + (couponBy.get(y) || 0);
+  Plotly.newPlot('plot_mat_years', [
+    { type: 'bar', name: 'номинал (погашения, амортизации, вклад)', x: ys, y: ys.map(y => faceBy.get(y) || 0), marker: { color: '#58a6ff' }, hovertemplate: '%{y:$,.0f}' },
+    { type: 'bar', name: 'купоны и проценты', x: ys, y: ys.map(y => couponBy.get(y) || 0), marker: { color: '#3dd68c' }, hovertemplate: '%{y:$,.0f}' },
+    { type: 'scatter', mode: 'text', x: ys, y: ys.map(tot), text: ys.map(y => money(tot(y))), textposition: 'top center', showlegend: false, hoverinfo: 'skip', cliponaxis: false },
+  ], { ...dark, barmode: 'stack', title: 'Сколько придёт по годам — по графику MOEX, по сегодняшнему курсу', margin: { l: 50, r: 20, t: 50, b: 30 },
+    hovermode: 'x unified', hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
+    legend: { orientation: 'h', y: -0.15 }, yaxis: { gridcolor: '#1e2830', tickprefix: '$', range: [0, Math.max(...ys.map(tot), 1) * 1.2] }, xaxis: { type: 'category' } },
+    { responsive: true, displaylogo: false });
 }
 
 // ---- Crypto strategy (05.11.2026): the crypto share's target by BTC's
