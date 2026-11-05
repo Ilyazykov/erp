@@ -7919,7 +7919,7 @@ const mpIsDayOff = d => {
 async function mpRenderCardReminders() {
   const box = document.getElementById('card_reminders');
   const { data: rules, error } = await sb.from('credit_card_reminders').select('*');
-  const out = await mpEarnReminders();
+  const out = [...await mpStaleDataReminders(), ...await mpEarnReminders()];
   if (error || !rules?.length) { box.innerHTML = out.join(''); return; }
   const today = new Date(); today.setHours(0, 0, 0, 0);
   for (const r of rules) {
@@ -8053,6 +8053,34 @@ async function mpGraceMonthsReminder(r, today) {
       ${note}
     </div>`);
   return banners;
+}
+
+// The nightly job (update-capital-history) stood still from 26.10.2026 to
+// 05.11.2026 -- killed by the platform's time limit, with no report -- and the
+// capital was counted at 26.10 prices with nothing to show it. A red banner
+// when a held security's prices or the capital history are more than a few
+// days behind.
+async function mpStaleDataReminders() {
+  const out = [];
+  const ago = n => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); };
+  const fmt = d => new Date(d + 'T00:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  try {
+    const { data: cap } = await sb.from('capital_daily_total').select('day').order('day', { ascending: false }).limit(1);
+    if (cap?.[0] && cap[0].day < ago(2)) out.push(`<div class="card-reminder urgent">⚠️ История капитала не обновлялась с <b>${fmt(cap[0].day)}</b> — ночной пересчёт (update-capital-history) не проходит</div>`);
+    // held now, with a price source (deposits, cash and the like have none)
+    const { data: held } = await sb.from('portfolio_value_usd').select('ticker, quantity');
+    const tickers = [...new Set((held || []).filter(h => Number(h.quantity) > 0).map(h => h.ticker))];
+    if (!tickers.length) return out;
+    const { data: srcs } = await sb.from('price_sources').select('ticker').in('ticker', tickers).neq('source', 'none');
+    const priced = (srcs || []).map(x => x.ticker);
+    if (!priced.length) return out;
+    // 4 days: a weekend and a holiday without a close are fine
+    const { data: recent } = await sb.from('price_history').select('ticker').in('ticker', priced).gte('day', ago(4));
+    const fresh = new Set((recent || []).map(r => r.ticker));
+    const stale = priced.filter(t => !fresh.has(t)).sort();
+    if (stale.length) out.push(`<div class="card-reminder urgent">⚠️ Цены не обновлялись больше 4 дней: <b>${stale.slice(0, 8).map(mpEscapeHtml).join(', ')}</b>${stale.length > 8 ? ` и ещё ${stale.length - 8}` : ''} — графики считаются по старым ценам</div>`);
+  } catch { /* a check that can't run shows nothing */ }
+  return out;
 }
 
 // Crypto.com's Earn terms don't renew: 90 days after it's opened a term's BTC

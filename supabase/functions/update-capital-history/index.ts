@@ -362,6 +362,9 @@ Deno.serve(async (req) => {
       if (timeLeft() < 8000) break;
       const from = lastDay.has(ticker) ? addDays(lastDay.get(ticker)!, -OVERLAP_DAYS) : addDays(since.get(ticker)!, -7);
       if (lastDay.get(ticker) === today()) continue;
+      // tried already today by an earlier run of the night (the job runs every
+      // 10 minutes, migration ...170): one run gets through some 40 tickers
+      if (String(sources.get(ticker)?.updated_at ?? '').slice(0, 10) === today()) continue;
       // Found nowhere: try again once a week, not every run.
       const cached = sources.get(ticker);
       if (cached?.source === 'none' && Date.now() - Date.parse(cached.updated_at) < 7 * 86400_000) { failed.push(ticker); continue; }
@@ -467,6 +470,7 @@ Deno.serve(async (req) => {
         if (error) throw new Error(error.message);
       }
       done.push(`${ticker}:${rows.length}`);
+      await db.from('price_sources').update({ updated_at: new Date().toISOString() }).eq('ticker', ticker);
       await sleep(80);
     }
     report.prices = done;
