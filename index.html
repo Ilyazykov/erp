@@ -547,6 +547,8 @@
     <div class="pie-card"><h4>Куда пошла ключевая за 1–3 года — от её уровня (история ЦБ с 2013)</h4><div id="plot_kr_odds" style="height:380px"></div></div>
     <div class="pie-card"><h4>Без «не изменится»: флоатеры и постоянный купон</h4><div id="plot_kr_split" style="height:380px"></div></div>
     <div class="pie-card"><h4>Инерция по центробанкам мира: поправка шансов повышения от изменения ставки за год</h4><div id="plot_kr_trend" style="height:380px"></div>
+      <div class="form-row" style="gap:8px;margin:8px 4px 0"><label>степень над k <input type="number" id="mat_beta" min="0" max="1" step="0.05" style="width:70px"></label>
+        <span class="note" style="margin:0">0 — без инерции, 1 — k целиком</span></div>
       <p class="note" id="kr_formula" style="margin:8px 4px"></p></div>
   </div>
   <div id="plot_mat_float" style="height:300px;margin-bottom:24px"></div>
@@ -5328,7 +5330,20 @@ for (const id of ['mat_deposits', 'mat_coupons', 'mat_floaters']) {
 // kept, daily).
 // The trend over it: the rate's change over the last 365 days, its bucket's
 // odds ratio (key_rate_trend_odds) times the level's odds of a rise.
-const MP_TREND_BETA = 0.5;
+// the power over k, the tab's field (0: no inertia, 1: k whole), 0.5 by default
+let MP_TREND_BETA = 0.5;
+{
+  const el = document.getElementById('mat_beta');
+  try { const v = localStorage.getItem('mp_mat_beta'); if (v !== null && v !== '') MP_TREND_BETA = Math.min(1, Math.max(0, Number(v))); } catch { /* no storage */ }
+  el.value = MP_TREND_BETA;
+  el.addEventListener('change', e => {
+    const v = Number(e.target.value);
+    MP_TREND_BETA = Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.5;
+    e.target.value = MP_TREND_BETA;
+    try { localStorage.setItem('mp_mat_beta', String(MP_TREND_BETA)); } catch { /* no storage */ }
+    mpRenderMaturities();
+  });
+}
 async function mpKeyRateOdds() {
   // the last day of each of the last 120 months, for the 10 years' range and
   // mean (the trend's bucket and the rate's position, as the world's are)
