@@ -532,6 +532,7 @@
     <label><input type="checkbox" id="mat_deposits" checked> вклады</label>
     <label><input type="checkbox" id="mat_coupons" checked> купоны и проценты</label>
     <label>лесенка с <input type="number" id="mat_from" style="width:70px"> по <input type="number" id="mat_to" style="width:70px"></label>
+    <label><select id="mat_weights"><option value="far">больше в дальние</option><option value="even">поровну</option></select></label>
   </div>
   <div id="plot_mat_years" style="height:280px;margin-bottom:24px"></div>
   <div id="plot_mat"></div>
@@ -5271,6 +5272,14 @@ async function mpMoexBondDates(secids) {
     });
   }
 }
+{
+  const el = document.getElementById('mat_weights');
+  try { const v = localStorage.getItem('mp_mat_weights'); if (v) el.value = v; } catch { /* no storage */ }
+  el.addEventListener('change', e => {
+    try { localStorage.setItem('mp_mat_weights', e.target.value); } catch { /* no storage */ }
+    mpRenderMaturities();
+  });
+}
 for (const id of ['mat_deposits', 'mat_coupons']) {
   try { const v = localStorage.getItem('mp_' + id); if (v) document.getElementById(id).checked = v === '1'; } catch { /* no storage */ }
   document.getElementById(id).addEventListener('change', e => {
@@ -5359,13 +5368,17 @@ async function mpRenderMaturities() {
     for (const f of r.face) add(faceBy, f.day, f.value * k);
     for (const c of r.coupons) add(couponBy, c.day, c.value * k);
   }
-  // the target ladder (05.11.2026): the face of everything held, spread evenly
-  // over its years -- each year's maturing money bought into the far end
+  // the target ladder (05.11.2026): the face of everything held spread over
+  // its years -- evenly, or more in the far ones (1 : 2 : ... : n, to lock the
+  // high rates in for longer) -- each year's maturing money bought into the far end
   const from = Number(document.getElementById('mat_from').value), to = Number(document.getElementById('mat_to').value);
   const rungs = [];
   for (let y = from; y <= to && to - from < 40; y++) rungs.push(String(y));
   const faceAll = [...faceBy.values()].reduce((t, v) => t + v, 0);
-  const perRung = rungs.length ? faceAll / rungs.length : 0;
+  const far = document.getElementById('mat_weights').value === 'far';
+  const weightSum = far ? rungs.length * (rungs.length + 1) / 2 : rungs.length;
+  const targetOf = y => { const i = rungs.indexOf(y); return i < 0 ? 0 : faceAll * (far ? i + 1 : 1) / weightSum; };
+  const perRung = Math.max(0, ...rungs.map(targetOf));
   for (const y of rungs) if (!faceBy.has(y)) faceBy.set(y, 0);
   const ys = [...new Set([...faceBy.keys(), ...(withCoupons ? couponBy.keys() : []), ...rungs])].sort();
   if (!withCoupons) couponBy.clear();
@@ -5375,9 +5388,9 @@ async function mpRenderMaturities() {
     { type: 'bar', name: 'купоны и проценты', x: ys, y: ys.map(y => couponBy.get(y) || 0), marker: { color: '#3dd68c' }, hovertemplate: '%{y:$,.0f}' },
     { type: 'scatter', mode: 'text', x: ys, y: ys.map(tot), text: ys.map(y => money(tot(y))), textposition: 'top center', showlegend: false, hoverinfo: 'skip', cliponaxis: false },
     // the ladder's target per year: a tick over the bar; outside the ladder 0
-    { type: 'scatter', mode: 'markers', name: `цель лесенки ${from}–${to} (номинал)`, x: ys, y: ys.map(y => rungs.includes(y) ? perRung : 0),
+    { type: 'scatter', mode: 'markers', name: `цель лесенки ${from}–${to} (номинал)`, x: ys, y: ys.map(targetOf),
       marker: { symbol: 'line-ew-open', size: 34, line: { width: 3, color: '#f5c542' } },
-      customdata: ys.map(y => { const d = (faceBy.get(y) || 0) - (rungs.includes(y) ? perRung : 0); return `${d >= 0 ? 'перебор' : 'недобор'} ${money(Math.abs(d))}`; }),
+      customdata: ys.map(y => { const d = (faceBy.get(y) || 0) - targetOf(y); return `${d >= 0 ? 'перебор' : 'недобор'} ${money(Math.abs(d))}`; }),
       hovertemplate: '%{y:$,.0f} — %{customdata}' },
   ], { ...dark, barmode: 'stack', title: 'Сколько придёт по годам — по графику MOEX, по сегодняшнему курсу', margin: { l: 50, r: 20, t: 50, b: 30 },
     hovermode: 'x unified', hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
