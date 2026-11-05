@@ -5571,8 +5571,8 @@ async function mpRenderMaturities() {
     const curRate = odds.now != null ? Math.min(21, Math.max(4, Math.floor(odds.now))) : null;
     const heat = (id, field, scale) => Plotly.newPlot(id, [{
       type: 'heatmap', x: xs, y: hs.map(h => `${h} г`), z: hs.map(h => xs.map(k => cell(h, k)?.[field] * 100)),
-      text: hs.map(h => xs.map(k => { const c = cell(h, k); return c ? `${Math.round(c[field] * 100)}${c.months ? '' : '*'}` : ''; })),
-      texttemplate: '%{text}', textfont: { size: 9 }, colorscale: scale, zmin: 0, zmax: 100, showscale: false,
+      text: hs.map(h => xs.map(k => { const c = cell(h, k); return c ? `${(c[field] * 100).toFixed(1)}${c.months ? '' : '*'}` : ''; })),
+      texttemplate: '%{text}', textfont: { size: 8 }, colorscale: scale, zmin: 0, zmax: 100, showscale: false,
       customdata: hs.map(h => xs.map(k => cell(h, k)?.months ?? 0)),
       hovertemplate: 'ставка %{x}, через %{y}: %{z:.1f}%<br>месяцев в истории: %{customdata} (0 — по соседним)<extra></extra>' }],
       { ...dark, margin: { l: 45, r: 10, t: 10, b: 40 }, hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
