@@ -28,11 +28,11 @@ create table public.key_rate_odds (
 alter table public.key_rate_odds enable row level security;
 create policy "anyone can read key rate odds" on public.key_rate_odds for select using (true);
 
--- The trend over the level: the rate's change over the last half year, per
+-- The trend over the level: the rate's change over the last year, per
 -- bucket of it the odds ratio of a rise -- how often it went up against what
 -- the level's odds expected; the tab multiplies the level's odds by it.
 create table public.key_rate_trend_odds (
-  trend_from numeric primary key,  -- the bucket: trend_from < change over 183 days <= trend_to, pp
+  trend_from numeric primary key,  -- the bucket: trend_from < change over 365 days <= trend_to, pp
   trend_to numeric not null,
   n int not null,                  -- day x horizon pairs
   obs_up numeric not null,         -- went up (of up + down)

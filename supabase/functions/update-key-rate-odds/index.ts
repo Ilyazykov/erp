@@ -22,14 +22,13 @@
 //    as it was.
 // 5. Without the same: floaters = up / (up + down), fixed = the rest.
 // 6. The trend over it (asked 05.11.2026): the rate's change over the last
-//    half year, in buckets (<= -3, -3..-1, -1..-0.25, about 0, 0.25..1, 1..3,
+//    year (365 days -- a walk-forward test had it beat 1-9 months), in buckets (<= -3, -3..-1, -1..-0.25, about 0, 0.25..1, 1..3,
 //    >= 3 pp). Per bucket, the days' horizons as in 2-3 (not counting the
 //    same): how often the rate went up, against what the level's odds (5)
 //    expected for them -- the odds ratio, the trend over the level; the tab
 //    multiplies the level's odds by it. Not made monotone: the history has a
-//    move go on (a cut of 0.25-3 pp, odds of a rise some x0.4; a rise, them
-//    x1.8-4) but a cut of 3 pp and more tell nothing (x1.06: 2015 and 2022,
-//    after the spikes). Clamped to 0.2-5 -- a bucket of one episode.
+//    move mostly go on, but not a sharp cut after a spike (2015, 2022).
+//    Clamped to 0.2-5 -- a bucket of one episode.
 //
 // Called by pg_cron daily and once a month with the odds (deployed with
 // --no-verify-jwt; it only ever writes public data, with the service role).
@@ -145,7 +144,7 @@ Deno.serve(async (req) => {
     if (error) throw new Error(error.message);
     // 6. the trend
     const level = (x: number) => { const u = upFit(x), d = downFit(x); return u + d > 0 ? u / (u + d) : 0.5; };
-    const LAG = 183;
+    const LAG = 365;
     const TREND = [[-99, -3], [-3, -1], [-1, -0.25], [-0.25, 0.25], [0.25, 1], [1, 3], [3, 99]];
     const tb = TREND.map(([from, to]) => ({ trend_from: from, trend_to: to, n: 0, w: 0, obs: 0, exp: 0 }));
     daily.forEach((r, i) => {
