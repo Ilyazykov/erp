@@ -23,7 +23,7 @@
 // 5. Without the same: floaters = up / (up + down), fixed = the rest.
 // 6. The trend over it (asked 05.11.2026), from the world's central banks --
 //    Russia's own history has too few episodes of it: the BIS policy rates
-//    (stats.bis.org, WS_CBPOL, monthly), every country but Russia, since
+//    (stats.bis.org, WS_CBPOL, monthly), every country, Russia too, since
 //    1990, a rate of 40% and over (and a decade with 60%) left out. Per
 //    country-month: the rate's change over the last 12 months as a share of
 //    its range over the last 10 years (max - min; 1 pp is a lot in
@@ -115,7 +115,6 @@ async function worldTrendOdds(weight: (h: number) => number) {
   const cell = TREND.map(() => [0, 1, 2].map(() => [0, 0]));
   const pos = [0, 1, 2].map(() => [0, 0]);
   for (const [country, s] of byCountry) {
-    if (country === 'RU') continue;
     const ms = [...s.keys()].sort(), v = ms.map(m => s.get(m)!);
     for (let i = 120; i < ms.length; i++) {
       if (ms[i] < '1990-01' || v[i] > 40 || Math.max(...v.slice(i - 120, i + 1)) > 60) continue;

@@ -5555,7 +5555,7 @@ async function mpRenderMaturities() {
   if (key && op.length) {
     const p = levelPct / 100, k = odds.ratio, kb = odds.kb;
     const lp = Math.abs(Math.log(p / (1 - p))), lk = Math.abs(MP_TREND_BETA * Math.log(k));
-    document.getElementById('kr_formula').innerHTML = `Флоатеров = p·k<sup>${MP_TREND_BETA}</sup> / (p·k<sup>${MP_TREND_BETA}</sup> + 1 − p), где p — доля по уровню ключевой (средняя диаграмма), k — поправка за изменение ставки за год по 48 центробанкам мира (эта), ослабленная степенью ${MP_TREND_BETA}.
+    document.getElementById('kr_formula').innerHTML = `Флоатеров = p·k<sup>${MP_TREND_BETA}</sup> / (p·k<sup>${MP_TREND_BETA}</sup> + 1 − p), где p — доля по уровню ключевой (средняя диаграмма), k — поправка за изменение ставки за год по 49 центробанкам мира, включая ЦБ РФ (эта), ослабленная степенью ${MP_TREND_BETA}.
       Сейчас: p = ${levelPct}%, k = ×${k}, k<sup>${MP_TREND_BETA}</sup> = ×${kb.toFixed(3)} → ${p.toFixed(3)}·${kb.toFixed(3)} / (${p.toFixed(3)}·${kb.toFixed(3)} + ${(1 - p).toFixed(3)}) = <b>${floatPct}%</b>.
       Вклад в сдвиг от 50/50: p — ${Math.round(lp / (lp + lk || 1) * 100)}%, k — ${Math.round(lk / (lp + lk || 1) * 100)}%.`;
   }
