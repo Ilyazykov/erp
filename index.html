@@ -5667,6 +5667,7 @@ async function mpRenderMaturities() {
   // the floaters against their share by the key rate, as the other target pies
   const pies = document.getElementById('mat_pies');
   pies.innerHTML = '';
+  let pieRub = 0, pieCny = 0, pieLiquid = 0, pieW = null;   // the first pie's, for the buy plan
   // yuan vs rouble (06.11.2026, as the chart in USD/RUB -> CNY Weight): the
   // Russian infrastructure's bonds, deposits and money-market funds by what
   // they hold; the target -- w_CNY by USD/RUB, when that tab has it
@@ -5677,6 +5678,8 @@ async function mpRenderMaturities() {
     const cny = (ruRows || []).filter(r => (r.underlying_currency || 'RUB') !== 'RUB').reduce((t, r) => t + Number(r.value_usd || 0), 0);
     const w = typeof DATA !== 'undefined' && DATA?.currentWCny != null ? DATA.currentWCny * 100 : null;
     const tot = rub + cny || 1;
+    pieRub = rub; pieCny = cny; pieW = w;
+    pieLiquid = (ruRows || []).filter(r => r.instrument_type === 'liquid' && (r.underlying_currency || 'RUB') === 'RUB').reduce((t, r) => t + Number(r.value_usd || 0), 0);
     mpTargetPie(pies, 'Облигации, вклады и фонды ликвидности: юани и рубли', [
       { label: 'в юанях', usd: cny, target: w ?? cny / tot * 100, color: '#f778ba' },
       { label: 'в рублях', usd: rub, target: w != null ? 100 - w : rub / tot * 100, color: '#58a6ff' },
@@ -5906,11 +5909,20 @@ async function mpRenderMaturities() {
     const liquid = ofz.filter(b => (b.turnover || 0) > 1e6 && (b.pk || b.yield > 0));   // a floater has no yield on MOEX
     const y0 = new Date().getFullYear();
     const pk = liquid.filter(b => b.pk && b.mat > `${y0 + 1}` && b.mat < `${y0 + 4}`).sort((a, b) => b.turnover - a.turnover)[0];
+    // the yuan side (06.11.2026: all three kinds in one plan): the ladder's
+    // years, the reliable corporates due in each
+    const cnyBondsAll = await mpCnyBondList();
+    const cnyUsd = usdPer('CNY') || 0;
+    const costOf = r => r.kind === 'cny' ? (r.b.price / 100 * r.b.face + r.b.accrued) * cnyUsd : cost(r.b);
+    const cnyMVAll = sumMap(mvCnyBy);
     const buckets = [
-      ...rungs.map(y => ({ key: y, w: weightOf.get(y) / weightSum, cur: fixedMV(y),
+      ...rungs.map(y => ({ kind: 'fixed', key: y, w: weightOf.get(y) / weightSum, cur: fixedMV(y),
         b: liquid.filter(b => b.pd && b.mat.startsWith(y)).sort((a, c) => c.yield - a.yield)[0] })),
-      { key: 'флоатеры', float: true, cur: mvFloat, b: pk },
+      { kind: 'float', key: '—', cur: mvFloat, b: pk },
+      ...(cnyUsd ? cr.map((y, i) => ({ kind: 'cny', key: y, w: cauto ? cauto.weights[i] : 1 / cr.length, cur: mvCnyBy.get(y) || 0,
+        b: cnyBondsAll.filter(o => o.due.startsWith(y)).sort((a, c) => c.yield - a.yield || c.turnover - a.turnover)[0] })) : []),
     ];
+    const KIND = { fixed: '₽ постоянный', float: '₽ флоатер', cny: '¥ юани' };
     const td = 'style="padding:4px 10px;text-align:left;white-space:nowrap"', tdr = 'style="padding:4px 10px;text-align:right;white-space:nowrap"';
     const till = d => `до ${d.slice(5, 7)}.${d.slice(0, 4)}`;
     const box = document.getElementById('mat_buy');
@@ -5918,24 +5930,30 @@ async function mpRenderMaturities() {
     try { money = Number(localStorage.getItem('mp_mat_invest')) || 0; whole = localStorage.getItem('mp_mat_invest_whole') !== '0'; } catch { /* no storage */ }
     const plan = () => {
       const M = money * rubUsd;   // dollars
-      // the targets with the money in (or as they are, without it)
-      const floatT = (mvBonds + M) * floatPct / 100, ladderT = mvAll + M - floatT;
-      const target = k => k.float ? floatT : ladderT * k.w;
+      // the targets with the money in (or as they are, without it): yuan vs
+      // rouble by w_CNY over the first pie's whole (the money-market funds
+      // stay as they are), the rouble part -- floaters by their share of the
+      // bonds, the rest the ladder
+      const whole0 = pieRub + pieCny + M;
+      const cnyT = pieW != null ? whole0 * pieW / 100 : cnyMVAll + M * (pieCny / ((pieRub + pieCny) || 1));
+      const rubT = Math.max(0, whole0 - cnyT - pieLiquid);
+      const floatT = Math.max(0, rubT - mvDeposits) * floatPct / 100, ladderT = rubT - floatT;
+      const target = k => k.kind === 'float' ? floatT : k.kind === 'cny' ? cnyT * k.w : ladderT * k.w;
       const rows = buckets.map(k => ({ ...k, t: target(k), n: 0, spent: 0 }));
       if (M > 0) {
         let left = M;
         const step = whole ? null : M / 500;
         for (let guard = 0; guard < 100000; guard++) {
-          const can = rows.filter(r => r.b && (whole ? cost(r.b) <= left + 1e-9 : left > 1e-9));
+          const can = rows.filter(r => r.b && (whole ? costOf(r) <= left + 1e-9 : left > 1e-9));
           if (!can.length) break;
           const r = can.sort((a, c) => (c.t - c.cur - c.spent) - (a.t - a.cur - a.spent))[0];
-          const amt = whole ? cost(r.b) : Math.min(step, left);
+          const amt = whole ? costOf(r) : Math.min(step, left);
           r.spent += amt; left -= amt; if (whole) r.n++;
         }
-        if (!whole) rows.forEach(r => { r.n = r.b ? r.spent / cost(r.b) : 0; });
+        if (!whole) rows.forEach(r => { r.n = r.b ? r.spent / costOf(r) : 0; });
         return { rows, left };
       }
-      rows.forEach(r => { const short = r.t - r.cur; if (short > 5 && r.b) { r.n = Math.max(1, Math.round(short / cost(r.b))); r.spent = r.n * cost(r.b); } });
+      rows.forEach(r => { const short = r.t - r.cur; if (short > 5 && r.b) { r.n = Math.max(1, Math.round(short / costOf(r))); r.spent = r.n * costOf(r); } });
       return { rows, left: 0 };
     };
     const draw = () => {
@@ -5948,14 +5966,14 @@ async function mpRenderMaturities() {
           <label><input type="checkbox" id="mat_invest_whole"${whole ? ' checked' : ''}> целыми облигациями</label>
         </div>
         ${!shown.length ? '<p class="note">Недобора по лесенке нет.</p>' : `<div><table class="data-table" style="width:auto"><thead><tr>
-          <th ${td}>Год</th><th ${td}>Облигация</th><th ${tdr}>Доходность</th><th ${tdr}>За штуку</th><th ${tdr}>Сейчас</th><th ${tdr}>Цель</th><th ${tdr}>Купить, шт</th><th ${tdr}>На сумму</th><th ${tdr}>Станет</th></tr></thead><tbody>
-          ${shown.map(r => `<tr><td ${td}>${r.key}</td>${r.b
-            ? `<td ${td}>${mpEscapeHtml(r.b.name)} <span style="color:#8b949e">${r.float ? 'ОФЗ-ПК · ' : ''}${till(r.b.mat)}</span></td><td ${tdr}>${r.float ? '—' : r.b.yield.toFixed(1) + '%'}</td><td ${tdr}>${rub(cost(r.b))}</td>`
-            : `<td ${td} colspan="3" style="color:#8b949e">${r.float ? 'подходящей ОФЗ-ПК нет' : 'ОФЗ-ПД с погашением в этом году нет'}</td>`}
+          <th ${td}>Вид</th><th ${td}>Год</th><th ${td}>Облигация</th><th ${tdr}>Доходность</th><th ${tdr}>За штуку</th><th ${tdr}>Сейчас</th><th ${tdr}>Цель</th><th ${tdr}>Купить, шт</th><th ${tdr}>На сумму</th><th ${tdr}>Станет</th></tr></thead><tbody>
+          ${shown.map(r => `<tr><td ${td}>${KIND[r.kind]}</td><td ${td}>${r.key}</td>${r.b
+            ? `<td ${td}>${mpEscapeHtml(r.b.name)} <span style="color:#8b949e">${r.kind === 'float' ? 'ОФЗ-ПК · ' : ''}${r.kind === 'cny' && r.b.offer ? 'оферта ' + till(r.b.due).slice(3) : till(r.kind === 'cny' ? r.b.due : r.b.mat)}</span></td><td ${tdr}>${r.kind === 'float' ? '—' : r.b.yield.toFixed(1) + '%'}</td><td ${tdr}>${rub(costOf(r))}</td>`
+            : `<td ${td} colspan="3" style="color:#8b949e">${r.kind === 'float' ? 'подходящей ОФЗ-ПК нет' : r.kind === 'cny' ? 'надёжных юаневых выпусков на этот год нет' : 'ОФЗ-ПД с погашением в этом году нет'}</td>`}
             <td ${tdr}>${rub(r.cur)}</td><td ${tdr}>${rub(r.t)}</td><td ${tdr}><b>${r.n ? (whole ? r.n : r.n.toFixed(1)) : '—'}</b></td><td ${tdr}>${r.spent ? rub(r.spent) : '—'}</td><td ${tdr}>${rub(r.cur + r.spent)}</td></tr>`).join('')}
-          <tr><td ${td} colspan="7"><b>Итого</b>${money ? ` · не потрачено ${rub(left)}` : ''}</td><td ${tdr}><b>${rub(spent)}</b></td><td></td></tr>
+          <tr><td ${td} colspan="8"><b>Итого</b>${money ? ` · не потрачено ${rub(left)}` : ''}</td><td ${tdr}><b>${rub(spent)}</b></td><td></td></tr>
           </tbody></table></div>`}
-        <p class="note">${money ? 'Деньги раскладываются по одной облигации: каждая — туда, где сейчас больше всего не хватает до цели (цели — с учётом вложенного).'
+        <p class="note">${money ? 'Деньги раскладываются по одной облигации: каждая — туда, где сейчас больше всего не хватает до цели (цели — с учётом вложенного: юани и рубли по w_CNY, в рублях флоатеры по своей доле, остальное — лесенка).'
           : 'Без суммы — сколько купить, чтобы закрыть весь недобор.'} По цене прошлого дня с НКД.</p>`;
       box.querySelector('#mat_invest').addEventListener('change', e => {
         money = Math.max(0, Number(e.target.value) || 0);
