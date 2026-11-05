@@ -8407,7 +8407,14 @@ async function mpExpLoad() {
     r.approx = !!t.authorized_approx;
   }
   // the places one's rows can be set to (the Place column's picker)
-  const placeList = await page(() => sb.from('places').select('id, name, lat, lng, url, google_id').order('name')).catch(() => []);
+  const placeList = await page(() => sb.from('places').select('id, name, lat, lng, url, google_id, city, street, house').order('name'))
+    .catch(() => page(() => sb.from('places').select('id, name, lat, lng, url, google_id').order('name')).catch(() => []));
+  // a place shown by its name, with as much of its address as tells it from another of that name
+  for (const r of [...spent, ...skipped, ...(inc || [])]) {
+    const from = placeList.find(p => p.id === r.placeId), to = placeList.find(p => p.id === r.deliveredToId);
+    if (from) r.place = { name: mpPlaceLabel(from, placeList), url: from.url };
+    if (to) r.deliveredTo = { name: mpPlaceLabel(to, placeList), url: to.url };
+  }
   // the pairs that net out, and the money in that's no income, no refund, no
   // pair's leg (kept by refresh_expenses, migration 156): none yet -- the rows out alone
   const [pairs, unpairedIn, chains, incomeExpect] = await Promise.all([
@@ -8628,6 +8635,24 @@ function mpPlaceFromLink(url) {
   const gid = [...url.matchAll(/!1s(0x[0-9a-f]+:0x[0-9a-f]+)/gi)].pop();
   return { name: decodeURIComponent(name[1].replace(/\+/g, ' ')), lat: pt ? Number(pt[1]) : null, lng: pt ? Number(pt[2]) : null, url: clean, google_id: gid ? gid[1] : null };
 }
+// A place's name, and when another has the same name, what tells them apart:
+// the city, else the street, else the street and house ("Spar · Shanidze St").
+function mpPlaceLabel(p, list) {
+  const same = list.filter(o => o.id !== p.id && o.name.toLowerCase() === p.name.toLowerCase());
+  if (!same.length) return p.name;
+  const differ = key => p[key] && same.every(o => (o[key] || '') !== p[key]);
+  if (differ('city')) return `${p.name} · ${p.city}`;
+  if (differ('street')) return `${p.name} · ${p.street}`;
+  if (p.street && p.house) return `${p.name} · ${p.street} ${p.house}`;
+  return `${p.name} · #${p.id}`;
+}
+// A point's address, from OpenStreetMap (Nominatim): city, street, house.
+async function mpAddressAt(lat, lng) {
+  const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&accept-language=en`);
+  if (!res.ok) return null;
+  const a = (await res.json()).address || {};
+  return { city: a.city || a.town || a.village || '', street: a.road || a.pedestrian || '', house: a.house_number || '' };
+}
 // A row's place, its own column: the name, a click opens the map (when
 // there's a link); a delivery's also where it was brought to, on a line of
 // its own ("→ 🏠 ..."). A long name is cut short, the whole of it on hover.
@@ -8720,7 +8745,7 @@ function mpEditPlace(src, xid) {
   const delivery = r.cat === 'Food delivery' || r.deliveredToId != null;
   // a new place first, then none, then the places A-Z; the search box above filters them
   const opts = sel => `<option value="new">+ new place…</option><option value=""${sel == null ? ' selected' : ''}>—</option>${
-    list.slice().sort((a, b) => a.name.localeCompare(b.name)).map(p => `<option value="${p.id}"${p.id === sel ? ' selected' : ''}>${mpEscapeHtml(p.name)}</option>`).join('')}`;
+    list.map(p => [p, mpPlaceLabel(p, list)]).sort((a, b) => a[1].localeCompare(b[1])).map(([p, label]) => `<option value="${p.id}"${p.id === sel ? ' selected' : ''}>${mpEscapeHtml(label)}</option>`).join('')}`;
   const picker = (name, label, sel) => `<label>${label}
     <input type="search" data-for="${name}" placeholder="search…" style="${MP_FIELD};margin:4px 0">
     <select name="${name}" size="7" style="${MP_FIELD}">${opts(sel)}</select></label>`;
@@ -8732,6 +8757,8 @@ function mpEditPlace(src, xid) {
       <input name="link" placeholder="Google Maps link -- fills the fields" style="${MP_FIELD}">
       <input name="pname" placeholder="name" style="${MP_FIELD}">
       <div style="display:flex;gap:6px"><input name="lat" placeholder="lat" style="${MP_FIELD}"><input name="lng" placeholder="lng" style="${MP_FIELD}"></div>
+      <input name="city" placeholder="city" style="${MP_FIELD}">
+      <div style="display:flex;gap:6px"><input name="street" placeholder="street" style="${MP_FIELD}"><input name="house" placeholder="house" style="${MP_FIELD};width:30%"></div>
       <input name="url" placeholder="map link" style="${MP_FIELD}">
       <input name="gid" placeholder="Google id (0x…:0x…)" style="${MP_FIELD}">
     </fieldset>`);
@@ -8750,21 +8777,28 @@ function mpEditPlace(src, xid) {
       form.link.focus();
     });
   }
-  form.link.addEventListener('input', () => {
+  form.link.addEventListener('input', async () => {
     const p = mpPlaceFromLink(form.link.value.trim());
     if (!p) return;
     form.pname.value = p.name; form.lat.value = p.lat ?? ''; form.lng.value = p.lng ?? '';
     form.url.value = p.url; form.gid.value = p.google_id ?? '';
+    // the address at that point (to check): what tells two Spars apart
+    if (p.lat == null) return;
+    const a = await mpAddressAt(p.lat, p.lng).catch(() => null);
+    if (a) { form.city.value = a.city; form.street.value = a.street; form.house.value = a.house; }
   });
   form.addEventListener('submit', async e => {
     e.preventDefault();
     let newId = null;
     if (target) {
       const num = v => (v.trim() === '' ? null : Number(v));
-      const place = { name: form.pname.value.trim(), lat: num(form.lat.value), lng: num(form.lng.value), url: form.url.value.trim() || null, google_id: form.gid.value.trim() || null };
+      const txt = v => v.trim() || null;
+      const place = { name: form.pname.value.trim(), lat: num(form.lat.value), lng: num(form.lng.value), url: txt(form.url.value), google_id: txt(form.gid.value),
+        city: txt(form.city.value), street: txt(form.street.value), house: txt(form.house.value) };
+      const cols = 'id, name, lat, lng, url, google_id, city, street, house';
       const { data, error } = place.google_id
-        ? await sb.from('places').upsert(place, { onConflict: 'user_id,google_id' }).select('id, name, lat, lng, url, google_id').single()
-        : await sb.from('places').insert(place).select('id, name, lat, lng, url, google_id').single();
+        ? await sb.from('places').upsert(place, { onConflict: 'user_id,google_id' }).select(cols).single()
+        : await sb.from('places').insert(place).select(cols).single();
       if (error) { alert(error.message); return; }
       newId = data.id;
       if (!list.some(p => p.id === data.id)) list.push(data);
@@ -8773,7 +8807,7 @@ function mpEditPlace(src, xid) {
     const from = pick('from'), to = delivery ? pick('to') : null;
     const { error } = await sb.from('bank_transactions').update({ place_id: from, delivery_place_id: to }).eq('external_source', src).eq('external_id', xid);
     if (error) { alert(error.message); return; }
-    const byId = id => { const p = list.find(x => x.id === id); return p ? { name: p.name, url: p.url } : null; };
+    const byId = id => { const p = list.find(x => x.id === id); return p ? { name: mpPlaceLabel(p, list), url: p.url } : null; };
     rows.forEach(x => { x.placeId = from; x.deliveredToId = to; x.place = byId(from); x.deliveredTo = byId(to); });
     form.closest('dialog').close();
     document.querySelectorAll('#expenses .exp-place').forEach(c => {
