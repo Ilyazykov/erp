@@ -5364,7 +5364,8 @@ async function mpKeyRateOdds() {
     sb.from('key_rate_horizon_odds').select('country, horizon, rate, months, down, up').order('horizon').order('rate'),
     sb.from('cb_rates_monthly').select('month, rate').eq('country', 'CN').order('month', { ascending: false }).limit(1),
   ]);
-  const pts = (odds || []).map(o => ({ ...o, rate: Number(o.rate), up: Number(o.up), down: Number(o.down), floaters_pct: Number(o.floaters_pct) }));
+  // a bucket's point at its whole rate (06.11.2026; was its days' mean -- 9.32 for 9-10%)
+  const pts = (odds || []).map(o => ({ ...o, rate: Number(o.rate_from), up: Number(o.up), down: Number(o.down), floaters_pct: Number(o.floaters_pct) }));
   const share = x => {
     if (!pts.length) return null;
     if (x <= pts[0].rate) return pts[0].floaters_pct;
@@ -5848,8 +5849,7 @@ async function mpRenderMaturities() {
       text: [`сейчас ${key.now}% → ${floatPct}%`], textposition: 'middle right', textfont: { color: '#e6edf3' }, hoverinfo: 'skip' }] : []),
   ], { ...dark, showlegend: false, margin: { l: 50, r: 20, t: 10, b: 45 }, hovermode: 'x unified',
     hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
-    // a bucket's point at its days' mean rate (9-10%: 9.32, mostly 9.25) -- one decimal in the hover
-    xaxis: { title: 'ключевая ставка', ticksuffix: '%', range: [3, 23], dtick: 1, gridcolor: '#1e2830', zeroline: false, hoverformat: '.1f' },
+    xaxis: { title: 'ключевая ставка', ticksuffix: '%', range: [3, 23], dtick: 1, gridcolor: '#1e2830', zeroline: false },
     yaxis: { title: 'флоатеров = вероятность повышения', ticksuffix: '%', range: [-3, 103], dtick: 10, gridcolor: '#1e2830', zeroline: false } },
     { responsive: true, displaylogo: false, displayModeBar: false });
   // The floaters by term and spread (asked 05.11.2026). A floater's coupon
