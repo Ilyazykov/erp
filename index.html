@@ -5578,10 +5578,10 @@ async function mpRenderMaturities() {
     const val = (c, field) => field === 'net' ? Math.max(0, c.down - c.up) : c[field];
     const heat = (id, field, scale) => Plotly.newPlot(id, [{
       type: 'heatmap', x: xs, y: hs.map(h => `${h} г`), z: hs.map(h => xs.map(k => { const c = cell(h, k); return c ? val(c, field) * 100 : null; })),
-      text: hs.map(h => xs.map(k => { const c = cell(h, k); return c ? `${(val(c, field) * 100).toFixed(1)}${c.months ? '' : '*'}` : ''; })),
-      texttemplate: '%{text}', textfont: { size: 8 }, colorscale: scale, zmin: 0, zmax: 100, showscale: false,
+      text: hs.map(h => xs.map(k => { const c = cell(h, k); return c ? `${Math.round(val(c, field) * 100)}${c.months ? '' : '*'}` : ''; })),
+      texttemplate: '%{text}', textfont: { size: 9 }, colorscale: scale, zmin: 0, zmax: 100, showscale: false,
       customdata: hs.map(h => xs.map(k => cell(h, k)?.months ?? 0)),
-      hovertemplate: 'ставка %{x}, через %{y}: %{z:.1f}%<br>месяцев в истории: %{customdata} (0 — по соседним)<extra></extra>' }],
+      hovertemplate: 'ставка %{x}%, через %{y}: %{z:.0f}%<br>месяцев в истории: %{customdata} (0 — по соседним)<extra></extra>' }],
       { ...dark, margin: { l: 45, r: 10, t: 10, b: 40 }, hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
         xaxis: { title: { text: 'ключевая ставка сейчас', font: { size: 11 } }, tickfont: { size: 10 }, dtick: 1, ticksuffix: '%' }, yaxis: { autorange: 'reversed', tickfont: { size: 10 } },
         shapes: [

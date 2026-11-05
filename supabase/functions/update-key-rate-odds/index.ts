@@ -146,69 +146,54 @@ function worldTrendOdds(byCountry: Map<string, Map<string, number>>, weight: (h:
 
 // 7. The bond ladder's weights (asked 05.11.2026): per horizon 1-15 years x
 //    key rate 4-21% (1 pp buckets) -- how often the rate was lower in that
-//    many years (down) and higher (up; 06.11.2026 -- was "not higher"). Russia's
-//    rate by the BIS's monthly series, month-ends since 1992 (the CBR's
-//    refinancing rate before 13.09.2013, the key rate after; a month at 22%
-//    and over not counted) -- the key rate alone, since 2013, has no 15
-//    years yet. Both tables made monotone both ways -- down rises with the
-//    rate and with the horizon, up falls (fitted as not-up, 1 - up, rising): a weighted least-squares fit
-//    (Dykstra's alternating projections, rows and columns by pool-adjacent-
-//    violators, a cell weighted by its months; a cell of no months takes
-//    what its neighbours give) -- then strictly so: 95% the fit + 5% a grid
-//    rising from 0 (4%, 1 year) to 1 (21%, 15 years).
+//    many years (down) and higher (up). Russia's rate by the BIS's monthly
+//    series, month-ends since 1992 (the CBR's refinancing rate before
+//    13.09.2013, the key rate after; a month at 22% and over not counted) --
+//    the key rate alone, since 2013, has no 15 years yet.
+//    Per horizon: down rises with the rate, up falls -- a weighted isotonic
+//    fit (pool adjacent violators by months, each block a point at its mean
+//    rate, linear between, flat past the ends; a bucket of no months takes
+//    the line there). Along the horizon (06.11.2026): no rule -- the further,
+//    the less today's rate tells, so a year is smoothed with its neighbours
+//    (1 : 2 : 1, by months) and drawn toward the long run, h / 15 of it: the
+//    share of all the months (at under 22%) below / above the bucket's
+//    middle -- a rate at 21% stays likelier lower even 15 years on, one at
+//    4% not lower. Then a hair of a slope along the rate (up to 1 pp) keeps
+//    neighbours apart.
 const LADDER_RATES = Array.from({ length: 18 }, (_, i) => i + 4);
 const LADDER_YEARS = Array.from({ length: 15 }, (_, i) => i + 1);
 
-function pava(ys: number[], ws: number[]) {
-  const bl: { y: number; w: number; n: number }[] = [];
-  ys.forEach((y, i) => {
-    bl.push({ y, w: ws[i], n: 1 });
-    while (bl.length > 1 && bl.at(-2)!.y > bl.at(-1)!.y) {
-      const b = bl.pop()!, a = bl.pop()!;
-      bl.push({ y: (a.y * a.w + b.y * b.w) / (a.w + b.w), w: a.w + b.w, n: a.n + b.n });
-    }
-  });
-  return bl.flatMap(b => Array(b.n).fill(b.y) as number[]);
-}
-
-// non-decreasing along the rows and the columns, cells weighted
-function isotonic2d(X0: number[][], W: number[][]) {
-  let X = X0.map(r => [...r]);
-  let P = X.map(r => r.map(() => 0)), Q = X.map(r => r.map(() => 0));
-  for (let it = 0; it < 2000; it++) {
-    const A = X.map((r, i) => r.map((x, j) => x + P[i][j]));
-    const Ar = A.map((r, i) => pava(r, W[i]));
-    P = A.map((r, i) => r.map((a, j) => a - Ar[i][j]));
-    const B = Ar.map((r, i) => r.map((x, j) => x + Q[i][j]));
-    const Bc = B.map(r => [...r]);
-    for (let j = 0; j < X[0].length; j++) pava(B.map(r => r[j]), W.map(r => r[j])).forEach((x, i) => { Bc[i][j] = x; });
-    Q = B.map((r, i) => r.map((b, j) => b - Bc[i][j]));
-    X = Bc;
-  }
-  return X;
-}
-
 function horizonOdds(ru: Map<string, number>) {
   const ms = [...ru.keys()].sort(), v = ms.map(m => ru.get(m)!);
-  const cells = LADDER_YEARS.map(h => LADDER_RATES.map(k => {
-    let down = 0, notUp = 0, n = 0;
-    for (let i = 0; i + 12 * h < v.length; i++) {
-      if (Math.floor(v[i]) !== k || v[i] >= 22) continue;
-      const later = v[i + 12 * h];
-      n++; if (later < v[i]) down++; if (later <= v[i]) notUp++;
-    }
-    return { n, down: n ? down / n : 0.5, notUp: n ? notUp / n : 0.5 };
-  }));
-  const W = cells.map(r => r.map(c => c.n || 0.01));
-  const fitD = isotonic2d(cells.map(r => r.map(c => c.down)), W);
-  const fitN = isotonic2d(cells.map(r => r.map(c => c.notUp)), W);
-  const L = 0.05, grid = (i: number, j: number) => (j / (LADDER_RATES.length - 1) + i / (LADDER_YEARS.length - 1)) / 2;
+  const pool = v.filter(x => x < 22);
+  const longRun = (k: number) => ({ below: pool.filter(x => x < k + 0.5).length / pool.length, above: pool.filter(x => x > k + 0.5).length / pool.length });
+  const fitted = LADDER_YEARS.map(h => {
+    const cells = LADDER_RATES.map(k => {
+      let down = 0, up = 0, n = 0, xs = 0;
+      for (let i = 0; i + 12 * h < v.length; i++) {
+        if (Math.floor(v[i]) !== k || v[i] >= 22) continue;
+        const later = v[i + 12 * h];
+        n++; xs += v[i]; if (later < v[i]) down++; if (later > v[i]) up++;
+      }
+      return { k, n, x: xs / (n || 1), down: down / (n || 1), up: up / (n || 1) };
+    }).filter(c => c.n);
+    const fd = isotonic(cells.map(c => ({ x: c.x, y: c.down, w: c.n })), false);
+    const fu = isotonic(cells.map(c => ({ x: c.x, y: c.up, w: c.n })), true);
+    return LADDER_RATES.map(k => ({ n: cells.find(c => c.k === k)?.n ?? 0, d: fd(k + 0.5), u: fu(k + 0.5) }));
+  });
+  const clamp = (x: number) => Math.min(1, Math.max(0, x));
   return LADDER_YEARS.flatMap((h, i) => LADDER_RATES.map((k, j) => {
-    let d = fitD[i][j], nu = fitN[i][j];
-    nu = Math.max(nu, d);   // not up holds down
-    return { horizon: h, rate: k, months: cells[i][j].n,
-      down: Math.round(((1 - L) * d + L * grid(i, j)) * 10000) / 10000,
-      up: Math.round((1 - ((1 - L) * nu + L * grid(i, j))) * 10000) / 10000 };
+    let sd = 0, su = 0, sw = 0;
+    for (const [di, w0] of [[-1, 1], [0, 2], [1, 1]]) {
+      const r = fitted[i + di]?.[j];
+      if (!r) continue;
+      const w = w0 * (r.n + 1);
+      sd += w * r.d; su += w * r.u; sw += w;
+    }
+    const a = h / 15, lr = longRun(k), g = 0.01 * j / (LADDER_RATES.length - 1);
+    return { horizon: h, rate: k, months: fitted[i][j].n,
+      down: Math.round(clamp((1 - a) * sd / sw + a * lr.below + g) * 10000) / 10000,
+      up: Math.round(clamp((1 - a) * su / sw + a * lr.above - g) * 10000) / 10000 };
   }));
 }
 
