@@ -5878,31 +5878,82 @@ async function mpRenderMaturities() {
     hovermode: 'x unified', hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
     legend: { orientation: 'h', y: -0.15 }, yaxis: { gridcolor: '#1e2830', ticksuffix: ' ₽', tickformat: ',.0f', range: [0, yTop * KR] }, xaxis: { type: 'category' } },
     { responsive: true, displaylogo: false });
-  // what to buy (06.11.2026): per ladder year short of its target, the OFZ-PD
-  // (fixed-coupon OFZ, 25xxx/26xxx) maturing that year -- the best yield of
-  // those trading over 1 mln roubles a day -- and how many; the floaters short
-  // of theirs -- an OFZ-PK (29xxx, no credit risk, the term hardly matters)
+  // what to buy (06.11.2026): the OFZ-PD (fixed-coupon OFZ, 25xxx/26xxx)
+  // maturing in a ladder year -- the best yield of those trading over 1 mln
+  // roubles a day; the floaters -- an OFZ-PK (29xxx) 1-3 years out, the most
+  // traded. With money to invest (roubles, the field): one bond at a time
+  // into the bucket furthest under its target -- the targets taken with the
+  // money in -- till the money's out; without it, what closes every shortfall
   {
     const ofz = await mpOfzList();
-    const rubUsd = usdPer('RUB');
+    const rubUsd = usdPer('RUB') || 1;
     const cost = b => ((b.price || 100) / 100 * b.face + (b.accrued || 0)) * rubUsd;
     const liquid = ofz.filter(b => (b.turnover || 0) > 1e6 && (b.pk || b.yield > 0));   // a floater has no yield on MOEX
-    const rows = rungs.map(y => ({ y, short: targetOf(y) - fixedOf(y) })).filter(r => r.short > 5).map(r => {
-      const pd = liquid.filter(b => b.pd && b.mat.startsWith(r.y)).sort((a, b) => b.yield - a.yield)[0];
-      return { ...r, b: pd, n: pd ? Math.max(1, Math.round(r.short / cost(pd))) : 0 };
-    });
-    const pk = liquid.filter(b => b.pk && b.mat > `${new Date().getFullYear() + 1}` && b.mat < `${new Date().getFullYear() + 4}`).sort((a, b) => b.turnover - a.turnover)[0];
+    const y0 = new Date().getFullYear();
+    const pk = liquid.filter(b => b.pk && b.mat > `${y0 + 1}` && b.mat < `${y0 + 4}`).sort((a, b) => b.turnover - a.turnover)[0];
+    const buckets = [
+      ...rungs.map(y => ({ key: y, w: weightOf.get(y) / weightSum, cur: Math.max(0, fixedOf(y)),
+        b: liquid.filter(b => b.pd && b.mat.startsWith(y)).sort((a, c) => c.yield - a.yield)[0] })),
+      { key: 'флоатеры', float: true, cur: floatAll, b: pk },
+    ];
     const td = 'style="padding:4px 10px;text-align:left;white-space:nowrap"', tdr = 'style="padding:4px 10px;text-align:right;white-space:nowrap"';
     const till = d => `до ${d.slice(5, 7)}.${d.slice(0, 4)}`;
-    document.getElementById('mat_buy').innerHTML = !rows.length && floatShort <= 5 ? '<p class="note">Недобора по лесенке нет.</p>'
-      : `<div class="section-title" style="font-size:0.95rem">Что докупить</div>
-      <div><table class="data-table" style="width:auto"><thead><tr><th ${td}>Год</th><th ${tdr}>Недобор</th><th ${td}>Облигация</th><th ${tdr}>Доходность</th><th ${tdr}>Цена</th><th ${tdr}>Штук</th></tr></thead><tbody>
-      ${rows.map(r => `<tr><td ${td}>${r.y}</td><td ${tdr}>${rub(r.short)}</td>${r.b
-        ? `<td ${td}>${mpEscapeHtml(r.b.name)} <span style="color:#8b949e">${till(r.b.mat)}</span></td><td ${tdr}>${r.b.yield.toFixed(1)}%</td><td ${tdr}>${r.b.price.toFixed(1)}%</td><td ${tdr}><b>${r.n}</b></td>`
-        : `<td ${td} colspan="4" style="color:#8b949e">ОФЗ-ПД с погашением в этом году нет</td>`}</tr>`).join('')}
-      ${floatShort > 5 && pk ? `<tr><td ${td}>флоатеры</td><td ${tdr}>${rub(floatShort)}</td><td ${td}>${mpEscapeHtml(pk.name)} <span style="color:#8b949e">ОФЗ-ПК · ${till(pk.mat)}</span></td><td ${tdr}>—</td><td ${tdr}>${pk.price.toFixed(1)}%</td><td ${tdr}><b>${Math.max(1, Math.round(floatShort / cost(pk)))}</b></td></tr>` : ''}
-      </tbody></table></div>
-      <p class="note">По цене прошлого дня с НКД. Деньги на это — из ближних погашений (2028 и раньше) и новых пополнений.</p>`;
+    const box = document.getElementById('mat_buy');
+    let money = 0, whole = true;
+    try { money = Number(localStorage.getItem('mp_mat_invest')) || 0; whole = localStorage.getItem('mp_mat_invest_whole') !== '0'; } catch { /* no storage */ }
+    const plan = () => {
+      const M = money * rubUsd;   // dollars
+      // the targets with the money in (or as they are, without it)
+      const floatT = (bondsAll + M) * floatPct / 100, ladderT = faceAll + M - floatT;
+      const target = k => k.float ? floatT : ladderT * k.w;
+      const rows = buckets.map(k => ({ ...k, t: target(k), n: 0, spent: 0 }));
+      if (M > 0) {
+        let left = M;
+        const step = whole ? null : M / 500;
+        for (let guard = 0; guard < 100000; guard++) {
+          const can = rows.filter(r => r.b && (whole ? cost(r.b) <= left + 1e-9 : left > 1e-9));
+          if (!can.length) break;
+          const r = can.sort((a, c) => (c.t - c.cur - c.spent) - (a.t - a.cur - a.spent))[0];
+          const amt = whole ? cost(r.b) : Math.min(step, left);
+          r.spent += amt; left -= amt; if (whole) r.n++;
+        }
+        if (!whole) rows.forEach(r => { r.n = r.b ? r.spent / cost(r.b) : 0; });
+        return { rows, left };
+      }
+      rows.forEach(r => { const short = r.t - r.cur; if (short > 5 && r.b) { r.n = Math.max(1, Math.round(short / cost(r.b))); r.spent = r.n * cost(r.b); } });
+      return { rows, left: 0 };
+    };
+    const draw = () => {
+      const { rows, left } = plan();
+      const spent = rows.reduce((t, r) => t + r.spent, 0);
+      const shown = rows.filter(r => r.spent > 0 || (money > 0 && r.t - r.cur > 5) || (!money && r.t - r.cur > 5));
+      box.innerHTML = `<div class="section-title" style="font-size:0.95rem">Что докупить</div>
+        <div class="form-row" style="gap:16px;margin:4px 0 8px">
+          <label>Сколько вложить, ₽: <input type="number" id="mat_invest" min="0" step="1000" value="${money || ''}" placeholder="0 — закрыть весь недобор" style="width:190px"></label>
+          <label><input type="checkbox" id="mat_invest_whole"${whole ? ' checked' : ''}> целыми облигациями</label>
+        </div>
+        ${!shown.length ? '<p class="note">Недобора по лесенке нет.</p>' : `<div><table class="data-table" style="width:auto"><thead><tr>
+          <th ${td}>Год</th><th ${td}>Облигация</th><th ${tdr}>Доходность</th><th ${tdr}>За штуку</th><th ${tdr}>Сейчас</th><th ${tdr}>Цель</th><th ${tdr}>Купить, шт</th><th ${tdr}>На сумму</th><th ${tdr}>Станет</th></tr></thead><tbody>
+          ${shown.map(r => `<tr><td ${td}>${r.key}</td>${r.b
+            ? `<td ${td}>${mpEscapeHtml(r.b.name)} <span style="color:#8b949e">${r.float ? 'ОФЗ-ПК · ' : ''}${till(r.b.mat)}</span></td><td ${tdr}>${r.float ? '—' : r.b.yield.toFixed(1) + '%'}</td><td ${tdr}>${rub(cost(r.b))}</td>`
+            : `<td ${td} colspan="3" style="color:#8b949e">${r.float ? 'подходящей ОФЗ-ПК нет' : 'ОФЗ-ПД с погашением в этом году нет'}</td>`}
+            <td ${tdr}>${rub(r.cur)}</td><td ${tdr}>${rub(r.t)}</td><td ${tdr}><b>${r.n ? (whole ? r.n : r.n.toFixed(1)) : '—'}</b></td><td ${tdr}>${r.spent ? rub(r.spent) : '—'}</td><td ${tdr}>${rub(r.cur + r.spent)}</td></tr>`).join('')}
+          <tr><td ${td} colspan="7"><b>Итого</b>${money ? ` · не потрачено ${rub(left)}` : ''}</td><td ${tdr}><b>${rub(spent)}</b></td><td></td></tr>
+          </tbody></table></div>`}
+        <p class="note">${money ? 'Деньги раскладываются по одной облигации: каждая — туда, где сейчас больше всего не хватает до цели (цели — с учётом вложенного).'
+          : 'Без суммы — сколько купить, чтобы закрыть весь недобор.'} По цене прошлого дня с НКД.</p>`;
+      box.querySelector('#mat_invest').addEventListener('change', e => {
+        money = Math.max(0, Number(e.target.value) || 0);
+        try { localStorage.setItem('mp_mat_invest', String(money)); } catch { /* no storage */ }
+        draw();
+      });
+      box.querySelector('#mat_invest_whole').addEventListener('change', e => {
+        whole = e.target.checked;
+        try { localStorage.setItem('mp_mat_invest_whole', whole ? '1' : '0'); } catch { /* no storage */ }
+        draw();
+      });
+    };
+    draw();
   }
   // the yuan ones (and any other currency's fixed ones): their own ladder, by
   // the PBoC's rate as the rouble one by the CBR's (06.11.2026)
