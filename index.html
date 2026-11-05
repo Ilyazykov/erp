@@ -5848,7 +5848,8 @@ async function mpRenderMaturities() {
       text: [`сейчас ${key.now}% → ${floatPct}%`], textposition: 'middle right', textfont: { color: '#e6edf3' }, hoverinfo: 'skip' }] : []),
   ], { ...dark, showlegend: false, margin: { l: 50, r: 20, t: 10, b: 45 }, hovermode: 'x unified',
     hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
-    xaxis: { title: 'ключевая ставка', ticksuffix: '%', range: [3, 23], dtick: 1, gridcolor: '#1e2830', zeroline: false },
+    // a bucket's point at its days' mean rate (9-10%: 9.32, mostly 9.25) -- one decimal in the hover
+    xaxis: { title: 'ключевая ставка', ticksuffix: '%', range: [3, 23], dtick: 1, gridcolor: '#1e2830', zeroline: false, hoverformat: '.1f' },
     yaxis: { title: 'флоатеров = вероятность повышения', ticksuffix: '%', range: [-3, 103], dtick: 10, gridcolor: '#1e2830', zeroline: false } },
     { responsive: true, displaylogo: false, displayModeBar: false });
   // The floaters by term and spread (asked 05.11.2026). A floater's coupon
