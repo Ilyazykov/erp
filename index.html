@@ -5969,7 +5969,7 @@ async function mpRenderMaturities() {
         if (!whole) rows.forEach(r => { r.n = r.b ? r.spent / costOf(r) : 0; });
         return { rows, left };
       }
-      rows.forEach(r => { const short = r.t - r.cur; if (short > 5 && r.b) { r.n = Math.max(1, Math.round(short / costOf(r))); r.spent = r.n * costOf(r); } });
+      // no money -- no purchases (06.11.2026: 0 bought what closed every shortfall)
       return { rows, left: 0 };
     };
     // the table (06.11.2026): what's held and what to buy, by kind (rouble
@@ -6045,7 +6045,7 @@ async function mpRenderMaturities() {
       }
       box.innerHTML = `<div class="section-title" style="font-size:0.95rem">Облигации: что есть и что докупить</div>
         <div class="form-row" style="gap:16px;margin:4px 0 8px">
-          <label>Сколько вложить, ₽: <input type="number" id="mat_invest" min="0" step="1000" value="${money || ''}" placeholder="0 — закрыть весь недобор" style="width:190px"></label>
+          <label>Сколько вложить, ₽: <input type="number" id="mat_invest" min="0" step="1000" value="${money || ''}" placeholder="0" style="width:190px"></label>
           <label><input type="checkbox" id="mat_invest_whole"${whole ? ' checked' : ''}> целыми облигациями</label>
         </div>
         <div><table class="data-table" style="width:auto"><thead><tr>
@@ -6055,7 +6055,7 @@ async function mpRenderMaturities() {
           <tr style="border-top:2px solid #30363d"><td ${td} colspan="8"><b>Итого к покупке</b>${money ? ` · не потрачено ${rub(left)}` : ''}</td><td ${tdr}><b>${rub(spent)}</b></td><td colspan="3"></td></tr>
           </tbody></table></div>
         <p class="note">${money ? 'Деньги раскладываются по одной облигации: каждая — туда, где сейчас больше всего не хватает до цели (цели — с учётом вложенного: юани и рубли по w_CNY, в рублях флоатеры по своей доле, остальное — лесенка).'
-          : 'Без суммы — сколько купить, чтобы закрыть весь недобор.'} Зелёным — что купить. Стоимость и цели — по рыночной цене, в рублях; цена покупки — прошлого дня с НКД.</p>`;
+          : 'Введи сумму — появится, что на неё купить.'} Зелёным — что купить. Стоимость и цели — по рыночной цене, в рублях; цена покупки — прошлого дня с НКД.</p>`;
       box.querySelector('#mat_invest').addEventListener('change', e => {
         money = Math.max(0, Number(e.target.value) || 0);
         try { localStorage.setItem('mp_mat_invest', String(money)); } catch { /* no storage */ }
