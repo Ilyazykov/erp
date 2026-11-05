@@ -5320,7 +5320,8 @@ async function mpRenderCryptoStrategy() {
     // crypto at zero before its first buys there.
     // Buys: the money sent to crypto (expenses 'Crypto': card payments to
     // Mercuryo, Crypto.com, ...), a marker a month with its sum in euros, as
-    // on the strategy's back-test chart. Sales: crypto sold for money -- none
+    // on the strategy's back-test chart -- at the month's first buy, on the
+    // share before it (the share the decision was taken at). Sales: crypto sold for money -- none
     // so far; they'd go down as ▼.
     const [{ data: periods }, { data: buys }, { data: eur }] = await Promise.all([
       sb.from('life_periods').select('start_day, place').order('start_day'),
@@ -5331,12 +5332,13 @@ async function mpRenderCryptoStrategy() {
     // from the move to Cyprus: the share still at zero, then the first buys
     const start = cyprus || shares[0].day;
     const shown = shares.filter(x => x.day >= start);
-    const shareOn = day => { let v = null; for (const x of shown) { if (x.day > day) break; v = x.pct; } return v ?? shown[0]?.pct ?? 0; };
+    // the share before a day: what the decision to buy was taken at
+    const shareBefore = day => { let v = null; for (const x of shown) { if (x.day >= day) break; v = x.pct; } return v ?? shown[0]?.pct ?? 0; };
     const eurOn = day => { let v = null; for (const r of eur || []) { if (r.day > day) break; v = Number(r.usd_per_unit); } return v || 1.1; };
     const months = new Map();
     for (const b of (buys || []).filter(b => b.day >= start)) {
       const m = b.day.slice(0, 7), cur = months.get(m) || { day: b.day, eur: 0 };
-      cur.day = b.day; cur.eur += Number(b.usd) / eurOn(b.day);
+      cur.eur += Number(b.usd) / eurOn(b.day);   // at the month's first buy
       months.set(m, cur);
     }
     const marks = [...months.values()];
@@ -5368,7 +5370,7 @@ async function mpRenderCryptoStrategy() {
     Plotly.newPlot('plot_cs_share', [
       { x: shown.map(x => x.day), y: targets, type: 'scatter', mode: 'lines', name: 'цель стратегии', connectgaps: false, line: { color: '#3dd68c', width: 2, dash: 'dash', shape: 'hv' } },
       { x: shown.map(x => x.day), y: shown.map(x => x.pct), type: 'scatter', mode: 'lines', name: 'доля крипты, %', line: { color: '#f5c542', width: 2 } },
-      { x: marks.map(m => m.day), y: marks.map(m => shareOn(m.day)), type: 'scatter', mode: 'markers+text', name: 'покупка',
+      { x: marks.map(m => m.day), y: marks.map(m => shareBefore(m.day)), type: 'scatter', mode: 'markers+text', name: 'покупка',
         marker: { symbol: 'triangle-up', size: 12, color: '#58a6ff', line: { color: '#e6edf3', width: 1 } },
         text: marks.map(m => `€${Math.round(m.eur).toLocaleString('en-US')}`), textposition: 'top center', textfont: { color: '#58a6ff', size: 11 },
         hovertemplate: '%{x}: покупка %{text}<extra></extra>' },
