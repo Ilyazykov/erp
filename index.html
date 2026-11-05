@@ -536,6 +536,7 @@
   </div>
   <div id="plot_mat_years" style="height:280px;margin-bottom:24px"></div>
   <div id="mat_pies" class="pie-grid" style="margin-bottom:24px"></div>
+  <div id="plot_mat_float" style="height:300px;margin-bottom:24px"></div>
   <div id="plot_mat"></div>
 </div>
 
@@ -5231,7 +5232,7 @@ function mpAssetBuckets(rows, keep = null) {
 // has its offer (MOEX ISS, straight from the browser), and the term deposits'
 // ends (deposit_terms, set by hand: no statement gives them) -- a bar from
 // today to the date, its thickness the money in it. ----
-const MP_MAT_CACHE = 'mp_moex_bond_dates_v4';
+const MP_MAT_CACHE = 'mp_moex_bond_dates_v5';
 async function mpMoexBondDates(secids) {
   let cache = {};
   try { cache = JSON.parse(localStorage.getItem(MP_MAT_CACHE) || '{}'); } catch { /* none */ }
@@ -5264,8 +5265,13 @@ async function mpMoexBondDates(secids) {
     const coupons = raw.map(c => { if (c.value) lastCoupon = Number(c.value); return { day: c.coupondate, value: c.value ? Number(c.value) : lastCoupon }; })
       .filter(c => c.day > today && c.value > 0);
     const face = table('amortizations').filter(a => a.amortdate > today).map(a => ({ day: a.amortdate, value: Number(a.value) }));
+    // the coupon's rate now, % a year: the last one set (a floater's next
+    // ones aren't) -- MOEX's own rate, or its sum over the face and the period
+    const set = raw.filter(c => c.value || c.valueprc).pop();
+    const rate = !set ? null : Number(set.valueprc) || Number(set.value) / Number(set.facevalue)
+      * 365 / Math.max(1, (Date.parse(set.coupondate) - Date.parse(set.startdate)) / 86400000) * 100;
     cache[secid] = { at: today, name: desc.NAME || desc.SHORTNAME || secid, mat: desc.MATDATE || null, offer: offers[0] || null,
-      unit: (desc.FACEUNIT || 'RUB').replace('SUR', 'RUB'), coupons, face, floating };
+      unit: (desc.FACEUNIT || 'RUB').replace('SUR', 'RUB'), coupons, face, floating, rate };
   };
   for (let i = 0; i < todo.length; i += 6) await Promise.all(todo.slice(i, i + 6).map(one));
   try { localStorage.setItem(MP_MAT_CACHE, JSON.stringify(cache)); } catch { /* no storage */ }
@@ -5352,7 +5358,7 @@ async function mpRenderMaturities() {
   for (const r of rows) {
     if (r.deposit) { r.name = r.ticker.replace(/^DEPOSIT:/, 'Вклад '); r.mat = endOf.get(r.ticker) || null; r.offer = null; }
     else Object.assign(r, { name: dates[r.ticker]?.name || r.ticker, mat: dates[r.ticker]?.mat || null, offer: dates[r.ticker]?.offer || null,
-      unit: dates[r.ticker]?.unit || 'RUB', coupons: dates[r.ticker]?.coupons || [], face: dates[r.ticker]?.face || [], floating: !!dates[r.ticker]?.floating });
+      unit: dates[r.ticker]?.unit || 'RUB', coupons: dates[r.ticker]?.coupons || [], face: dates[r.ticker]?.face || [], floating: !!dates[r.ticker]?.floating, rate: dates[r.ticker]?.rate ?? null });
     r.next = r.offer || r.mat;
   }
   const withDeposits = document.getElementById('mat_deposits').checked, withCoupons = document.getElementById('mat_coupons').checked;
@@ -5446,6 +5452,44 @@ async function mpRenderMaturities() {
     { label: 'переменный купон', usd: floatAll, target: floatPct, color: '#a371f7' },
   ], `${key ? `Ключевая ≈ ${key.now.toFixed(2)}% (RUSFAR), за полгода ${key.change > 0 ? '+' : ''}${key.change.toFixed(2)} пп. ` : ''}`
     + `Флоатеров ${MP_FLOAT_SHARE.cutting}%, пока ключевую снижают (−${MP_FLOAT_SHARE.step} пп за полгода и больше), ${MP_FLOAT_SHARE.flat}% — пока стоит, ${MP_FLOAT_SHARE.hiking}% — пока повышают.`);
+  // The floaters by term and spread (asked 05.11.2026). A floater's coupon
+  // follows the key rate, so its term hardly matters -- but its spread over the
+  // key rate is fixed for the whole term: if the market's spreads widen by
+  // 1 pp, a bond with N years left loses some N% of its price (a short one
+  // little -- the green zone, up to 3 years); a long one is worth it at a
+  // bigger spread. The spread: the coupon now over the key rate (RUSFAR),
+  // plus the price's discount to the face spread over the years left.
+  const floaters = shown.filter(r => r.floating && r.next);
+  const plotFloat = document.getElementById('plot_mat_float');
+  plotFloat.style.display = floaters.length ? '' : 'none';
+  if (floaters.length) {
+    const md = await fetch(`https://iss.moex.com/iss/engines/stock/markets/bonds/securities.json?iss.meta=off&iss.only=securities&securities.columns=SECID,PREVWAPRICE,PREVPRICE&securities=${floaters.map(r => r.ticker).join(',')}`)
+      .then(r => r.json()).catch(() => null);
+    const priceOf = new Map((md?.securities?.data || []).filter(([, w, p]) => w || p).map(([id, w, p]) => [id, Number(w || p)]));
+    const pts = floaters.map(r => {
+      const years = Math.max(0.05, (Date.parse(r.next) - Date.now()) / (365 * 86400000));
+      const price = priceOf.get(r.ticker) ?? 100;
+      const spread = r.rate != null && key ? r.rate - key.now + (100 - price) / years : null;
+      return { r, years, price, spread, ofz: /^SU/.test(r.ticker) };
+    }).filter(p => p.spread != null);
+    const maxX = Math.max(5, ...pts.map(p => p.years + 0.5));
+    const maxUsdF = Math.max(...pts.map(p => p.r.usd), 1);
+    Plotly.newPlot(plotFloat, [{
+      type: 'scatter', mode: 'markers+text', x: pts.map(p => p.years), y: pts.map(p => p.spread),
+      text: pts.map(p => p.r.name.length > 26 ? p.r.name.slice(0, 25) + '…' : p.r.name), textposition: 'top center', textfont: { size: 11, color: '#c9d1d9' },
+      marker: { size: pts.map(p => 12 + 28 * Math.sqrt(p.r.usd / maxUsdF)), color: pts.map(p => p.ofz ? '#c9b3ff' : '#a371f7'), line: { color: '#0d1117', width: 1 } },
+      customdata: pts.map(p => [p.r.next, money(p.r.usd), p.r.rate.toFixed(2), p.price.toFixed(2), p.years.toFixed(1)]),
+      hovertemplate: '<b>%{text}</b><br>до %{customdata[0]} (%{customdata[4]} г.) · %{customdata[1]}<br>купон сейчас %{customdata[2]}%, цена %{customdata[3]}%'
+        + '<br>надбавка к ключевой ≈ %{y:+.2f} пп<br>надбавки на рынке +1 пп → цена ≈ −%{customdata[4]}%<extra></extra>',
+    }], { ...dark, title: 'Флоатеры: срок и надбавка к ключевой', showlegend: false, margin: { l: 50, r: 20, t: 50, b: 40 },
+      hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
+      xaxis: { title: 'лет до погашения / оферты', range: [0, maxX], gridcolor: '#1e2830', zeroline: false },
+      yaxis: { title: 'надбавка, пп', gridcolor: '#1e2830', zerolinecolor: '#30363d', range: [Math.min(-1, ...pts.map(p => p.spread - 1)), Math.max(3, ...pts.map(p => p.spread + 1))] },
+      shapes: [{ type: 'rect', xref: 'x', yref: 'paper', x0: 0, x1: 3, y0: 0, y1: 1, fillcolor: 'rgba(61,214,140,0.07)', line: { width: 0 }, layer: 'below' }],
+      annotations: [{ xref: 'x', yref: 'paper', x: 1.5, y: 1, yanchor: 'top', showarrow: false, font: { size: 11, color: '#3dd68c' }, text: 'до 3 лет: рост надбавок почти не бьёт по цене' },
+        { xref: 'x', yref: 'paper', x: (3 + maxX) / 2, y: 1, yanchor: 'top', showarrow: false, font: { size: 11, color: '#8b949e' }, text: 'длиннее — только за бо́льшую надбавку' }] },
+      { responsive: true, displaylogo: false });
+  }
   Plotly.newPlot('plot_mat_years', [
     { type: 'bar', name: 'номинал: постоянный купон и вклад', x: ys, y: ys.map(y => (faceBy.get(y) || 0) - (floatFaceBy.get(y) || 0)), marker: { color: '#58a6ff' }, hovertemplate: '%{y:$,.0f}' },
     { type: 'bar', name: 'номинал: переменный купон (флоатеры)', x: ys, y: ys.map(y => floatFaceBy.get(y) || 0), marker: { color: '#a371f7' }, hovertemplate: '%{y:$,.0f}' },
