@@ -534,8 +534,8 @@
     <label>лесенка с <input type="number" id="mat_from" style="width:70px"> по <input type="number" id="mat_to" style="width:70px"></label>
     <label><select id="mat_weights"><option value="far">больше в дальние</option><option value="even">поровну</option></select></label>
   </div>
-  <div id="plot_mat_years" style="height:280px;margin-bottom:8px"></div>
-  <p class="note" id="mat_plan" style="margin-bottom:24px"></p>
+  <div id="plot_mat_years" style="height:280px;margin-bottom:24px"></div>
+  <div id="mat_pies" class="pie-grid" style="margin-bottom:24px"></div>
   <div id="plot_mat"></div>
 </div>
 
@@ -5438,15 +5438,14 @@ async function mpRenderMaturities() {
   const tot = y => (faceBy.get(y) || 0) + (couponBy.get(y) || 0);
   const fixedOf = y => (faceBy.get(y) || 0) - (floatFaceBy.get(y) || 0);
   const floatAll = [...floatFaceBy.values()].reduce((t, v) => t + v, 0);
-  const short = rungs.map(y => [y, targetOf(y) - fixedOf(y)]).filter(([, d]) => d > 1).sort((a, b) => b[0].localeCompare(a[0]));
-  const phaseText = { cutting: 'ставку снижают', flat: 'ставка стоит', hiking: 'ставку повышают' }[key?.phase || 'flat'];
-  const floatTarget = faceAll * floatPct / 100, floatDiff = floatAll - floatTarget;
-  const shortText = short.length ? `в ступени с недобором, начиная с дальних: ${short.map(([y, d]) => `<b>${y}</b> — ${money(d)}`).join(', ')}` : 'в дальнюю ступень';
-  document.getElementById('mat_plan').innerHTML = !rungs.length ? '' : `${key ? `Ключевая ≈ ${key.now.toFixed(2)}% (RUSFAR), за полгода ${key.change > 0 ? '+' : ''}${key.change.toFixed(2)} пп — ${phaseText}` : 'Ставку с MOEX получить не удалось — считаю, что стоит'}:
-    флоатеров (переменный купон) — <b>${floatPct}%</b> номинала (${floatPct === MP_FLOAT_SHARE.cutting ? 'при снижении фиксируем ставку' : floatPct === MP_FLOAT_SHARE.hiking ? 'при росте купон флоатера растёт' : 'нейтрально'}; снижают ≤ −${MP_FLOAT_SHARE.step} пп — ${MP_FLOAT_SHARE.cutting}%, стоит — ${MP_FLOAT_SHARE.flat}%, повышают — ${MP_FLOAT_SHARE.hiking}%), остальное — лесенка постоянного купона и вкладов.<br>
-    Сейчас флоатеров ${money(floatAll)} (${Math.round(floatAll / (faceAll || 1) * 100)}%), цель ${money(floatTarget)}:
-    ${Math.abs(floatDiff) < faceAll * 0.01 ? 'в норме.' : floatDiff > 0 ? `лишние ${money(floatDiff)} — переложить в постоянный купон (ОФЗ-ПД и т.п.) ${shortText}.` : `докупить флоатеров на ${money(-floatDiff)} — из денег ближних погашений.`}
-    ${floatDiff > 0 || !short.length ? '' : `Недобор лесенки: ${short.map(([y, d]) => `<b>${y}</b> — ${money(d)}`).join(', ')}.`}`;
+  // the floaters against their share by the key rate, as the other target pies
+  const pies = document.getElementById('mat_pies');
+  pies.innerHTML = '';
+  mpTargetPie(pies, 'Постоянный и переменный купон (номинал)', [
+    { label: 'постоянный купон и вклады', usd: faceAll - floatAll, target: 100 - floatPct, color: '#58a6ff' },
+    { label: 'переменный купон', usd: floatAll, target: floatPct, color: '#a371f7' },
+  ], `${key ? `Ключевая ≈ ${key.now.toFixed(2)}% (RUSFAR), за полгода ${key.change > 0 ? '+' : ''}${key.change.toFixed(2)} пп. ` : ''}`
+    + `Флоатеров ${MP_FLOAT_SHARE.cutting}%, пока ключевую снижают (−${MP_FLOAT_SHARE.step} пп за полгода и больше), ${MP_FLOAT_SHARE.flat}% — пока стоит, ${MP_FLOAT_SHARE.hiking}% — пока повышают.`);
   Plotly.newPlot('plot_mat_years', [
     { type: 'bar', name: 'номинал: постоянный купон и вклад', x: ys, y: ys.map(y => (faceBy.get(y) || 0) - (floatFaceBy.get(y) || 0)), marker: { color: '#58a6ff' }, hovertemplate: '%{y:$,.0f}' },
     { type: 'bar', name: 'номинал: переменный купон (флоатеры)', x: ys, y: ys.map(y => floatFaceBy.get(y) || 0), marker: { color: '#a371f7' }, hovertemplate: '%{y:$,.0f}' },
@@ -5454,7 +5453,7 @@ async function mpRenderMaturities() {
     { type: 'scatter', mode: 'text', x: ys, y: ys.map(tot), text: ys.map(y => money(tot(y))), textposition: 'top center', showlegend: false, hoverinfo: 'skip', cliponaxis: false },
     // the ladder's target per year: a tick over the bar; outside the ladder 0
     { type: 'scatter', mode: 'markers', name: `цель лесенки ${from}–${to} (номинал с постоянным купоном)`, x: ys, y: ys.map(targetOf),
-      marker: { symbol: 'line-ew-open', size: 34, line: { width: 3, color: '#f5c542' } },
+      marker: { symbol: 'line-ew-open', size: 34, line: { width: 3, color: '#f85149' } },
       customdata: ys.map(y => { const d = fixedOf(y) - targetOf(y); return `${d >= 0 ? 'перебор' : 'недобор'} ${money(Math.abs(d))}${floatFaceBy.get(y) ? ' (флоатеры не в счёт)' : ''}`; }),
       hovertemplate: '%{y:$,.0f} — %{customdata}' },
   ], { ...dark, barmode: 'stack', title: 'Сколько придёт по годам — по графику MOEX, по сегодняшнему курсу', margin: { l: 50, r: 20, t: 50, b: 30 },
