@@ -5217,15 +5217,67 @@ function mpAssetBuckets(rows, keep = null) {
 // It's the whole crypto's share (BTC moves the rest with it). ----
 const MP_AHR = { red: 0.45, green: 1.2, target: 5, floor: 1 };
 let mpCryptoInd = null;   // [{ day, btc, dca, fair, ahr }], oldest first
-// The days crypto was bought (expenses 'Crypto': money sent to crypto) and
-// sold (none recorded so far), oldest first: a month's step is one buy or one sale.
-let mpCryptoBuyDays = [], mpCryptoSellDays = [], mpCryptoDealsLoaded = false;
-async function mpLoadCryptoIndicators() {
-  // the buys once signed in (the indicators are public, the buys aren't)
-  if (mpIsSignedIn && !mpCryptoDealsLoaded) {
-    const { data: buys, error } = await sb.from('expenses').select('day').eq('category', 'Crypto').order('day');
-    if (!error) { mpCryptoBuyDays = [...new Set((buys || []).map(b => b.day))]; mpCryptoDealsLoaded = true; }
+// The crypto bought and sold (wallet_transactions: the exchanges' and
+// wallets' trades), oldest first: a buy is crypto got for money -- a
+// stablecoin, fiat -- in one trade, a sale the other way round. Not a deal:
+// crypto for crypto, and gold tokens (XAUT, PAXG: gold) or stablecoins
+// (dollars) bought -- the money sent to crypto services (expenses 'Crypto')
+// was no measure: September 2025's €300 bought XAUT. A month's step is one
+// buy or one sale. [{ day, usd }] each, a day's deals summed.
+const MP_NOT_CRYPTO = new Set(['USDT', 'USDC', 'DAI', 'USDS', 'FDUSD', 'BUSD', 'TUSD', 'USDE', 'PYUSD', 'USD', 'EUR', 'GBP', 'XAUT', 'PAXG']);
+const MP_MONEY = new Set(['USDT', 'USDC', 'DAI', 'USDS', 'FDUSD', 'BUSD', 'TUSD', 'USDE', 'PYUSD', 'USD', 'EUR', 'GBP']);
+let mpCryptoBuys = [], mpCryptoSells = [], mpCryptoDealsLoaded = false;
+let mpCryptoBuyDays = [], mpCryptoSellDays = [];
+async function mpLoadCryptoDeals() {
+  const rows = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await sb.from('wallet_transactions').select('wallet_id, tx_time, kind, symbol, amount')
+      .in('kind', ['trade', 'purchase', 'convert', 'trade_out_unknown']).eq('estimated', false).order('tx_time').range(from, from + 999);
+    if (error) return false;
+    rows.push(...data);
+    if (data.length < 1000) break;
   }
+  const { data: eur } = await sb.from('fx_history').select('day, usd_per_unit').eq('currency', 'EUR').order('day', { ascending: false }).limit(1);
+  const eurUsd = Number(eur?.[0]?.usd_per_unit) || 1.1;
+  // one trade: its legs at the same moment in the same wallet
+  const deals = new Map();
+  for (const r of rows) {
+    const k = `${r.wallet_id}|${r.tx_time}`;
+    deals.set(k, [...(deals.get(k) || []), r]);
+  }
+  // a day's deals: money amounts, or a card purchase's coin to price
+  const buys = new Map(), sells = new Map();
+  const add = (m, day, part) => m.set(day, [...(m.get(day) || []), part]);
+  for (const legs of deals.values()) {
+    const day = String(legs[0].tx_time).slice(0, 10);
+    const coin = legs.filter(l => !MP_NOT_CRYPTO.has(String(l.symbol).toUpperCase()) && Number(l.amount) !== 0);
+    const money = legs.filter(l => MP_MONEY.has(String(l.symbol).toUpperCase()) && Number(l.amount) !== 0);
+    if (coin.length !== 1) continue;   // crypto for crypto, or no crypto
+    const c = coin[0], amt = Number(c.amount);
+    if (money.length) {
+      const usd = money.reduce((t, l) => t + Math.abs(Number(l.amount)) * (String(l.symbol).toUpperCase() === 'EUR' ? eurUsd : 1), 0);
+      add(amt > 0 ? buys : sells, day, usd);
+    // a card purchase, or a Telegram trade whose spent side the wallet's export
+    // doesn't give (trade_out_unknown, amount 0): priced at the coin's close
+    } else if (amt > 0 && (c.kind === 'purchase' || legs.some(l => l.kind === 'trade_out_unknown'))) add(buys, day, { coin: c.symbol, qty: amt });
+  }
+  // a card purchase has no money leg: the coin's close that day (price_history)
+  const value = async (day, x) => {
+    if (typeof x === 'number') return x;
+    const { data } = await sb.from('price_history').select('price_usd').eq('ticker', x.coin).lte('day', day).order('day', { ascending: false }).limit(1);
+    return x.qty * (Number(data?.[0]?.price_usd) || 0);
+  };
+  const list = async m => (await Promise.all([...m].map(async ([day, parts]) =>
+    ({ day, usd: (await Promise.all(parts.map(x => value(day, x)))).reduce((t, v) => t + v, 0) })))).sort((a, b) => a.day.localeCompare(b.day));
+  mpCryptoBuys = await list(buys);
+  mpCryptoSells = await list(sells);
+  mpCryptoBuyDays = mpCryptoBuys.map(b => b.day);
+  mpCryptoSellDays = mpCryptoSells.map(b => b.day);
+  return true;
+}
+async function mpLoadCryptoIndicators() {
+  // the deals once signed in (the indicators are public, the deals aren't)
+  if (mpIsSignedIn && !mpCryptoDealsLoaded) mpCryptoDealsLoaded = await mpLoadCryptoDeals().catch(() => false);
   if (mpCryptoInd?.length) return mpCryptoInd;   // an empty answer isn't kept: the table may fill later
   const out = [];
   for (let from = 0; ; from += 1000) {
@@ -5328,7 +5380,9 @@ async function mpRenderCryptoStrategy() {
     card('Доля крипты', share === null ? 'войдите' : `${share.toFixed(1)}%`, `цель стратегии: ${share === null ? '—' : plan.target.toFixed(1) + '%'}`),
     card('В этом месяце', actionText, plan.why),
   ].join('');
-  const dark = { paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', font: { color: '#c9d1d9' }, margin: { t: 30, r: 20, b: 40, l: 60 } };
+  // hover as on the other charts: anywhere over the day, one dark box for all lines
+  const dark = { paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', font: { color: '#c9d1d9' }, margin: { t: 30, r: 20, b: 40, l: 60 },
+    hovermode: 'x unified', hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } } };
   const days = ind.map(r => r.day);
   // zone bands as shapes: each run of red / green days
   const shapes = [];
@@ -5344,7 +5398,7 @@ async function mpRenderCryptoStrategy() {
       fillcolor: runZone === 'red' ? '#e05252' : '#3dd68c', opacity: 0.12, line: { width: 0 }, layer: 'below' });
   });
   const hline = (y, color) => ({ type: 'line', xref: 'paper', x0: 0, x1: 1, y0: y, y1: y, line: { color, width: 1, dash: 'dash' } });
-  Plotly.newPlot('plot_cs_ahr', [{ x: days, y: ind.map(r => r.ahr), type: 'scatter', mode: 'lines', name: 'AHR999', line: { color: '#f5c542', width: 1.5 } }],
+  Plotly.newPlot('plot_cs_ahr', [{ x: days, y: ind.map(r => r.ahr), type: 'scatter', mode: 'lines', name: 'AHR999', line: { color: '#f5c542', width: 1.5 }, hovertemplate: '%{y:.3f}' }],
     { ...dark, title: 'AHR999', yaxis: { type: 'log', gridcolor: '#1e2830' }, xaxis: { gridcolor: '#1e2830' },
       shapes: [...shapes, hline(MP_AHR.red, '#e05252'), hline(MP_AHR.green, '#3dd68c')] }, { responsive: true, displaylogo: false });
   Plotly.newPlot('plot_cs_price', [
@@ -5356,27 +5410,18 @@ async function mpRenderCryptoStrategy() {
   if (shares.length) {
     // From the move to Cyprus (life_periods) -- the strategy's start: the
     // crypto at zero before its first buys there.
-    // Buys: the money sent to crypto (expenses 'Crypto': card payments to
-    // Mercuryo, Crypto.com, ...), a marker a month with its sum in euros, as
-    // on the strategy's back-test chart -- at the month's first buy, on the
-    // share before it (the share the decision was taken at). Sales: crypto sold for money -- none
-    // so far; they'd go down as ▼.
-    const [{ data: buys }, { data: eur }] = await Promise.all([
-      sb.from('expenses').select('day, usd').eq('category', 'Crypto').order('day'),
-      sb.from('fx_history').select('day, usd_per_unit').eq('currency', 'EUR').gte('day', '2025-01-01').order('day'),
-    ]);
+    // Buys ▲ and sales ▼ (mpLoadCryptoDeals: crypto for money and back),
+    // a marker a day with its sum in euros.
+    const buys = mpCryptoBuys, sells = mpCryptoSells;
+    const { data: eur } = await sb.from('fx_history').select('day, usd_per_unit').eq('currency', 'EUR').gte('day', '2025-01-01').order('day');
     const start = shares[0].day;
     const shown = shares.filter(x => x.day >= start);
     // the share before a day: what the decision to buy was taken at
     const shareBefore = day => { let v = null; for (const x of shown) { if (x.day >= day) break; v = x.pct; } return v ?? shown[0]?.pct ?? 0; };
     const eurOn = day => { let v = null; for (const r of eur || []) { if (r.day > day) break; v = Number(r.usd_per_unit); } return v || 1.1; };
-    const months = new Map();
-    for (const b of (buys || []).filter(b => b.day >= start)) {
-      const m = b.day.slice(0, 7), cur = months.get(m) || { day: b.day, eur: 0 };
-      cur.eur += Number(b.usd) / eurOn(b.day);   // at the month's first buy
-      months.set(m, cur);
-    }
-    const marks = [...months.values()];
+    // a marker a day of buys (▲) and of sales (▼), its sum in euros
+    const toMarks = list => list.filter(b => b.day >= start).map(b => ({ day: b.day, eur: b.usd / eurOn(b.day) }));
+    const marks = toMarks(buys), sellMarks = toMarks(sells);
     // the red and green zones shaded (the neutral left blank)
     const zoneShapes = [];
     let zStart = null, zZone = null;
@@ -5400,23 +5445,32 @@ async function mpRenderCryptoStrategy() {
       return mpCryptoTarget(x.day, x.pct, z, regime, mpLastBefore(mpCryptoBuyDays, x.day), mpLastBefore(mpCryptoSellDays, x.day)).target;
     });
     Plotly.newPlot('plot_cs_share', [
-      { x: shown.map(x => x.day), y: targets, type: 'scatter', mode: 'lines', name: 'цель стратегии', connectgaps: false, line: { color: '#3dd68c', width: 2, dash: 'dash', shape: 'hv' } },
-      { x: shown.map(x => x.day), y: shown.map(x => x.pct), type: 'scatter', mode: 'lines', name: 'доля крипты, %', line: { color: '#f5c542', width: 2 } },
+      { x: shown.map(x => x.day), y: targets, type: 'scatter', mode: 'lines', name: 'цель стратегии', connectgaps: false, opacity: 0.45, line: { color: '#3dd68c', width: 3, shape: 'hv' },
+        hovertemplate: '%{y:.2f}%' },
+      { x: shown.map(x => x.day), y: shown.map(x => x.pct), type: 'scatter', mode: 'lines', name: 'доля крипты', line: { color: '#f5c542', width: 2 },
+        hovertemplate: '%{y:.2f}%' },
       // along the bottom, each with a thin dotted line up to see the moment
       { x: marks.map(m => m.day), y: marks.map(() => 0.25), type: 'scatter', mode: 'markers', name: 'покупка',
         marker: { symbol: 'triangle-up', size: 12, color: '#58a6ff', line: { color: '#e6edf3', width: 1 } },
         text: marks.map(m => `€${Math.round(m.eur).toLocaleString('en-US')}`), textposition: 'top center', textfont: { color: '#58a6ff', size: 11 },
         customdata: marks.map(m => shareBefore(m.day).toFixed(1)),
-        hovertemplate: '%{x}: покупка %{text} при доле %{customdata}%<extra></extra>' },
+        hovertemplate: 'покупка %{text} при доле %{customdata}%' },
+      { x: sellMarks.map(m => m.day), y: sellMarks.map(() => 0.25), type: 'scatter', mode: 'markers', name: 'продажа',
+        marker: { symbol: 'triangle-down', size: 12, color: '#e05252', line: { color: '#e6edf3', width: 1 } },
+        text: sellMarks.map(m => `€${Math.round(m.eur).toLocaleString('en-US')}`),
+        customdata: sellMarks.map(m => shareBefore(m.day).toFixed(1)),
+        hovertemplate: 'продажа %{text} при доле %{customdata}%' },
     ], { ...dark, title: 'Доля крипты в портфеле, %', yaxis: { gridcolor: '#1e2830', ticksuffix: '%', range: [0, Math.max(MP_AHR.target, ...shown.map(x => x.pct)) * 1.12], zeroline: true, zerolinecolor: '#8b949e' },
       xaxis: { gridcolor: '#1e2830' }, legend: { orientation: 'h', y: -0.15 },
       shapes: [...zoneShapes, hline(MP_AHR.target, '#8b949e'), hline(MP_AHR.floor, '#8b949e'),
-        ...marks.map(m => ({ type: 'line', xref: 'x', yref: 'paper', x0: m.day, x1: m.day, y0: 0, y1: 1, line: { color: '#58a6ff', width: 1, dash: 'dot' }, opacity: 0.6 }))],
+        ...[[marks, '#58a6ff'], [sellMarks, '#e05252']].flatMap(([list, color]) =>
+          list.map(m => ({ type: 'line', xref: 'x', yref: 'paper', x0: m.day, x1: m.day, y0: 0, y1: 1, line: { color, width: 1, dash: 'dot' }, opacity: 0.6 })))],
       annotations: [...[[MP_AHR.target, `цель ${MP_AHR.target}%`], [MP_AHR.floor, `минимум ${MP_AHR.floor}%`]].map(([y, text]) =>
         ({ xref: 'paper', x: 0, xanchor: 'left', y, yanchor: 'bottom', text, showarrow: false, font: { color: '#8b949e', size: 11 } })),
         // the sums upright along their dotted lines: buys days apart don't run into each other
-        ...marks.map(m => ({ x: m.day, y: 0.5, yanchor: 'bottom', xanchor: 'center', textangle: -90, showarrow: false,
-          text: `€${Math.round(m.eur).toLocaleString('en-US')}`, font: { color: '#58a6ff', size: 11 }, bgcolor: '#0d1117' }))] },
+        ...[[marks, '#58a6ff'], [sellMarks, '#e05252']].flatMap(([list, color]) =>
+          list.map(m => ({ x: m.day, y: 0.5, yanchor: 'bottom', xanchor: 'center', textangle: -90, showarrow: false,
+            text: `€${Math.round(m.eur).toLocaleString('en-US')}`, font: { color, size: 11 }, bgcolor: '#0d1117' })))] },
       { responsive: true, displaylogo: false });
   } else document.getElementById('plot_cs_share').innerHTML = '<p class="empty-note">Войдите, чтобы увидеть долю крипты в портфеле.</p>';
 }
