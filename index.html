@@ -5241,8 +5241,9 @@ const mpAhrZone = a => (a < MP_AHR.red ? 'red' : a > MP_AHR.green ? 'green' : 'n
 const mpDaysBefore = (day, n) => new Date(Date.parse(day + 'T00:00:00Z') - n * 86400000).toISOString().slice(0, 10);
 // The strategy's target share on `day` for a share of `share` %, the zone that
 // day and the last red / green before it; lastBuy / lastSell: the latest
-// buy / sale before that day. A month's step is done once: a buy (sale)
-// within the 30 days before keeps the target at the share.
+// buy / sale before that day. A month's step is done once: after a buy the
+// target rises back from the share to the share +1% over 30 days, linearly;
+// a sale within the 30 days before keeps it at the share.
 //   red, and neutral after red: +1% up to 5%; above 5% the share (nothing sold)
 //   green: the share less 1% (1-10%), 2% (10-20%), 3% (20% and more), not below 1%
 //   neutral after green: the share (nothing to do)
@@ -5256,7 +5257,13 @@ function mpCryptoTarget(day, share, zone, regime, lastBuy, lastSell) {
   if (zone === 'red' || regime !== 'green') {
     const head = zone === 'red' ? 'красная зона' : 'нейтральная после красной';
     if (share >= MP_AHR.target) return { target: share, step: 1, why: `${head}: доля уже не ниже ${MP_AHR.target}%, ничего не делать` };
-    if (lastBuy && lastBuy > monthAgo) return { target: share, step: 1, why: `${head}: покупка этого месяца уже была (${lastBuy})` };
+    // after a buy the next 1% comes back gradually: from 0 on its day to the
+    // whole 1% 30 days on
+    if (lastBuy && lastBuy > monthAgo) {
+      const part = (Date.parse(day + 'T00:00:00Z') - Date.parse(lastBuy + 'T00:00:00Z')) / 86400000 / 30;
+      return { target: Math.min(MP_AHR.target, share + part), step: 1,
+        why: `${head}: после покупки ${lastBuy} шаг набирается заново — ${(part * 100).toFixed(0)}% из 1%` };
+    }
     return { target: Math.min(MP_AHR.target, share + 1), step: 1, why: `${head}: докупить на 1% портфеля, до ${MP_AHR.target}%` };
   }
   return { target: share, step: 0, why: 'нейтральная после зелёной: ничего не делать до красной зоны' };
