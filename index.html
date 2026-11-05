@@ -8718,10 +8718,15 @@ function mpEditPlace(src, xid) {
   const list = mpExpCache?.placeList || [];
   // where it was brought to: a delivery's only
   const delivery = r.cat === 'Food delivery' || r.deliveredToId != null;
-  const opts = sel => `<option value="">—</option>${list.map(p => `<option value="${p.id}"${p.id === sel ? ' selected' : ''}>${mpEscapeHtml(p.name)}</option>`).join('')}<option value="new">+ new place…</option>`;
+  // a new place first, then none, then the places A-Z; the search box above filters them
+  const opts = sel => `<option value="new">+ new place…</option><option value=""${sel == null ? ' selected' : ''}>—</option>${
+    list.slice().sort((a, b) => a.name.localeCompare(b.name)).map(p => `<option value="${p.id}"${p.id === sel ? ' selected' : ''}>${mpEscapeHtml(p.name)}</option>`).join('')}`;
+  const picker = (name, label, sel) => `<label>${label}
+    <input type="search" data-for="${name}" placeholder="search…" style="${MP_FIELD};margin:4px 0">
+    <select name="${name}" size="7" style="${MP_FIELD}">${opts(sel)}</select></label>`;
   const form = mpDialog(`Place · ${r.day} · ${mpShortDesc(r.description)}`, `
-    <label>📍 Where<select name="from" style="${MP_FIELD}">${opts(r.placeId)}</select></label>
-    ${delivery ? `<label>→ 🏠 Delivered to<select name="to" style="${MP_FIELD}">${opts(r.deliveredToId)}</select></label>` : ''}
+    ${picker('from', '📍 Where', r.placeId)}
+    ${delivery ? picker('to', '→ 🏠 Delivered to', r.deliveredToId) : ''}
     <fieldset name="nw" style="display:none;border:1px solid #30363d;border-radius:6px;padding:8px;gap:6px;flex-direction:column">
       <legend>New place</legend>
       <input name="link" placeholder="Google Maps link -- fills the fields" style="${MP_FIELD}">
@@ -8730,6 +8735,10 @@ function mpEditPlace(src, xid) {
       <input name="url" placeholder="map link" style="${MP_FIELD}">
       <input name="gid" placeholder="Google id (0x…:0x…)" style="${MP_FIELD}">
     </fieldset>`);
+  form.querySelectorAll('input[data-for]').forEach(box => box.addEventListener('input', () => {
+    const q = box.value.trim().toLowerCase();
+    for (const o of form[box.dataset.for].options) o.hidden = !!q && o.value !== 'new' && !o.text.toLowerCase().includes(q);
+  }));
   let target = null;   // which select the new place is for
   const nw = form.querySelector('fieldset');
   for (const name of delivery ? ['from', 'to'] : ['from']) {
