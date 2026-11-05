@@ -534,7 +534,6 @@
   <div id="mat_buy" style="margin-bottom:24px;overflow-x:auto"></div>
   <div class="form-row" style="gap:16px;justify-content:flex-end;margin:8px 0 -8px">
     <label><input type="checkbox" id="mat_deposits" checked> вклады</label>
-    <label><input type="checkbox" id="mat_coupons" checked> купоны и проценты</label>
     <label><input type="checkbox" id="mat_floaters"> флоатеры</label>
     <label>год рождения <input type="number" id="mat_birth" style="width:70px"></label>
   </div>
@@ -5318,7 +5317,7 @@ async function mpMoexBondDates(secids) {
     });
   }
 }
-for (const id of ['mat_deposits', 'mat_coupons', 'mat_floaters']) {
+for (const id of ['mat_deposits', 'mat_floaters']) {
   try { const v = localStorage.getItem('mp_' + id); if (v) document.getElementById(id).checked = v === '1'; } catch { /* no storage */ }
   document.getElementById(id).addEventListener('change', e => {
     try { localStorage.setItem('mp_' + id, e.target.checked ? '1' : '0'); } catch { /* no storage */ }
@@ -5560,7 +5559,8 @@ async function mpRenderMaturities() {
       unit: dates[r.ticker]?.unit || 'RUB', coupons: dates[r.ticker]?.coupons || [], face: dates[r.ticker]?.face || [], floating: !!dates[r.ticker]?.floating, rate: dates[r.ticker]?.rate ?? null });
     r.next = r.offer || r.mat;
   }
-  const withDeposits = document.getElementById('mat_deposits').checked, withCoupons = document.getElementById('mat_coupons').checked;
+  // the year charts by market value (06.11.2026: the face back at maturity wasn't wanted) -- no coupons
+  const withDeposits = document.getElementById('mat_deposits').checked, withCoupons = false;
   const shown = rows.filter(r => (r.next || r.deposit) && (withDeposits || !r.deposit)).sort((a, b) => (a.next || '9999').localeCompare(b.next || '9999'));
   status.textContent = shown.some(r => !r.next) ? 'У вклада не указана дата окончания — клик по нему на графике.' : '';
   const money = v => mpFormatUsd(v).replace(/\.\d+$/, '');
@@ -5948,26 +5948,27 @@ async function mpRenderMaturities() {
   const drawYears = (add = null) => {
     const aF = y => add?.fixed.get(y) || 0, aL = y => add?.float.get(y) || 0;
     const addAll = add ? [...add.fixed.values(), ...add.float.values()].reduce((t, v) => t + v, 0) : 0;
-    const lAll = faceAll + addAll - (bondsAll + addAll) * floatPct / 100;
+    // the targets as the pies': the ladder's share of the rouble market value, purchases in
+    const lAll = mvAll + addAll - (mvBonds + addAll) * floatPct / 100;
     const tOf = y => weightOf.has(y) ? lAll * weightOf.get(y) / weightSum : 0;
-    const yys = [...new Set([...ys, ...(add ? [...add.fixed.keys(), ...add.float.keys()] : [])])].sort();
-    const totA = y => tot(y) + aF(y) + (withFloaters ? aL(y) : 0);
+    const yys = [...new Set([...mvFixedBy.keys(), ...(withFloaters ? mvFloatBy.keys() : []), ...rungs, ...(add ? [...add.fixed.keys(), ...(withFloaters ? add.float.keys() : [])] : [])])].sort();
+    const fixedV = y => mvFixedBy.get(y) || 0, floatV = y => mvFloatBy.get(y) || 0;
+    const totA = y => fixedV(y) + aF(y) + (withFloaters ? floatV(y) + aL(y) : 0);
     const perR = Math.max(0, ...rungs.map(tOf));
     const yTop = Math.max(perR * 2.2, 1);
     const over = y => totA(y) > yTop;
     Plotly.newPlot('plot_mat_years', [
-      { type: 'bar', name: 'номинал: постоянный купон и вклад', x: yys, y: yys.map(y => ((faceBy.get(y) || 0) - (floatFaceBy.get(y) || 0)) * KR), marker: { color: '#58a6ff' }, hovertemplate: '%{y:,.0f} ₽' },
-      ...(withFloaters ? [{ type: 'bar', name: 'номинал: переменный купон (флоатеры)', x: yys, y: yys.map(y => (floatFaceBy.get(y) || 0) * KR), marker: { color: '#a371f7' }, hovertemplate: '%{y:,.0f} ₽' }] : []),
-      { type: 'bar', name: 'купоны и проценты', x: yys, y: yys.map(y => shownCoupon(y) * KR), marker: { color: '#3dd68c' }, hovertemplate: '%{y:,.0f} ₽' },
-      ...(addAll ? [{ type: 'bar', name: 'покупки по плану (номинал)', x: yys, y: yys.map(y => (aF(y) + (withFloaters ? aL(y) : 0)) * KR),
+      { type: 'bar', name: 'постоянный купон и вклады', x: yys, y: yys.map(y => fixedV(y) * KR), marker: { color: '#58a6ff' }, hovertemplate: '%{y:,.0f} ₽' },
+      ...(withFloaters ? [{ type: 'bar', name: 'флоатеры', x: yys, y: yys.map(y => floatV(y) * KR), marker: { color: '#a371f7' }, hovertemplate: '%{y:,.0f} ₽' }] : []),
+      ...(addAll ? [{ type: 'bar', name: 'покупки по плану', x: yys, y: yys.map(y => (aF(y) + (withFloaters ? aL(y) : 0)) * KR),
         marker: { color: 'rgba(88,166,255,0.35)', line: { color: '#58a6ff', width: 1 }, pattern: { shape: '/', fgcolor: '#58a6ff', solidity: 0.3 } }, hovertemplate: 'покупки: %{y:,.0f} ₽' }] : []),
       { type: 'scatter', mode: 'text', x: yys, y: yys.map(y => (over(y) ? yTop * 0.93 : totA(y)) * KR), text: yys.map(y => (over(y) ? '↑ ' : '') + rub(totA(y))), textposition: yys.map(y => over(y) ? 'middle center' : 'top center'), textfont: { color: yys.map(y => over(y) ? '#0d1117' : '#c9d1d9') }, showlegend: false, hoverinfo: 'skip', cliponaxis: false },
       // the ladder's target per year: a tick over the bar; outside the ladder 0
-      { type: 'scatter', mode: 'markers', name: `цель лесенки ${from}–${to}${auto ? ` (по вероятностям ЦБ: ${auto.years} лет)` : ' (таблицы не загружены: ровно)'} (номинал с постоянным купоном)${addAll ? ', с покупками' : ''}`, x: yys, y: yys.map(y => tOf(y) * KR),
+      { type: 'scatter', mode: 'markers', name: `цель лесенки ${from}–${to}${auto ? ` (по вероятностям ЦБ: ${auto.years} лет)` : ' (таблицы не загружены: ровно)'}${addAll ? ', с покупками' : ''}`, x: yys, y: yys.map(y => tOf(y) * KR),
         marker: { symbol: 'line-ew-open', size: 34, color: '#d62728', line: { width: 3, color: '#d62728' } },
-        customdata: yys.map(y => { const d = fixedOf(y) + aF(y) - tOf(y); return `${d >= 0 ? 'перебор' : 'недобор'} ${rub(Math.abs(d))}${floatFaceBy.get(y) ? ' (флоатеры не в счёт)' : ''}`; }),
+        customdata: yys.map(y => { const d = fixedV(y) + aF(y) - tOf(y); return `${d >= 0 ? 'перебор' : 'недобор'} ${rub(Math.abs(d))}${withFloaters && floatV(y) ? ' (флоатеры не в счёт)' : ''}`; }),
         hovertemplate: '%{y:,.0f} ₽ — %{customdata}' },
-    ], { ...dark, barmode: 'stack', title: 'Рублёвые: сколько придёт по годам, ₽ — по графику MOEX', margin: { l: 50, r: 20, t: 50, b: 30 },
+    ], { ...dark, barmode: 'stack', title: 'Рублёвые по году погашения: рыночная стоимость, ₽', margin: { l: 50, r: 20, t: 50, b: 30 },
       hovermode: 'x unified', hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
       legend: { orientation: 'h', y: -0.15 }, yaxis: { gridcolor: '#1e2830', ticksuffix: ' ₽', tickformat: ',.0f', range: [0, yTop * KR] }, xaxis: { type: 'category' } },
       { responsive: true, displaylogo: false });
@@ -5979,21 +5980,21 @@ async function mpRenderMaturities() {
   const drawCnyYears = (add = null) => {
     if (!(cnyAll > 0)) return;
     const aC = y => add?.get(y) || 0, addAll = add ? [...add.values()].reduce((t, v) => t + v, 0) : 0;
-    const cys = [...new Set([...cnyFaceBy.keys(), ...cnyCouponBy.keys(), ...cr, ...(add ? add.keys() : [])])].sort();
-    const ctot = y => (cnyFaceBy.get(y) || 0) + (cnyCouponBy.get(y) || 0) + aC(y);
-    const ct2 = y => { const i = cr.indexOf(y); return i < 0 ? 0 : (cnyAll + addAll) * (cauto ? cauto.weights[i] : 1 / cr.length); };
+    const mvC = y => mvCnyBy.get(y) || 0, mvCAll = [...mvCnyBy.values()].reduce((t, v) => t + v, 0);
+    const cys = [...new Set([...mvCnyBy.keys(), ...cr, ...(add ? add.keys() : [])])].sort();
+    const ctot = y => mvC(y) + aC(y);
+    const ct2 = y => { const i = cr.indexOf(y); return i < 0 ? 0 : (mvCAll + addAll) * (cauto ? cauto.weights[i] : 1 / cr.length); };
     const KC = 1 / (usdPer('CNY') || 1), yuan = v => `${Math.round(v * KC).toLocaleString('ru-RU')} ¥`;
     Plotly.newPlot(cnyEl, [
-      { type: 'bar', name: 'номинал: в юанях', x: cys, y: cys.map(y => (cnyFaceBy.get(y) || 0) * KC), marker: { color: '#f778ba' }, hovertemplate: '%{y:,.0f} ¥' },
-      { type: 'bar', name: 'купоны', x: cys, y: cys.map(y => (cnyCouponBy.get(y) || 0) * KC), marker: { color: '#3dd68c' }, hovertemplate: '%{y:,.0f} ¥' },
-      ...(addAll ? [{ type: 'bar', name: 'покупки по плану (номинал)', x: cys, y: cys.map(y => aC(y) * KC),
+      { type: 'bar', name: 'в юанях', x: cys, y: cys.map(y => mvC(y) * KC), marker: { color: '#f778ba' }, hovertemplate: '%{y:,.0f} ¥' },
+      ...(addAll ? [{ type: 'bar', name: 'покупки по плану', x: cys, y: cys.map(y => aC(y) * KC),
         marker: { color: 'rgba(247,120,186,0.35)', line: { color: '#f778ba', width: 1 }, pattern: { shape: '/', fgcolor: '#f778ba', solidity: 0.3 } }, hovertemplate: 'покупки: %{y:,.0f} ¥' }] : []),
       { type: 'scatter', mode: 'text', x: cys, y: cys.map(y => ctot(y) * KC), text: cys.map(y => yuan(ctot(y))), textposition: 'top center', showlegend: false, hoverinfo: 'skip', cliponaxis: false },
       { type: 'scatter', mode: 'markers', name: `цель юаневой лесенки ${cf}–${ct}${cauto ? ` (по ставке Банка Китая ${odds.cnNow}%: ${cauto.years} лет)` : ' (таблицы не загружены: ровно)'}${addAll ? ', с покупками' : ''}`, x: cys, y: cys.map(y => ct2(y) * KC),
         marker: { symbol: 'line-ew-open', size: 34, color: '#d62728', line: { width: 3, color: '#d62728' } },
-        customdata: cys.map(y => { const d = (cnyFaceBy.get(y) || 0) + aC(y) - ct2(y); return `${d >= 0 ? 'перебор' : 'недобор'} ${yuan(Math.abs(d))}`; }),
+        customdata: cys.map(y => { const d = ctot(y) - ct2(y); return `${d >= 0 ? 'перебор' : 'недобор'} ${yuan(Math.abs(d))}`; }),
         hovertemplate: '%{y:,.0f} ¥ — %{customdata}' },
-    ], { ...dark, barmode: 'stack', title: 'В юанях: сколько придёт по годам, ¥', margin: { l: 50, r: 20, t: 50, b: 30 },
+    ], { ...dark, barmode: 'stack', title: 'В юанях по году погашения: рыночная стоимость, ¥', margin: { l: 50, r: 20, t: 50, b: 30 },
       hovermode: 'x unified', hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
       legend: { orientation: 'h', y: -0.18 }, yaxis: { gridcolor: '#1e2830', ticksuffix: ' ¥', tickformat: ',.0f', range: [0, Math.max(...cys.map(ctot), ...cr.map(ct2), 1) * 1.2 * KC] }, xaxis: { type: 'category' } },
       { responsive: true, displaylogo: false });
@@ -6084,7 +6085,7 @@ async function mpRenderMaturities() {
       } else drawPies(null);
       // the year charts and the bars, with the plan's bonds by face (06.11.2026)
       const bought = plans.filter(p => p.n > 0 && p.b);
-      const faceUsd = p => (whole ? p.n : p.n) * p.b.face * (p.kind === 'cny' ? cnyUsd : rubUsd);
+      const faceUsd = p => p.spent;   // the year charts are by market value: what's paid
       const yr = p => (p.kind === 'cny' ? p.b.due : p.b.mat).slice(0, 4);
       const fFixed = new Map(), fFloat = new Map(), fCny = new Map();
       for (const p of bought) { const m = p.kind === 'cny' ? fCny : p.kind === 'float' ? fFloat : fFixed; m.set(yr(p), (m.get(yr(p)) || 0) + faceUsd(p)); }
