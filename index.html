@@ -524,7 +524,7 @@
 
 <div id="maturities" class="chart-wrap">
   <div class="section-title">Погашения облигаций и вкладов</div>
-  <p class="note">Каждая облигация и вклад — полоса от сегодня до погашения (синяя); оферта — оранжевая часть до её даты.
+  <p class="note">Каждая облигация и вклад — полоса от сегодня до погашения: синяя — постоянный купон, фиолетовая — переменный (флоатеры), бирюзовая — вклад; оферта — оранжевая часть до её даты.
     Толщина полосы — сколько в ней денег; справа — штук и сумма. Даты погашений и оферт — с MOEX.
     Фонды облигаций (TBRU, SBBY, …) без срока не показаны. Срок вклада выписка не даёт: клик по вкладу — указать дату окончания.</p>
   <p class="empty-note" id="mat_status"></p>
@@ -534,7 +534,8 @@
     <label>лесенка с <input type="number" id="mat_from" style="width:70px"> по <input type="number" id="mat_to" style="width:70px"></label>
     <label><select id="mat_weights"><option value="far">больше в дальние</option><option value="even">поровну</option></select></label>
   </div>
-  <div id="plot_mat_years" style="height:280px;margin-bottom:24px"></div>
+  <div id="plot_mat_years" style="height:280px;margin-bottom:8px"></div>
+  <p class="note" id="mat_plan" style="margin-bottom:24px"></p>
   <div id="plot_mat"></div>
 </div>
 
@@ -5230,7 +5231,7 @@ function mpAssetBuckets(rows, keep = null) {
 // has its offer (MOEX ISS, straight from the browser), and the term deposits'
 // ends (deposit_terms, set by hand: no statement gives them) -- a bar from
 // today to the date, its thickness the money in it. ----
-const MP_MAT_CACHE = 'mp_moex_bond_dates_v2';
+const MP_MAT_CACHE = 'mp_moex_bond_dates_v4';
 async function mpMoexBondDates(secids) {
   let cache = {};
   try { cache = JSON.parse(localStorage.getItem(MP_MAT_CACHE) || '{}'); } catch { /* none */ }
@@ -5248,11 +5249,23 @@ async function mpMoexBondDates(secids) {
     // the money a bond still pays, per bond in its face currency: coupons (a
     // floating one not fixed yet: at the last known), and the face back
     let lastCoupon = 0;
-    const coupons = table('coupons').map(c => { if (c.value) lastCoupon = Number(c.value); return { day: c.coupondate, value: c.value ? Number(c.value) : lastCoupon }; })
+    const raw = table('coupons');
+    // a floating coupon: by MOEX's COUPON_DETAILS -- 'Ключевая ставка',
+    // 'Ставка RUONIA', ...; not 'Фиксированный с неизвестными купонами': fixed
+    // up to an offer, the rate after it set at the offer (Полюс ПБО-06, Почта
+    // БО-001P-07, АФК Система 001Р-24). Unknown future sums are no sign
+    // either: a securitisation's coupons wait on its amortisations, its rate
+    // fixed (СФО Сплит Финанс 1 at 25%). Without COUPON_DETAILS: floating if
+    // the future rates aren't all one known rate
+    const details = desc.COUPON_DETAILS || '';
+    const rates = new Set(raw.filter(c => c.coupondate > today).map(c => Number(c.valueprc) || 0));
+    const floating = /ОФЗ-ПК/.test(desc.NAME || '')
+      || (details ? !/^Фиксированный/i.test(details) : rates.size > 1 || rates.has(0));
+    const coupons = raw.map(c => { if (c.value) lastCoupon = Number(c.value); return { day: c.coupondate, value: c.value ? Number(c.value) : lastCoupon }; })
       .filter(c => c.day > today && c.value > 0);
     const face = table('amortizations').filter(a => a.amortdate > today).map(a => ({ day: a.amortdate, value: Number(a.value) }));
     cache[secid] = { at: today, name: desc.NAME || desc.SHORTNAME || secid, mat: desc.MATDATE || null, offer: offers[0] || null,
-      unit: (desc.FACEUNIT || 'RUB').replace('SUR', 'RUB'), coupons, face };
+      unit: (desc.FACEUNIT || 'RUB').replace('SUR', 'RUB'), coupons, face, floating };
   };
   for (let i = 0; i < todo.length; i += 6) await Promise.all(todo.slice(i, i + 6).map(one));
   try { localStorage.setItem(MP_MAT_CACHE, JSON.stringify(cache)); } catch { /* no storage */ }
@@ -5287,6 +5300,37 @@ for (const id of ['mat_deposits', 'mat_coupons']) {
     mpRenderMaturities();
   });
 }
+// The floaters' share of the bonds by where the key rate goes (asked
+// 05.11.2026): a floater's coupon follows it, a fixed one locks today's in --
+// in a cutting cycle the fixed one wins, in a hiking one the floater. The key
+// rate by RUSFAR (MOEX's overnight repo rate, a step from the key rate --
+// the CBR's own page has no CORS), its median over 20 trading days now
+// against half a year ago: down by 0.5 pp and more -- cutting, up -- hiking.
+const MP_FLOAT_SHARE = { cutting: 5, flat: 15, hiking: 30, step: 0.5 };
+async function mpKeyRateTrend() {
+  const KEY = 'mp_rusfar_v1', today = new Date().toISOString().slice(0, 10);
+  try { const c = JSON.parse(localStorage.getItem(KEY) || 'null'); if (c?.at === today) return c; } catch { /* none */ }
+  const from = new Date(Date.now() - 400 * 86400000).toISOString().slice(0, 10);
+  const rows = [];
+  for (let start = 0; start < 2000; start += 100) {
+    const j = await fetch(`https://iss.moex.com/iss/history/engines/stock/markets/index/securities/RUSFAR.json?iss.meta=off&from=${from}&start=${start}&history.columns=TRADEDATE,CLOSE`)
+      .then(r => r.json()).catch(() => null);
+    const d = j?.history?.data || [];
+    rows.push(...d.filter(([, v]) => v > 0));
+    if (d.length < 100) break;
+  }
+  if (rows.length < 150) return null;
+  const median = a => { const b = a.map(r => r[1]).sort((x, y) => x - y); return b[Math.floor(b.length / 2)]; };
+  const halfYear = new Date(Date.now() - 182 * 86400000).toISOString().slice(0, 10);
+  const i = rows.findIndex(([d]) => d >= halfYear);
+  const now = median(rows.slice(-20)), then = median(rows.slice(Math.max(0, i - 10), i + 10));
+  const change = Math.round((now - then) * 100) / 100;
+  const phase = change <= -MP_FLOAT_SHARE.step ? 'cutting' : change >= MP_FLOAT_SHARE.step ? 'hiking' : 'flat';
+  const res = { at: today, now, change, phase };
+  try { localStorage.setItem(KEY, JSON.stringify(res)); } catch { /* no storage */ }
+  return res;
+}
+
 async function mpRenderMaturities() {
   const status = document.getElementById('mat_status');
   status.textContent = 'Loading…';
@@ -5308,7 +5352,7 @@ async function mpRenderMaturities() {
   for (const r of rows) {
     if (r.deposit) { r.name = r.ticker.replace(/^DEPOSIT:/, 'Вклад '); r.mat = endOf.get(r.ticker) || null; r.offer = null; }
     else Object.assign(r, { name: dates[r.ticker]?.name || r.ticker, mat: dates[r.ticker]?.mat || null, offer: dates[r.ticker]?.offer || null,
-      unit: dates[r.ticker]?.unit || 'RUB', coupons: dates[r.ticker]?.coupons || [], face: dates[r.ticker]?.face || [] });
+      unit: dates[r.ticker]?.unit || 'RUB', coupons: dates[r.ticker]?.coupons || [], face: dates[r.ticker]?.face || [], floating: !!dates[r.ticker]?.floating });
     r.next = r.offer || r.mat;
   }
   const withDeposits = document.getElementById('mat_deposits').checked, withCoupons = document.getElementById('mat_coupons').checked;
@@ -5328,11 +5372,12 @@ async function mpRenderMaturities() {
       width: shown.map(width), marker: { color: '#f0a03c' }, hovertemplate: '%{y}: оферта %{customdata}<extra></extra>', customdata: shown.map(r => r.offer || '') },
     // to the redemption: blue, dimmer past an offer
     { type: 'bar', orientation: 'h', name: 'до погашения', y, base: shown.map(r => r.offer || today), x: shown.map(r => r.mat ? span(r.offer || today, r.mat) : 0),
-      width: shown.map(width), marker: { color: shown.map(r => r.deposit ? '#2bb5a8' : r.offer ? 'rgba(88,166,255,0.45)' : '#58a6ff') },
+      width: shown.map(width), marker: { color: shown.map(r => r.deposit ? '#2bb5a8'
+        : r.floating ? (r.offer ? 'rgba(163,113,247,0.45)' : '#a371f7') : r.offer ? 'rgba(88,166,255,0.45)' : '#58a6ff') },
       hovertemplate: '%{y}: погашение %{customdata}<extra></extra>', customdata: shown.map(r => r.mat || 'не указано') },
   ];
   const annotations = shown.map((r, i) => ({ x: endOrMax(r), y: y[i], xanchor: 'left', xshift: 6, showarrow: false, font: { size: 11, color: '#8b949e' },
-    text: `${r.deposit ? '' : `${Math.round(r.qty)} шт · `}${money(r.usd)}${r.next ? '' : ' · срок?'}` }));
+    text: `${r.deposit ? '' : `${r.floating ? 'перем.' : 'пост.'} · ${Math.round(r.qty)} шт · `}${money(r.usd)}${r.next ? '' : ' · срок?'}` }));
   const el = document.getElementById('plot_mat');
   el.style.height = `${Math.max(300, shown.length * 26 + 110)}px`;
   await Plotly.newPlot(el, traces, { ...dark, barmode: 'overlay', showlegend: false, margin: { l: 260, r: 120, t: 50, b: 30 },
@@ -5354,7 +5399,7 @@ async function mpRenderMaturities() {
   // today's rates; a deposit its sum and its interest at its end
   const { data: fx } = await sb.from('fx_history').select('currency, usd_per_unit, day').in('currency', ['RUB', 'CNY', 'EUR']).order('day', { ascending: false }).limit(30);
   const usdPer = c => c === 'USD' ? 1 : Number((fx || []).find(f => f.currency === c)?.usd_per_unit) || 0;
-  const faceBy = new Map(), couponBy = new Map();
+  const faceBy = new Map(), couponBy = new Map(), floatFaceBy = new Map();
   const add = (m, day, usd) => { const y = day.slice(0, 4); m.set(y, (m.get(y) || 0) + usd); };
   for (const r of shown) {
     if (r.deposit) {
@@ -5365,32 +5410,52 @@ async function mpRenderMaturities() {
       continue;
     }
     const k = r.qty * usdPer(r.unit);
-    for (const f of r.face) add(faceBy, f.day, f.value * k);
+    for (const f of r.face) { add(faceBy, f.day, f.value * k); if (r.floating) add(floatFaceBy, f.day, f.value * k); }
     for (const c of r.coupons) add(couponBy, c.day, c.value * k);
   }
   // the target ladder (05.11.2026): the face of everything held spread over
   // its years -- evenly, or more in the far ones (1 : 2 : ... : n, to lock the
-  // high rates in for longer) -- each year's maturing money bought into the far end
+  // high rates in for longer) -- each year's maturing money bought into the far end.
+  // A floater locks no rate in -- its coupon follows the key rate down -- so
+  // it fills no rung: the rungs count the fixed coupons and the deposits, and
+  // a floater's money, at its redemption or offer, goes into the rungs short
+  // of their target (asked 05.11.2026). The floaters have their own share by
+  // the key rate (mpKeyRateTrend); the rungs share the rest
   const from = Number(document.getElementById('mat_from').value), to = Number(document.getElementById('mat_to').value);
   const rungs = [];
   for (let y = from; y <= to && to - from < 40; y++) rungs.push(String(y));
   const faceAll = [...faceBy.values()].reduce((t, v) => t + v, 0);
+  const key = await mpKeyRateTrend();
+  const floatPct = MP_FLOAT_SHARE[key?.phase || 'flat'];
+  const ladderAll = faceAll * (1 - floatPct / 100);
   const far = document.getElementById('mat_weights').value === 'far';
   const weightSum = far ? rungs.length * (rungs.length + 1) / 2 : rungs.length;
-  const targetOf = y => { const i = rungs.indexOf(y); return i < 0 ? 0 : faceAll * (far ? i + 1 : 1) / weightSum; };
+  const targetOf = y => { const i = rungs.indexOf(y); return i < 0 ? 0 : ladderAll * (far ? i + 1 : 1) / weightSum; };
   const perRung = Math.max(0, ...rungs.map(targetOf));
   for (const y of rungs) if (!faceBy.has(y)) faceBy.set(y, 0);
   const ys = [...new Set([...faceBy.keys(), ...(withCoupons ? couponBy.keys() : []), ...rungs])].sort();
   if (!withCoupons) couponBy.clear();
   const tot = y => (faceBy.get(y) || 0) + (couponBy.get(y) || 0);
+  const fixedOf = y => (faceBy.get(y) || 0) - (floatFaceBy.get(y) || 0);
+  const floatAll = [...floatFaceBy.values()].reduce((t, v) => t + v, 0);
+  const short = rungs.map(y => [y, targetOf(y) - fixedOf(y)]).filter(([, d]) => d > 1).sort((a, b) => b[0].localeCompare(a[0]));
+  const phaseText = { cutting: 'ставку снижают', flat: 'ставка стоит', hiking: 'ставку повышают' }[key?.phase || 'flat'];
+  const floatTarget = faceAll * floatPct / 100, floatDiff = floatAll - floatTarget;
+  const shortText = short.length ? `в ступени с недобором, начиная с дальних: ${short.map(([y, d]) => `<b>${y}</b> — ${money(d)}`).join(', ')}` : 'в дальнюю ступень';
+  document.getElementById('mat_plan').innerHTML = !rungs.length ? '' : `${key ? `Ключевая ≈ ${key.now.toFixed(2)}% (RUSFAR), за полгода ${key.change > 0 ? '+' : ''}${key.change.toFixed(2)} пп — ${phaseText}` : 'Ставку с MOEX получить не удалось — считаю, что стоит'}:
+    флоатеров (переменный купон) — <b>${floatPct}%</b> номинала (${floatPct === MP_FLOAT_SHARE.cutting ? 'при снижении фиксируем ставку' : floatPct === MP_FLOAT_SHARE.hiking ? 'при росте купон флоатера растёт' : 'нейтрально'}; снижают ≤ −${MP_FLOAT_SHARE.step} пп — ${MP_FLOAT_SHARE.cutting}%, стоит — ${MP_FLOAT_SHARE.flat}%, повышают — ${MP_FLOAT_SHARE.hiking}%), остальное — лесенка постоянного купона и вкладов.<br>
+    Сейчас флоатеров ${money(floatAll)} (${Math.round(floatAll / (faceAll || 1) * 100)}%), цель ${money(floatTarget)}:
+    ${Math.abs(floatDiff) < faceAll * 0.01 ? 'в норме.' : floatDiff > 0 ? `лишние ${money(floatDiff)} — переложить в постоянный купон (ОФЗ-ПД и т.п.) ${shortText}.` : `докупить флоатеров на ${money(-floatDiff)} — из денег ближних погашений.`}
+    ${floatDiff > 0 || !short.length ? '' : `Недобор лесенки: ${short.map(([y, d]) => `<b>${y}</b> — ${money(d)}`).join(', ')}.`}`;
   Plotly.newPlot('plot_mat_years', [
-    { type: 'bar', name: 'номинал (погашения, амортизации, вклад)', x: ys, y: ys.map(y => faceBy.get(y) || 0), marker: { color: '#58a6ff' }, hovertemplate: '%{y:$,.0f}' },
+    { type: 'bar', name: 'номинал: постоянный купон и вклад', x: ys, y: ys.map(y => (faceBy.get(y) || 0) - (floatFaceBy.get(y) || 0)), marker: { color: '#58a6ff' }, hovertemplate: '%{y:$,.0f}' },
+    { type: 'bar', name: 'номинал: переменный купон (флоатеры)', x: ys, y: ys.map(y => floatFaceBy.get(y) || 0), marker: { color: '#a371f7' }, hovertemplate: '%{y:$,.0f}' },
     { type: 'bar', name: 'купоны и проценты', x: ys, y: ys.map(y => couponBy.get(y) || 0), marker: { color: '#3dd68c' }, hovertemplate: '%{y:$,.0f}' },
     { type: 'scatter', mode: 'text', x: ys, y: ys.map(tot), text: ys.map(y => money(tot(y))), textposition: 'top center', showlegend: false, hoverinfo: 'skip', cliponaxis: false },
     // the ladder's target per year: a tick over the bar; outside the ladder 0
-    { type: 'scatter', mode: 'markers', name: `цель лесенки ${from}–${to} (номинал)`, x: ys, y: ys.map(targetOf),
+    { type: 'scatter', mode: 'markers', name: `цель лесенки ${from}–${to} (номинал с постоянным купоном)`, x: ys, y: ys.map(targetOf),
       marker: { symbol: 'line-ew-open', size: 34, line: { width: 3, color: '#f5c542' } },
-      customdata: ys.map(y => { const d = (faceBy.get(y) || 0) - targetOf(y); return `${d >= 0 ? 'перебор' : 'недобор'} ${money(Math.abs(d))}`; }),
+      customdata: ys.map(y => { const d = fixedOf(y) - targetOf(y); return `${d >= 0 ? 'перебор' : 'недобор'} ${money(Math.abs(d))}${floatFaceBy.get(y) ? ' (флоатеры не в счёт)' : ''}`; }),
       hovertemplate: '%{y:$,.0f} — %{customdata}' },
   ], { ...dark, barmode: 'stack', title: 'Сколько придёт по годам — по графику MOEX, по сегодняшнему курсу', margin: { l: 50, r: 20, t: 50, b: 30 },
     hovermode: 'x unified', hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
