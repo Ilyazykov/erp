@@ -528,6 +528,10 @@
     Толщина полосы — сколько в ней денег; справа — штук и сумма. Даты погашений и оферт — с MOEX.
     Фонды облигаций (TBRU, SBBY, …) без срока не показаны. Срок вклада выписка не даёт: клик по вкладу — указать дату окончания.</p>
   <p class="empty-note" id="mat_status"></p>
+  <div class="form-row" style="gap:16px;justify-content:flex-end;margin:8px 0 -8px">
+    <label><input type="checkbox" id="mat_deposits" checked> вклады</label>
+    <label><input type="checkbox" id="mat_coupons" checked> купоны и проценты</label>
+  </div>
   <div id="plot_mat_years" style="height:280px;margin-bottom:24px"></div>
   <div id="plot_mat"></div>
 </div>
@@ -5252,6 +5256,14 @@ async function mpMoexBondDates(secids) {
   try { localStorage.setItem(MP_MAT_CACHE, JSON.stringify(cache)); } catch { /* no storage */ }
   return cache;
 }
+// the two switches over the chart by year: remembered, redraw the tab
+for (const id of ['mat_deposits', 'mat_coupons']) {
+  try { const v = localStorage.getItem('mp_' + id); if (v) document.getElementById(id).checked = v === '1'; } catch { /* no storage */ }
+  document.getElementById(id).addEventListener('change', e => {
+    try { localStorage.setItem('mp_' + id, e.target.checked ? '1' : '0'); } catch { /* no storage */ }
+    mpRenderMaturities();
+  });
+}
 async function mpRenderMaturities() {
   const status = document.getElementById('mat_status');
   status.textContent = 'Loading…';
@@ -5276,7 +5288,8 @@ async function mpRenderMaturities() {
       unit: dates[r.ticker]?.unit || 'RUB', coupons: dates[r.ticker]?.coupons || [], face: dates[r.ticker]?.face || [] });
     r.next = r.offer || r.mat;
   }
-  const shown = rows.filter(r => r.next || r.deposit).sort((a, b) => (a.next || '9999').localeCompare(b.next || '9999'));
+  const withDeposits = document.getElementById('mat_deposits').checked, withCoupons = document.getElementById('mat_coupons').checked;
+  const shown = rows.filter(r => (r.next || r.deposit) && (withDeposits || !r.deposit)).sort((a, b) => (a.next || '9999').localeCompare(b.next || '9999'));
   status.textContent = shown.some(r => !r.next) ? 'У вклада не указана дата окончания — клик по нему на графике.' : '';
   const money = v => mpFormatUsd(v).replace(/\.\d+$/, '');
   const label = r => `${r.name.length > 34 ? r.name.slice(0, 33) + '…' : r.name}`;
@@ -5332,7 +5345,8 @@ async function mpRenderMaturities() {
     for (const f of r.face) add(faceBy, f.day, f.value * k);
     for (const c of r.coupons) add(couponBy, c.day, c.value * k);
   }
-  const ys = [...new Set([...faceBy.keys(), ...couponBy.keys()])].sort();
+  const ys = [...new Set([...faceBy.keys(), ...(withCoupons ? couponBy.keys() : [])])].sort();
+  if (!withCoupons) couponBy.clear();
   const tot = y => (faceBy.get(y) || 0) + (couponBy.get(y) || 0);
   Plotly.newPlot('plot_mat_years', [
     { type: 'bar', name: 'номинал (погашения, амортизации, вклад)', x: ys, y: ys.map(y => faceBy.get(y) || 0), marker: { color: '#58a6ff' }, hovertemplate: '%{y:$,.0f}' },
