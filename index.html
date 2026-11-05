@@ -5588,7 +5588,9 @@ async function mpRenderMaturities() {
       { ...dark, margin: { l: 45, r: 10, t: 10, b: 40 }, hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
         xaxis: { title: { text: 'ключевая ставка сейчас', font: { size: 11 } }, tickfont: { size: 10 }, dtick: 1, ticksuffix: '%' }, yaxis: { autorange: 'reversed', tickfont: { size: 10 } },
         shapes: [
-          ...(curRate != null ? [{ type: 'rect', xref: 'x', yref: 'paper', x0: curRate - 0.5, x1: curRate + 0.5, y0: 0, y1: 1, line: { color: '#f85149', width: 2 } }] : []),
+          ...(curRate != null ? [auto
+            ? { type: 'rect', xref: 'x', yref: 'y', x0: curRate - 0.5, x1: curRate + 0.5, y0: -0.5, y1: auto.years - 0.5, line: { color: '#f85149', width: 2 } }
+            : { type: 'rect', xref: 'x', yref: 'paper', x0: curRate - 0.5, x1: curRate + 0.5, y0: 0, y1: 1, line: { color: '#f85149', width: 2 } }] : []),
           ...(auto ? [{ type: 'rect', xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: -0.5, y1: auto.years - 0.5, line: { color: '#f5c542', width: 1, dash: 'dot' } }] : []),
         ] }, { responsive: true, displaylogo: false, displayModeBar: false });
     heat('plot_kr_h_down', 'down', [[0, '#0d1117'], [1, '#58a6ff']]);
