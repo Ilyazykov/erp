@@ -8333,6 +8333,7 @@ const MP_EXP_GROUP_META = Object.fromEntries(Object.entries({
 }).map(([g, [icon, main]]) => [g, { icon, color: MP_EXP_CATS.find(c => c[0] === main)[2] }]));
 let mpExpCache = null;
 const mpExpFolded = new Set();  // groups folded in the list of the expenses tab
+const mpExpOpen = new Set();    // categories open onto their rows -- kept across re-renders
 async function mpExpLoad() {
   const page = async (q) => {
     const out = [];
@@ -8700,10 +8701,10 @@ function mpEditTime(src, xid) {
     if (error) { alert(error.message); return; }
     rows.forEach(x => { x.at = t || ''; x.handTime = !!t; x.approx = !!t && approx; x.ts = t ? `${x.day}T${t}:00Z` : x.day; });
     form.closest('dialog').close();
-    // in place: a re-render would fold the open categories
-    document.querySelectorAll('#expenses .exp-time').forEach(c => {
-      if (c.dataset.src === src && c.dataset.xid === xid) c.outerHTML = mpTimeHtml(r).trim();
-    });
+    // re-sorted by the new time; the open categories stay open (mpExpOpen)
+    const y = window.scrollY;
+    await mpRenderExpenses();
+    window.scrollTo(0, y);
   };
   form.querySelector('[data-act=clear]')?.addEventListener('click', () => save(null, false));
   form.addEventListener('submit', e => { e.preventDefault(); save(form.t.value, form.approx.checked); });
@@ -8965,7 +8966,14 @@ async function mpRenderExpenses() {
     const box = catList.querySelector(`.exp-open[data-i="${el.dataset.i}"]`);
     if (!box.innerHTML) box.innerHTML = rowsTable(items[el.dataset.i].rows);
     box.style.display = box.style.display === 'none' ? '' : 'none';
+    box.style.display === 'none' ? mpExpOpen.delete(items[el.dataset.i].cat) : mpExpOpen.add(items[el.dataset.i].cat);
   }));
+  items.forEach((c, i) => {
+    if (c.header || folded(c) || !mpExpOpen.has(c.cat)) return;
+    const box = catList.querySelector(`.exp-open[data-i="${i}"]`);
+    box.innerHTML = rowsTable(c.rows);
+    box.style.display = '';
+  });
 
   // income in the period, as the spending above: a ring by kind (a salary, a
   // flat's rent, ...) and the list, each kind opening onto its transfers --
