@@ -5244,9 +5244,9 @@ const mpDaysBefore = (day, n) => new Date(Date.parse(day + 'T00:00:00Z') - n * 8
 // buy / sale before that day. A month's step is done once: after a buy the
 // target rises back from the share to the share +1% over 30 days, linearly;
 // a sale within the 30 days before keeps it at the share.
-//   red, and neutral after red: +1% up to 5%; above 5% the share (nothing sold)
+//   red, and neutral after red: +1% up to 5%, not below 1%; above 5% the share (nothing sold)
 //   green: the share less 1% (1-10%), 2% (10-20%), 3% (20% and more), not below 1%
-//   neutral after green: the share (nothing to do)
+//   neutral after green: the share (nothing to do), but not below 1%
 function mpCryptoTarget(day, share, zone, regime, lastBuy, lastSell) {
   const monthAgo = mpDaysBefore(day, 30);
   if (zone === 'green') {
@@ -5261,11 +5261,12 @@ function mpCryptoTarget(day, share, zone, regime, lastBuy, lastSell) {
     // whole 1% 30 days on
     if (lastBuy && lastBuy > monthAgo) {
       const part = (Date.parse(day + 'T00:00:00Z') - Date.parse(lastBuy + 'T00:00:00Z')) / 86400000 / 30;
-      return { target: Math.min(MP_AHR.target, share + part), step: 1,
+      return { target: Math.max(MP_AHR.floor, Math.min(MP_AHR.target, share + part)), step: 1,
         why: `${head}: после покупки ${lastBuy} следующий шаг набирается — +${part.toFixed(2)} из 1 п.п.` };
     }
-    return { target: Math.min(MP_AHR.target, share + 1), step: 1, why: `${head}: докупить на 1% портфеля, до ${MP_AHR.target}%` };
+    return { target: Math.max(MP_AHR.floor, Math.min(MP_AHR.target, share + 1)), step: 1, why: `${head}: докупить на 1% портфеля, до ${MP_AHR.target}%` };
   }
+  if (share < MP_AHR.floor) return { target: MP_AHR.floor, step: 0, why: `нейтральная после зелёной: доля ниже ${MP_AHR.floor}% — довести до ${MP_AHR.floor}%` };
   return { target: share, step: 0, why: 'нейтральная после зелёной: ничего не делать до красной зоны' };
 }
 const mpLastBefore = (days, day) => { let v = null; for (const d of days) { if (d >= day) break; v = d; } return v; };
