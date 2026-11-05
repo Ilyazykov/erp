@@ -5245,13 +5245,16 @@ const mpDaysBefore = (day, n) => new Date(Date.parse(day + 'T00:00:00Z') - n * 8
 // target rises back from the share to the share +1% over 30 days, linearly;
 // a sale within the 30 days before keeps it at the share.
 //   red, and neutral after red: +1% up to 5%, not below 1%; above 5% the share (nothing sold)
-//   green: the share less 1% (1-10%), 2% (10-20%), 3% (20% and more), not below 1%
+//   green: the share less 1% (1-10%), 2% (10-20%), 3% (20% and more), not below 1%;
+//     never a buy, even under 1%
 //   neutral after green: the share (nothing to do), but not below 1%
 function mpCryptoTarget(day, share, zone, regime, lastBuy, lastSell) {
   const monthAgo = mpDaysBefore(day, 30);
   if (zone === 'green') {
     const step = share >= 20 ? 3 : share >= 10 ? 2 : 1;
     if (lastSell && lastSell > monthAgo) return { target: share, step, why: `зелёная зона: продажа этого месяца уже была (${lastSell})` };
+    // never a buy in the green, even below 1%: at or under 1% the share stays
+    if (share <= MP_AHR.floor) return { target: share, step, why: `зелёная зона: доля не выше ${MP_AHR.floor}% — не продавать и не покупать` };
     return { target: Math.max(MP_AHR.floor, share - step), step, why: `зелёная зона: продать ${step}% портфеля, не ниже ${MP_AHR.floor}%` };
   }
   if (zone === 'red' || regime !== 'green') {
