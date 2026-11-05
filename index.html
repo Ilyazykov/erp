@@ -5489,6 +5489,30 @@ async function mpOfzList() {
   return list;
 }
 
+// The yuan corporate bonds to buy (06.11.2026; not the yuan OFZ -- asked): on
+// MOEX's main corporate board, face in yuan, of the most reliable issuers
+// (top-rated: Gazprom capital, RZD, Nornickel, Polyus, PhosAgro,
+// Atomenergoprom, Rosneft, Metalloinvest, the EDB -- MOEX gives no ratings,
+// so a list), a yield of 3-12% (over that the market prices trouble), a
+// day's cache; `due` -- the offer, if any, else the maturity: when the money
+// may come back
+const MP_CNY_ISSUERS = /^(ГазКап|РЖД|НорНик|Полюс|ФосАгро|Атомэнпр|Роснфт|МЕТАЛИН|ЕАБР)/;
+async function mpCnyBondList() {
+  const KEY = 'mp_cny_bonds_v1', today = new Date().toISOString().slice(0, 10);
+  try { const c = JSON.parse(localStorage.getItem(KEY) || 'null'); if (c?.at === today) return c.list; } catch { /* none */ }
+  const j = await fetch('https://iss.moex.com/iss/engines/stock/markets/bonds/boards/TQCB/securities.json?iss.meta=off&iss.only=securities,marketdata'
+    + '&securities.columns=SECID,SHORTNAME,MATDATE,OFFERDATE,FACEUNIT,FACEVALUE,PREVPRICE,ACCRUEDINT&marketdata.columns=SECID,YIELD,VALTODAY')
+    .then(r => r.json()).catch(() => null);
+  if (!j) return [];
+  const md = new Map((j.marketdata?.data || []).map(([id, y, v]) => [id, { y, v }]));
+  const list = (j.securities?.data || []).filter(r => r[4] === 'CNY' && r[2] && MP_CNY_ISSUERS.test(r[1] || '')).map(([secid, name, mat, offer, , face, price, accrued]) => ({
+    secid, name, mat, offer, due: offer || mat, face: Number(face), price: Number(price) || 100, accrued: Number(accrued) || 0,
+    yield: Number(md.get(secid)?.y) || 0, turnover: Number(md.get(secid)?.v) || 0 }))
+    .filter(b => b.yield >= 3 && b.yield <= 12);
+  try { localStorage.setItem(KEY, JSON.stringify({ at: today, list })); } catch { /* no storage */ }
+  return list;
+}
+
 async function mpRenderMaturities() {
   const status = document.getElementById('mat_status');
   status.textContent = 'Loading…';
@@ -5644,13 +5668,24 @@ async function mpRenderMaturities() {
       { label: 'в рублях', usd: rub, target: w != null ? 100 - w : rub / tot * 100, color: '#58a6ff' },
     ], w != null ? `Цель — w_CNY ${Math.round(w)}% по курсу USD/RUB (вкладка «USD/RUB → CNY Weight»).` : 'Цель w_CNY ещё не посчитана — открой вкладку «USD/RUB → CNY Weight».');
   }
+  // which floater to buy (06.11.2026): an OFZ-PK 1-3 years out, the most traded
+  const rubPie = v => `${Math.round(v / (usdPer('RUB') || 1)).toLocaleString('ru-RU')} ₽`;
+  const floatShort = bondsAll * floatPct / 100 - floatAll;
+  const floatHover = await (async () => {
+    if (floatShort <= 5) return 'флоатеров достаточно — новых не покупать';
+    const y = new Date().getFullYear();
+    const pk = (await mpOfzList()).filter(b => b.pk && (b.turnover || 0) > 1e6 && b.mat > `${y + 1}` && b.mat < `${y + 4}`).sort((a, b) => b.turnover - a.turnover)[0];
+    if (!pk) return `недобор ${rubPie(floatShort)}; подходящей ОФЗ-ПК нет`;
+    const n = Math.max(1, Math.round(floatShort / (((pk.price || 100) / 100 * pk.face + (pk.accrued || 0)) * usdPer('RUB'))));
+    return `купить: ${mpEscapeHtml(pk.name)} (ОФЗ-ПК, до ${pk.mat.slice(5, 7)}.${pk.mat.slice(0, 4)}) — ${n} шт`;
+  })();
   mpTargetPie(pies, 'Российские облигации: постоянный и переменный купон (номинал)', [
-    { label: 'постоянный купон', usd: bondsAll - floatAll, target: 100 - floatPct, color: '#58a6ff' },
-    { label: 'переменный купон', usd: floatAll, target: floatPct, color: '#a371f7' },
+    { label: 'постоянный купон', usd: bondsAll - floatAll, target: 100 - floatPct, color: '#58a6ff', hover: 'что покупать по годам — на диаграмме лесенки' },
+    { label: 'переменный купон', usd: floatAll, target: floatPct, color: '#a371f7', hover: floatHover },
   ], !key || !odds.pts.length ? 'Таблица вероятностей ключевой ещё не посчитана (update-key-rate-odds, раз в месяц).'
     : `Ключевая ${key.now}% на ${odds.since}: по уровню флоатеров ${levelPct}%`
       + (odds.change != null ? `; за год ${odds.change > 0 ? '+' : ''}${odds.change} пп — шансы повышения ×${odds.ratio}^${MP_TREND_BETA} = ×${odds.kb.toFixed(2)}` : '')
-      + ` → ${floatPct}%. Вероятность, что за 1–3 года её повысят, против того, что понизят — по истории ЦБ с 2013 г.`);
+      + ` → ${floatPct}%. Вероятность, что за 1–3 года её повысят, против того, что понизят — по истории ЦБ с 2013 г.`, null, false, null, rubPie);
   // the fixed coupons by year against the ladder (06.11.2026): a slice a
   // ladder year, its target its weight; what's outside the ladder (sooner,
   // later) -- one grey slice, target 0; in roubles; the buy list under it
@@ -5689,10 +5724,20 @@ async function mpRenderMaturities() {
     const yuanFmt = v => `${Math.round(v * KC0).toLocaleString('ru-RU')} ¥`;
     const outside = [...cnyFaceBy.keys()].filter(y => !cr.includes(y)).reduce((t, y) => t + (cnyFaceBy.get(y) || 0), 0);
     const tw = cr.reduce((t, y) => t + ctarget(y), 0) || 1;
+    // what to buy for a short year: the best yield of the reliable yuan corporates due that year
+    const cnyBonds = await mpCnyBondList();
+    const cnyBuy = y => {
+      const short = ctarget(y) - (cnyFaceBy.get(y) || 0);
+      if (short <= 5) return 'недобора нет';
+      const b = cnyBonds.filter(o => o.due.startsWith(y)).sort((a, c) => c.yield - a.yield || c.turnover - a.turnover)[0];
+      if (!b) return `недобор ${yuanFmt(short)}; надёжных юаневых выпусков с погашением или офертой в этом году нет`;
+      const n = Math.max(1, Math.round(short / ((b.price / 100 * b.face + b.accrued) * usdPer('CNY'))));
+      return `купить: ${mpEscapeHtml(b.name)} (${b.offer ? 'оферта' : 'до'} ${b.due.slice(5, 7)}.${b.due.slice(0, 4)}, ${b.yield.toFixed(1)}%, номинал ${b.face} ¥) — ${n} шт`;
+    };
     const shade = i => { const t = cr.length > 1 ? i / (cr.length - 1) : 0; const c = [[255, 196, 226], [176, 52, 120]];
       return '#' + c[0].map((a, k) => Math.round(a + (c[1][k] - a) * t).toString(16).padStart(2, '0')).join(''); };
     mpTargetPie(pies, 'Юаневые: по годам лесенки (номинал)', [
-      ...cr.map((y, i) => ({ label: y, usd: cnyFaceBy.get(y) || 0, target: ctarget(y) / tw * 100, color: shade(i) })),
+      ...cr.map((y, i) => ({ label: y, usd: cnyFaceBy.get(y) || 0, target: ctarget(y) / tw * 100, color: shade(i), hover: cnyBuy(y) })),
       ...(outside > 0 ? [{ label: 'вне лесенки', usd: outside, target: 0, color: '#6e7681' }] : []),
     ], `Цель — веса юаневой лесенки ${cf}–${ct} по ставке Банка Китая (${odds.cnNow ?? '—'}%); «вне лесенки» — погашения позже, их деньги идут в годы с недобором.`,
       null, false, null, yuanFmt);
@@ -5846,7 +5891,6 @@ async function mpRenderMaturities() {
       const pd = liquid.filter(b => b.pd && b.mat.startsWith(r.y)).sort((a, b) => b.yield - a.yield)[0];
       return { ...r, b: pd, n: pd ? Math.max(1, Math.round(r.short / cost(pd))) : 0 };
     });
-    const floatShort = bondsAll * floatPct / 100 - floatAll;
     const pk = liquid.filter(b => b.pk && b.mat > `${new Date().getFullYear() + 1}` && b.mat < `${new Date().getFullYear() + 4}`).sort((a, b) => b.turnover - a.turnover)[0];
     const td = 'style="padding:4px 10px;text-align:left;white-space:nowrap"', tdr = 'style="padding:4px 10px;text-align:right;white-space:nowrap"';
     const till = d => `до ${d.slice(5, 7)}.${d.slice(0, 4)}`;
