@@ -5723,11 +5723,16 @@ async function mpRenderMaturities() {
         { xref: 'x', yref: 'paper', x: (3 + maxX) / 2, y: 1, yanchor: 'top', showarrow: false, font: { size: 11, color: '#8b949e' }, text: 'длиннее — только за бо́льшую надбавку' }] },
       { responsive: true, displaylogo: false });
   }
+  // the scale by the ladder's targets (06.11.2026: a year far over them --
+  // 2028's $518 -- flattened the ladder's shape): bars over the top cut, their
+  // sum written at the top with an arrow
+  const yTop = Math.max(perRung * 2.2, 1);
+  const over = y => tot(y) > yTop;
   Plotly.newPlot('plot_mat_years', [
     { type: 'bar', name: 'номинал: постоянный купон и вклад', x: ys, y: ys.map(y => (faceBy.get(y) || 0) - (floatFaceBy.get(y) || 0)), marker: { color: '#58a6ff' }, hovertemplate: '%{y:$,.0f}' },
     ...(withFloaters ? [{ type: 'bar', name: 'номинал: переменный купон (флоатеры)', x: ys, y: ys.map(y => floatFaceBy.get(y) || 0), marker: { color: '#a371f7' }, hovertemplate: '%{y:$,.0f}' }] : []),
     { type: 'bar', name: 'купоны и проценты', x: ys, y: ys.map(shownCoupon), marker: { color: '#3dd68c' }, hovertemplate: '%{y:$,.0f}' },
-    { type: 'scatter', mode: 'text', x: ys, y: ys.map(tot), text: ys.map(y => money(tot(y))), textposition: 'top center', showlegend: false, hoverinfo: 'skip', cliponaxis: false },
+    { type: 'scatter', mode: 'text', x: ys, y: ys.map(y => over(y) ? yTop * 0.93 : tot(y)), text: ys.map(y => (over(y) ? '↑ ' : '') + money(tot(y))), textposition: ys.map(y => over(y) ? 'middle center' : 'top center'), textfont: { color: ys.map(y => over(y) ? '#0d1117' : '#c9d1d9') }, showlegend: false, hoverinfo: 'skip', cliponaxis: false },
     // the ladder's target per year: a tick over the bar; outside the ladder 0
     { type: 'scatter', mode: 'markers', name: `цель лесенки ${from}–${to}${auto ? ` (по вероятностям ЦБ: ${auto.years} лет)` : ''}${tail > 0 ? `, дальше на спад до ${lastYear}` : ''} (номинал с постоянным купоном)`, x: ys, y: ys.map(targetOf),
       marker: { symbol: 'line-ew-open', size: 34, color: '#d62728', line: { width: 3, color: '#d62728' } },
@@ -5735,7 +5740,7 @@ async function mpRenderMaturities() {
       hovertemplate: '%{y:$,.0f} — %{customdata}' },
   ], { ...dark, barmode: 'stack', title: 'Рублёвые: сколько придёт по годам — по графику MOEX, по сегодняшнему курсу', margin: { l: 50, r: 20, t: 50, b: 30 },
     hovermode: 'x unified', hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
-    legend: { orientation: 'h', y: -0.15 }, yaxis: { gridcolor: '#1e2830', tickprefix: '$', range: [0, Math.max(...ys.map(tot), perRung, 1) * 1.2] }, xaxis: { type: 'category' } },
+    legend: { orientation: 'h', y: -0.15 }, yaxis: { gridcolor: '#1e2830', tickprefix: '$', range: [0, yTop] }, xaxis: { type: 'category' } },
     { responsive: true, displaylogo: false });
   // the yuan ones (and any other currency's fixed ones): their own ladder,
   // even -- each year of it the same share of their face
