@@ -542,14 +542,14 @@
   </div>
   <div id="plot_mat_cny" style="height:260px;margin-bottom:24px"></div>
   <div class="pie-grid" style="margin-bottom:24px"><div id="mat_pies" style="display:contents"></div>
-    <div class="pie-card"><h4>Доля флоатеров от ключевой ставки</h4><div id="plot_mat_floatfn" style="height:440px"></div></div></div>
+    <div class="pie-card"><h4>Доля флоатеров от ключевой ставки</h4><div id="plot_mat_floatfn" style="height:440px"></div>
+      <div class="form-row" style="gap:8px;margin:8px 4px 0"><label>степень над k <input type="number" id="mat_beta" min="0" max="1" step="0.05" style="width:70px"></label>
+        <span class="note" style="margin:0">0 — без инерции, 1 — k целиком</span></div>
+      <p class="note" id="kr_formula" style="margin:8px 4px"></p></div></div>
   <div class="pie-grid" style="margin-bottom:24px">
     <div class="pie-card"><h4>Куда пошла ключевая за 1–3 года — от её уровня (история ЦБ с 2013)</h4><div id="plot_kr_odds" style="height:380px"></div></div>
     <div class="pie-card"><h4>Без «не изменится»: флоатеры и постоянный купон</h4><div id="plot_kr_split" style="height:380px"></div></div>
-    <div class="pie-card"><h4>Инерция по центробанкам мира: поправка шансов повышения от изменения ставки за год</h4><div id="plot_kr_trend" style="height:380px"></div>
-      <div class="form-row" style="gap:8px;margin:8px 4px 0"><label>степень над k <input type="number" id="mat_beta" min="0" max="1" step="0.05" style="width:70px"></label>
-        <span class="note" style="margin:0">0 — без инерции, 1 — k целиком</span></div>
-      <p class="note" id="kr_formula" style="margin:8px 4px"></p></div>
+    <div class="pie-card"><h4>Инерция по центробанкам мира: поправка шансов повышения от изменения ставки за год</h4><div id="plot_kr_trend" style="height:380px"></div></div>
   </div>
   <div id="plot_mat_float" style="height:300px;margin-bottom:24px"></div>
   <div id="plot_mat"></div>
@@ -5585,7 +5585,7 @@ async function mpRenderMaturities() {
   if (key && op.length) {
     const p = levelPct / 100, k = odds.ratio, kb = odds.kb;
     const lp = Math.abs(Math.log(p / (1 - p))), lk = Math.abs(MP_TREND_BETA * Math.log(k));
-    document.getElementById('kr_formula').innerHTML = `Флоатеров = p·k<sup>${MP_TREND_BETA}</sup> / (p·k<sup>${MP_TREND_BETA}</sup> + 1 − p), где p — доля по уровню ключевой (средняя диаграмма), k — поправка за изменение ставки за год по 49 центробанкам мира, включая ЦБ РФ (эта), ослабленная степенью ${MP_TREND_BETA}.
+    document.getElementById('kr_formula').innerHTML = `Флоатеров = p·k<sup>${MP_TREND_BETA}</sup> / (p·k<sup>${MP_TREND_BETA}</sup> + 1 − p), где p — доля по уровню ключевой (диаграмма «Без „не изменится“»), k — поправка за изменение ставки за год по 49 центробанкам мира, включая ЦБ РФ (диаграмма «Инерция»), ослабленная степенью ${MP_TREND_BETA}.
       Сейчас: p = ${levelPct}%, k = ×${k}, k<sup>${MP_TREND_BETA}</sup> = ×${kb.toFixed(3)} → ${p.toFixed(3)}·${kb.toFixed(3)} / (${p.toFixed(3)}·${kb.toFixed(3)} + ${(1 - p).toFixed(3)}) = <b>${floatPct}%</b>.
       Вклад в сдвиг от 50/50: p — ${Math.round(lp / (lp + lk || 1) * 100)}%, k — ${Math.round(lk / (lp + lk || 1) * 100)}%.`;
   }
