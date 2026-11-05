@@ -5354,7 +5354,7 @@ async function mpRenderCryptoStrategy() {
     });
     // the strategy's target day by day: 5% in the red zone and the neutral after
     // it; in the green the share less its month's sale (not below 1%); in the
-    // neutral after the green none -- nothing to do: a gap, marked as such
+    // neutral after the green none -- nothing to do: a gap
     const ahrOn = new Map(ind.map(r => [r.day, r.ahr]));
     let regime = null;
     for (const r of ind) { if (r.day >= start) break; const z = mpAhrZone(r.ahr); if (z !== 'neutral') regime = z; }
@@ -5364,13 +5364,6 @@ async function mpRenderCryptoStrategy() {
       if (z !== 'neutral') regime = z;
       const step = x.pct >= 20 ? 3 : x.pct >= 10 ? 2 : 1;
       return z === 'green' ? Math.max(MP_AHR.floor, x.pct - step) : regime === 'green' ? null : MP_AHR.target;
-    });
-    // the no-target stretches, for their labels
-    const idle = [];
-    targets.forEach((t, i) => {
-      if (t !== null) return;
-      if (i && targets[i - 1] === null) idle[idle.length - 1].to = shown[i].day;
-      else idle.push({ from: shown[i].day, to: shown[i].day });
     });
     Plotly.newPlot('plot_cs_share', [
       { x: shown.map(x => x.day), y: targets, type: 'scatter', mode: 'lines', name: 'цель стратегии', connectgaps: false, line: { color: '#3dd68c', width: 2, dash: 'dash', shape: 'hv' } },
@@ -5382,10 +5375,8 @@ async function mpRenderCryptoStrategy() {
     ], { ...dark, title: 'Доля крипты в портфеле, % — с переезда на Кипр', yaxis: { gridcolor: '#1e2830', ticksuffix: '%', range: [0, Math.max(MP_AHR.target, ...shown.map(x => x.pct)) * 1.12], zeroline: true, zerolinecolor: '#8b949e' },
       xaxis: { gridcolor: '#1e2830' }, legend: { orientation: 'h', y: -0.15 },
       shapes: [...zoneShapes, hline(MP_AHR.target, '#8b949e'), hline(MP_AHR.floor, '#8b949e')],
-      annotations: [...[[MP_AHR.target, `цель ${MP_AHR.target}%`], [MP_AHR.floor, `минимум ${MP_AHR.floor}%`]].map(([y, text]) =>
-        ({ xref: 'paper', x: 0, xanchor: 'left', y, yanchor: 'bottom', text, showarrow: false, font: { color: '#8b949e', size: 11 } })),
-        ...idle.filter(r => r.to > r.from).map(r => ({ xref: 'x', yref: 'paper', x: new Date((Date.parse(r.from) + Date.parse(r.to)) / 2).toISOString().slice(0, 10),
-          y: 0.04, text: 'по стратегии: ничего не делать<br>(нейтральная после зелёной)', showarrow: false, font: { color: '#3dd68c', size: 11 } }))] },
+      annotations: [[MP_AHR.target, `цель ${MP_AHR.target}%`], [MP_AHR.floor, `минимум ${MP_AHR.floor}%`]].map(([y, text]) =>
+        ({ xref: 'paper', x: 0, xanchor: 'left', y, yanchor: 'bottom', text, showarrow: false, font: { color: '#8b949e', size: 11 } })) },
       { responsive: true, displaylogo: false });
   } else document.getElementById('plot_cs_share').innerHTML = '<p class="empty-note">Войдите, чтобы увидеть долю крипты в портфеле.</p>';
 }
