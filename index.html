@@ -5262,7 +5262,7 @@ function mpCryptoTarget(day, share, zone, regime, lastBuy, lastSell) {
     if (lastBuy && lastBuy > monthAgo) {
       const part = (Date.parse(day + 'T00:00:00Z') - Date.parse(lastBuy + 'T00:00:00Z')) / 86400000 / 30;
       return { target: Math.min(MP_AHR.target, share + part), step: 1,
-        why: `${head}: после покупки ${lastBuy} шаг набирается заново — ${(part * 100).toFixed(0)}% из 1%` };
+        why: `${head}: после покупки ${lastBuy} следующий шаг набирается — +${part.toFixed(2)} из 1 п.п.` };
     }
     return { target: Math.min(MP_AHR.target, share + 1), step: 1, why: `${head}: докупить на 1% портфеля, до ${MP_AHR.target}%` };
   }
