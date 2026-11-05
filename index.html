@@ -8375,10 +8375,12 @@ async function mpExpLoad() {
   // income (migration 141): none yet or no table -- no line
   // page by page: the interest a day (savings, money market funds) runs past 1000 rows
   const inc = await page(() => sb.from('income').select('day, account, usd, category, description, amount, currency, external_source, external_id').order('day').order('id')).catch(() => []);
-  // a note on a row in, as on a row out (bank_transactions.expense_note): none -- no notes
-  const incNotes = await page(() => sb.from('bank_transactions').select('external_source, external_id, expense_note').not('expense_note', 'is', null).gt('amount', 0).order('id')).catch(() => []);
-  const incNoteOf = new Map((incNotes || []).map(n => [`${n.external_source}|${n.external_id}`, n.expense_note]));
-  for (const r of inc || []) { r.src = r.external_source; r.xid = r.external_id; r.note = incNoteOf.get(`${r.src}|${r.xid}`) || null; }
+  // the notes, out and in, from the rows themselves (bank_transactions.expense_note):
+  // expenses.note is refresh_expenses' copy, behind a note just written until the next run
+  const notes = await page(() => sb.from('bank_transactions').select('external_source, external_id, expense_note').not('expense_note', 'is', null).order('id')).catch(() => null);
+  const noteOf = new Map((notes || []).map(n => [`${n.external_source}|${n.external_id}`, n.expense_note]));
+  for (const r of [...spent, ...skipped]) r.note = noteOf.get(`${r.src}|${r.xid}`) ?? r.note;
+  for (const r of inc || []) { r.src = r.external_source; r.xid = r.external_id; r.note = noteOf.get(`${r.src}|${r.xid}`) || null; }
   // where a payment was made (migration 163): no column yet -- no places
   // and, a delivery, where it was brought to (migration 165): no column yet -- the place alone
   const placed = await page(() => sb.from('bank_transactions').select('external_source, external_id, from:places!place_id(name, url), to:places!delivery_place_id(name, url)').or('place_id.not.is.null,delivery_place_id.not.is.null').order('id'))
