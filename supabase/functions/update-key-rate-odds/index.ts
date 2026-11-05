@@ -21,14 +21,22 @@
 //    point at its days' mean rate, linear between the points. The same stays
 //    as it was.
 // 5. Without the same: floaters = up / (up + down), fixed = the rest.
-// 6. The trend over it (asked 05.11.2026): the rate's change over the last
-//    year (365 days -- a walk-forward test had it beat 1-9 months), in buckets (<= -3, -3..-1, -1..-0.25, about 0, 0.25..1, 1..3,
-//    >= 3 pp). Per bucket, the days' horizons as in 2-3 (not counting the
-//    same): how often the rate went up, against what the level's odds (5)
-//    expected for them -- the odds ratio, the trend over the level; the tab
-//    multiplies the level's odds by it. Not made monotone: the history has a
-//    move mostly go on, but not a sharp cut after a spike (2015, 2022).
-//    Clamped to 0.2-5 -- a bucket of one episode.
+// 6. The trend over it (asked 05.11.2026), from the world's central banks --
+//    Russia's own history has too few episodes of it: the BIS policy rates
+//    (stats.bis.org, WS_CBPOL, monthly), every country but Russia, since
+//    1990, a rate of 40% and over (and a decade with 60%) left out. Per
+//    country-month: the rate's change over the last 12 months as a share of
+//    its range over the last 10 years (max - min; 1 pp is a lot in
+//    Switzerland, little in Turkey -- asked 05.11.2026), in buckets (cut by
+//    more than 30% of the range, 10-30%, 2-10%, about none, raised 2-10%,
+//    10-30%, more than 30%), and where
+//    it stands against its last 10 years (more than half a standard
+//    deviation below the mean, about it, above) -- a pause high up and one
+//    low down tell the opposite. Per bucket x position, 12, 24, 36 months
+//    later (weighted as in 3, not counting the same): how often it went up,
+//    against how often it did at that position whatever the change -- the
+//    odds ratio k; the tab multiplies the level's odds (5) by it. Clamped to
+//    0.2-5; a cell under 20 (weighted) observations -- 1.
 //
 // Called by pg_cron daily and once a month with the odds (deployed with
 // --no-verify-jwt; it only ever writes public data, with the service role).
@@ -72,6 +80,62 @@ function isotonic(points: { x: number; y: number; w: number }[], falling: boolea
     const a = knots[i - 1], b = knots[i];
     return a.y + (b.y - a.y) * (x - a.x) / (b.x - a.x);
   };
+}
+
+const TREND = [[-99, -0.3], [-0.3, -0.1], [-0.1, -0.02], [-0.02, 0.02], [0.02, 0.1], [0.1, 0.3], [0.3, 99]];
+// the change over 12 months, a share of the range over the last 10 years
+function relChange(v: number[], i: number) {
+  const w = v.slice(i - 120, i + 1), range = Math.max(...w) - Math.min(...w);
+  return range > 0 ? (v[i] - v[i - 12]) / range : 0;
+}
+const trendBucket = (x: number) => Math.max(0, TREND.findIndex(([a, b]) => x > a && x <= b));
+// against the last 120 months: 0 -- more than half a standard deviation
+// below their mean, 2 -- above, 1 -- about it
+function position(v: number[], i: number) {
+  const w = v.slice(i - 120, i), m = w.reduce((s, x) => s + x, 0) / 120;
+  const sd = Math.sqrt(w.reduce((s, x) => s + (x - m) ** 2, 0) / 120) || 1, rel = (v[i] - m) / sd;
+  return rel < -0.5 ? 0 : rel > 0.5 ? 2 : 1;
+}
+
+async function worldTrendOdds(weight: (h: number) => number) {
+  const url = 'https://stats.bis.org/api/v2/data/dataflow/BIS/WS_CBPOL/1.0/M.?format=csv&detail=dataonly&c%5BTIME_PERIOD%5D=ge:1980-01';
+  const res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+  if (!res.ok) throw new Error(`BIS: HTTP ${res.status}`);
+  const lines = (await res.text()).trim().split('\n');
+  const head = lines[0].split(','), ci = head.indexOf('REF_AREA'), ti = head.indexOf('TIME_PERIOD'), vi = head.indexOf('OBS_VALUE');
+  const byCountry = new Map<string, Map<string, number>>();
+  for (const line of lines.slice(1)) {
+    const f = line.split(','), v = Number(f[vi]);
+    if (f[vi] === '' || !Number.isFinite(v)) continue;
+    if (!byCountry.has(f[ci])) byCountry.set(f[ci], new Map());
+    byCountry.get(f[ci])!.set(f[ti], v);
+  }
+  if (byCountry.size < 30) throw new Error(`BIS: ${byCountry.size} countries`);
+  // [bucket][position]: [up (weighted), all (weighted)]; per position the same
+  const cell = TREND.map(() => [0, 1, 2].map(() => [0, 0]));
+  const pos = [0, 1, 2].map(() => [0, 0]);
+  for (const [country, s] of byCountry) {
+    if (country === 'RU') continue;
+    const ms = [...s.keys()].sort(), v = ms.map(m => s.get(m)!);
+    for (let i = 120; i < ms.length; i++) {
+      if (ms[i] < '1990-01' || v[i] > 40 || Math.max(...v.slice(i - 120, i + 1)) > 60) continue;
+      const t = trendBucket(relChange(v, i)), p = position(v, i);
+      for (const h of HORIZONS) {
+        const j = i + 12 * h;
+        if (j >= ms.length || v[j] === v[i]) continue;
+        const w = weight(h), up = v[j] > v[i] ? 1 : 0;
+        cell[t][p][0] += w * up; cell[t][p][1] += w; pos[p][0] += w * up; pos[p][1] += w;
+      }
+    }
+  }
+  const odds = (q: number) => q / (1 - q);
+  return TREND.flatMap(([from, to], t) => [0, 1, 2].map(p => {
+    const [u, n] = cell[t][p], exp = pos[p][0] / pos[p][1];
+    const obs = (u + 0.5) / (n + 1);
+    const ratio = n < 20 ? 1 : Math.min(5, Math.max(0.2, odds(obs) / odds(exp)));
+    return { trend_from: from, trend_to: to, position: p, n: Math.round(n), obs_up: Math.round(obs * 10000) / 10000,
+      exp_up: Math.round(exp * 10000) / 10000, odds_ratio: Math.round(ratio * 1000) / 1000 };
+  }));
 }
 
 Deno.serve(async (req) => {
@@ -142,34 +206,15 @@ Deno.serve(async (req) => {
     if (delErr) throw new Error(delErr.message);
     const { error } = await db.from('key_rate_odds').insert(out);
     if (error) throw new Error(error.message);
-    // 6. the trend
-    const level = (x: number) => { const u = upFit(x), d = downFit(x); return u + d > 0 ? u / (u + d) : 0.5; };
-    const LAG = 365;
-    const TREND = [[-99, -3], [-3, -1], [-1, -0.25], [-0.25, 0.25], [0.25, 1], [1, 3], [3, 99]];
-    const tb = TREND.map(([from, to]) => ({ trend_from: from, trend_to: to, n: 0, w: 0, obs: 0, exp: 0 }));
-    daily.forEach((r, i) => {
-      if (i < LAG) return;
-      const tr = r - daily[i - LAG];
-      const b = tb.find(t => tr > t.trend_from && tr <= t.trend_to) ?? tb[0];
-      for (const h of HORIZONS) {
-        const later = daily[i + Math.round(h * 365.25)];
-        if (later === undefined || later === r) continue;
-        b.n++; b.w += weight(h); b.obs += weight(h) * (later > r ? 1 : 0); b.exp += weight(h) * level(r);
-      }
-    });
-    const odds = (p: number) => p / (1 - p);
-    const trendRows = tb.filter(t => t.n).map(t => {
-      const obs = t.obs / t.w, exp = t.exp / t.w;
-      const ratio = Math.min(5, Math.max(0.2, obs >= 1 ? 5 : obs <= 0 ? 0.2 : odds(obs) / odds(exp)));
-      return { trend_from: t.trend_from, trend_to: t.trend_to, n: t.n, obs_up: Math.round(obs * 10000) / 10000,
-        exp_up: Math.round(exp * 10000) / 10000, odds_ratio: Math.round(ratio * 1000) / 1000, computed_at };
-    });
+    // 6. the trend, the world's
+    const k = await worldTrendOdds(weight);
+    const trendRows = k.map(r => ({ ...r, computed_at }));
     const { error: delTrend } = await db.from('key_rate_trend_odds').delete().gte('trend_from', -1000);
     if (delTrend) throw new Error(delTrend.message);
     const { error: trendErr } = await db.from('key_rate_trend_odds').insert(trendRows);
     if (trendErr) throw new Error(trendErr.message);
     return json({ key_rate: now, buckets: out.length, odds: out.map(r => `${r.rate_from}-${r.rate_to}%: ${r.floaters_pct}%`),
-      trend: trendRows.map(t => `${t.trend_from}..${t.trend_to} pp: x${t.odds_ratio}`) });
+      trend: trendRows.map(t => `${t.trend_from}..${t.trend_to} of range, position ${t.position}: x${t.odds_ratio}`) });
   } catch (e) {
     return json({ error: String(e) }, 500);
   }

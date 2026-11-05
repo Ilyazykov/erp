@@ -541,7 +541,7 @@
   <div class="pie-grid" style="margin-bottom:24px">
     <div class="pie-card"><h4>Куда пошла ключевая за 1–3 года — от её уровня (история ЦБ с 2013)</h4><div id="plot_kr_odds" style="height:380px"></div></div>
     <div class="pie-card"><h4>Без «не изменится»: флоатеры и постоянный купон</h4><div id="plot_kr_split" style="height:380px"></div></div>
-    <div class="pie-card"><h4>Инерция: поправка шансов повышения от изменения ставки за год</h4><div id="plot_kr_trend" style="height:380px"></div>
+    <div class="pie-card"><h4>Инерция по центробанкам мира: поправка шансов повышения от изменения ставки за год</h4><div id="plot_kr_trend" style="height:380px"></div>
       <p class="note" id="kr_formula" style="margin:8px 4px"></p></div>
   </div>
   <div id="plot_mat_float" style="height:300px;margin-bottom:24px"></div>
@@ -5325,12 +5325,18 @@ for (const id of ['mat_deposits', 'mat_coupons', 'mat_floaters']) {
 // odds ratio (key_rate_trend_odds) times the level's odds of a rise.
 const MP_TREND_BETA = 0.5;
 async function mpKeyRateOdds() {
+  // the last day of each of the last 120 months, for the 10 years' range and
+  // mean (the trend's bucket and the rate's position, as the world's are)
+  const monthEnds = [];
+  const t0 = new Date();
+  for (let m = 1; m <= 120; m++) monthEnds.push(new Date(Date.UTC(t0.getUTCFullYear(), t0.getUTCMonth() - m + 1, 0)).toISOString().slice(0, 10));
   const yearAgo = new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10);
-  const [{ data: odds }, { data: last }, { data: before }, { data: trend }] = await Promise.all([
+  const [{ data: odds }, { data: last }, { data: before }, { data: trend }, { data: decade }] = await Promise.all([
     sb.from('key_rate_odds').select('rate_from, rate_to, rate, days, up, down, floaters_pct').order('rate'),
     sb.from('key_rates').select('day, rate').order('day', { ascending: false }).limit(1),
     sb.from('key_rates').select('day, rate').lte('day', yearAgo).order('day', { ascending: false }).limit(1),
-    sb.from('key_rate_trend_odds').select('trend_from, trend_to, n, obs_up, exp_up, odds_ratio').order('trend_from'),
+    sb.from('key_rate_trend_odds').select('trend_from, trend_to, position, n, obs_up, exp_up, odds_ratio').order('trend_from').order('position'),
+    sb.from('key_rates').select('day, rate').in('day', monthEnds),
   ]);
   const pts = (odds || []).map(o => ({ ...o, rate: Number(o.rate), up: Number(o.up), down: Number(o.down), floaters_pct: Number(o.floaters_pct) }));
   const share = x => {
@@ -5342,14 +5348,25 @@ async function mpKeyRateOdds() {
   };
   const now = last?.[0] ? Number(last[0].rate) : null;
   const change = now != null && before?.[0] ? Math.round((now - Number(before[0].rate)) * 100) / 100 : null;
-  const tb = change == null ? null : (trend || []).find(t => change > Number(t.trend_from) && change <= Number(t.trend_to));
+  // the world's k (key_rate_trend_odds): the change as a share of the last 10
+  // years' range, and where the rate stands against their mean
+  const dec = (decade || []).map(d => Number(d.rate));
+  let rel = null, position = null, range = null;
+  if (now != null && dec.length >= 100) {
+    const all = [...dec, now], mean = dec.reduce((t, v) => t + v, 0) / dec.length;
+    const sd = Math.sqrt(dec.reduce((t, v) => t + (v - mean) ** 2, 0) / dec.length) || 1;
+    range = { min: Math.min(...all), max: Math.max(...all), mean };
+    rel = change != null && range.max > range.min ? change / (range.max - range.min) : null;
+    position = (now - mean) / sd < -0.5 ? 0 : (now - mean) / sd > 0.5 ? 2 : 1;
+  }
+  const tb = rel == null ? null : (trend || []).find(t => Number(t.position) === position && rel > Number(t.trend_from) && rel <= Number(t.trend_to));
   const ratio = tb ? Number(tb.odds_ratio) : 1;
   // the level's share, the trend's odds ratio over it -- weakened, k^0.5, for
   // the level to weigh more (asked 05.11.2026; a walk-forward test had k^0.5
   // and k^1 within 0.03 pp a year)
   const kb = ratio ** MP_TREND_BETA;
   const withTrend = x => { const p = share(x) / 100; return p <= 0 || p >= 1 ? p * 100 : 100 * p * kb / (p * kb + 1 - p); };
-  return { pts, share, withTrend, ratio, kb, change, trend: tb, trends: trend || [], now, since: last?.[0]?.day || null };
+  return { pts, share, withTrend, ratio, kb, change, rel, position, range, trend: tb, trends: trend || [], now, since: last?.[0]?.day || null };
 }
 
 async function mpRenderMaturities() {
@@ -5506,36 +5523,39 @@ async function mpRenderMaturities() {
     Plotly.newPlot('plot_kr_split', [bar('повысят → флоатеры', op.map(p => p.floaters_pct / 100), '#a371f7'), bar('понизят → постоянный купон', op.map(p => 1 - p.floaters_pct / 100), '#58a6ff')],
       barLayout('доля облигаций'), { responsive: true, displaylogo: false, displayModeBar: false });
   }
-  // the inertia: the odds ratio per bucket of the year's change, on a
-  // log axis around x1 (no effect) -- above: a rise likelier than the level
-  // says, below: a cut; today's bucket outlined
-  const tr = odds.trends.map(t => ({ ...t, from: Number(t.trend_from), to: Number(t.trend_to), r: Number(t.odds_ratio) }));
+  // the inertia, the world's central banks': the odds ratio per bucket of
+  // the year's change (a share of the 10 years' range) and per where the
+  // rate stands against its 10 years -- three bars a bucket; on a log axis
+  // around x1 (no effect); today's cell outlined
+  const tr = odds.trends.map(t => ({ ...t, from: Number(t.trend_from), to: Number(t.trend_to), pos: Number(t.position), r: Number(t.odds_ratio) }));
   if (tr.length) {
-    const n = v => String(Math.abs(v)).replace('.', ',');
-    const tl = tr.map(t => t.from <= -50 ? `снизили<br>на ${n(t.to)}+ пп` : t.to >= 50 ? `подняли<br>на ${n(t.from)}+ пп`
-      : t.from < 0 && t.to > 0 ? 'почти не<br>меняли' : t.to <= 0 ? `снизили<br>на ${n(t.to)}–${n(t.from)}` : `подняли<br>на ${n(t.from)}–${n(t.to)}`);
-    const curT = tr.findIndex(t => odds.change != null && odds.change > t.from && odds.change <= t.to);
-    Plotly.newPlot('plot_kr_trend', [{ type: 'bar', x: tl, y: tr.map(t => t.r), base: 0,
-      marker: { color: tr.map(t => t.r >= 1 ? '#a371f7' : '#58a6ff'), line: { color: tr.map((_, i) => i === curT ? '#f85149' : 'rgba(0,0,0,0)'), width: 3 } },
-      text: tr.map(t => `×${t.r.toFixed(2)}`), textposition: 'outside', textfont: { size: 11, color: '#c9d1d9' }, cliponaxis: false,
-      customdata: tr.map(t => [Math.round(Number(t.obs_up) * 100), Math.round(Number(t.exp_up) * 100), t.n]),
-      hovertemplate: '%{x}: потом повышали в %{customdata[0]}% случаев, по уровню ожидалось %{customdata[1]}% → ×%{y:.2f}<extra></extra>' }],
-      { ...dark, showlegend: false, margin: { l: 45, r: 10, t: 30, b: 75 },
+    const pc = v => `${Math.round(Math.abs(v) * 100)}%`;
+    const buckets = [...new Map(tr.map(t => [t.from, t])).values()];
+    const tl = buckets.map(t => t.from <= -50 ? `снизили<br>на ${pc(t.to)}+` : t.to >= 50 ? `подняли<br>на ${pc(t.from)}+`
+      : t.from < 0 && t.to > 0 ? 'почти не<br>меняли' : t.to <= 0 ? `снизили<br>на ${pc(t.to)}–${pc(t.from)}` : `подняли<br>на ${pc(t.from)}–${pc(t.to)}`);
+    const curB = odds.trend ? buckets.findIndex(t => t.from === Number(odds.trend.trend_from)) : -1;
+    const POS = [['ставка ниже средней за 10 лет', '#58a6ff'], ['около средней', '#8b949e'], ['выше средней', '#f0a03c']];
+    Plotly.newPlot('plot_kr_trend', POS.map(([name, color], p) => {
+      const row = buckets.map(b => tr.find(t => t.from === b.from && t.pos === p));
+      return { type: 'bar', name, x: tl, y: row.map(t => t?.r ?? 1), base: 0,
+        marker: { color, line: { color: row.map((_, i) => i === curB && p === odds.position ? '#f85149' : 'rgba(0,0,0,0)'), width: 3 } },
+        text: row.map(t => (t?.r ?? 1).toFixed(2)), textposition: 'outside', textfont: { size: 9, color: '#c9d1d9' }, cliponaxis: false,
+        customdata: row.map(t => [Math.round(Number(t?.obs_up ?? 0) * 100), Math.round(Number(t?.exp_up ?? 0) * 100), t?.n ?? 0]),
+        hovertemplate: `%{x}, ${name}: потом повышали в %{customdata[0]}% случаев, при таком положении ставки обычно %{customdata[1]}% → ×%{y:.2f}<extra></extra>` };
+    }), { ...dark, barmode: 'group', showlegend: true, legend: { orientation: 'h', y: -0.32, font: { size: 10 } }, margin: { l: 45, r: 10, t: 30, b: 95 },
         hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
-        xaxis: { type: 'category', title: 'как изменилась ключевая за последний год', tickangle: 0, tickfont: { size: 10 } },
+        xaxis: { type: 'category', title: { text: 'как изменилась ставка за год, в доле её размаха за 10 лет', font: { size: 11 } }, tickangle: 0, tickfont: { size: 10 } },
         yaxis: { type: 'log', range: [Math.log10(0.15), Math.log10(7)], tickvals: [0.2, 0.5, 1, 2, 5], ticktext: ['×0.2', '×0.5', '×1', '×2', '×5'], gridcolor: '#1e2830' },
         shapes: [{ type: 'line', xref: 'paper', x0: 0, x1: 1, y0: 1, y1: 1, line: { color: '#8b949e', width: 1, dash: 'dash' } }],
-        annotations: [
-          ...(curT >= 0 ? [{ x: tl[curT], y: Math.log10(7), yanchor: 'top', showarrow: false, text: `сейчас ${odds.change > 0 ? '+' : ''}${odds.change}`, font: { color: '#f85149', size: 11 } }] : []),
-          { xref: 'paper', x: 0, y: Math.log10(1.6), xanchor: 'left', showarrow: false, text: 'повышение вероятнее, чем по уровню', font: { size: 10, color: '#a371f7' } },
-          { xref: 'paper', x: 0, y: Math.log10(0.62), xanchor: 'left', showarrow: false, text: 'понижение вероятнее', font: { size: 10, color: '#58a6ff' } }] },
+        annotations: curB >= 0 && odds.range ? [{ x: tl[curB], y: Math.log10(7), yanchor: 'top', showarrow: false, font: { color: '#f85149', size: 11 },
+          text: `сейчас ${odds.change > 0 ? '+' : ''}${odds.change} пп = ${odds.rel > 0 ? '+' : '−'}${pc(odds.rel)} размаха ${odds.range.min}–${odds.range.max}%` }] : [] },
       { responsive: true, displaylogo: false, displayModeBar: false });
   }
   // the formula, today's numbers in it
   if (key && op.length) {
     const p = levelPct / 100, k = odds.ratio, kb = odds.kb;
     const lp = Math.abs(Math.log(p / (1 - p))), lk = Math.abs(MP_TREND_BETA * Math.log(k));
-    document.getElementById('kr_formula').innerHTML = `Флоатеров = p·k<sup>${MP_TREND_BETA}</sup> / (p·k<sup>${MP_TREND_BETA}</sup> + 1 − p), где p — доля по уровню ключевой (средняя диаграмма), k — поправка за год (эта), ослабленная степенью ${MP_TREND_BETA}.
+    document.getElementById('kr_formula').innerHTML = `Флоатеров = p·k<sup>${MP_TREND_BETA}</sup> / (p·k<sup>${MP_TREND_BETA}</sup> + 1 − p), где p — доля по уровню ключевой (средняя диаграмма), k — поправка за изменение ставки за год по 48 центробанкам мира (эта), ослабленная степенью ${MP_TREND_BETA}.
       Сейчас: p = ${levelPct}%, k = ×${k}, k<sup>${MP_TREND_BETA}</sup> = ×${kb.toFixed(3)} → ${p.toFixed(3)}·${kb.toFixed(3)} / (${p.toFixed(3)}·${kb.toFixed(3)} + ${(1 - p).toFixed(3)}) = <b>${floatPct}%</b>.
       Вклад в сдвиг от 50/50: p — ${Math.round(lp / (lp + lk || 1) * 100)}%, k — ${Math.round(lk / (lp + lk || 1) * 100)}%.`;
   }
