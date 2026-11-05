@@ -5428,11 +5428,10 @@ function mpLadderAuto(rows, now, age, step = 1) {
   const years = Math.max(1, Math.min(nRate, nAge)), net = netAll.slice(0, years);
   const raw = net.map((x, i) => (i + 1) * x * (1 - (i + 1) / 16)), rs = raw.reduce((t, x) => t + x, 0);
   const weights = rs ? raw.map(x => x / rs) : net.map(() => 1 / years);
-  // the floaters' bonus (06.11.2026): over the years the age allows, where a
-  // cut isn't likelier than a rise locking the rate in buys nothing -- half
-  // the share of such years, half how much likelier a rise is on average
-  const span = netAll.slice(0, nAge), upAll = col.slice(0, nAge);
-  const bonus = (span.filter(x => x <= 0.005).length / nAge + upAll.reduce((t, r) => t + Math.max(0, r.up - r.down), 0) / nAge) / 2;
+  // the floaters' bonus (06.11.2026): over the years the age allows, the
+  // share of those where a cut isn't likelier than a rise -- locking the rate
+  // in for that long buys nothing
+  const bonus = netAll.slice(0, nAge).filter(x => x <= 0.005).length / nAge;
   return { rate, s, nRate, nAge, years, weights, net, short: !nRate, bonus };
 }
 
@@ -5467,8 +5466,8 @@ function mpLadderNote(auto, now, age, from, cny = false) {
   return `Сейчас ${now}% (столбец ${auto.rate}%): ${auto.short ? 'снижение ставки не вероятнее повышения ни на одном сроке — держать коротко, 1 год'
       : `перевес снижения есть до ${auto.nRate}-го года включительно`}, по возрасту (${age}) не больше ${auto.nAge} → <b>${auto.years} ${auto.years === 1 ? 'год' : auto.years < 5 ? 'года' : 'лет'}</b> (${from}–${to}, жёлтая рамка).
     Вес года: перевес снижения («ниже» − «выше») × число лет, на которое год фиксирует ставку × (1 − лет/16) — надёжность прогноза.
-    ${auto.bonus > 0.005 ? (cny ? `Бонус «держать коротко» ${Math.round(auto.bonus * 100)}% (сроки без перевеса снижения и перевес повышения; юаневых флоатеров нет) — в ${from} год. `
-      : `Бонус флоатерам ${Math.round(auto.bonus * 100)}% от остатка (сроки без перевеса снижения и перевес повышения, пополам). `) : ''}
+    ${auto.bonus > 0.005 ? (cny ? `Бонус «держать коротко» ${Math.round(auto.bonus * 100)}% (доля сроков без перевеса снижения; юаневых флоатеров нет) — в ${from} год. `
+      : `Бонус флоатерам ${Math.round(auto.bonus * 100)}% от остатка (доля сроков без перевеса снижения). `) : ''}
     Веса: ${auto.weights.map((w, i) => `${from + i} — ${(w * 100).toFixed(1)}%`).join(', ')}.`;
 }
 
