@@ -5231,27 +5231,32 @@ async function mpLoadCryptoIndicators() {
 }
 const mpAhrZone = a => (a < MP_AHR.red ? 'red' : a > MP_AHR.green ? 'green' : 'neutral');
 // This month's move for a crypto share of `share` % (of chart 3's total):
-// { day, ahr, zone, regime (the last red / green), target %, action, step } --
-// null with no indicators (the plain 5% then).
+// { day, ahr, zone, regime (the last red / green), goal (the strategy's
+// share: 5%, in the green the share less its sale, after the green none),
+// target (where this month's move takes the share), action, step } -- null
+// with no indicators (the plain 5% then).
 function mpCryptoPlan(share, ind = mpCryptoInd) {
   if (!ind?.length) return null;
   const last = ind[ind.length - 1];
   const zone = mpAhrZone(last.ahr);
   let regime = null;
   for (let i = ind.length - 1; i >= 0 && !regime; i--) { const z = mpAhrZone(ind[i].ahr); if (z !== 'neutral') regime = z; }
-  let target = share, step = 0, why;
+  let target = share, goal = null, step = 0, why;
   if (zone === 'green') {
     step = share >= 20 ? 3 : share >= 10 ? 2 : 1;
-    target = Math.max(MP_AHR.floor, share - step);
+    goal = target = Math.max(MP_AHR.floor, share - step);
     why = `зелёная зона: продать ${step}% портфеля, не ниже ${MP_AHR.floor}%`;
   } else if (zone === 'red' || regime !== 'green') {
     step = 1;
+    goal = MP_AHR.target;
+    // above 5% nothing is sold here: the share stays where it is
     target = share < MP_AHR.target ? Math.min(MP_AHR.target, share + step) : share;
-    why = zone === 'red' ? `красная зона: докупить на 1% портфеля, до ${MP_AHR.target}%`
-      : `нейтральная после красной: докупать по 1% до ${MP_AHR.target}%, потом держать ${MP_AHR.target}%`;
+    why = (zone === 'red' ? `красная зона: докупать по 1% портфеля до ${MP_AHR.target}%`
+      : `нейтральная после красной: докупать по 1% до ${MP_AHR.target}%, потом держать ${MP_AHR.target}%`)
+      + (share >= MP_AHR.target ? ' — доля уже выше' : '');
   } else why = 'нейтральная после зелёной: ничего не делать до красной зоны';
   const action = target > share + 1e-9 ? 'buy' : target < share - 1e-9 ? 'sell' : 'hold';
-  return { day: last.day, ahr: last.ahr, zone, regime, target, action, step, why };
+  return { day: last.day, ahr: last.ahr, zone, regime, goal, target, action, step, why };
 }
 const MP_ZONE_NAME = { red: '🔴 красная', green: '🟢 зелёная', neutral: '🟡 нейтральная' };
 async function mpRenderCryptoStrategy() {
@@ -5291,7 +5296,7 @@ async function mpRenderCryptoStrategy() {
     card('AHR999', last.ahr.toFixed(3), last.day),
     card('Зона', MP_ZONE_NAME[plan.zone], plan.regime ? `последняя крайняя: ${MP_ZONE_NAME[plan.regime]}` : ''),
     card('BTC', mpFormatUsd(last.btc), `DCA 200: ${mpFormatUsd(last.dca)} · fair: ${mpFormatUsd(last.fair)}`),
-    card('Доля крипты', share === null ? 'войдите' : `${share.toFixed(1)}%`, `цель стратегии: ${share === null ? '—' : plan.target.toFixed(1) + '%'}`),
+    card('Доля крипты', share === null ? 'войдите' : `${share.toFixed(1)}%`, `цель стратегии: ${plan.goal === null ? 'нет' : plan.goal.toFixed(1) + '%'}`),
     card('В этом месяце', actionText, plan.why),
   ].join('');
   const dark = { paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', font: { color: '#c9d1d9' }, margin: { t: 30, r: 20, b: 40, l: 60 } };
@@ -5372,17 +5377,20 @@ async function mpRenderCryptoStrategy() {
       { x: shown.map(x => x.day), y: targets, type: 'scatter', mode: 'lines', name: 'цель стратегии', connectgaps: false, line: { color: '#3dd68c', width: 2, dash: 'dash', shape: 'hv' } },
       { x: shown.map(x => x.day), y: shown.map(x => x.pct), type: 'scatter', mode: 'lines', name: 'доля крипты, %', line: { color: '#f5c542', width: 2 } },
       // along the bottom, each with a thin dotted line up to see the moment
-      { x: marks.map(m => m.day), y: marks.map(() => 0.25), type: 'scatter', mode: 'markers+text', name: 'покупка',
+      { x: marks.map(m => m.day), y: marks.map(() => 0.25), type: 'scatter', mode: 'markers', name: 'покупка',
         marker: { symbol: 'triangle-up', size: 12, color: '#58a6ff', line: { color: '#e6edf3', width: 1 } },
         text: marks.map(m => `€${Math.round(m.eur).toLocaleString('en-US')}`), textposition: 'top center', textfont: { color: '#58a6ff', size: 11 },
         customdata: marks.map(m => shareBefore(m.day).toFixed(1)),
         hovertemplate: '%{x}: покупка %{text} при доле %{customdata}%<extra></extra>' },
-    ], { ...dark, title: 'Доля крипты в портфеле, % — с переезда на Кипр', yaxis: { gridcolor: '#1e2830', ticksuffix: '%', range: [0, Math.max(MP_AHR.target, ...shown.map(x => x.pct)) * 1.12], zeroline: true, zerolinecolor: '#8b949e' },
+    ], { ...dark, title: 'Доля крипты в портфеле, %', yaxis: { gridcolor: '#1e2830', ticksuffix: '%', range: [0, Math.max(MP_AHR.target, ...shown.map(x => x.pct)) * 1.12], zeroline: true, zerolinecolor: '#8b949e' },
       xaxis: { gridcolor: '#1e2830' }, legend: { orientation: 'h', y: -0.15 },
       shapes: [...zoneShapes, hline(MP_AHR.target, '#8b949e'), hline(MP_AHR.floor, '#8b949e'),
         ...marks.map(m => ({ type: 'line', xref: 'x', yref: 'paper', x0: m.day, x1: m.day, y0: 0, y1: 1, line: { color: '#58a6ff', width: 1, dash: 'dot' }, opacity: 0.6 }))],
-      annotations: [[MP_AHR.target, `цель ${MP_AHR.target}%`], [MP_AHR.floor, `минимум ${MP_AHR.floor}%`]].map(([y, text]) =>
-        ({ xref: 'paper', x: 0, xanchor: 'left', y, yanchor: 'bottom', text, showarrow: false, font: { color: '#8b949e', size: 11 } })) },
+      annotations: [...[[MP_AHR.target, `цель ${MP_AHR.target}%`], [MP_AHR.floor, `минимум ${MP_AHR.floor}%`]].map(([y, text]) =>
+        ({ xref: 'paper', x: 0, xanchor: 'left', y, yanchor: 'bottom', text, showarrow: false, font: { color: '#8b949e', size: 11 } })),
+        // the sums upright along their dotted lines: buys days apart don't run into each other
+        ...marks.map(m => ({ x: m.day, y: 0.5, yanchor: 'bottom', xanchor: 'center', textangle: -90, showarrow: false,
+          text: `€${Math.round(m.eur).toLocaleString('en-US')}`, font: { color: '#58a6ff', size: 11 }, bgcolor: '#0d1117' }))] },
       { responsive: true, displaylogo: false });
   } else document.getElementById('plot_cs_share').innerHTML = '<p class="empty-note">Войдите, чтобы увидеть долю крипты в портфеле.</p>';
 }
