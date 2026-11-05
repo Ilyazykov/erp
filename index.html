@@ -5517,6 +5517,25 @@ async function mpCnyBondList() {
   return list;
 }
 
+// The OFZ-PK to buy (06.11.2026): of the new kind, 1-3 years out, trading
+// over 1 mln roubles a day, the
+// biggest spread over the key rate -- the coupon now (MOEX) less the key
+// rate, plus the price's discount to the face over the years left
+async function mpBestPk(ofz, keyNow) {
+  const y = new Date().getFullYear();
+  // only the new kind (29014 on): the coupon by RUONIA over its own period; the
+  // old ones (29006-29010) take the half year before -- they look richer while
+  // the rate falls and catch up with a rise half a year late, worse at what a
+  // floater is for
+  const cands = ofz.filter(b => b.pk && Number(b.secid.slice(2, 7)) >= 29014 && (b.turnover || 0) > 1e6 && b.mat > `${y + 1}` && b.mat < `${y + 4}`);
+  if (!cands.length) return null;
+  if (keyNow == null) return cands.sort((a, b) => b.turnover - a.turnover)[0];
+  const dates = await mpMoexBondDates(cands.map(b => b.secid));
+  const spread = b => { const r = dates[b.secid]?.rate, yrs = Math.max(0.05, (Date.parse(b.mat) - Date.now()) / (365 * 86400000));
+    return r == null ? -Infinity : r - keyNow + (100 - (b.price || 100)) / yrs; };
+  return cands.map(b => ({ ...b, spread: spread(b) })).sort((a, b) => b.spread - a.spread)[0];
+}
+
 async function mpRenderMaturities() {
   const status = document.getElementById('mat_status');
   status.textContent = 'Loading…';
@@ -5704,6 +5723,7 @@ async function mpRenderMaturities() {
   const cr = []; for (let y = cf; y <= ct; y++) cr.push(String(y));
   const ctarget = y => { const i = cr.indexOf(y); return i < 0 ? 0 : cnyAll * (cauto ? cauto.weights[i] : 1 / cr.length); };
   const ofzAll = await mpOfzList(), cnyBondList = await mpCnyBondList();
+  const bestPk = await mpBestPk(ofzAll, key?.now ?? null);
   const rubPie = v => `${Math.round(v / (usdPer('RUB') || 1)).toLocaleString('ru-RU')} ₽`;
   const yuanPie = v => `${Math.round(v / (usdPer('CNY') || 1)).toLocaleString('ru-RU')} ¥`;
   const shadeOf = (n, from, to) => i => { const t = n > 1 ? i / (n - 1) : 0;
@@ -5727,7 +5747,7 @@ async function mpRenderMaturities() {
     {
       const fl = mvFloat + aFloat, bonds = mvBonds + aFixedAll + aFloat;
       const short = bonds * floatPct / 100 - fl, y = new Date().getFullYear();
-      const pk = ofzAll.filter(b => b.pk && (b.turnover || 0) > 1e6 && b.mat > `${y + 1}` && b.mat < `${y + 4}`).sort((a, b) => b.turnover - a.turnover)[0];
+      const pk = bestPk;
       const hover = short <= 5 ? 'флоатеров достаточно — новых не покупать' : !pk ? `недобор ${rubPie(short)}; подходящей ОФЗ-ПК нет`
         : `купить: ${mpEscapeHtml(pk.name)} (ОФЗ-ПК, до ${pk.mat.slice(5, 7)}.${pk.mat.slice(0, 4)}) — ${Math.max(1, Math.round(short / (((pk.price || 100) / 100 * pk.face + (pk.accrued || 0)) * usdPer('RUB'))))} шт`;
       mpTargetPie(pies, `Российские облигации: постоянный и переменный купон (по рыночной цене)${withBuys}`, [
@@ -5903,9 +5923,9 @@ async function mpRenderMaturities() {
       marker: { size: pts.map(p => 12 + 28 * Math.sqrt(p.r.usd / maxUsdF)), color: pts.map(p => p.ofz ? '#c9b3ff' : '#a371f7'),
         line: { color: pts.map(p => p.r.plannedN ? '#3dd68c' : '#0d1117'), width: pts.map(p => p.r.plannedN ? 3 : 1) } },
       customdata: pts.map(p => [p.r.next, money(p.r.usd), p.r.rate.toFixed(2), p.price.toFixed(2), p.years.toFixed(1),
-        p.r.plannedN ? `<br><b>план: +${p.r.plannedN} шт</b>${p.r.isNew ? ' (новая)' : ''}` : '']),
+        p.r.plannedN ? `<br><b>план: +${p.r.plannedN} шт</b>${p.r.isNew ? ' (новая)' : ''}` : '', `${p.spread >= 0 ? '+' : '−'}${Math.abs(p.spread).toFixed(2).replace('.', ',')}`]),
       hovertemplate: '<b>%{text}</b><br>до %{customdata[0]} (%{customdata[4]} г.) · %{customdata[1]}<br>купон сейчас %{customdata[2]}%, цена %{customdata[3]}%'
-        + '<br>надбавка к ключевой ≈ %{y:+.2f} пп<br>надбавки на рынке +1 пп → цена ≈ −%{customdata[4]}%%{customdata[5]}<extra></extra>',
+        + '<br>надбавка к ключевой ≈ %{customdata[6]} пп<br>надбавки на рынке +1 пп → цена ≈ −%{customdata[4]}%%{customdata[5]}<extra></extra>',
     }], { ...dark, title: 'Флоатеры: срок и надбавка к ключевой', showlegend: false, margin: { l: 50, r: 20, t: 50, b: 40 },
       hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
       xaxis: { title: 'лет до погашения / оферты', range: [0, maxX], gridcolor: '#1e2830', zeroline: false },
@@ -5991,7 +6011,7 @@ async function mpRenderMaturities() {
     const cost = b => ((b.price || 100) / 100 * b.face + (b.accrued || 0)) * rubUsd;
     const liquid = ofz.filter(b => (b.turnover || 0) > 1e6 && (b.pk || b.yield > 0));   // a floater has no yield on MOEX
     const y0 = new Date().getFullYear();
-    const pk = liquid.filter(b => b.pk && b.mat > `${y0 + 1}` && b.mat < `${y0 + 4}`).sort((a, b) => b.turnover - a.turnover)[0];
+    const pk = await mpBestPk(ofz, key?.now ?? null);
     // the yuan side (06.11.2026: all three kinds in one plan): the ladder's
     // years, the reliable corporates due in each
     const cnyBondsAll = await mpCnyBondList();
