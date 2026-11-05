@@ -5560,8 +5560,9 @@ async function mpRenderMaturities() {
   if (tr.length) {
     const pc = v => `${Math.round(Math.abs(v) * 100)}%`;
     const buckets = [...new Map(tr.map(t => [t.from, t])).values()];
-    const tl = buckets.map(t => t.from <= -50 ? `снизили<br>на ${pc(t.to)}+` : t.to >= 50 ? `подняли<br>на ${pc(t.from)}+`
-      : t.from < 0 && t.to > 0 ? 'почти не<br>меняли' : t.to <= 0 ? `снизили<br>на ${pc(t.to)}–${pc(t.from)}` : `подняли<br>на ${pc(t.from)}–${pc(t.to)}`);
+    const pn = v => Math.round(Math.abs(v) * 100);
+    const tl = buckets.map(t => t.from <= -50 ? `−${pn(t.to)}%<br>и больше` : t.to >= 50 ? `+${pn(t.from)}%<br>и больше`
+      : t.from < 0 && t.to > 0 ? '≈ 0' : t.to <= 0 ? `−${pn(t.to)}…<br>${pn(t.from)}%` : `+${pn(t.from)}…<br>${pn(t.to)}%`);
     const curB = odds.trend ? buckets.findIndex(t => t.from === Number(odds.trend.trend_from)) : -1;
     const POS = [['ставка ниже средней за 10 лет', '#58a6ff'], ['около средней', '#8b949e'], ['выше средней', '#f0a03c']];
     Plotly.newPlot('plot_kr_trend', POS.map(([name, color], p) => {
@@ -5573,7 +5574,7 @@ async function mpRenderMaturities() {
         hovertemplate: `%{x}, ${name}: потом повышали в %{customdata[0]}% случаев, при таком положении ставки обычно %{customdata[1]}% → ×%{y:.2f}<extra></extra>` };
     }), { ...dark, barmode: 'group', showlegend: true, legend: { orientation: 'h', y: -0.32, font: { size: 10 } }, margin: { l: 45, r: 10, t: 30, b: 95 },
         hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
-        xaxis: { type: 'category', title: { text: 'как изменилась ставка за год, в доле её размаха за 10 лет', font: { size: 11 } }, tickangle: 0, tickfont: { size: 10 } },
+        xaxis: { type: 'category', title: { text: 'изменение ставки за год, % от её размаха за 10 лет (− снизили, + подняли)', font: { size: 11 } }, tickangle: 0, tickfont: { size: 10 } },
         yaxis: { type: 'log', range: [Math.log10(0.15), Math.log10(7)], tickvals: [0.2, 0.5, 1, 2, 5], ticktext: ['×0.2', '×0.5', '×1', '×2', '×5'], gridcolor: '#1e2830' },
         shapes: [{ type: 'line', xref: 'paper', x0: 0, x1: 1, y0: 1, y1: 1, line: { color: '#8b949e', width: 1, dash: 'dash' } }],
         annotations: curB >= 0 && odds.range ? [{ x: tl[curB], y: Math.log10(7), yanchor: 'top', showarrow: false, font: { color: '#f85149', size: 11 },
