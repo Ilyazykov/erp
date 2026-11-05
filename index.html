@@ -5217,7 +5217,15 @@ function mpAssetBuckets(rows, keep = null) {
 // It's the whole crypto's share (BTC moves the rest with it). ----
 const MP_AHR = { red: 0.45, green: 1.2, target: 5, floor: 1 };
 let mpCryptoInd = null;   // [{ day, btc, dca, fair, ahr }], oldest first
+// The days crypto was bought (expenses 'Crypto': money sent to crypto) and
+// sold (none recorded so far), oldest first: a month's step is one buy or one sale.
+let mpCryptoBuyDays = [], mpCryptoSellDays = [], mpCryptoDealsLoaded = false;
 async function mpLoadCryptoIndicators() {
+  // the buys once signed in (the indicators are public, the buys aren't)
+  if (mpIsSignedIn && !mpCryptoDealsLoaded) {
+    const { data: buys, error } = await sb.from('expenses').select('day').eq('category', 'Crypto').order('day');
+    if (!error) { mpCryptoBuyDays = [...new Set((buys || []).map(b => b.day))]; mpCryptoDealsLoaded = true; }
+  }
   if (mpCryptoInd?.length) return mpCryptoInd;   // an empty answer isn't kept: the table may fill later
   const out = [];
   for (let from = 0; ; from += 1000) {
@@ -5230,33 +5238,43 @@ async function mpLoadCryptoIndicators() {
   return mpCryptoInd;
 }
 const mpAhrZone = a => (a < MP_AHR.red ? 'red' : a > MP_AHR.green ? 'green' : 'neutral');
+const mpDaysBefore = (day, n) => new Date(Date.parse(day + 'T00:00:00Z') - n * 86400000).toISOString().slice(0, 10);
+// The strategy's target share on `day` for a share of `share` %, the zone that
+// day and the last red / green before it; lastBuy / lastSell: the latest
+// buy / sale before that day. A month's step is done once: a buy (sale)
+// within the 30 days before keeps the target at the share.
+//   red, and neutral after red: +1% up to 5%; above 5% the share (nothing sold)
+//   green: the share less 1% (1-10%), 2% (10-20%), 3% (20% and more), not below 1%
+//   neutral after green: the share (nothing to do)
+function mpCryptoTarget(day, share, zone, regime, lastBuy, lastSell) {
+  const monthAgo = mpDaysBefore(day, 30);
+  if (zone === 'green') {
+    const step = share >= 20 ? 3 : share >= 10 ? 2 : 1;
+    if (lastSell && lastSell > monthAgo) return { target: share, step, why: `зелёная зона: продажа этого месяца уже была (${lastSell})` };
+    return { target: Math.max(MP_AHR.floor, share - step), step, why: `зелёная зона: продать ${step}% портфеля, не ниже ${MP_AHR.floor}%` };
+  }
+  if (zone === 'red' || regime !== 'green') {
+    const head = zone === 'red' ? 'красная зона' : 'нейтральная после красной';
+    if (share >= MP_AHR.target) return { target: share, step: 1, why: `${head}: доля уже не ниже ${MP_AHR.target}%, ничего не делать` };
+    if (lastBuy && lastBuy > monthAgo) return { target: share, step: 1, why: `${head}: покупка этого месяца уже была (${lastBuy})` };
+    return { target: Math.min(MP_AHR.target, share + 1), step: 1, why: `${head}: докупить на 1% портфеля, до ${MP_AHR.target}%` };
+  }
+  return { target: share, step: 0, why: 'нейтральная после зелёной: ничего не делать до красной зоны' };
+}
+const mpLastBefore = (days, day) => { let v = null; for (const d of days) { if (d >= day) break; v = d; } return v; };
 // This month's move for a crypto share of `share` % (of chart 3's total):
-// { day, ahr, zone, regime (the last red / green), goal (the strategy's
-// share: 5%, in the green the share less its sale, after the green none),
-// target (where this month's move takes the share), action, step } -- null
-// with no indicators (the plain 5% then).
+// { day, ahr, zone, regime (the last red / green), target %, action, step, why } --
+// null with no indicators (the plain 5% then).
 function mpCryptoPlan(share, ind = mpCryptoInd) {
   if (!ind?.length) return null;
   const last = ind[ind.length - 1];
   const zone = mpAhrZone(last.ahr);
   let regime = null;
   for (let i = ind.length - 1; i >= 0 && !regime; i--) { const z = mpAhrZone(ind[i].ahr); if (z !== 'neutral') regime = z; }
-  let target = share, goal = null, step = 0, why;
-  if (zone === 'green') {
-    step = share >= 20 ? 3 : share >= 10 ? 2 : 1;
-    goal = target = Math.max(MP_AHR.floor, share - step);
-    why = `зелёная зона: продать ${step}% портфеля, не ниже ${MP_AHR.floor}%`;
-  } else if (zone === 'red' || regime !== 'green') {
-    step = 1;
-    goal = MP_AHR.target;
-    // above 5% nothing is sold here: the share stays where it is
-    target = share < MP_AHR.target ? Math.min(MP_AHR.target, share + step) : share;
-    why = (zone === 'red' ? `красная зона: докупать по 1% портфеля до ${MP_AHR.target}%`
-      : `нейтральная после красной: докупать по 1% до ${MP_AHR.target}%, потом держать ${MP_AHR.target}%`)
-      + (share >= MP_AHR.target ? ' — доля уже выше' : '');
-  } else why = 'нейтральная после зелёной: ничего не делать до красной зоны';
-  const action = target > share + 1e-9 ? 'buy' : target < share - 1e-9 ? 'sell' : 'hold';
-  return { day: last.day, ahr: last.ahr, zone, regime, goal, target, action, step, why };
+  const today = new Date().toISOString().slice(0, 10);
+  const t = mpCryptoTarget(today, share, zone, regime, mpLastBefore(mpCryptoBuyDays, today + 'z'), mpLastBefore(mpCryptoSellDays, today + 'z'));
+  const action = t.target > share + 1e-9 ? 'buy' : t.target < share - 1e-9 ? 'sell' : 'hold';
+  return { day: last.day, ahr: last.ahr, zone, regime, ...t, action };
 }
 const MP_ZONE_NAME = { red: '🔴 красная', green: '🟢 зелёная', neutral: '🟡 нейтральная' };
 async function mpRenderCryptoStrategy() {
@@ -5296,7 +5314,7 @@ async function mpRenderCryptoStrategy() {
     card('AHR999', last.ahr.toFixed(3), last.day),
     card('Зона', MP_ZONE_NAME[plan.zone], plan.regime ? `последняя крайняя: ${MP_ZONE_NAME[plan.regime]}` : ''),
     card('BTC', mpFormatUsd(last.btc), `DCA 200: ${mpFormatUsd(last.dca)} · fair: ${mpFormatUsd(last.fair)}`),
-    card('Доля крипты', share === null ? 'войдите' : `${share.toFixed(1)}%`, `цель стратегии: ${plan.goal === null ? 'нет' : plan.goal.toFixed(1) + '%'}`),
+    card('Доля крипты', share === null ? 'войдите' : `${share.toFixed(1)}%`, `цель стратегии: ${share === null ? '—' : plan.target.toFixed(1) + '%'}`),
     card('В этом месяце', actionText, plan.why),
   ].join('');
   const dark = { paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', font: { color: '#c9d1d9' }, margin: { t: 30, r: 20, b: 40, l: 60 } };
@@ -5360,9 +5378,7 @@ async function mpRenderCryptoStrategy() {
       if (z !== zZone) { if (zZone) close(r.day); zStart = r.day; zZone = z; }
       if (i === span.length - 1) close(r.day);
     });
-    // the strategy's target day by day: 5% in the red zone and the neutral after
-    // it; in the green the share less its month's sale (not below 1%); in the
-    // neutral after the green none -- nothing to do: a gap
+    // the strategy's target day by day (mpCryptoTarget, as the card has it)
     const ahrOn = new Map(ind.map(r => [r.day, r.ahr]));
     let regime = null;
     for (const r of ind) { if (r.day >= start) break; const z = mpAhrZone(r.ahr); if (z !== 'neutral') regime = z; }
@@ -5370,8 +5386,7 @@ async function mpRenderCryptoStrategy() {
       const a = ahrOn.get(x.day);
       const z = a === undefined ? 'neutral' : mpAhrZone(a);
       if (z !== 'neutral') regime = z;
-      const step = x.pct >= 20 ? 3 : x.pct >= 10 ? 2 : 1;
-      return z === 'green' ? Math.max(MP_AHR.floor, x.pct - step) : regime === 'green' ? null : MP_AHR.target;
+      return mpCryptoTarget(x.day, x.pct, z, regime, mpLastBefore(mpCryptoBuyDays, x.day), mpLastBefore(mpCryptoSellDays, x.day)).target;
     });
     Plotly.newPlot('plot_cs_share', [
       { x: shown.map(x => x.day), y: targets, type: 'scatter', mode: 'lines', name: 'цель стратегии', connectgaps: false, line: { color: '#3dd68c', width: 2, dash: 'dash', shape: 'hv' } },
