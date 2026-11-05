@@ -529,6 +529,7 @@
     Фонды облигаций (TBRU, SBBY, …) без срока не показаны. Срок вклада выписка не даёт: клик по вкладу — указать дату окончания.
     Рублёвая лесенка — только постоянный купон и вклады, по ключевой ставке ЦБ; юаневые облигации — своя лесенка ниже, по ставке Банка Китая.</p>
   <p class="empty-note" id="mat_status"></p>
+  <div id="mat_metrics" style="margin-bottom:16px"></div>
   <div class="pie-grid" style="margin-bottom:16px"><div id="mat_pies" style="display:contents"></div></div>
   <div id="plot_mat_float" style="height:300px;margin-bottom:24px"></div>
   <div id="mat_buy" style="margin-bottom:24px;overflow-x:auto"></div>
@@ -6095,9 +6096,11 @@ async function mpRenderMaturities() {
         const q = Number(d.quantity), day = d.trade_date, yrs = x => (Date.parse(x) - Date.parse(day)) / (365 * 86400000);
         const end = r.offer && r.offer > day ? r.offer : r.mat;
         const faceLeft = r.allA.filter(([dt]) => dt > day).reduce((t, [, v]) => t + v, 0) || 1000;
-        const paid = Number(d.price) / 100 * faceLeft + (Number(d.nkd) || 0) / q;
+        // the price: % of the face (Sber) or money a bond (T-Bank, Alfa) -- over 200 it's money
+        const pct = Number(d.price) > 200 ? Number(d.price) / faceLeft * 100 : Number(d.price);
+        const paid = pct / 100 * faceLeft + (Number(d.nkd) || 0) / q;
         let y;
-        if (r.floating) y = r.rate != null ? r.rate / (Number(d.price) / 100) : null;
+        if (r.floating) y = r.rate != null ? r.rate / (pct / 100) : null;
         else {
           let last = 0;
           const flows = [[0, -paid]];
@@ -6250,8 +6253,8 @@ async function mpRenderMaturities() {
           firstOfGroup = false;
         });
       }
+      document.getElementById('mat_metrics').innerHTML = metricsCards(plans);
       box.innerHTML = `<div class="section-title" style="font-size:0.95rem">Облигации: что есть и что докупить</div>
-        <div style="margin:4px 0 12px">${metricsCards(plans)}</div>
         <div class="form-row" style="gap:16px;margin:4px 0 8px">
           <label>Сколько вложить, ₽: <input type="number" id="mat_invest" min="0" step="1000" value="${money}" style="width:190px"></label>
           <label><input type="checkbox" id="mat_invest_whole"${whole ? ' checked' : ''}> целыми облигациями</label>
