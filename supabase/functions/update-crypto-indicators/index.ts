@@ -10,8 +10,9 @@
 //   dca200 = the geometric mean of the last 200 closes
 //   fair   = 10 ^ (5.84 * log10(days since 2009-01-03) - 17.01)
 //
-// Checked against its known lows (05.11.2026): 0.27 on 21.11.2022, 0.30 on
-// 13.03.2020, 0.28 on 15.12.2018.
+// Checked (05.11.2026) against CoinGlass (coinglass.com/pro/i/ahr999):
+// 0.485 on 05.11.2026 there and here; and its known lows: 0.27 on
+// 22.11.2022, 0.30 on 14.03.2020.
 //
 // Called by pg_cron every morning (deployed with --no-verify-jwt; it only
 // ever writes public data, with the service role).
@@ -29,8 +30,15 @@ async function btcCloses(): Promise<[string, number][]> {
   const r = (await res.json())?.chart?.result?.[0];
   const ts: number[] = r?.timestamp ?? [];
   const close: (number | null)[] = r?.indicators?.quote?.[0]?.close ?? [];
+  // Dated as CoinGlass dates its AHR999: a day's value is at its 00:00 UTC,
+  // the close of the day before (its 05.11.2026 row: BTC $80,450 -- Yahoo's
+  // close of 04.11). Today's candle, not closed yet, is left out.
+  const today = new Date().toISOString().slice(0, 10);
   const byDay = new Map<string, number>();
-  ts.forEach((t, i) => { if (close[i]) byDay.set(new Date(t * 1000).toISOString().slice(0, 10), close[i]!); });
+  ts.forEach((t, i) => {
+    const day = new Date(t * 1000).toISOString().slice(0, 10);
+    if (close[i] && day < today) byDay.set(new Date(t * 1000 + 86400_000).toISOString().slice(0, 10), close[i]!);
+  });
   return [...byDay].sort((a, b) => a[0].localeCompare(b[0]));
 }
 
