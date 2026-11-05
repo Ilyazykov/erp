@@ -533,8 +533,6 @@
     <label><input type="checkbox" id="mat_deposits" checked> вклады</label>
     <label><input type="checkbox" id="mat_coupons" checked> купоны и проценты</label>
     <label><input type="checkbox" id="mat_floaters"> флоатеры</label>
-    <label>лесенка с <input type="number" id="mat_from" style="width:70px"> по <input type="number" id="mat_to" style="width:70px"></label>
-    <label><select id="mat_weights"><option value="prob">по вероятностям ЦБ (авто)</option><option value="far">больше в дальние</option><option value="even">поровну</option></select></label>
     <label>год рождения <input type="number" id="mat_birth" style="width:70px"></label>
   </div>
   <div id="plot_mat_years" style="height:280px;margin-bottom:24px"></div>
@@ -5303,7 +5301,7 @@ async function mpMoexBondDates(secids) {
 {
   // the ladder: the next five years by default
   const y = new Date().getFullYear();
-  for (const [id, def] of [['mat_from', y + 1], ['mat_to', y + 5], ['mat_cny_from', y + 1], ['mat_cny_to', y + 5], ['mat_birth', 1991]]) {
+  for (const [id, def] of [['mat_cny_from', y + 1], ['mat_cny_to', y + 5], ['mat_birth', 1991]]) {
     let v = def;
     try { v = Number(localStorage.getItem('mp_' + id)) || def; } catch { /* no storage */ }
     document.getElementById(id).value = v;
@@ -5312,14 +5310,6 @@ async function mpMoexBondDates(secids) {
       mpRenderMaturities();
     });
   }
-}
-{
-  const el = document.getElementById('mat_weights');
-  try { const v = localStorage.getItem('mp_mat_weights'); if (v) el.value = v; } catch { /* no storage */ }
-  el.addEventListener('change', e => {
-    try { localStorage.setItem('mp_mat_weights', e.target.value); } catch { /* no storage */ }
-    mpRenderMaturities();
-  });
 }
 for (const id of ['mat_deposits', 'mat_coupons', 'mat_floaters']) {
   try { const v = localStorage.getItem('mp_' + id); if (v) document.getElementById(id).checked = v === '1'; } catch { /* no storage */ }
@@ -5533,13 +5523,11 @@ async function mpRenderMaturities() {
   // of their target (asked 05.11.2026). The floaters have their own share by
   // the key rate's odds (mpKeyRateOdds); the rungs share the rest
   const odds = await mpKeyRateOdds();
-  const mode = document.getElementById('mat_weights').value;
+  // the ladder only by the CBR's odds (06.11.2026: no hand-set years or
+  // shapes); till the tables load -- an even five years
   const age = new Date().getFullYear() - Number(document.getElementById('mat_birth').value || 1991);
-  const auto = mode === 'prob' ? mpLadderAuto(odds, age) : null;
-  const fromEl = document.getElementById('mat_from'), toEl = document.getElementById('mat_to');
-  if (auto) { fromEl.value = new Date().getFullYear() + 1; toEl.value = Number(fromEl.value) + auto.years - 1; }
-  fromEl.disabled = toEl.disabled = !!auto;
-  const from = Number(fromEl.value), to = Number(toEl.value);
+  const auto = mpLadderAuto(odds, age);
+  const from = new Date().getFullYear() + 1, to = from + (auto ? auto.years : 5) - 1;
   const rungs = [];
   for (let y = from; y <= to && to - from < 40; y++) rungs.push(String(y));
   const faceAll = [...faceBy.values()].reduce((t, v) => t + v, 0);
@@ -5550,14 +5538,7 @@ async function mpRenderMaturities() {
   // only them); the ladder -- the rouble face, deposits too, less the floaters' target
   const bondsAll = faceAll - depositsAll;
   const ladderAll = faceAll - bondsAll * floatPct / 100;
-  const far = mode === 'far';
-  // past the ladder's end, to the last year anything held matures, a tail
-  // stepping down from the top rung to nothing (asked 05.11.2026): those years
-  // may hold some too, less the farther
-  const lastYear = Math.max(to, ...[...faceBy.entries()].filter(([, v]) => v > 0).map(([y]) => Number(y)));
-  const weightOf = new Map(rungs.map((y, i) => [y, auto ? auto.weights[i] : far ? i + 1 : 1]));
-  const peak = auto ? auto.weights.at(-1) : far ? rungs.length : 1, tail = lastYear - to;
-  for (let j = 1; j <= tail && rungs.length; j++) { const y = String(to + j); weightOf.set(y, peak * (tail + 1 - j) / (tail + 1)); rungs.push(y); }
+  const weightOf = new Map(rungs.map((y, i) => [y, auto ? auto.weights[i] : 1]));
   const weightSum = [...weightOf.values()].reduce((t, w) => t + w, 0);
   const targetOf = y => weightOf.has(y) ? ladderAll * weightOf.get(y) / weightSum : 0;
   const perRung = Math.max(0, ...rungs.map(targetOf));
@@ -5596,7 +5577,7 @@ async function mpRenderMaturities() {
     heat('plot_kr_h_down', 'down', [[0, '#0d1117'], [1, '#58a6ff']]);
     heat('plot_kr_h_up', 'up', [[0, '#0d1117'], [1, '#a371f7']]);
     heat('plot_kr_h_net', 'net', [[0, '#0d1117'], [1, '#f5c542']]);
-    document.getElementById('kr_ladder_note').innerHTML = !auto ? (mode === 'prob' ? 'Ставка или таблицы ещё не загружены.' : 'Режим лесенки — не «по вероятностям ЦБ»: таблицы для справки.')
+    document.getElementById('kr_ladder_note').innerHTML = !auto ? 'Ставка или таблицы ещё не загружены — лесенка пока ровная на 5 лет.'
       : `Сейчас ${odds.now}% (столбец ${auto.rate}%): снижение за 1–15 лет в среднем ${Math.round(auto.s * 100)}% → лесенка 5 + 10 × ${auto.s.toFixed(2)} = ${auto.nRate} лет,
         по возрасту (${age}) не больше ${auto.nAge} → <b>${auto.years} лет</b> (${from}–${to}, жёлтая рамка).
         Вес года: «ниже» − «выше» (насколько снижение вероятнее повышения; 0, если нет) × число лет, на которое год фиксирует ставку × (1 − лет/16) — надёжность прогноза —
@@ -5734,7 +5715,7 @@ async function mpRenderMaturities() {
     { type: 'bar', name: 'купоны и проценты', x: ys, y: ys.map(shownCoupon), marker: { color: '#3dd68c' }, hovertemplate: '%{y:$,.0f}' },
     { type: 'scatter', mode: 'text', x: ys, y: ys.map(y => over(y) ? yTop * 0.93 : tot(y)), text: ys.map(y => (over(y) ? '↑ ' : '') + money(tot(y))), textposition: ys.map(y => over(y) ? 'middle center' : 'top center'), textfont: { color: ys.map(y => over(y) ? '#0d1117' : '#c9d1d9') }, showlegend: false, hoverinfo: 'skip', cliponaxis: false },
     // the ladder's target per year: a tick over the bar; outside the ladder 0
-    { type: 'scatter', mode: 'markers', name: `цель лесенки ${from}–${to}${auto ? ` (по вероятностям ЦБ: ${auto.years} лет)` : ''}${tail > 0 ? `, дальше на спад до ${lastYear}` : ''} (номинал с постоянным купоном)`, x: ys, y: ys.map(targetOf),
+    { type: 'scatter', mode: 'markers', name: `цель лесенки ${from}–${to}${auto ? ` (по вероятностям ЦБ: ${auto.years} лет)` : ' (таблицы не загружены: ровно)'} (номинал с постоянным купоном)`, x: ys, y: ys.map(targetOf),
       marker: { symbol: 'line-ew-open', size: 34, color: '#d62728', line: { width: 3, color: '#d62728' } },
       customdata: ys.map(y => { const d = fixedOf(y) - targetOf(y); return `${d >= 0 ? 'перебор' : 'недобор'} ${money(Math.abs(d))}${floatFaceBy.get(y) ? ' (флоатеры не в счёт)' : ''}`; }),
       hovertemplate: '%{y:$,.0f} — %{customdata}' },
