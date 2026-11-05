@@ -8635,16 +8635,20 @@ function mpPlaceFromLink(url) {
   const gid = [...url.matchAll(/!1s(0x[0-9a-f]+:0x[0-9a-f]+)/gi)].pop();
   return { name: decodeURIComponent(name[1].replace(/\+/g, ' ')), lat: pt ? Number(pt[1]) : null, lng: pt ? Number(pt[2]) : null, url: clean, google_id: gid ? gid[1] : null };
 }
-// A place's name, and when another has the same name, what tells them apart:
-// the city, else the street, else the street and house ("Spar · Shanidze St").
+// A place's name, and when another has the same name, as much of its address
+// as tells them apart: the city, then the street, then the house number
+// ("Spar · Merab Kostava Street"); with no address to tell by, its point.
 function mpPlaceLabel(p, list) {
   const same = list.filter(o => o.id !== p.id && o.name.toLowerCase() === p.name.toLowerCase());
   if (!same.length) return p.name;
-  const differ = key => p[key] && same.every(o => (o[key] || '') !== p[key]);
-  if (differ('city')) return `${p.name} · ${p.city}`;
-  if (differ('street')) return `${p.name} · ${p.street}`;
-  if (p.street && p.house) return `${p.name} · ${p.street} ${p.house}`;
-  return `${p.name} · #${p.id}`;
+  const levels = [o => [o.city], o => [o.street], o => [o.street, o.house], o => [o.city, o.street, o.house]];
+  const tail = (o, f) => f(o).filter(Boolean).join(' ');
+  for (const f of levels) {
+    const mine = tail(p, f);
+    if (mine && same.every(o => tail(o, f) !== mine)) return `${p.name} · ${mine}`;
+  }
+  const full = tail(p, levels[3]);
+  return p.lat != null ? `${p.name} · ${full ? full + ' · ' : ''}${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}` : `${p.name}${full ? ' · ' + full : ''}`;
 }
 // A point's address, from OpenStreetMap (Nominatim): city, street, house.
 async function mpAddressAt(lat, lng) {
