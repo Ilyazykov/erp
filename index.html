@@ -5565,6 +5565,14 @@ async function mpBondMarket(secids) {
   return new Map(Object.entries(cache.m));
 }
 
+// The Bonds & deposits tab's buy logic for others (06.11.2026: the salary
+// plan's step 8): set by mpRenderMaturities; session() -- a buyer for one
+// plan: (ccy 'RUB' | 'CNY', usd) -> { buys: [{ ticker, name, units, usd }],
+// left } -- whole bonds, one at a time into the year (or the floaters)
+// furthest under its target in share of it, the targets with what this
+// session spent and this money in; the rest is left
+let mpBondCtx = null;
+
 async function mpRenderMaturities() {
   const status = document.getElementById('mat_status');
   status.textContent = 'Loading…';
@@ -6058,6 +6066,33 @@ async function mpRenderMaturities() {
         b: cnyBondsAll.filter(o => o.due.startsWith(y)).sort((a, c) => c.yield - a.yield || c.turnover - a.turnover)[0] })) : []),
     ];
     const KIND = { fixed: '₽ постоянный', float: '₽ флоатер', cny: '¥ юани' };
+    mpBondCtx = {
+      session() {
+        const spentBy = new Map(); let spentRub = 0, spentCny = 0;
+        return (ccy, usd) => {
+          const cny = ccy === 'CNY';
+          const pool = buckets.map((k, i) => ({ ...k, i })).filter(k => k.b && (cny ? k.kind === 'cny' : k.kind !== 'cny'));
+          const total = cny ? cnyMVAll + spentCny + usd : mvAll + spentRub + usd;
+          const floatT = cny ? 0 : Math.max(0, total - mvDeposits) * floatPct / 100, ladderT = total - floatT;
+          const target = k => cny ? total * k.w : k.kind === 'float' ? floatT : ladderT * k.w;
+          const buys = new Map();
+          let left = usd;
+          for (let guard = 0; guard < 100000; guard++) {
+            const can = pool.filter(k => costOf(k) <= left + 1e-9);
+            if (!can.length) break;
+            const fill = k => { const t = target(k); return t > 0 ? (k.cur + (spentBy.get(k.i) || 0)) / t : Infinity; };
+            const k = can.sort((a, c) => fill(a) - fill(c))[0];
+            const price = costOf(k);
+            spentBy.set(k.i, (spentBy.get(k.i) || 0) + price); left -= price;
+            const b = buys.get(k.b.secid) || { ticker: k.b.secid, name: k.b.name, units: 0, usd: 0 };
+            b.units++; b.usd += price; buys.set(k.b.secid, b);
+          }
+          const spent = usd - left;
+          if (cny) spentCny += spent; else spentRub += spent;
+          return { buys: [...buys.values()], left };
+        };
+      },
+    };
     // the yield cards (06.11.2026): the bonds held and the plan's, by market
     // value -- current yield (the coupon over the price), yield to maturity
     // (MOEX's effective one, unreinvested by the coupon's frequency), the
@@ -6817,7 +6852,16 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
     const bondHeld = {};
     for (const r of c.holdings) if (['moex_bond', 'moex_ofz'].includes(r.asset_class) && r.value_usd > 0) bondHeld[r.ticker] = (bondHeld[r.ticker] || 0) + r.value_usd;
     const bondCcy = Object.fromEntries(c.holdings.filter(r => r.ticker in bondHeld).map(r => [r.ticker, r.underlying_currency || r.currency]));
+    // the Bonds & deposits tab's logic when it has run (06.11.2026): its ladder,
+    // floaters and yuan corporates, whole bonds; what's left -- the fund
+    const bondSession = mpBondCtx ? mpBondCtx.session() : null;
     const buyFund = (account, ccy, usd) => {
+      if (bondSession) {
+        const r = bondSession(ccy, usd);
+        const fund = fundBuy(account, ccy, r.left);
+        const spent = r.buys.reduce((a, b) => a + b.usd, 0) + (fund ? fund.usd : 0);
+        return spent > 0 ? { bonds: r.buys, fund, usd: spent } : null;
+      }
       const bonds = [];
       let left = usd;
       for (;;) {
@@ -6875,7 +6919,7 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
         ...e.liquid.map(l => `${txt(l.usd, l.ccy)} from ${l.priceUsd ? `${l.ticker} (sell ${Math.round(l.usd / l.priceUsd)})` : l.ticker.replace(/^(SAVINGS|DEPOSIT):/, '')}`),
       ].filter(Boolean).join(' + ');
       // a purchase: whole bonds (by name) and / or fund units
-      const buys = x => [...x.bonds.map(b => `${b.units} × ${(c.bondNames || {})[b.ticker] || b.ticker}`),
+      const buys = x => [...x.bonds.map(b => `${b.units} × ${b.name || (c.bondNames || {})[b.ticker] || b.ticker}`),
         x.fund ? `${x.fund.units} × ${x.fund.ticker}` : ''].filter(Boolean).join(', ');
       const does = [
         e.cnyFund ? `${cnyTxt(e.cnyFund.usd)} → ${buys(e.cnyFund)}` : '',
@@ -7042,6 +7086,9 @@ async function mpDrawCharts(run = ++mpChartsRun) {
   const ctx = await mpBuildCharts(mpChartsBase, [], false, run);
   if (!ctx || run !== mpChartsRun) return;
   mpSalaryCtx = ctx;
+  // step 8 buys bonds by the Bonds & deposits tab's logic: worked out once if that tab hasn't been opened
+  const fl = mpSalaryFlags();
+  if (!mpBondCtx && mpIsSignedIn && (fl.ruCash || fl.ruLiquid)) { try { await mpRenderMaturities(); } catch { /* the old way then */ } }
   const salary = Math.max(0, parseFloat(document.getElementById('mp_salary_amount').value) || 0);
   // (the plan runs with no salary too: it still moves the free money)
   const plan = mpSalaryPlan(ctx, salary);
