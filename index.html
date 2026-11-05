@@ -5780,7 +5780,7 @@ async function mpRenderMaturities() {
       mpTargetPie(pies, `Облигации, вклады и фонды ликвидности: юани и рубли${withBuys}`, [
         { label: 'в юанях', usd: cny, target: w ?? cny / tot * 100, color: '#f778ba' },
         { label: 'в рублях', usd: rub, target: w != null ? 100 - w : rub / tot * 100, color: '#58a6ff' },
-      ], w != null ? `Цель — w_CNY ${Math.round(w)}% по курсу USD/RUB (вкладка «USD/RUB → CNY Weight»).` : 'Цель w_CNY ещё не посчитана — открой вкладку «USD/RUB → CNY Weight».');
+      ], w != null ? `Цель — w_CNY ${Math.round(w)}% по курсу USD/RUB (вкладка «USD/RUB → CNY Weight»).` : 'Цель w_CNY ещё не посчитана — открой вкладку «USD/RUB → CNY Weight».', null, false, null, rubPie);
     }
     // 2. fixed vs floating; which floater to buy: an OFZ-PK 1-3 years out, the most traded
     {
@@ -6080,8 +6080,8 @@ async function mpRenderMaturities() {
           for (let guard = 0; guard < 100000; guard++) {
             const can = pool.filter(k => costOf(k) <= left + 1e-9);
             if (!can.length) break;
-            const fill = k => { const t = target(k); return t > 0 ? (k.cur + (spentBy.get(k.i) || 0)) / t : Infinity; };
-            const k = can.sort((a, c) => fill(a) - fill(c))[0];
+            const gap = k => target(k) - k.cur - (spentBy.get(k.i) || 0);
+            const k = can.sort((a, c) => gap(c) - gap(a))[0];
             const price = costOf(k);
             spentBy.set(k.i, (spentBy.get(k.i) || 0) + price); left -= price;
             const b = buys.get(k.b.secid) || { ticker: k.b.secid, name: k.b.name, units: 0, usd: 0 };
@@ -6192,10 +6192,9 @@ async function mpRenderMaturities() {
         for (let guard = 0; guard < 100000; guard++) {
           const can = rows.filter(r => r.b && (whole ? costOf(r) <= left + 1e-9 : left > 1e-9));
           if (!can.length) break;
-          // the furthest from its target in share of it (06.11.2026: by roubles
-          // short the small years at the ladder's ends stayed under)
-          const fill = r => r.t > 0 ? (r.cur + r.spent) / r.t : Infinity;
-          const r = can.sort((a, c) => fill(a) - fill(c))[0];
+          // the most roubles short of its target (06.11.2026: by the share filled
+          // a short sum topped the small years at the ladder's ends up first)
+          const r = can.sort((a, c) => (c.t - c.cur - c.spent) - (a.t - a.cur - a.spent))[0];
           const amt = whole ? costOf(r) : Math.min(step, left);
           r.spent += amt; left -= amt; if (whole) r.n++;
         }
@@ -6300,7 +6299,7 @@ async function mpRenderMaturities() {
           ${body.join('')}
           <tr style="border-top:2px solid #30363d"><td ${td} colspan="8"><b>Итого к покупке</b>${money ? ` · не потрачено ${rub(left)}` : ''}</td><td ${tdr}><b>${rub(spent)}</b></td><td colspan="3"></td></tr>
           </tbody></table></div>
-        <p class="note">${money ? 'Деньги раскладываются по одной облигации: каждая — туда, где меньше всего набрано в процентах от цели (цели — с учётом вложенного: юани и рубли по w_CNY, в рублях флоатеры по своей доле, остальное — лесенка).'
+        <p class="note">${money ? 'Деньги раскладываются по одной облигации: каждая — туда, где до цели не хватает больше всего рублей (цели — с учётом вложенного: юани и рубли по w_CNY, в рублях флоатеры по своей доле, остальное — лесенка).'
           : 'Введи сумму — появится, что на неё купить.'} Зелёным — что купить. Стоимость и цели — по рыночной цене, в рублях; цена покупки — прошлого дня с НКД.</p>`;
       box.querySelector('#mat_invest').addEventListener('change', e => {
         money = Math.max(0, Number(e.target.value) || 0);
