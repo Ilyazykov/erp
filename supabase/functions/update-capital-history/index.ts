@@ -30,6 +30,7 @@ import { fromCron, notFromCron } from '../_shared/cron_auth.ts';
 
 // Price fetching stops here (the function has ~150 s in all).
 const TIME_BUDGET_MS = 100_000;
+const PARALLEL = 6;
 const OVERLAP_DAYS = 5;
 const UA = { 'User-Agent': 'Mozilla/5.0 (erp-portfolio capital history)' };
 const YAHOO = 'https://query1.finance.yahoo.com/v8/finance/chart';
@@ -369,16 +370,18 @@ Deno.serve(async (req) => {
     const dead = (t: string) => !held.has(t) && sources.get(t)?.source === 'none';
     const queue = [...since.keys()].filter(t => !dead(t))
       .sort((a, b) => Number(!held.has(a)) - Number(!held.has(b)) || tried(a).localeCompare(tried(b)));
-    for (const ticker of queue) {
-      if (timeLeft() < 8000) break;
+    // Six tickers at a time (05.11.2026): one by one, a run got through some
+    // 40 of ~250 in its budget. More would have Yahoo throttle.
+    let next = 0;
+    const one = async (ticker: string) => {
       const from = lastDay.has(ticker) ? addDays(lastDay.get(ticker)!, -OVERLAP_DAYS) : addDays(since.get(ticker)!, -7);
-      if (lastDay.get(ticker) === today()) continue;
+      if (lastDay.get(ticker) === today()) return;
       // tried already today by an earlier run of the night (the job runs every
       // 10 minutes, migration ...170): one run gets through some 40 tickers
-      if (String(sources.get(ticker)?.updated_at ?? '').slice(0, 10) === today()) continue;
+      if (String(sources.get(ticker)?.updated_at ?? '').slice(0, 10) === today()) return;
       // Found nowhere: try again once a week, not every run.
       const cached = sources.get(ticker);
-      if (cached?.source === 'none' && Date.now() - Date.parse(cached.updated_at) < 7 * 86400_000) { failed.push(ticker); continue; }
+      if (cached?.source === 'none' && Date.now() - Date.parse(cached.updated_at) < 7 * 86400_000) { failed.push(ticker); return; }
       let src = sources.get(ticker);
       const m = mp.get(ticker);
       let points: { day: string; price: number; currency: string }[] = [];
@@ -471,7 +474,7 @@ Deno.serve(async (req) => {
         // a source that gave nothing for a month, for a security not held: delisted -- dead from now on
         const gone = !held.has(ticker) && (!lastDay.has(ticker) || lastDay.get(ticker)! < addDays(today(), -30));
         if (src && src.source !== 'none') await db.from('price_sources').update({ updated_at: new Date().toISOString(), ...(gone ? { source: 'none' } : {}) }).eq('ticker', ticker);
-        continue;
+        return;
       }
       const rows = [];
       for (const p of points) {
@@ -484,8 +487,10 @@ Deno.serve(async (req) => {
       }
       done.push(`${ticker}:${rows.length}`);
       await db.from('price_sources').update({ updated_at: new Date().toISOString() }).eq('ticker', ticker);
-      await sleep(80);
-    }
+    };
+    await Promise.all(Array.from({ length: PARALLEL }, async () => {
+      while (next < queue.length && timeLeft() >= 8000) await one(queue[next++]);
+    }));
     report.prices = done;
     report.no_price = failed;
     report.splits_changed = splitsFound;
