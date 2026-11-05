@@ -5258,7 +5258,7 @@ function mpAssetBuckets(rows, keep = null) {
 // has its offer (MOEX ISS, straight from the browser), and the term deposits'
 // ends (deposit_terms, set by hand: no statement gives them) -- a bar from
 // today to the date, its thickness the money in it. ----
-const MP_MAT_CACHE = 'mp_moex_bond_dates_v6';
+const MP_MAT_CACHE = 'mp_moex_bond_dates_v7';
 async function mpMoexBondDates(secids) {
   let cache = {};
   try { cache = JSON.parse(localStorage.getItem(MP_MAT_CACHE) || '{}'); } catch { /* none */ }
@@ -5296,8 +5296,11 @@ async function mpMoexBondDates(secids) {
     const set = raw.filter(c => c.value || c.valueprc).pop();
     const rate = !set ? null : Number(set.valueprc) || Number(set.value) / Number(set.facevalue)
       * 365 / Math.max(1, (Date.parse(set.coupondate) - Date.parse(set.startdate)) / 86400000) * 100;
+    // every coupon and amortisation, the past ones too: a purchase's yield (06.11.2026)
+    const allC = raw.map(c => [c.coupondate, c.value ? Number(c.value) : null]);
+    const allA = table('amortizations').map(a => [a.amortdate, Number(a.value)]);
     cache[secid] = { at: today, name: desc.NAME || desc.SHORTNAME || secid, mat: desc.MATDATE || null, offer: offers[0] || null,
-      unit: (desc.FACEUNIT || 'RUB').replace('SUR', 'RUB'), coupons, face, floating, rate };
+      unit: (desc.FACEUNIT || 'RUB').replace('SUR', 'RUB'), coupons, face, floating, rate, allC, allA };
   };
   for (let i = 0; i < todo.length; i += 6) await Promise.all(todo.slice(i, i + 6).map(one));
   try { localStorage.setItem(MP_MAT_CACHE, JSON.stringify(cache)); } catch { /* no storage */ }
@@ -5535,6 +5538,32 @@ async function mpBestPk(ofz, keyNow) {
   return cands.map(b => ({ ...b, spread: spread(b) })).sort((a, b) => b.spread - a.spread)[0];
 }
 
+// MOEX's figures for bonds (06.11.2026, the portfolio's yield cards): per
+// security its main board's coupon (% a year; a floater's -- none), coupon
+// period (days), last price (%), yield (effective, to maturity or the offer;
+// a floater's -- 0) and duration (days); a day's cache
+async function mpBondMarket(secids) {
+  const KEY = 'mp_bond_market_v1', today = new Date().toISOString().slice(0, 10);
+  let cache = {};
+  try { cache = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { /* none */ }
+  if (cache.at !== today) cache = { at: today, m: {} };
+  const todo = [...new Set(secids)].filter(id => !(id in cache.m));
+  for (let i = 0; i < todo.length; i += 20) {
+    const ids = todo.slice(i, i + 20).join(',');
+    const j = await fetch(`https://iss.moex.com/iss/engines/stock/markets/bonds/securities.json?iss.meta=off&iss.only=securities,marketdata&securities=${ids}`
+      + '&securities.columns=SECID,BOARDID,COUPONPERCENT,COUPONPERIOD,PREVPRICE&marketdata.columns=SECID,BOARDID,YIELD,DURATION').then(r => r.json()).catch(() => null);
+    const md = new Map((j?.marketdata?.data || []).map(([id, b, y, d]) => [`${id}|${b}`, { y, d }]));
+    for (const [id, b, cp, per, price] of j?.securities?.data || []) {
+      if (!['TQOB', 'TQCB', 'TQIR'].includes(b)) continue;
+      const m = md.get(`${id}|${b}`) || {};
+      cache.m[id] = { coupon: cp != null ? Number(cp) : null, period: Number(per) || null, price: Number(price) || null, yield: Number(m.y) || 0, dur: Number(m.d) || 0 };
+    }
+    for (const id of todo.slice(i, i + 20)) if (!(id in cache.m)) cache.m[id] = null;
+  }
+  try { localStorage.setItem(KEY, JSON.stringify(cache)); } catch { /* no storage */ }
+  return new Map(Object.entries(cache.m));
+}
+
 async function mpRenderMaturities() {
   const status = document.getElementById('mat_status');
   status.textContent = 'Loading…';
@@ -5556,7 +5585,8 @@ async function mpRenderMaturities() {
   for (const r of rows) {
     if (r.deposit) { r.name = r.ticker.replace(/^DEPOSIT:/, 'Вклад '); r.mat = endOf.get(r.ticker) || null; r.offer = null; }
     else Object.assign(r, { name: dates[r.ticker]?.name || r.ticker, mat: dates[r.ticker]?.mat || null, offer: dates[r.ticker]?.offer || null,
-      unit: dates[r.ticker]?.unit || 'RUB', coupons: dates[r.ticker]?.coupons || [], face: dates[r.ticker]?.face || [], floating: !!dates[r.ticker]?.floating, rate: dates[r.ticker]?.rate ?? null });
+      unit: dates[r.ticker]?.unit || 'RUB', coupons: dates[r.ticker]?.coupons || [], face: dates[r.ticker]?.face || [], floating: !!dates[r.ticker]?.floating, rate: dates[r.ticker]?.rate ?? null,
+      allC: dates[r.ticker]?.allC || [], allA: dates[r.ticker]?.allA || [] });
     r.next = r.offer || r.mat;
   }
   // the year charts by market value (06.11.2026: the face back at maturity wasn't wanted) -- no coupons
@@ -6027,11 +6057,85 @@ async function mpRenderMaturities() {
         b: cnyBondsAll.filter(o => o.due.startsWith(y)).sort((a, c) => c.yield - a.yield || c.turnover - a.turnover)[0] })) : []),
     ];
     const KIND = { fixed: '₽ постоянный', float: '₽ флоатер', cny: '¥ юани' };
+    // the yield cards (06.11.2026): the bonds held and the plan's, by market
+    // value -- current yield (the coupon over the price), yield to maturity
+    // (MOEX's effective one, unreinvested by the coupon's frequency), the
+    // effective one, duration; a floater's yields -- its coupon now
+    const heldBonds = shown.filter(r => !r.deposit && r.unit);
+    const mkt = await mpBondMarket([...heldBonds.map(r => r.ticker), ...buckets.filter(k => k.b).map(k => k.b.secid)]);
+    const figures = (secid, r) => {
+      const m = mkt.get(secid) || {};
+      const coupon = m.coupon ?? r?.rate ?? null, price = m.price || (r ? null : 100);
+      const eff = m.yield > 0 ? m.yield : coupon, freq = m.period ? 365 / m.period : 2;
+      const yrs = r?.next ? Math.max(0, (Date.parse(r.next) - Date.now()) / (365 * 86400000)) : null;
+      return { cur: coupon != null ? coupon / ((price || 100) / 100) : null, eff, ytm: eff != null ? freq * ((1 + eff / 100) ** (1 / freq) - 1) * 100 : null,
+        dur: m.dur > 0 ? m.dur / 365 : (r?.floating || !m.coupon ? (m.period || 91) / 365 / 2 : yrs) };
+    };
+    // by the deals (06.11.2026): each purchase's own yield -- its price with the
+    // accrued coupon on its day against what the bond pays after it (coupons,
+    // amortisations, the face back -- or at the offer, as MOEX's), effective a
+    // year; a floater's -- its coupon now over the price paid. The held bond's
+    // -- its purchases' by quantity; a sale takes from all alike
+    const { data: deals } = await sb.from('trades').select('ticker, side, quantity, price, nkd, trade_date')
+      .in('ticker', heldBonds.map(r => r.ticker).length ? heldBonds.map(r => r.ticker) : ['-']).in('side', ['buy', 'sell']);
+    const irr = flows => {   // flows: [[years from the start, amount]]; the effective yearly rate, %
+      const npv = r => flows.reduce((t, [t0, a]) => t + a / (1 + r) ** t0, 0);
+      let lo = -0.9, hi = 3;
+      if (npv(lo) * npv(hi) > 0) return null;
+      for (let i = 0; i < 100; i++) { const m = (lo + hi) / 2; if (npv(lo) * npv(m) <= 0) hi = m; else lo = m; }
+      return (lo + hi) / 2 * 100;
+    };
+    const dealYield = new Map();
+    for (const r of heldBonds) {
+      const buys = (deals || []).filter(d => d.ticker === r.ticker && d.side === 'buy' && Number(d.quantity) > 0);
+      if (!buys.length) continue;
+      const m = mkt.get(r.ticker) || {}, freq = m.period ? 365 / m.period : 2;
+      let w = 0, sum = 0;
+      for (const d of buys) {
+        const q = Number(d.quantity), day = d.trade_date, yrs = x => (Date.parse(x) - Date.parse(day)) / (365 * 86400000);
+        const end = r.offer && r.offer > day ? r.offer : r.mat;
+        const faceLeft = r.allA.filter(([dt]) => dt > day).reduce((t, [, v]) => t + v, 0) || 1000;
+        const paid = Number(d.price) / 100 * faceLeft + (Number(d.nkd) || 0) / q;
+        let y;
+        if (r.floating) y = r.rate != null ? r.rate / (Number(d.price) / 100) : null;
+        else {
+          let last = 0;
+          const flows = [[0, -paid]];
+          for (const [dt, v] of r.allC) { if (v) last = v; if (dt > day && (!end || dt <= end)) flows.push([yrs(dt), v || last]); }
+          let amortised = 0;
+          for (const [dt, v] of r.allA) if (dt > day && (!end || dt < end)) { flows.push([yrs(dt), v]); amortised += v; }
+          if (end) flows.push([yrs(end), faceLeft - amortised]);
+          y = irr(flows);
+        }
+        if (y == null || !Number.isFinite(y)) continue;
+        w += q; sum += q * y;
+      }
+      if (w) dealYield.set(r.ticker, { eff: sum / w, ytm: freq * ((1 + sum / w / 100) ** (1 / freq) - 1) * 100 });
+    }
+    const metricsCards = plans => {
+      const groups = [['₽ рублёвые облигации', r => r.unit === 'RUB', p => p.kind !== 'cny'], ['¥ юаневые облигации', r => r.unit !== 'RUB', p => p.kind === 'cny']];
+      return groups.map(([title, heldOk, planOk]) => {
+        const items = [
+          ...heldBonds.filter(heldOk).map(r => { const f = figures(r.ticker, r), d = dealYield.get(r.ticker); return { v: r.usd, ...f, dEff: d?.eff ?? f.eff, dYtm: d?.ytm ?? f.ytm }; }),
+          // the plan's are bought at today's price: their deals' yield is the market's
+          ...plans.filter(p => p.spent > 0 && p.b && planOk(p)).map(p => { const f = figures(p.b.secid, null); return { v: p.spent, ...f, dEff: f.eff, dYtm: f.ytm }; }),
+        ];
+        const avg = k => { const xs = items.filter(i => i[k] != null && Number.isFinite(i[k])); const w = xs.reduce((t, i) => t + i.v, 0); return w ? xs.reduce((t, i) => t + i.v * i[k], 0) / w : null; };
+        if (!items.length) return '';
+        const pct = v => v == null ? '—' : `${v.toFixed(2).replace('.', ',')}%`;
+        const card = (label, val, deal) => `<div style="flex:1 1 150px;min-width:0;background:#13191f;border:1px solid #1e2830;border-radius:8px;padding:10px 14px">
+          <div style="color:#8b949e;font-size:0.8rem">${label}</div><div style="font-size:1.4rem;font-weight:600;font-variant-numeric:tabular-nums">${val}${deal ? ` <span style="font-size:0.85rem;font-weight:400;color:#8b949e">${deal} по сделкам</span>` : ''}</div></div>`;
+        return `<div style="margin:6px 0 4px;color:#8b949e;font-size:0.85rem">${title}${plans.some(p => p.spent > 0 && planOk(p)) ? ' — с покупками' : ''}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:10px">${card('Текущая доходность', pct(avg('cur')))}${card('Доходность к погашению', pct(avg('ytm')), pct(avg('dYtm')))}
+          ${card('Эффективная доходность', pct(avg('eff')), pct(avg('dEff')))}${card('Дюрация, лет', avg('dur') == null ? '—' : avg('dur').toFixed(1).replace('.', ','))}</div>`;
+      }).join('');
+    };
     const td = 'style="padding:4px 10px;text-align:left;white-space:nowrap"', tdr = 'style="padding:4px 10px;text-align:right;white-space:nowrap"';
     const till = d => `до ${d.slice(5, 7)}.${d.slice(0, 4)}`;
     const box = document.getElementById('mat_buy');
     let money = 0, whole = true;
-    try { money = Number(localStorage.getItem('mp_mat_invest')) || 0; whole = localStorage.getItem('mp_mat_invest_whole') !== '0'; } catch { /* no storage */ }
+    // the sum starts at 0 every time (06.11.2026); the whole-bonds switch is remembered
+    try { whole = localStorage.getItem('mp_mat_invest_whole') !== '0'; } catch { /* no storage */ }
     const plan = () => {
       const M = money * rubUsd;   // dollars
       // the targets with the money in (or as they are, without it): yuan vs
@@ -6147,8 +6251,9 @@ async function mpRenderMaturities() {
         });
       }
       box.innerHTML = `<div class="section-title" style="font-size:0.95rem">Облигации: что есть и что докупить</div>
+        <div style="margin:4px 0 12px">${metricsCards(plans)}</div>
         <div class="form-row" style="gap:16px;margin:4px 0 8px">
-          <label>Сколько вложить, ₽: <input type="number" id="mat_invest" min="0" step="1000" value="${money || ''}" placeholder="0" style="width:190px"></label>
+          <label>Сколько вложить, ₽: <input type="number" id="mat_invest" min="0" step="1000" value="${money}" style="width:190px"></label>
           <label><input type="checkbox" id="mat_invest_whole"${whole ? ' checked' : ''}> целыми облигациями</label>
         </div>
         <div><table class="data-table" style="width:auto"><thead><tr>
@@ -6161,7 +6266,6 @@ async function mpRenderMaturities() {
           : 'Введи сумму — появится, что на неё купить.'} Зелёным — что купить. Стоимость и цели — по рыночной цене, в рублях; цена покупки — прошлого дня с НКД.</p>`;
       box.querySelector('#mat_invest').addEventListener('change', e => {
         money = Math.max(0, Number(e.target.value) || 0);
-        try { localStorage.setItem('mp_mat_invest', String(money)); } catch { /* no storage */ }
         draw();
       });
       box.querySelector('#mat_invest_whole').addEventListener('change', e => {
