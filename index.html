@@ -549,7 +549,8 @@
       <p class="note" id="kr_formula" style="margin:8px 4px"></p></div></div>
   <div class="pie-grid" style="margin-bottom:24px">
     <div class="pie-card"><h4>Лесенка: вероятность, что через N лет ставка будет НИЖЕ, % (история ЦБ с 1992)</h4><div id="plot_kr_h_down" style="height:420px"></div></div>
-    <div class="pie-card"><h4>Лесенка: вероятность, что через N лет ставка будет ВЫШЕ, %</h4><div id="plot_kr_h_up" style="height:420px"></div>
+    <div class="pie-card"><h4>Лесенка: вероятность, что через N лет ставка будет ВЫШЕ, %</h4><div id="plot_kr_h_up" style="height:420px"></div></div>
+    <div class="pie-card"><h4>Лесенка: перевес снижения, max(0, «ниже» − «выше»), пп</h4><div id="plot_kr_h_net" style="height:420px"></div>
       <p class="note" id="kr_ladder_note" style="margin:8px 4px"></p></div>
   </div>
   <div class="pie-grid" style="margin-bottom:24px">
@@ -5574,9 +5575,10 @@ async function mpRenderMaturities() {
     const xs = [...new Set(odds.horizon.map(r => r.rate))].sort((a, b) => a - b), hs = [...new Set(odds.horizon.map(r => r.h))].sort((a, b) => a - b);
     const cell = (h, k) => odds.horizon.find(r => r.h === h && r.rate === k);
     const curRate = odds.now != null ? Math.min(21, Math.max(4, Math.floor(odds.now))) : null;
+    const val = (c, field) => field === 'net' ? Math.max(0, c.down - c.up) : c[field];
     const heat = (id, field, scale) => Plotly.newPlot(id, [{
-      type: 'heatmap', x: xs, y: hs.map(h => `${h} г`), z: hs.map(h => xs.map(k => cell(h, k)?.[field] * 100)),
-      text: hs.map(h => xs.map(k => { const c = cell(h, k); return c ? `${(c[field] * 100).toFixed(1)}${c.months ? '' : '*'}` : ''; })),
+      type: 'heatmap', x: xs, y: hs.map(h => `${h} г`), z: hs.map(h => xs.map(k => { const c = cell(h, k); return c ? val(c, field) * 100 : null; })),
+      text: hs.map(h => xs.map(k => { const c = cell(h, k); return c ? `${(val(c, field) * 100).toFixed(1)}${c.months ? '' : '*'}` : ''; })),
       texttemplate: '%{text}', textfont: { size: 8 }, colorscale: scale, zmin: 0, zmax: 100, showscale: false,
       customdata: hs.map(h => xs.map(k => cell(h, k)?.months ?? 0)),
       hovertemplate: 'ставка %{x}, через %{y}: %{z:.1f}%<br>месяцев в истории: %{customdata} (0 — по соседним)<extra></extra>' }],
@@ -5588,6 +5590,7 @@ async function mpRenderMaturities() {
         ] }, { responsive: true, displaylogo: false, displayModeBar: false });
     heat('plot_kr_h_down', 'down', [[0, '#0d1117'], [1, '#58a6ff']]);
     heat('plot_kr_h_up', 'up', [[0, '#0d1117'], [1, '#a371f7']]);
+    heat('plot_kr_h_net', 'net', [[0, '#0d1117'], [1, '#f5c542']]);
     document.getElementById('kr_ladder_note').innerHTML = !auto ? (mode === 'prob' ? 'Ставка или таблицы ещё не загружены.' : 'Режим лесенки — не «по вероятностям ЦБ»: таблицы для справки.')
       : `Сейчас ${odds.now}% (столбец ${auto.rate}%): снижение за 1–15 лет в среднем ${Math.round(auto.s * 100)}% → лесенка 5 + 10 × ${auto.s.toFixed(2)} = ${auto.nRate} лет,
         по возрасту (${age}) не больше ${auto.nAge} → <b>${auto.years} лет</b> (${from}–${to}, жёлтая рамка).
