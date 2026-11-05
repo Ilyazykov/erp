@@ -5207,8 +5207,10 @@ function mpTargetPie(el, title, items, note = '', targetTotal = null, shareOfTar
     {
       type: 'barpolar', r: rows.map(r => r.r), theta: rows.map(r => r.theta), width: rows.map(r => r.width),
       marker: { color: rows.map(r => r.color), line: { color: '#0d1117', width: 1 } },
-      hovertemplate: rows.map(r => `${r.label}<br>$${Math.round(r.usd).toLocaleString('en-US')} - ${r.current.toFixed(1)}%`
-        + `<br>target ${r.target.toFixed(1)}% = $${Math.round(r.target / 100 * base).toLocaleString('en-US')}<extra></extra>`),
+      // a slice's own line (item.hover) under, if any; the sums by `money` when given
+      hovertemplate: rows.map(r => { const m = money ? money : v => `$${Math.round(v).toLocaleString('en-US')}`;
+        return `${r.label}<br>${m(r.usd)} - ${r.current.toFixed(1)}%<br>target ${r.target.toFixed(1)}% = ${m(r.target / 100 * base)}`
+          + `${r.hover ? `<br>${r.hover}` : ''}<extra></extra>`; }),
     },
     {
       type: 'scatterpolar', mode: 'lines', hoverinfo: 'skip',
@@ -5655,13 +5657,23 @@ async function mpRenderMaturities() {
   {
     const KR0 = 1 / (usdPer('RUB') || 1);
     const rubFmt = v => `${Math.round(v * KR0).toLocaleString('ru-RU')} ₽`;
+    // what to buy for a short year, as in the buy list below
+    const ofz0 = (await mpOfzList()).filter(b => b.pd && (b.turnover || 0) > 1e6 && b.yield > 0);
+    const buyLine = y => {
+      const short = targetOf(y) - fixedOf(y);
+      if (short <= 5) return 'недобора нет';
+      const b = ofz0.filter(o => o.mat.startsWith(y)).sort((a, c) => c.yield - a.yield)[0];
+      if (!b) return `недобор ${rubFmt(short)}; ОФЗ-ПД с погашением в этом году нет`;
+      const n = Math.max(1, Math.round(short / (((b.price || 100) / 100 * b.face + (b.accrued || 0)) * usdPer('RUB'))));
+      return `купить: ${mpEscapeHtml(b.name)} (до ${b.mat.slice(5, 7)}.${b.mat.slice(0, 4)}, ${b.yield.toFixed(1)}%) — ${n} шт`;
+    };
     const ladderFixed = rungs.reduce((t, y) => t + Math.max(0, fixedOf(y)), 0);
     const outside = [...faceBy.keys()].filter(y => !rungs.includes(y)).reduce((t, y) => t + Math.max(0, fixedOf(y)), 0);
     const tw = rungs.reduce((t, y) => t + targetOf(y), 0) || 1;
     const shade = i => { const t = rungs.length > 1 ? i / (rungs.length - 1) : 0; const c = [[168, 208, 255], [31, 86, 160]];
       return '#' + c[0].map((a, k) => Math.round(a + (c[1][k] - a) * t).toString(16).padStart(2, '0')).join(''); };
     mpTargetPie(pies, 'Рублёвые с постоянным купоном: по годам лесенки (номинал)', [
-      ...rungs.map((y, i) => ({ label: y, usd: Math.max(0, fixedOf(y)), target: targetOf(y) / tw * 100, color: shade(i) })),
+      ...rungs.map((y, i) => ({ label: y, usd: Math.max(0, fixedOf(y)), target: targetOf(y) / tw * 100, color: shade(i), hover: buyLine(y) })),
       ...(outside > 0 ? [{ label: 'вне лесенки', usd: outside, target: 0, color: '#6e7681' }] : []),
     ], `Цель — веса лесенки ${from}–${to} по вероятностям ЦБ; «вне лесенки» — погашения раньше и позже, их деньги идут в ступени с недобором. Сейчас в лесенке ${rubFmt(ladderFixed)}.`,
       null, false, null, rubFmt);
