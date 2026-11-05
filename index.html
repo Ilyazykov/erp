@@ -529,7 +529,9 @@
     Фонды облигаций (TBRU, SBBY, …) без срока не показаны. Срок вклада выписка не даёт: клик по вкладу — указать дату окончания.
     Рублёвая лесенка — только постоянный купон и вклады, по ключевой ставке ЦБ; юаневые облигации — своя лесенка ниже, по ставке Банка Китая.</p>
   <p class="empty-note" id="mat_status"></p>
-  <div class="pie-grid" style="margin-bottom:24px"><div id="mat_pies" style="display:contents"></div></div>
+  <div class="pie-grid" style="margin-bottom:16px"><div id="mat_pies" style="display:contents"></div></div>
+  <div id="plot_mat_float" style="height:300px;margin-bottom:24px"></div>
+  <div id="mat_buy" style="margin-bottom:24px;overflow-x:auto"></div>
   <div class="form-row" style="gap:16px;justify-content:flex-end;margin:8px 0 -8px">
     <label><input type="checkbox" id="mat_deposits" checked> вклады</label>
     <label><input type="checkbox" id="mat_coupons" checked> купоны и проценты</label>
@@ -560,7 +562,6 @@
     <div class="pie-card"><h4>Без «не изменится»: флоатеры и постоянный купон</h4><div id="plot_kr_split" style="height:380px"></div></div>
     <div class="pie-card"><h4>Инерция по центробанкам мира: поправка шансов повышения от изменения ставки за год</h4><div id="plot_kr_trend" style="height:380px"></div></div>
   </div>
-  <div id="plot_mat_float" style="height:300px;margin-bottom:24px"></div>
   <div id="plot_mat"></div>
 </div>
 
@@ -5637,7 +5638,7 @@ async function mpRenderMaturities() {
     const w = typeof DATA !== 'undefined' && DATA?.currentWCny != null ? DATA.currentWCny * 100 : null;
     const tot = rub + cny || 1;
     mpTargetPie(pies, 'Облигации, вклады и фонды ликвидности: юани и рубли', [
-      { label: 'в юанях и др. валютах', usd: cny, target: w ?? cny / tot * 100, color: '#f778ba' },
+      { label: 'в юанях', usd: cny, target: w ?? cny / tot * 100, color: '#f778ba' },
       { label: 'в рублях', usd: rub, target: w != null ? 100 - w : rub / tot * 100, color: '#58a6ff' },
     ], w != null ? `Цель — w_CNY ${Math.round(w)}% по курсу USD/RUB (вкладка «USD/RUB → CNY Weight»).` : 'Цель w_CNY ещё не посчитана — открой вкладку «USD/RUB → CNY Weight».');
   }
@@ -5664,10 +5665,29 @@ async function mpRenderMaturities() {
       ...(outside > 0 ? [{ label: 'вне лесенки', usd: outside, target: 0, color: '#6e7681' }] : []),
     ], `Цель — веса лесенки ${from}–${to} по вероятностям ЦБ; «вне лесенки» — погашения раньше и позже, их деньги идут в ступени с недобором. Сейчас в лесенке ${rubFmt(ladderFixed)}.`,
       null, false, null, rubFmt);
-    const buy = document.createElement('div');
-    buy.id = 'mat_buy';
-    pies.lastElementChild.appendChild(buy);
   }
+  // the yuan ladder (by the PBoC's rate) and its pie, as the rouble one's
+  const cnyAll = [...cnyFaceBy.values()].reduce((t, v) => t + v, 0);
+  const cauto = mpLadderAuto(odds.horizonCN, odds.cnNow, age, 0.5);
+  const cf = new Date().getFullYear() + 1, ct = cf + (cauto ? cauto.years : 5) - 1;
+  const cr = []; for (let y = cf; y <= ct; y++) cr.push(String(y));
+  const ctarget = y => { const i = cr.indexOf(y); return i < 0 ? 0 : cnyAll * (cauto ? cauto.weights[i] : 1 / cr.length); };
+  if (cnyAll > 0) {
+    const KC0 = 1 / (usdPer('CNY') || 1);
+    const yuanFmt = v => `${Math.round(v * KC0).toLocaleString('ru-RU')} ¥`;
+    const outside = [...cnyFaceBy.keys()].filter(y => !cr.includes(y)).reduce((t, y) => t + (cnyFaceBy.get(y) || 0), 0);
+    const tw = cr.reduce((t, y) => t + ctarget(y), 0) || 1;
+    const shade = i => { const t = cr.length > 1 ? i / (cr.length - 1) : 0; const c = [[255, 196, 226], [176, 52, 120]];
+      return '#' + c[0].map((a, k) => Math.round(a + (c[1][k] - a) * t).toString(16).padStart(2, '0')).join(''); };
+    mpTargetPie(pies, 'Юаневые: по годам лесенки (номинал)', [
+      ...cr.map((y, i) => ({ label: y, usd: cnyFaceBy.get(y) || 0, target: ctarget(y) / tw * 100, color: shade(i) })),
+      ...(outside > 0 ? [{ label: 'вне лесенки', usd: outside, target: 0, color: '#6e7681' }] : []),
+    ], `Цель — веса юаневой лесенки ${cf}–${ct} по ставке Банка Китая (${odds.cnNow ?? '—'}%); «вне лесенки» — погашения позже, их деньги идут в годы с недобором.`,
+      null, false, null, yuanFmt);
+  }
+  // the pies drawn one by one: each later one narrowed the row under the ones
+  // before (06.11.2026: the first one clipped) -- all of them refit now
+  requestAnimationFrame(() => pies.querySelectorAll('.pie-plot').forEach(el => Plotly.Plots.resize(el)));
   // the share's function of the key rate, today's key rate on it
   const op = odds.pts;
   // the odds table: up / the same / down per bucket of the key rate, and
@@ -5816,27 +5836,23 @@ async function mpRenderMaturities() {
     });
     const floatShort = bondsAll * floatPct / 100 - floatAll;
     const pk = liquid.filter(b => b.pk && b.mat > `${new Date().getFullYear() + 1}` && b.mat < `${new Date().getFullYear() + 4}`).sort((a, b) => b.turnover - a.turnover)[0];
-    const td = 'style="padding:4px 10px;text-align:left"', tdr = 'style="padding:4px 10px;text-align:right"';
+    const td = 'style="padding:4px 10px;text-align:left;white-space:nowrap"', tdr = 'style="padding:4px 10px;text-align:right;white-space:nowrap"';
+    const till = d => `до ${d.slice(5, 7)}.${d.slice(0, 4)}`;
     document.getElementById('mat_buy').innerHTML = !rows.length && floatShort <= 5 ? '<p class="note">Недобора по лесенке нет.</p>'
       : `<div class="section-title" style="font-size:0.95rem">Что докупить</div>
-      <div style="overflow-x:auto"><table class="data-table" style="width:auto;font-size:0.85rem"><thead><tr><th ${td}>Год</th><th ${tdr}>Недобор</th><th ${td}>Облигация</th><th ${tdr}>Доходность</th><th ${tdr}>Цена</th><th ${tdr}>Штук</th></tr></thead><tbody>
+      <div><table class="data-table" style="width:auto"><thead><tr><th ${td}>Год</th><th ${tdr}>Недобор</th><th ${td}>Облигация</th><th ${tdr}>Доходность</th><th ${tdr}>Цена</th><th ${tdr}>Штук</th></tr></thead><tbody>
       ${rows.map(r => `<tr><td ${td}>${r.y}</td><td ${tdr}>${rub(r.short)}</td>${r.b
-        ? `<td ${td}>${mpEscapeHtml(r.b.name)} <span style="color:#8b949e">${r.b.secid} · до ${r.b.mat}</span></td><td ${tdr}>${r.b.yield.toFixed(1)}%</td><td ${tdr}>${r.b.price.toFixed(1)}%</td><td ${tdr}><b>${r.n}</b></td>`
+        ? `<td ${td}>${mpEscapeHtml(r.b.name)} <span style="color:#8b949e">${till(r.b.mat)}</span></td><td ${tdr}>${r.b.yield.toFixed(1)}%</td><td ${tdr}>${r.b.price.toFixed(1)}%</td><td ${tdr}><b>${r.n}</b></td>`
         : `<td ${td} colspan="4" style="color:#8b949e">ОФЗ-ПД с погашением в этом году нет</td>`}</tr>`).join('')}
-      ${floatShort > 5 && pk ? `<tr><td ${td}>флоатеры</td><td ${tdr}>${rub(floatShort)}</td><td ${td}>${mpEscapeHtml(pk.name)} <span style="color:#8b949e">${pk.secid} · ОФЗ-ПК · до ${pk.mat}</span></td><td ${tdr}>—</td><td ${tdr}>${pk.price.toFixed(1)}%</td><td ${tdr}><b>${Math.max(1, Math.round(floatShort / cost(pk)))}</b></td></tr>` : ''}
+      ${floatShort > 5 && pk ? `<tr><td ${td}>флоатеры</td><td ${tdr}>${rub(floatShort)}</td><td ${td}>${mpEscapeHtml(pk.name)} <span style="color:#8b949e">ОФЗ-ПК · ${till(pk.mat)}</span></td><td ${tdr}>—</td><td ${tdr}>${pk.price.toFixed(1)}%</td><td ${tdr}><b>${Math.max(1, Math.round(floatShort / cost(pk)))}</b></td></tr>` : ''}
       </tbody></table></div>
       <p class="note">По цене прошлого дня с НКД. Деньги на это — из ближних погашений (2028 и раньше) и новых пополнений.</p>`;
   }
   // the yuan ones (and any other currency's fixed ones): their own ladder, by
   // the PBoC's rate as the rouble one by the CBR's (06.11.2026)
-  const cnyAll = [...cnyFaceBy.values()].reduce((t, v) => t + v, 0);
   const cnyEl = document.getElementById('plot_mat_cny');
   cnyEl.style.display = document.getElementById('mat_cn_tables').style.display = cnyAll > 0 ? '' : 'none';
   if (cnyAll > 0) {
-    const cauto = mpLadderAuto(odds.horizonCN, odds.cnNow, age, 0.5);
-    const cf = new Date().getFullYear() + 1, ct = cf + (cauto ? cauto.years : 5) - 1;
-    const cr = []; for (let y = cf; y <= ct; y++) cr.push(String(y));
-    const ctarget = y => { const i = cr.indexOf(y); return i < 0 ? 0 : cnyAll * (cauto ? cauto.weights[i] : 1 / cr.length); };
     mpLadderHeat('cn', odds.horizonCN, odds.cnNow, cauto, 0.5, `ставка Банка Китая сейчас (на ${odds.cnSince || '—'})`);
     document.getElementById('cn_ladder_note').innerHTML = mpLadderNote(cauto, odds.cnNow, age, cf);
     const cys = [...new Set([...cnyFaceBy.keys(), ...cnyCouponBy.keys(), ...cr])].sort();
