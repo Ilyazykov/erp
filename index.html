@@ -526,7 +526,8 @@
   <div class="section-title">Погашения облигаций и вкладов</div>
   <p class="note">Каждая облигация и вклад — полоса от сегодня до погашения: синяя — постоянный купон, розовая — в юанях, фиолетовая — переменный (флоатеры), бирюзовая — вклад; оферта — оранжевая часть до её даты.
     Толщина полосы — сколько в ней денег; справа — штук и сумма. Даты погашений и оферт — с MOEX.
-    Фонды облигаций (TBRU, SBBY, …) без срока не показаны. Срок вклада выписка не даёт: клик по вкладу — указать дату окончания.</p>
+    Фонды облигаций (TBRU, SBBY, …) без срока не показаны. Срок вклада выписка не даёт: клик по вкладу — указать дату окончания.
+    Рублёвая лесенка — только постоянный купон и вклады; юаневые облигации — своя ровная лесенка ниже.</p>
   <p class="empty-note" id="mat_status"></p>
   <div class="form-row" style="gap:16px;justify-content:flex-end;margin:8px 0 -8px">
     <label><input type="checkbox" id="mat_deposits" checked> вклады</label>
@@ -536,6 +537,10 @@
     <label><select id="mat_weights"><option value="far">больше в дальние</option><option value="even">поровну</option></select></label>
   </div>
   <div id="plot_mat_years" style="height:280px;margin-bottom:24px"></div>
+  <div class="form-row" id="mat_cny_row" style="gap:16px;justify-content:flex-end;margin:8px 0 -8px">
+    <label>юаневая лесенка (ровная) с <input type="number" id="mat_cny_from" style="width:70px"> по <input type="number" id="mat_cny_to" style="width:70px"></label>
+  </div>
+  <div id="plot_mat_cny" style="height:260px;margin-bottom:24px"></div>
   <div class="pie-grid" style="margin-bottom:24px"><div id="mat_pies" style="display:contents"></div>
     <div class="pie-card"><h4>Доля флоатеров от ключевой ставки</h4><div id="plot_mat_floatfn" style="height:440px"></div></div></div>
   <div class="pie-grid" style="margin-bottom:24px">
@@ -5289,7 +5294,7 @@ async function mpMoexBondDates(secids) {
 {
   // the ladder: the next five years by default
   const y = new Date().getFullYear();
-  for (const [id, def] of [['mat_from', y + 1], ['mat_to', y + 5]]) {
+  for (const [id, def] of [['mat_from', y + 1], ['mat_to', y + 5], ['mat_cny_from', y + 1], ['mat_cny_to', y + 5]]) {
     let v = def;
     try { v = Number(localStorage.getItem('mp_' + id)) || def; } catch { /* no storage */ }
     document.getElementById(id).value = v;
@@ -5438,18 +5443,27 @@ async function mpRenderMaturities() {
   // today's rates; a deposit its sum and its interest at its end
   const { data: fx } = await sb.from('fx_history').select('currency, usd_per_unit, day').in('currency', ['RUB', 'CNY', 'EUR']).order('day', { ascending: false }).limit(30);
   const usdPer = c => c === 'USD' ? 1 : Number((fx || []).find(f => f.currency === c)?.usd_per_unit) || 0;
-  const faceBy = new Map(), couponBy = new Map(), floatFaceBy = new Map(), floatCouponBy = new Map(), cnyFaceBy = new Map();
+  // The rouble ones -- the fixed coupons, the deposits, the floaters -- are
+  // the ladder by the key rate; the yuan (and any other currency's) fixed
+  // ones a ladder of their own, an even one (asked 05.11.2026)
+  const faceBy = new Map(), couponBy = new Map(), floatFaceBy = new Map(), floatCouponBy = new Map(), cnyFaceBy = new Map(), cnyCouponBy = new Map();
   const add = (m, day, usd) => { const y = day.slice(0, 4); m.set(y, (m.get(y) || 0) + usd); };
   for (const r of shown) {
     if (r.deposit) {
       if (!r.mat) continue;
       const rate = Number(r.ticker.match(/([\d.]+)%/)?.[1] || 0) / 100;
-      add(faceBy, r.mat, r.usd);
-      add(couponBy, r.mat, r.usd * rate * Math.max(0, Date.parse(r.mat) - Date.now()) / (365 * 86400000));
+      const rub = (r.currency || 'RUB') === 'RUB';
+      add(rub ? faceBy : cnyFaceBy, r.mat, r.usd);
+      add(rub ? couponBy : cnyCouponBy, r.mat, r.usd * rate * Math.max(0, Date.parse(r.mat) - Date.now()) / (365 * 86400000));
       continue;
     }
     const k = r.qty * usdPer(r.unit);
-    for (const f of r.face) { add(faceBy, f.day, f.value * k); if (r.floating) add(floatFaceBy, f.day, f.value * k); else if (r.unit === 'CNY') add(cnyFaceBy, f.day, f.value * k); }
+    if (r.unit !== 'RUB') {
+      for (const f of r.face) add(cnyFaceBy, f.day, f.value * k);
+      for (const c of r.coupons) add(cnyCouponBy, c.day, c.value * k);
+      continue;
+    }
+    for (const f of r.face) { add(faceBy, f.day, f.value * k); if (r.floating) add(floatFaceBy, f.day, f.value * k); }
     for (const c of r.coupons) { add(couponBy, c.day, c.value * k); if (r.floating) add(floatCouponBy, c.day, c.value * k); }
   }
   // the target ladder (05.11.2026): the face of everything held spread over
@@ -5482,7 +5496,7 @@ async function mpRenderMaturities() {
   const perRung = Math.max(0, ...rungs.map(targetOf));
   for (const y of rungs) if (!faceBy.has(y)) faceBy.set(y, 0);
   const ys = [...new Set([...faceBy.keys(), ...(withCoupons ? couponBy.keys() : []), ...rungs])].sort();
-  if (!withCoupons) { couponBy.clear(); floatCouponBy.clear(); }
+  if (!withCoupons) { couponBy.clear(); floatCouponBy.clear(); cnyCouponBy.clear(); }
   // the floaters out of the years' bars unless asked (05.11.2026): they fill
   // no rung; the ladder and the pie still count them
   const withFloaters = document.getElementById('mat_floaters').checked;
@@ -5611,8 +5625,7 @@ async function mpRenderMaturities() {
       { responsive: true, displaylogo: false });
   }
   Plotly.newPlot('plot_mat_years', [
-    { type: 'bar', name: 'номинал: постоянный купон и вклад', x: ys, y: ys.map(y => (faceBy.get(y) || 0) - (floatFaceBy.get(y) || 0) - (cnyFaceBy.get(y) || 0)), marker: { color: '#58a6ff' }, hovertemplate: '%{y:$,.0f}' },
-    ...(cnyFaceBy.size ? [{ type: 'bar', name: 'номинал: в юанях', x: ys, y: ys.map(y => cnyFaceBy.get(y) || 0), marker: { color: '#f778ba' }, hovertemplate: '%{y:$,.0f}' }] : []),
+    { type: 'bar', name: 'номинал: постоянный купон и вклад', x: ys, y: ys.map(y => (faceBy.get(y) || 0) - (floatFaceBy.get(y) || 0)), marker: { color: '#58a6ff' }, hovertemplate: '%{y:$,.0f}' },
     ...(withFloaters ? [{ type: 'bar', name: 'номинал: переменный купон (флоатеры)', x: ys, y: ys.map(y => floatFaceBy.get(y) || 0), marker: { color: '#a371f7' }, hovertemplate: '%{y:$,.0f}' }] : []),
     { type: 'bar', name: 'купоны и проценты', x: ys, y: ys.map(shownCoupon), marker: { color: '#3dd68c' }, hovertemplate: '%{y:$,.0f}' },
     { type: 'scatter', mode: 'text', x: ys, y: ys.map(tot), text: ys.map(y => money(tot(y))), textposition: 'top center', showlegend: false, hoverinfo: 'skip', cliponaxis: false },
@@ -5621,10 +5634,34 @@ async function mpRenderMaturities() {
       marker: { symbol: 'line-ew-open', size: 34, color: '#d62728', line: { width: 3, color: '#d62728' } },
       customdata: ys.map(y => { const d = fixedOf(y) - targetOf(y); return `${d >= 0 ? 'перебор' : 'недобор'} ${money(Math.abs(d))}${floatFaceBy.get(y) ? ' (флоатеры не в счёт)' : ''}`; }),
       hovertemplate: '%{y:$,.0f} — %{customdata}' },
-  ], { ...dark, barmode: 'stack', title: 'Сколько придёт по годам — по графику MOEX, по сегодняшнему курсу', margin: { l: 50, r: 20, t: 50, b: 30 },
+  ], { ...dark, barmode: 'stack', title: 'Рублёвые: сколько придёт по годам — по графику MOEX, по сегодняшнему курсу', margin: { l: 50, r: 20, t: 50, b: 30 },
     hovermode: 'x unified', hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
     legend: { orientation: 'h', y: -0.15 }, yaxis: { gridcolor: '#1e2830', tickprefix: '$', range: [0, Math.max(...ys.map(tot), perRung, 1) * 1.2] }, xaxis: { type: 'category' } },
     { responsive: true, displaylogo: false });
+  // the yuan ones (and any other currency's fixed ones): their own ladder,
+  // even -- each year of it the same share of their face
+  const cnyAll = [...cnyFaceBy.values()].reduce((t, v) => t + v, 0);
+  const cnyEl = document.getElementById('plot_mat_cny');
+  document.getElementById('mat_cny_row').style.display = cnyEl.style.display = cnyAll > 0 ? '' : 'none';
+  if (cnyAll > 0) {
+    const cf = Number(document.getElementById('mat_cny_from').value), ct = Number(document.getElementById('mat_cny_to').value);
+    const cr = []; for (let y = cf; y <= ct && ct - cf < 40; y++) cr.push(String(y));
+    const ctarget = y => cr.includes(y) ? cnyAll / cr.length : 0;
+    const cys = [...new Set([...cnyFaceBy.keys(), ...cnyCouponBy.keys(), ...cr])].sort();
+    const ctot = y => (cnyFaceBy.get(y) || 0) + (cnyCouponBy.get(y) || 0);
+    Plotly.newPlot(cnyEl, [
+      { type: 'bar', name: 'номинал: в юанях', x: cys, y: cys.map(y => cnyFaceBy.get(y) || 0), marker: { color: '#f778ba' }, hovertemplate: '%{y:$,.0f}' },
+      { type: 'bar', name: 'купоны', x: cys, y: cys.map(y => cnyCouponBy.get(y) || 0), marker: { color: '#3dd68c' }, hovertemplate: '%{y:$,.0f}' },
+      { type: 'scatter', mode: 'text', x: cys, y: cys.map(ctot), text: cys.map(y => money(ctot(y))), textposition: 'top center', showlegend: false, hoverinfo: 'skip', cliponaxis: false },
+      { type: 'scatter', mode: 'markers', name: `цель юаневой лесенки ${cf}–${ct} (ровная)`, x: cys, y: cys.map(ctarget),
+        marker: { symbol: 'line-ew-open', size: 34, color: '#d62728', line: { width: 3, color: '#d62728' } },
+        customdata: cys.map(y => { const d = (cnyFaceBy.get(y) || 0) - ctarget(y); return `${d >= 0 ? 'перебор' : 'недобор'} ${money(Math.abs(d))}`; }),
+        hovertemplate: '%{y:$,.0f} — %{customdata}' },
+    ], { ...dark, barmode: 'stack', title: 'В юанях: сколько придёт по годам', margin: { l: 50, r: 20, t: 50, b: 30 },
+      hovermode: 'x unified', hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
+      legend: { orientation: 'h', y: -0.18 }, yaxis: { gridcolor: '#1e2830', tickprefix: '$', range: [0, Math.max(...cys.map(ctot), cnyAll / Math.max(1, cr.length), 1) * 1.2] }, xaxis: { type: 'category' } },
+      { responsive: true, displaylogo: false });
+  }
 }
 
 // ---- Crypto strategy (05.11.2026): the crypto share's target by BTC's
