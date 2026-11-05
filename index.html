@@ -5370,13 +5370,16 @@ async function mpRenderCryptoStrategy() {
     Plotly.newPlot('plot_cs_share', [
       { x: shown.map(x => x.day), y: targets, type: 'scatter', mode: 'lines', name: 'цель стратегии', connectgaps: false, line: { color: '#3dd68c', width: 2, dash: 'dash', shape: 'hv' } },
       { x: shown.map(x => x.day), y: shown.map(x => x.pct), type: 'scatter', mode: 'lines', name: 'доля крипты, %', line: { color: '#f5c542', width: 2 } },
-      { x: marks.map(m => m.day), y: marks.map(m => shareBefore(m.day)), type: 'scatter', mode: 'markers+text', name: 'покупка',
+      // along the bottom, each with a thin dotted line up to see the moment
+      { x: marks.map(m => m.day), y: marks.map(() => 0.25), type: 'scatter', mode: 'markers+text', name: 'покупка',
         marker: { symbol: 'triangle-up', size: 12, color: '#58a6ff', line: { color: '#e6edf3', width: 1 } },
         text: marks.map(m => `€${Math.round(m.eur).toLocaleString('en-US')}`), textposition: 'top center', textfont: { color: '#58a6ff', size: 11 },
-        hovertemplate: '%{x}: покупка %{text}<extra></extra>' },
+        customdata: marks.map(m => shareBefore(m.day).toFixed(1)),
+        hovertemplate: '%{x}: покупка %{text} при доле %{customdata}%<extra></extra>' },
     ], { ...dark, title: 'Доля крипты в портфеле, % — с переезда на Кипр', yaxis: { gridcolor: '#1e2830', ticksuffix: '%', range: [0, Math.max(MP_AHR.target, ...shown.map(x => x.pct)) * 1.12], zeroline: true, zerolinecolor: '#8b949e' },
       xaxis: { gridcolor: '#1e2830' }, legend: { orientation: 'h', y: -0.15 },
-      shapes: [...zoneShapes, hline(MP_AHR.target, '#8b949e'), hline(MP_AHR.floor, '#8b949e')],
+      shapes: [...zoneShapes, hline(MP_AHR.target, '#8b949e'), hline(MP_AHR.floor, '#8b949e'),
+        ...marks.map(m => ({ type: 'line', xref: 'x', yref: 'paper', x0: m.day, x1: m.day, y0: 0, y1: 1, line: { color: '#58a6ff', width: 1, dash: 'dot' }, opacity: 0.6 }))],
       annotations: [[MP_AHR.target, `цель ${MP_AHR.target}%`], [MP_AHR.floor, `минимум ${MP_AHR.floor}%`]].map(([y, text]) =>
         ({ xref: 'paper', x: 0, xanchor: 'left', y, yanchor: 'bottom', text, showarrow: false, font: { color: '#8b949e', size: 11 } })) },
       { responsive: true, displaylogo: false });
