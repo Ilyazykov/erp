@@ -533,7 +533,7 @@
   <p class="empty-note" id="cs_status"></p>
   <div id="plot_cs_ahr" style="height:420px"></div>
   <div id="plot_cs_price" style="height:360px"></div>
-  <div id="plot_cs_share" style="height:320px"></div>
+  <div id="plot_cs_share" style="height:460px"></div>
 </div>
 
 <div id="capital" class="chart-wrap">
@@ -5218,7 +5218,7 @@ function mpAssetBuckets(rows, keep = null) {
 const MP_AHR = { red: 0.45, green: 1.2, target: 5, floor: 1 };
 let mpCryptoInd = null;   // [{ day, btc, dca, fair, ahr }], oldest first
 async function mpLoadCryptoIndicators() {
-  if (mpCryptoInd) return mpCryptoInd;
+  if (mpCryptoInd?.length) return mpCryptoInd;   // an empty answer isn't kept: the table may fill later
   const out = [];
   for (let from = 0; ; from += 1000) {
     const { data, error } = await sb.from('crypto_indicators').select('day, btc_usd, dca200, fair_usd, ahr999').order('day').range(from, from + 999);
@@ -5316,9 +5316,67 @@ async function mpRenderCryptoStrategy() {
   ], { ...dark, title: 'BTC и его оценки, $', yaxis: { type: 'log', gridcolor: '#1e2830' }, xaxis: { gridcolor: '#1e2830' }, shapes,
     legend: { orientation: 'h', y: -0.15 } }, { responsive: true, displaylogo: false });
   if (shares.length) {
-    Plotly.newPlot('plot_cs_share', [{ x: shares.map(x => x.day), y: shares.map(x => x.pct), type: 'scatter', mode: 'lines', name: 'доля крипты, %', line: { color: '#ff9f1a', width: 1.5 } }],
-      { ...dark, title: 'Доля крипты в портфеле, %', yaxis: { gridcolor: '#1e2830', ticksuffix: '%' }, xaxis: { gridcolor: '#1e2830' },
-        shapes: [...shapes.map(x => ({ ...x })), hline(MP_AHR.target, '#8b949e'), hline(MP_AHR.floor, '#3dd68c')] }, { responsive: true, displaylogo: false });
+    // From the first crypto bought while living in Cyprus (life_periods) -- the
+    // strategy's start; before it the crypto was next to nothing.
+    // Buys: the money sent to crypto (expenses 'Crypto': card payments to
+    // Mercuryo, Crypto.com, ...), a marker a month with its sum in euros, as
+    // on the strategy's back-test chart. Sales: crypto sold for money -- none
+    // so far; they'd go down as ▼.
+    const [{ data: periods }, { data: buys }, { data: eur }] = await Promise.all([
+      sb.from('life_periods').select('start_day, place').order('start_day'),
+      sb.from('expenses').select('day, usd').eq('category', 'Crypto').order('day'),
+      sb.from('fx_history').select('day, usd_per_unit').eq('currency', 'EUR').gte('day', '2025-01-01').order('day'),
+    ]);
+    const cyprus = (periods || []).find(p => /cyprus/i.test(p.place))?.start_day;
+    const start = (cyprus && (buys || []).find(b => b.day >= cyprus)?.day) || cyprus || shares[0].day;
+    const shown = shares.filter(x => x.day >= start);
+    const shareOn = day => { let v = null; for (const x of shown) { if (x.day > day) break; v = x.pct; } return v ?? shown[0]?.pct ?? 0; };
+    const eurOn = day => { let v = null; for (const r of eur || []) { if (r.day > day) break; v = Number(r.usd_per_unit); } return v || 1.1; };
+    const months = new Map();
+    for (const b of (buys || []).filter(b => b.day >= start)) {
+      const m = b.day.slice(0, 7), cur = months.get(m) || { day: b.day, eur: 0 };
+      cur.day = b.day; cur.eur += Number(b.usd) / eurOn(b.day);
+      months.set(m, cur);
+    }
+    const marks = [...months.values()];
+    // the neutral zone shaded too, faint, as on the back-test chart
+    const zoneShapes = [];
+    let zStart = null, zZone = null;
+    const zoneColor = { red: '#e05252', green: '#3dd68c', neutral: '#d4b84a' };
+    const span = ind.filter(r => r.day >= start);
+    span.forEach((r, i) => {
+      const z = mpAhrZone(r.ahr);
+      const close = end => zoneShapes.push({ type: 'rect', xref: 'x', yref: 'paper', x0: zStart, x1: end, y0: 0, y1: 1,
+        fillcolor: zoneColor[zZone], opacity: zZone === 'neutral' ? 0.07 : 0.15, line: { width: 0 }, layer: 'below' });
+      if (z !== zZone) { if (zZone) close(r.day); zStart = r.day; zZone = z; }
+      if (i === span.length - 1) close(r.day);
+    });
+    // the strategy's target day by day: 5% in the red zone and the neutral after
+    // it; in the green the share less its month's sale (not below 1%); after
+    // the green whatever the share is (nothing to do)
+    const ahrOn = new Map(ind.map(r => [r.day, r.ahr]));
+    let regime = null;
+    for (const r of ind) { if (r.day >= start) break; const z = mpAhrZone(r.ahr); if (z !== 'neutral') regime = z; }
+    const targets = shown.map(x => {
+      const a = ahrOn.get(x.day);
+      const z = a === undefined ? 'neutral' : mpAhrZone(a);
+      if (z !== 'neutral') regime = z;
+      const step = x.pct >= 20 ? 3 : x.pct >= 10 ? 2 : 1;
+      return z === 'green' ? Math.max(MP_AHR.floor, x.pct - step) : regime === 'green' ? x.pct : MP_AHR.target;
+    });
+    Plotly.newPlot('plot_cs_share', [
+      { x: shown.map(x => x.day), y: targets, type: 'scatter', mode: 'lines', name: 'цель стратегии', line: { color: '#3dd68c', width: 2, dash: 'dash', shape: 'hv' } },
+      { x: shown.map(x => x.day), y: shown.map(x => x.pct), type: 'scatter', mode: 'lines', name: 'доля крипты, %', line: { color: '#f5c542', width: 2 } },
+      { x: marks.map(m => m.day), y: marks.map(m => shareOn(m.day)), type: 'scatter', mode: 'markers+text', name: 'покупка',
+        marker: { symbol: 'triangle-up', size: 12, color: '#58a6ff', line: { color: '#e6edf3', width: 1 } },
+        text: marks.map(m => `€${Math.round(m.eur).toLocaleString('en-US')}`), textposition: 'top center', textfont: { color: '#58a6ff', size: 11 },
+        hovertemplate: '%{x}: покупка %{text}<extra></extra>' },
+    ], { ...dark, title: 'Доля крипты в портфеле, % — с первой покупки на Кипре', yaxis: { gridcolor: '#1e2830', ticksuffix: '%', rangemode: 'tozero' },
+      xaxis: { gridcolor: '#1e2830' }, legend: { orientation: 'h', y: -0.15 },
+      shapes: [...zoneShapes, hline(MP_AHR.target, '#8b949e'), hline(MP_AHR.floor, '#8b949e')],
+      annotations: [[MP_AHR.target, `цель ${MP_AHR.target}%`], [MP_AHR.floor, `минимум ${MP_AHR.floor}%`]].map(([y, text]) =>
+        ({ xref: 'paper', x: 0, xanchor: 'left', y, yanchor: 'bottom', text, showarrow: false, font: { color: '#8b949e', size: 11 } })) },
+      { responsive: true, displaylogo: false });
   } else document.getElementById('plot_cs_share').innerHTML = '<p class="empty-note">Войдите, чтобы увидеть долю крипты в портфеле.</p>';
 }
 
