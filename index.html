@@ -5404,9 +5404,13 @@ async function mpKeyRateOdds() {
 //     one: short), no longer than the age allows: (80 - age) / 3 up to 65,
 //     5 to 15 years (35: 15, 50: 10, 65: 5); past 65 a year less every six,
 //     not under 2 (71: 4, 77: 3, 83: 2);
-//   a year's weight -- half its share of "down" over the ladder's years,
-//     half its share of "not up" -- taken as far as s: the rest even (a low
-//     rate, a cut unlikely anyway: an even ladder; a high one: rising).
+//   a year's weight (06.11.2026 -- by the probabilities alone a high rate
+//     gave the flattest ladder: down is near 1 at every horizon there): the
+//     net odds of a cut, down - up = down + not_up - 1 (the two tables half
+//     and half), 0 where a rise is likelier, times the years it locks the
+//     rate in -- h * net; taken as far as S, the net odds' mean over the
+//     ladder (how much locking pays at all), the rest even: a low rate -- an
+//     even ladder, a high one -- rising, the steeper the higher.
 function mpLadderAuto(odds, age) {
   if (odds.now == null || !odds.horizon.length) return null;
   const rate = Math.min(21, Math.max(4, Math.floor(odds.now)));
@@ -5416,9 +5420,11 @@ function mpLadderAuto(odds, age) {
   const nRate = Math.round(5 + 10 * s);
   const nAge = age <= 65 ? Math.min(15, Math.max(5, Math.round((80 - age) / 3))) : Math.max(2, 5 - Math.floor((age - 65) / 6));
   const years = Math.min(nRate, nAge), cc = col.slice(0, years);
-  const sd = cc.reduce((t, r) => t + r.down, 0), sn = cc.reduce((t, r) => t + r.notUp, 0);
-  const weights = cc.map(r => s * (0.5 * r.down / sd + 0.5 * r.notUp / sn) + (1 - s) / years);
-  return { rate, s, nRate, nAge, years, weights };
+  const net = cc.map(r => Math.max(0, r.down + r.notUp - 1));
+  const S = net.reduce((t, x) => t + x, 0) / years;
+  const raw = net.map((x, i) => (i + 1) * x), rs = raw.reduce((t, x) => t + x, 0);
+  const weights = raw.map(x => S * (rs ? x / rs : 0) + (1 - S) / years);
+  return { rate, s, S, nRate, nAge, years, weights, net };
 }
 
 async function mpRenderMaturities() {
@@ -5586,7 +5592,8 @@ async function mpRenderMaturities() {
     document.getElementById('kr_ladder_note').innerHTML = !auto ? (mode === 'prob' ? 'Ставка или таблицы ещё не загружены.' : 'Режим лесенки — не «по вероятностям ЦБ»: таблицы для справки.')
       : `Сейчас ${odds.now}% (столбец ${auto.rate}%): снижение за 1–15 лет в среднем ${Math.round(auto.s * 100)}% → лесенка 5 + 10 × ${auto.s.toFixed(2)} = ${auto.nRate} лет,
         по возрасту (${age}) не больше ${auto.nAge} → <b>${auto.years} лет</b> (${from}–${to}, жёлтая рамка).
-        Вес года: ${Math.round(auto.s * 100)}% — пополам по «ниже» и «не выше» (доля года в сумме по лесенке), ${Math.round((1 - auto.s) * 100)}% — ровно.
+        Вес года: «ниже» + «не выше» − 1 (насколько снижение вероятнее повышения; 0, если нет) × число лет, на которое год фиксирует ставку —
+        это ${Math.round(auto.S * 100)}% лесенки (средний перевес снижения), остальные ${Math.round((1 - auto.S) * 100)}% — ровно.
         Веса: ${auto.weights.map((w, i) => `${from + i} — ${(w * 100).toFixed(1)}%`).join(', ')}.`;
   }
   // the floaters against their share by the key rate, as the other target pies
