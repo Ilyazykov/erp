@@ -527,7 +527,7 @@
   <p class="note">Каждая облигация и вклад — полоса от сегодня до погашения: синяя — постоянный купон, розовая — в юанях, фиолетовая — переменный (флоатеры), бирюзовая — вклад; оферта — оранжевая часть до её даты.
     Толщина полосы — сколько в ней денег; справа — штук и сумма. Даты погашений и оферт — с MOEX.
     Фонды облигаций (TBRU, SBBY, …) без срока не показаны. Срок вклада выписка не даёт: клик по вкладу — указать дату окончания.
-    Рублёвая лесенка — только постоянный купон и вклады; юаневые облигации — своя ровная лесенка ниже.</p>
+    Рублёвая лесенка — только постоянный купон и вклады, по ключевой ставке ЦБ; юаневые облигации — своя лесенка ниже, по ставке Банка Китая.</p>
   <p class="empty-note" id="mat_status"></p>
   <div class="form-row" style="gap:16px;justify-content:flex-end;margin:8px 0 -8px">
     <label><input type="checkbox" id="mat_deposits" checked> вклады</label>
@@ -536,10 +536,13 @@
     <label>год рождения <input type="number" id="mat_birth" style="width:70px"></label>
   </div>
   <div id="plot_mat_years" style="height:280px;margin-bottom:24px"></div>
-  <div class="form-row" id="mat_cny_row" style="gap:16px;justify-content:flex-end;margin:8px 0 -8px">
-    <label>юаневая лесенка (ровная) с <input type="number" id="mat_cny_from" style="width:70px"> по <input type="number" id="mat_cny_to" style="width:70px"></label>
-  </div>
   <div id="plot_mat_cny" style="height:260px;margin-bottom:24px"></div>
+  <div class="pie-grid" id="mat_cn_tables" style="margin-bottom:24px">
+    <div class="pie-card"><h4>Юаневая лесенка: вероятность, что через N лет ставка Банка Китая будет НИЖЕ, % (с 1996)</h4><div id="plot_cn_h_down" style="height:420px"></div></div>
+    <div class="pie-card"><h4>Юаневая лесенка: вероятность, что ставка Банка Китая будет ВЫШЕ, %</h4><div id="plot_cn_h_up" style="height:420px"></div></div>
+    <div class="pie-card"><h4>Юаневая лесенка: перевес снижения, max(0, «ниже» − «выше»), пп</h4><div id="plot_cn_h_net" style="height:420px"></div>
+      <p class="note" id="cn_ladder_note" style="margin:8px 4px"></p></div>
+  </div>
   <div class="pie-grid" style="margin-bottom:24px"><div id="mat_pies" style="display:contents"></div>
     <div class="pie-card"><h4>Доля флоатеров от ключевой ставки</h4><div id="plot_mat_floatfn" style="height:440px"></div>
       <div class="form-row" style="gap:8px;margin:8px 4px 0"><label>степень над k <input type="number" id="mat_beta" min="0" max="1" step="0.05" style="width:70px"></label>
@@ -5301,7 +5304,7 @@ async function mpMoexBondDates(secids) {
 {
   // the ladder: the next five years by default
   const y = new Date().getFullYear();
-  for (const [id, def] of [['mat_cny_from', y + 1], ['mat_cny_to', y + 5], ['mat_birth', 1991]]) {
+  for (const [id, def] of [['mat_birth', 1991]]) {
     let v = def;
     try { v = Number(localStorage.getItem('mp_' + id)) || def; } catch { /* no storage */ }
     document.getElementById(id).value = v;
@@ -5348,13 +5351,14 @@ async function mpKeyRateOdds() {
   const t0 = new Date();
   for (let m = 1; m <= 120; m++) monthEnds.push(new Date(Date.UTC(t0.getUTCFullYear(), t0.getUTCMonth() - m + 1, 0)).toISOString().slice(0, 10));
   const yearAgo = new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10);
-  const [{ data: odds }, { data: last }, { data: before }, { data: trend }, { data: decade }, { data: horizon }] = await Promise.all([
+  const [{ data: odds }, { data: last }, { data: before }, { data: trend }, { data: decade }, { data: horizon }, { data: cnLast }] = await Promise.all([
     sb.from('key_rate_odds').select('rate_from, rate_to, rate, days, up, down, floaters_pct').order('rate'),
     sb.from('key_rates').select('day, rate').order('day', { ascending: false }).limit(1),
     sb.from('key_rates').select('day, rate').lte('day', yearAgo).order('day', { ascending: false }).limit(1),
     sb.from('key_rate_trend_odds').select('trend_from, trend_to, position, n, obs_up, exp_up, odds_ratio').order('trend_from').order('position'),
     sb.from('key_rates').select('day, rate').in('day', monthEnds),
-    sb.from('key_rate_horizon_odds').select('horizon, rate, months, down, up').order('horizon').order('rate'),
+    sb.from('key_rate_horizon_odds').select('country, horizon, rate, months, down, up').order('horizon').order('rate'),
+    sb.from('cb_rates_monthly').select('month, rate').eq('country', 'CN').order('month', { ascending: false }).limit(1),
   ]);
   const pts = (odds || []).map(o => ({ ...o, rate: Number(o.rate), up: Number(o.up), down: Number(o.down), floaters_pct: Number(o.floaters_pct) }));
   const share = x => {
@@ -5379,13 +5383,14 @@ async function mpKeyRateOdds() {
   }
   const tb = rel == null ? null : (trend || []).find(t => Number(t.position) === position && rel > Number(t.trend_from) && rel <= Number(t.trend_to));
   const ratio = tb ? Number(tb.odds_ratio) : 1;
+  const hz = c => (horizon || []).filter(r => (r.country || 'RU') === c).map(r => ({ h: r.horizon, rate: Number(r.rate), months: r.months, down: Number(r.down), up: Number(r.up) }));
   // the level's share, the trend's odds ratio over it -- weakened, k^0.5, for
   // the level to weigh more (asked 05.11.2026; a walk-forward test had k^0.5
   // and k^1 within 0.03 pp a year)
   const kb = ratio ** MP_TREND_BETA;
   const withTrend = x => { const p = share(x) / 100; return p <= 0 || p >= 1 ? p * 100 : 100 * p * kb / (p * kb + 1 - p); };
   return { pts, share, withTrend, ratio, kb, change, rel, position, range, trend: tb, trends: trend || [], now, since: last?.[0]?.day || null,
-    horizon: (horizon || []).map(r => ({ h: r.horizon, rate: r.rate, months: r.months, down: Number(r.down), up: Number(r.up) })) };
+    horizon: hz('RU'), horizonCN: hz('CN'), cnNow: cnLast?.[0] ? Number(cnLast[0].rate) : null, cnSince: cnLast?.[0]?.month?.slice(0, 7) || null };
 }
 
 // The fixed coupons' ladder by the CBR's odds (asked 05.11.2026), from
@@ -5404,10 +5409,16 @@ async function mpKeyRateOdds() {
 //     as S, the net odds' mean over the ladder (how much locking pays at
 //     all), the rest even: a low rate -- an even ladder, a high one -- rising
 //     to a peak (some 4 years at 10%, 8 at 14% and over) and down after.
-function mpLadderAuto(odds, age) {
-  if (odds.now == null || !odds.horizon.length) return null;
-  const rate = Math.min(21, Math.max(4, Math.floor(odds.now)));
-  const col = odds.horizon.filter(r => r.rate === rate).sort((a, b) => a.h - b.h);
+// rows: one country's table; step: its bucket (RU 1 pp, CN 0.5 pp)
+const mpBucket = (rows, now, step) => {
+  const rates = [...new Set(rows.map(r => r.rate))].sort((a, b) => a - b);
+  const k = Math.floor(now / step + 1e-9) * step;
+  return Math.min(rates.at(-1), Math.max(rates[0], k));
+};
+function mpLadderAuto(rows, now, age, step = 1) {
+  if (now == null || !rows.length) return null;
+  const rate = mpBucket(rows, now, step);
+  const col = rows.filter(r => Math.abs(r.rate - rate) < 1e-9).sort((a, b) => a.h - b.h);
   if (col.length < 15) return null;
   const s = col.reduce((t, r) => t + r.down, 0) / col.length;
   const nRate = Math.round(5 + 10 * s);
@@ -5418,6 +5429,41 @@ function mpLadderAuto(odds, age) {
   const raw = net.map((x, i) => (i + 1) * x * (1 - (i + 1) / 16)), rs = raw.reduce((t, x) => t + x, 0);
   const weights = raw.map(x => S * (rs ? x / rs : 0) + (1 - S) / years);
   return { rate, s, S, nRate, nAge, years, weights, net };
+}
+
+function mpLadderHeat(prefix, rows, now, auto, step, xTitle) {
+  if (!rows.length) return;
+  const xs = [...new Set(rows.map(r => r.rate))].sort((a, b) => a - b), hs = [...new Set(rows.map(r => r.h))].sort((a, b) => a - b);
+  const cell = (h, k) => rows.find(r => r.h === h && Math.abs(r.rate - k) < 1e-9);
+  const curRate = now != null ? mpBucket(rows, now, step) : null;
+  const val = (c, field) => field === 'net' ? Math.max(0, c.down - c.up) : c[field];
+  const heat = (id, field, scale) => Plotly.newPlot(id, [{
+    type: 'heatmap', x: xs, y: hs.map(h => `${h} г`), z: hs.map(h => xs.map(k => { const c = cell(h, k); return c ? val(c, field) * 100 : null; })),
+    text: hs.map(h => xs.map(k => { const c = cell(h, k); return c ? `${Math.round(val(c, field) * 100)}${c.months ? '' : '*'}` : ''; })),
+    texttemplate: '%{text}', textfont: { size: 9 }, colorscale: scale, zmin: 0, zmax: 100, showscale: false,
+    customdata: hs.map(h => xs.map(k => cell(h, k)?.months ?? 0)),
+    hovertemplate: 'ставка %{x}%, через %{y}: %{z:.0f}%<br>месяцев в истории: %{customdata} (0 — по соседним)<extra></extra>' }],
+    { paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', font: { color: '#c9d1d9' }, margin: { l: 45, r: 10, t: 10, b: 40 },
+      hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
+      xaxis: { title: { text: xTitle, font: { size: 11 } }, tickfont: { size: 10 }, dtick: step, ticksuffix: '%' }, yaxis: { autorange: 'reversed', tickfont: { size: 10 } },
+      shapes: [
+        ...(curRate != null ? [auto
+          ? { type: 'rect', xref: 'x', yref: 'y', x0: curRate - step / 2, x1: curRate + step / 2, y0: -0.5, y1: auto.years - 0.5, line: { color: '#f85149', width: 2 } }
+          : { type: 'rect', xref: 'x', yref: 'paper', x0: curRate - step / 2, x1: curRate + step / 2, y0: 0, y1: 1, line: { color: '#f85149', width: 2 } }] : []),
+        ...(auto ? [{ type: 'rect', xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: -0.5, y1: auto.years - 0.5, line: { color: '#f5c542', width: 1, dash: 'dot' } }] : []),
+      ] }, { responsive: true, displaylogo: false, displayModeBar: false });
+  heat(`plot_${prefix}_h_down`, 'down', [[0, '#0d1117'], [1, '#58a6ff']]);
+  heat(`plot_${prefix}_h_up`, 'up', [[0, '#0d1117'], [1, '#a371f7']]);
+  heat(`plot_${prefix}_h_net`, 'net', [[0, '#0d1117'], [1, '#f5c542']]);
+}
+function mpLadderNote(auto, now, age, from) {
+  if (!auto) return 'Ставка или таблицы ещё не загружены — лесенка пока ровная на 5 лет.';
+  const to = from + auto.years - 1;
+  return `Сейчас ${now}% (столбец ${auto.rate}%): снижение за 1–15 лет в среднем ${Math.round(auto.s * 100)}% → лесенка 5 + 10 × ${auto.s.toFixed(2)} = ${auto.nRate} лет,
+    по возрасту (${age}) не больше ${auto.nAge} → <b>${auto.years} лет</b> (${from}–${to}, жёлтая рамка).
+    Вес года: «ниже» − «выше» (насколько снижение вероятнее повышения; 0, если нет) × число лет, на которое год фиксирует ставку × (1 − лет/16) — надёжность прогноза —
+    это ${Math.round(auto.S * 100)}% лесенки (средний перевес снижения), остальные ${Math.round((1 - auto.S) * 100)}% — ровно.
+    Веса: ${auto.weights.map((w, i) => `${from + i} — ${(w * 100).toFixed(1)}%`).join(', ')}.`;
 }
 
 async function mpRenderMaturities() {
@@ -5526,7 +5572,7 @@ async function mpRenderMaturities() {
   // the ladder only by the CBR's odds (06.11.2026: no hand-set years or
   // shapes); till the tables load -- an even five years
   const age = new Date().getFullYear() - Number(document.getElementById('mat_birth').value || 1991);
-  const auto = mpLadderAuto(odds, age);
+  const auto = mpLadderAuto(odds.horizon, odds.now, age, 1);
   const from = new Date().getFullYear() + 1, to = from + (auto ? auto.years : 5) - 1;
   const rungs = [];
   for (let y = from; y <= to && to - from < 40; y++) rungs.push(String(y));
@@ -5553,37 +5599,10 @@ async function mpRenderMaturities() {
   const tot = y => shownFace(y) + shownCoupon(y);
   const fixedOf = y => (faceBy.get(y) || 0) - (floatFaceBy.get(y) || 0);
   const floatAll = [...floatFaceBy.values()].reduce((t, v) => t + v, 0);
-  // the ladder's tables: down / not up per horizon x key rate, today's rate's
-  // column and the ladder's years outlined
-  if (odds.horizon.length) {
-    const xs = [...new Set(odds.horizon.map(r => r.rate))].sort((a, b) => a - b), hs = [...new Set(odds.horizon.map(r => r.h))].sort((a, b) => a - b);
-    const cell = (h, k) => odds.horizon.find(r => r.h === h && r.rate === k);
-    const curRate = odds.now != null ? Math.min(21, Math.max(4, Math.floor(odds.now))) : null;
-    const val = (c, field) => field === 'net' ? Math.max(0, c.down - c.up) : c[field];
-    const heat = (id, field, scale) => Plotly.newPlot(id, [{
-      type: 'heatmap', x: xs, y: hs.map(h => `${h} г`), z: hs.map(h => xs.map(k => { const c = cell(h, k); return c ? val(c, field) * 100 : null; })),
-      text: hs.map(h => xs.map(k => { const c = cell(h, k); return c ? `${Math.round(val(c, field) * 100)}${c.months ? '' : '*'}` : ''; })),
-      texttemplate: '%{text}', textfont: { size: 9 }, colorscale: scale, zmin: 0, zmax: 100, showscale: false,
-      customdata: hs.map(h => xs.map(k => cell(h, k)?.months ?? 0)),
-      hovertemplate: 'ставка %{x}%, через %{y}: %{z:.0f}%<br>месяцев в истории: %{customdata} (0 — по соседним)<extra></extra>' }],
-      { ...dark, margin: { l: 45, r: 10, t: 10, b: 40 }, hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
-        xaxis: { title: { text: 'ключевая ставка сейчас', font: { size: 11 } }, tickfont: { size: 10 }, dtick: 1, ticksuffix: '%' }, yaxis: { autorange: 'reversed', tickfont: { size: 10 } },
-        shapes: [
-          ...(curRate != null ? [auto
-            ? { type: 'rect', xref: 'x', yref: 'y', x0: curRate - 0.5, x1: curRate + 0.5, y0: -0.5, y1: auto.years - 0.5, line: { color: '#f85149', width: 2 } }
-            : { type: 'rect', xref: 'x', yref: 'paper', x0: curRate - 0.5, x1: curRate + 0.5, y0: 0, y1: 1, line: { color: '#f85149', width: 2 } }] : []),
-          ...(auto ? [{ type: 'rect', xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: -0.5, y1: auto.years - 0.5, line: { color: '#f5c542', width: 1, dash: 'dot' } }] : []),
-        ] }, { responsive: true, displaylogo: false, displayModeBar: false });
-    heat('plot_kr_h_down', 'down', [[0, '#0d1117'], [1, '#58a6ff']]);
-    heat('plot_kr_h_up', 'up', [[0, '#0d1117'], [1, '#a371f7']]);
-    heat('plot_kr_h_net', 'net', [[0, '#0d1117'], [1, '#f5c542']]);
-    document.getElementById('kr_ladder_note').innerHTML = !auto ? 'Ставка или таблицы ещё не загружены — лесенка пока ровная на 5 лет.'
-      : `Сейчас ${odds.now}% (столбец ${auto.rate}%): снижение за 1–15 лет в среднем ${Math.round(auto.s * 100)}% → лесенка 5 + 10 × ${auto.s.toFixed(2)} = ${auto.nRate} лет,
-        по возрасту (${age}) не больше ${auto.nAge} → <b>${auto.years} лет</b> (${from}–${to}, жёлтая рамка).
-        Вес года: «ниже» − «выше» (насколько снижение вероятнее повышения; 0, если нет) × число лет, на которое год фиксирует ставку × (1 − лет/16) — надёжность прогноза —
-        это ${Math.round(auto.S * 100)}% лесенки (средний перевес снижения), остальные ${Math.round((1 - auto.S) * 100)}% — ровно.
-        Веса: ${auto.weights.map((w, i) => `${from + i} — ${(w * 100).toFixed(1)}%`).join(', ')}.`;
-  }
+  // the ladder's tables: down / up / the net per horizon x key rate, today's
+  // rate's column (the ladder's years) and the ladder's years outlined
+  mpLadderHeat('kr', odds.horizon, odds.now, auto, 1, 'ключевая ставка сейчас');
+  document.getElementById('kr_ladder_note').innerHTML = mpLadderNote(auto, odds.now, age, from);
   // the floaters against their share by the key rate, as the other target pies
   const pies = document.getElementById('mat_pies');
   pies.innerHTML = '';
@@ -5723,28 +5742,31 @@ async function mpRenderMaturities() {
     hovermode: 'x unified', hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
     legend: { orientation: 'h', y: -0.15 }, yaxis: { gridcolor: '#1e2830', tickprefix: '$', range: [0, yTop] }, xaxis: { type: 'category' } },
     { responsive: true, displaylogo: false });
-  // the yuan ones (and any other currency's fixed ones): their own ladder,
-  // even -- each year of it the same share of their face
+  // the yuan ones (and any other currency's fixed ones): their own ladder, by
+  // the PBoC's rate as the rouble one by the CBR's (06.11.2026)
   const cnyAll = [...cnyFaceBy.values()].reduce((t, v) => t + v, 0);
   const cnyEl = document.getElementById('plot_mat_cny');
-  document.getElementById('mat_cny_row').style.display = cnyEl.style.display = cnyAll > 0 ? '' : 'none';
+  cnyEl.style.display = document.getElementById('mat_cn_tables').style.display = cnyAll > 0 ? '' : 'none';
   if (cnyAll > 0) {
-    const cf = Number(document.getElementById('mat_cny_from').value), ct = Number(document.getElementById('mat_cny_to').value);
-    const cr = []; for (let y = cf; y <= ct && ct - cf < 40; y++) cr.push(String(y));
-    const ctarget = y => cr.includes(y) ? cnyAll / cr.length : 0;
+    const cauto = mpLadderAuto(odds.horizonCN, odds.cnNow, age, 0.5);
+    const cf = new Date().getFullYear() + 1, ct = cf + (cauto ? cauto.years : 5) - 1;
+    const cr = []; for (let y = cf; y <= ct; y++) cr.push(String(y));
+    const ctarget = y => { const i = cr.indexOf(y); return i < 0 ? 0 : cnyAll * (cauto ? cauto.weights[i] : 1 / cr.length); };
+    mpLadderHeat('cn', odds.horizonCN, odds.cnNow, cauto, 0.5, `ставка Банка Китая сейчас (на ${odds.cnSince || '—'})`);
+    document.getElementById('cn_ladder_note').innerHTML = mpLadderNote(cauto, odds.cnNow, age, cf);
     const cys = [...new Set([...cnyFaceBy.keys(), ...cnyCouponBy.keys(), ...cr])].sort();
     const ctot = y => (cnyFaceBy.get(y) || 0) + (cnyCouponBy.get(y) || 0);
     Plotly.newPlot(cnyEl, [
       { type: 'bar', name: 'номинал: в юанях', x: cys, y: cys.map(y => cnyFaceBy.get(y) || 0), marker: { color: '#f778ba' }, hovertemplate: '%{y:$,.0f}' },
       { type: 'bar', name: 'купоны', x: cys, y: cys.map(y => cnyCouponBy.get(y) || 0), marker: { color: '#3dd68c' }, hovertemplate: '%{y:$,.0f}' },
       { type: 'scatter', mode: 'text', x: cys, y: cys.map(ctot), text: cys.map(y => money(ctot(y))), textposition: 'top center', showlegend: false, hoverinfo: 'skip', cliponaxis: false },
-      { type: 'scatter', mode: 'markers', name: `цель юаневой лесенки ${cf}–${ct} (ровная)`, x: cys, y: cys.map(ctarget),
+      { type: 'scatter', mode: 'markers', name: `цель юаневой лесенки ${cf}–${ct}${cauto ? ` (по ставке Банка Китая ${odds.cnNow}%: ${cauto.years} лет)` : ' (таблицы не загружены: ровно)'}`, x: cys, y: cys.map(ctarget),
         marker: { symbol: 'line-ew-open', size: 34, color: '#d62728', line: { width: 3, color: '#d62728' } },
         customdata: cys.map(y => { const d = (cnyFaceBy.get(y) || 0) - ctarget(y); return `${d >= 0 ? 'перебор' : 'недобор'} ${money(Math.abs(d))}`; }),
         hovertemplate: '%{y:$,.0f} — %{customdata}' },
     ], { ...dark, barmode: 'stack', title: 'В юанях: сколько придёт по годам', margin: { l: 50, r: 20, t: 50, b: 30 },
       hovermode: 'x unified', hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
-      legend: { orientation: 'h', y: -0.18 }, yaxis: { gridcolor: '#1e2830', tickprefix: '$', range: [0, Math.max(...cys.map(ctot), cnyAll / Math.max(1, cr.length), 1) * 1.2] }, xaxis: { type: 'category' } },
+      legend: { orientation: 'h', y: -0.18 }, yaxis: { gridcolor: '#1e2830', tickprefix: '$', range: [0, Math.max(...cys.map(ctot), ...cr.map(ctarget), 1) * 1.2] }, xaxis: { type: 'category' } },
       { responsive: true, displaylogo: false });
   }
 }

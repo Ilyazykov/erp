@@ -160,18 +160,27 @@ function worldTrendOdds(byCountry: Map<string, Map<string, number>>, weight: (h:
 //    middle -- a rate at 21% stays likelier lower even 15 years on, one at
 //    4% not lower. Then a hair of a slope along the rate (up to 1 pp) keeps
 //    neighbours apart.
-const LADDER_RATES = Array.from({ length: 18 }, (_, i) => i + 4);
+//    The same for China (06.11.2026: the yuan bonds' ladder), the PBoC's
+//    rate by the BIS (its 1-year benchmark lending rate, the 1-year LPR since
+//    2019; since 1996, 3-12%): buckets of 0.5 pp -- it moves by 0.1-0.25.
 const LADDER_YEARS = Array.from({ length: 15 }, (_, i) => i + 1);
+const LADDERS = [
+  { country: 'RU', from: 4, to: 21, step: 1, cap: 22 },
+  { country: 'CN', from: 3, to: 12, step: 0.5, cap: 99 },
+];
 
-function horizonOdds(ru: Map<string, number>) {
-  const ms = [...ru.keys()].sort(), v = ms.map(m => ru.get(m)!);
-  const pool = v.filter(x => x < 22);
-  const longRun = (k: number) => ({ below: pool.filter(x => x < k + 0.5).length / pool.length, above: pool.filter(x => x > k + 0.5).length / pool.length });
+function horizonOdds(series: Map<string, number>, { from, to, step, cap }: { from: number; to: number; step: number; cap: number }) {
+  const LADDER_RATES = Array.from({ length: Math.round((to - from) / step) + 1 }, (_, i) => from + i * step);
+  const bucket = (x: number) => Math.floor(x / step + 1e-9) * step;
+  const ms = [...series.keys()].sort(), v = ms.map(m => series.get(m)!);
+  const pool = v.filter(x => x < cap);
+  const mid = (k: number) => k + step / 2;
+  const longRun = (k: number) => ({ below: pool.filter(x => x < mid(k)).length / pool.length, above: pool.filter(x => x > mid(k)).length / pool.length });
   const fitted = LADDER_YEARS.map(h => {
     const cells = LADDER_RATES.map(k => {
       let down = 0, up = 0, n = 0, xs = 0;
       for (let i = 0; i + 12 * h < v.length; i++) {
-        if (Math.floor(v[i]) !== k || v[i] >= 22) continue;
+        if (Math.abs(bucket(v[i]) - k) > 1e-9 || v[i] >= cap) continue;
         const later = v[i + 12 * h];
         n++; xs += v[i]; if (later < v[i]) down++; if (later > v[i]) up++;
       }
@@ -179,7 +188,7 @@ function horizonOdds(ru: Map<string, number>) {
     }).filter(c => c.n);
     const fd = isotonic(cells.map(c => ({ x: c.x, y: c.down, w: c.n })), false);
     const fu = isotonic(cells.map(c => ({ x: c.x, y: c.up, w: c.n })), true);
-    return LADDER_RATES.map(k => ({ n: cells.find(c => c.k === k)?.n ?? 0, d: fd(k + 0.5), u: fu(k + 0.5) }));
+    return LADDER_RATES.map(k => ({ n: cells.find(c => c.k === k)?.n ?? 0, d: fd(mid(k)), u: fu(mid(k)) }));
   });
   const clamp = (x: number) => Math.min(1, Math.max(0, x));
   return LADDER_YEARS.flatMap((h, i) => LADDER_RATES.map((k, j) => {
@@ -273,10 +282,17 @@ Deno.serve(async (req) => {
     if (delTrend) throw new Error(delTrend.message);
     const { error: trendErr } = await db.from('key_rate_trend_odds').insert(trendRows);
     if (trendErr) throw new Error(trendErr.message);
-    // 7. the ladder's tables
-    const ru = bis.get('RU');
-    if (!ru || ru.size < 300) throw new Error(`BIS: Russia ${ru?.size} months`);
-    const ladder = horizonOdds(ru).map(r => ({ ...r, computed_at }));
+    // 7. the ladders' tables, and the two rates by month (the tab's rate now for China)
+    const ladder = LADDERS.flatMap(L => {
+      const series = bis.get(L.country);
+      if (!series || series.size < 300) throw new Error(`BIS: ${L.country} ${series?.size} months`);
+      return horizonOdds(series, L).map(r => ({ ...r, country: L.country, computed_at }));
+    });
+    const monthly = LADDERS.flatMap(L => [...bis.get(L.country)!].map(([m, rate]) => ({ country: L.country, month: `${m}-01`, rate })));
+    for (let i = 0; i < monthly.length; i += 1000) {
+      const { error: mErr } = await db.from('cb_rates_monthly').upsert(monthly.slice(i, i + 1000));
+      if (mErr) throw new Error(mErr.message);
+    }
     const { error: delLadder } = await db.from('key_rate_horizon_odds').delete().gte('horizon', 0);
     if (delLadder) throw new Error(delLadder.message);
     const { error: ladderErr } = await db.from('key_rate_horizon_odds').insert(ladder);
