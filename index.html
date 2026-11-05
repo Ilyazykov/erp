@@ -549,7 +549,7 @@
       <p class="note" id="kr_formula" style="margin:8px 4px"></p></div></div>
   <div class="pie-grid" style="margin-bottom:24px">
     <div class="pie-card"><h4>Лесенка: вероятность, что через N лет ставка будет НИЖЕ, % (история ЦБ с 1992)</h4><div id="plot_kr_h_down" style="height:420px"></div></div>
-    <div class="pie-card"><h4>Лесенка: вероятность, что через N лет ставка будет НЕ ВЫШЕ, %</h4><div id="plot_kr_h_notup" style="height:420px"></div>
+    <div class="pie-card"><h4>Лесенка: вероятность, что через N лет ставка будет ВЫШЕ, %</h4><div id="plot_kr_h_up" style="height:420px"></div>
       <p class="note" id="kr_ladder_note" style="margin:8px 4px"></p></div>
   </div>
   <div class="pie-grid" style="margin-bottom:24px">
@@ -5363,7 +5363,7 @@ async function mpKeyRateOdds() {
     sb.from('key_rates').select('day, rate').lte('day', yearAgo).order('day', { ascending: false }).limit(1),
     sb.from('key_rate_trend_odds').select('trend_from, trend_to, position, n, obs_up, exp_up, odds_ratio').order('trend_from').order('position'),
     sb.from('key_rates').select('day, rate').in('day', monthEnds),
-    sb.from('key_rate_horizon_odds').select('horizon, rate, months, down, not_up').order('horizon').order('rate'),
+    sb.from('key_rate_horizon_odds').select('horizon, rate, months, down, up').order('horizon').order('rate'),
   ]);
   const pts = (odds || []).map(o => ({ ...o, rate: Number(o.rate), up: Number(o.up), down: Number(o.down), floaters_pct: Number(o.floaters_pct) }));
   const share = x => {
@@ -5394,7 +5394,7 @@ async function mpKeyRateOdds() {
   const kb = ratio ** MP_TREND_BETA;
   const withTrend = x => { const p = share(x) / 100; return p <= 0 || p >= 1 ? p * 100 : 100 * p * kb / (p * kb + 1 - p); };
   return { pts, share, withTrend, ratio, kb, change, rel, position, range, trend: tb, trends: trend || [], now, since: last?.[0]?.day || null,
-    horizon: (horizon || []).map(r => ({ h: r.horizon, rate: r.rate, months: r.months, down: Number(r.down), notUp: Number(r.not_up) })) };
+    horizon: (horizon || []).map(r => ({ h: r.horizon, rate: r.rate, months: r.months, down: Number(r.down), up: Number(r.up) })) };
 }
 
 // The fixed coupons' ladder by the CBR's odds (asked 05.11.2026), from
@@ -5406,8 +5406,7 @@ async function mpKeyRateOdds() {
 //     not under 2 (71: 4, 77: 3, 83: 2);
 //   a year's weight (06.11.2026 -- by the probabilities alone a high rate
 //     gave the flattest ladder: down is near 1 at every horizon there): the
-//     net odds of a cut, down - up = down + not_up - 1 (the two tables half
-//     and half), 0 where a rise is likelier, times the years it locks the
+//     net odds of a cut, down - up (the two tables), 0 where a rise is likelier, times the years it locks the
 //     rate in -- h * net; taken as far as S, the net odds' mean over the
 //     ladder (how much locking pays at all), the rest even: a low rate -- an
 //     even ladder, a high one -- rising, the steeper the higher.
@@ -5420,7 +5419,7 @@ function mpLadderAuto(odds, age) {
   const nRate = Math.round(5 + 10 * s);
   const nAge = age <= 65 ? Math.min(15, Math.max(5, Math.round((80 - age) / 3))) : Math.max(2, 5 - Math.floor((age - 65) / 6));
   const years = Math.min(nRate, nAge), cc = col.slice(0, years);
-  const net = cc.map(r => Math.max(0, r.down + r.notUp - 1));
+  const net = cc.map(r => Math.max(0, r.down - r.up));
   const S = net.reduce((t, x) => t + x, 0) / years;
   const raw = net.map((x, i) => (i + 1) * x), rs = raw.reduce((t, x) => t + x, 0);
   const weights = raw.map(x => S * (rs ? x / rs : 0) + (1 - S) / years);
@@ -5588,11 +5587,11 @@ async function mpRenderMaturities() {
           ...(auto ? [{ type: 'rect', xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: -0.5, y1: auto.years - 0.5, line: { color: '#f5c542', width: 1, dash: 'dot' } }] : []),
         ] }, { responsive: true, displaylogo: false, displayModeBar: false });
     heat('plot_kr_h_down', 'down', [[0, '#0d1117'], [1, '#58a6ff']]);
-    heat('plot_kr_h_notup', 'notUp', [[0, '#0d1117'], [1, '#3dd68c']]);
+    heat('plot_kr_h_up', 'up', [[0, '#0d1117'], [1, '#a371f7']]);
     document.getElementById('kr_ladder_note').innerHTML = !auto ? (mode === 'prob' ? 'Ставка или таблицы ещё не загружены.' : 'Режим лесенки — не «по вероятностям ЦБ»: таблицы для справки.')
       : `Сейчас ${odds.now}% (столбец ${auto.rate}%): снижение за 1–15 лет в среднем ${Math.round(auto.s * 100)}% → лесенка 5 + 10 × ${auto.s.toFixed(2)} = ${auto.nRate} лет,
         по возрасту (${age}) не больше ${auto.nAge} → <b>${auto.years} лет</b> (${from}–${to}, жёлтая рамка).
-        Вес года: «ниже» + «не выше» − 1 (насколько снижение вероятнее повышения; 0, если нет) × число лет, на которое год фиксирует ставку —
+        Вес года: «ниже» − «выше» (насколько снижение вероятнее повышения; 0, если нет) × число лет, на которое год фиксирует ставку —
         это ${Math.round(auto.S * 100)}% лесенки (средний перевес снижения), остальные ${Math.round((1 - auto.S) * 100)}% — ровно.
         Веса: ${auto.weights.map((w, i) => `${from + i} — ${(w * 100).toFixed(1)}%`).join(', ')}.`;
   }

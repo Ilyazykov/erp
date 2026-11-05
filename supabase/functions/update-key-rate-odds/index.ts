@@ -146,12 +146,12 @@ function worldTrendOdds(byCountry: Map<string, Map<string, number>>, weight: (h:
 
 // 7. The bond ladder's weights (asked 05.11.2026): per horizon 1-15 years x
 //    key rate 4-21% (1 pp buckets) -- how often the rate was lower in that
-//    many years (down) and not higher (not_up = down + the same). Russia's
+//    many years (down) and higher (up; 06.11.2026 -- was "not higher"). Russia's
 //    rate by the BIS's monthly series, month-ends since 1992 (the CBR's
 //    refinancing rate before 13.09.2013, the key rate after; a month at 22%
 //    and over not counted) -- the key rate alone, since 2013, has no 15
-//    years yet. Both tables made monotone both ways -- down and not_up rise
-//    with the rate and with the horizon: a weighted least-squares fit
+//    years yet. Both tables made monotone both ways -- down rises with the
+//    rate and with the horizon, up falls (fitted as not-up, 1 - up, rising): a weighted least-squares fit
 //    (Dykstra's alternating projections, rows and columns by pool-adjacent-
 //    violators, a cell weighted by its months; a cell of no months takes
 //    what its neighbours give) -- then strictly so: 95% the fit + 5% a grid
@@ -208,7 +208,7 @@ function horizonOdds(ru: Map<string, number>) {
     nu = Math.max(nu, d);   // not up holds down
     return { horizon: h, rate: k, months: cells[i][j].n,
       down: Math.round(((1 - L) * d + L * grid(i, j)) * 10000) / 10000,
-      not_up: Math.round(((1 - L) * nu + L * grid(i, j)) * 10000) / 10000 };
+      up: Math.round((1 - ((1 - L) * nu + L * grid(i, j))) * 10000) / 10000 };
   }));
 }
 
