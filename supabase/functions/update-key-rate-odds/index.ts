@@ -206,8 +206,8 @@ Deno.serve(async (req) => {
     const { error } = await db.from('key_rate_odds').insert(out);
     if (error) throw new Error(error.message);
     // 6. the trend, the world's
-    const k = await worldTrendOdds(weight);
-    const trendRows = k.map(r => ({ ...r, computed_at }));
+    const world = await worldTrendOdds(weight);
+    const trendRows = world.map(r => ({ ...r, computed_at }));
     const { error: delTrend } = await db.from('key_rate_trend_odds').delete().gte('trend_from', -1000);
     if (delTrend) throw new Error(delTrend.message);
     const { error: trendErr } = await db.from('key_rate_trend_odds').insert(trendRows);
