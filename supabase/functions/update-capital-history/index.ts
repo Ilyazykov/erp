@@ -357,7 +357,18 @@ Deno.serve(async (req) => {
       const a = lastDay.get(t) ?? '', b = String(sources.get(t)?.updated_at ?? '').slice(0, 10);
       return a > b ? a : b;
     };
-    const queue = [...since.keys()].sort((a, b) => tried(a).localeCompare(tried(b)));
+    // A dead security -- no source of its prices found (the delisted ICPT,
+    // DISCA, ATVI, ...) -- not held any more is left out: each was looked for
+    // every week, a dozen requests apiece, for nothing. Sold live ones stay
+    // (their prices are wanted on), after the held ones.
+    const held = new Set<string>(walletBal.map(w => w.ticker));
+    for (const r of await selectAll(() => db.from('portfolio_value_usd').select('ticker, quantity'))) {
+      if (Number(r.quantity) > 0) held.add(r.ticker);
+    }
+    for (const r of exchRows) held.add(r.symbol);
+    const dead = (t: string) => !held.has(t) && sources.get(t)?.source === 'none';
+    const queue = [...since.keys()].filter(t => !dead(t))
+      .sort((a, b) => Number(!held.has(a)) - Number(!held.has(b)) || tried(a).localeCompare(tried(b)));
     for (const ticker of queue) {
       if (timeLeft() < 8000) break;
       const from = lastDay.has(ticker) ? addDays(lastDay.get(ticker)!, -OVERLAP_DAYS) : addDays(since.get(ticker)!, -7);
@@ -457,7 +468,9 @@ Deno.serve(async (req) => {
       }
       if (!points.length) {
         failed.push(ticker);
-        if (src && src.source !== 'none') await db.from('price_sources').update({ updated_at: new Date().toISOString() }).eq('ticker', ticker);
+        // a source that gave nothing for a month, for a security not held: delisted -- dead from now on
+        const gone = !held.has(ticker) && (!lastDay.has(ticker) || lastDay.get(ticker)! < addDays(today(), -30));
+        if (src && src.source !== 'none') await db.from('price_sources').update({ updated_at: new Date().toISOString(), ...(gone ? { source: 'none' } : {}) }).eq('ticker', ticker);
         continue;
       }
       const rows = [];
