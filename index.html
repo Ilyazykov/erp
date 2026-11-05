@@ -5836,6 +5836,10 @@ async function mpRenderMaturities() {
       hovertemplate: 'ключевая %{customdata[0]}: повысят %{customdata[1]}%, понизят %{customdata[2]}% (%{customdata[3]} дн.)<br>→ флоатеров %{y:.1f}%<extra></extra>' },
     ...(op.length && odds.ratio !== 1 ? [{ x: op.map(p => p.rate), y: op.map(p => odds.withTrend(p.rate)), type: 'scatter', mode: 'lines',
       line: { color: '#f0a03c', width: 2, dash: 'dot' }, hovertemplate: `с нынешним трендом (×${odds.kb.toFixed(2)}): %{y:.1f}%<extra></extra>` }] : []),
+    // the final share: with the ladder's bonus at each rate (06.11.2026)
+    ...(op.length && odds.horizon.length ? [{ x: op.map(p => p.rate), type: 'scatter', mode: 'lines', name: 'итог',
+      y: op.map(p => { const base = odds.withTrend(p.rate), b = mpLadderAuto(odds.horizon, p.rate, age, 1)?.bonus || 0; return base + b * (100 - base); }),
+      line: { color: '#3dd68c', width: 2.5 }, hovertemplate: 'итог с бонусом лесенки: %{y:.1f}%<extra></extra>' }] : []),
     ...(key && op.length ? [{ x: [key.now], y: [floatPct], type: 'scatter', mode: 'markers+text', marker: { size: 12, color: '#f85149' },
       text: [`сейчас ${key.now}% → ${floatPct}%`], textposition: 'middle right', textfont: { color: '#e6edf3' }, hoverinfo: 'skip' }] : []),
   ], { ...dark, showlegend: false, margin: { l: 50, r: 20, t: 10, b: 45 },
