@@ -227,7 +227,7 @@ function madeOn(bank: string, description: string, date: string): string | null 
 async function settlePending(db: any, userId: string, bank: string, bankSlug: string): Promise<number> {
   const pendingSource = `${bankSlug}_csv:pending`;
   const { data: holds, error: hErr } = await db.from('bank_transactions')
-    .select('id, tx_date, amount, currency, expense_note, expense_category, expense_manual, place_id, delivery_place_id, authorized_at')
+    .select('id, tx_date, amount, currency, expense_note, expense_category, expense_manual, place_id, delivery_place_id, authorized_at, authorized_approx')
     .eq('user_id', userId).eq('external_source', pendingSource).order('tx_date');
   if (hErr) throw new Error(hErr.message);
   if (!holds?.length) return 0;
@@ -251,7 +251,7 @@ async function settlePending(db: any, userId: string, bank: string, bankSlug: st
     if (h.expense_manual && !m.expense_manual) { patch.expense_category = h.expense_category; patch.expense_manual = true; }
     if (h.place_id && !m.place_id) patch.place_id = h.place_id;
     if (h.delivery_place_id && !m.delivery_place_id) patch.delivery_place_id = h.delivery_place_id;
-    if (h.authorized_at && !m.authorized_at) patch.authorized_at = h.authorized_at;
+    if (h.authorized_at && !m.authorized_at) Object.assign(patch, { authorized_at: h.authorized_at, authorized_approx: h.authorized_approx });
     if (Object.keys(patch).length) {
       const { error } = await db.from('bank_transactions').update(patch).eq('id', m.id);
       if (error) throw new Error(error.message);

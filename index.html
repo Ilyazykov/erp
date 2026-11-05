@@ -8383,14 +8383,30 @@ async function mpExpLoad() {
   for (const r of inc || []) { r.src = r.external_source; r.xid = r.external_id; r.note = noteOf.get(`${r.src}|${r.xid}`) || null; }
   // where a payment was made (migration 163): no column yet -- no places
   // and, a delivery, where it was brought to (migration 165): no column yet -- the place alone
-  const placed = await page(() => sb.from('bank_transactions').select('external_source, external_id, from:places!place_id(name, url), to:places!delivery_place_id(name, url)').or('place_id.not.is.null,delivery_place_id.not.is.null').order('id'))
+  const placed = await page(() => sb.from('bank_transactions').select('external_source, external_id, place_id, delivery_place_id, from:places!place_id(name, url), to:places!delivery_place_id(name, url)').or('place_id.not.is.null,delivery_place_id.not.is.null').order('id'))
     .catch(() => page(() => sb.from('bank_transactions').select('external_source, external_id, from:places!place_id(name, url)').not('place_id', 'is', null).order('id')).catch(() => []));
   const placeOf = new Map((placed || []).map(p => [`${p.external_source}|${p.external_id}`, p]));
   for (const r of [...spent, ...skipped, ...(inc || [])]) {
     const p = placeOf.get(`${r.src}|${r.xid}`);
     r.place = p?.from || null;
     r.deliveredTo = p?.to || null;
+    r.placeId = p?.place_id ?? null;
+    r.deliveredToId = p?.delivery_place_id ?? null;
   }
+  // a time set by hand -- the statement has the day only (migrations 166, 167):
+  // it's the row's time, "~" before it when a guess; none yet -- the statement's
+  const timed = await page(() => sb.from('bank_transactions').select('external_source, external_id, authorized_at, authorized_approx').not('authorized_at', 'is', null).order('id')).catch(() => []);
+  const timeOf = new Map((timed || []).map(t => [`${t.external_source}|${t.external_id}`, t]));
+  for (const r of [...spent, ...skipped]) {
+    const t = timeOf.get(`${r.src}|${r.xid}`);
+    if (!t) continue;
+    r.at = t.authorized_at.slice(11, 16);
+    r.ts = t.authorized_at;
+    r.handTime = true;
+    r.approx = !!t.authorized_approx;
+  }
+  // the places one's rows can be set to (the Place column's picker)
+  const placeList = await page(() => sb.from('places').select('id, name, lat, lng, url, google_id').order('name')).catch(() => []);
   // the pairs that net out, and the money in that's no income, no refund, no
   // pair's leg (kept by refresh_expenses, migration 156): none yet -- the rows out alone
   const [pairs, unpairedIn, chains, incomeExpect] = await Promise.all([
@@ -8401,7 +8417,7 @@ async function mpExpLoad() {
     // the income one expects (migration 161): none yet or no table -- the income bars unframed
     page(() => sb.from('income_expectations').select('category, amount, currency, from_day, to_day')).catch(() => []),
   ]);
-  return { spent, skipped, usdPer, periods: periods || [], incomeDays: mpExpIncomeDays(inc || []), incomeRows: inc || [],
+  return { spent, skipped, usdPer, placeList, periods: periods || [], incomeDays: mpExpIncomeDays(inc || []), incomeRows: inc || [],
     pairs, unpairedIn, incomeExpect: incomeExpect || [], chainOf: new Map((chains || []).map(c => [`${c.external_source}|${c.external_id}`, c.chain])) };
 }
 // Income over the days it was earned in: each payment over the days since the
@@ -8635,6 +8651,126 @@ function mpNoteHtml(note) {
     return `<a href="${mpEscapeHtml(part)}" target="_blank" rel="noopener" style="color:#58a6ff">${mpEscapeHtml(label)}</a>`;
   }).join('');
 }
+// A row's time next to its date: the statement's, or one set by hand
+// (authorized_at, migration 166) -- "~" before a guess (...167). A row
+// without a time of its own, or with one set by hand, can get one: a click.
+function mpTimeHtml(r) {
+  const canSet = r.src && (!r.at || r.handTime);
+  const attrs = canSet ? ` class="exp-time" data-src="${mpEscapeHtml(r.src)}" data-xid="${mpEscapeHtml(r.xid || '')}" style="color:#6a7381;cursor:pointer"` : ' style="color:#6a7381"';
+  if (!r.at) return canSet ? ` <span${attrs} title="Click to set the time">🕒</span>` : '';
+  const title = r.approx ? 'примерное время, проставлено вручную' : r.handTime ? 'время проставлено вручную' : '';
+  return ` <span${attrs}${title ? ` title="${title}"` : ''}>${r.approx ? '~' : ''}${r.at}</span>`;
+}
+// The tab's rows of one bank row (a row out may be in more than one list).
+function mpExpRowsOf(src, xid) {
+  return [...(mpExpCache?.spent || []), ...(mpExpCache?.skipped || []), ...(mpExpCache?.incomeRows || [])].filter(r => r.src === src && r.xid === xid);
+}
+// A small form over the page: fields' HTML in, the form's element out to wire;
+// closed by Cancel / Esc.
+function mpDialog(title, body) {
+  let dlg = document.getElementById('mp_dialog');
+  if (!dlg) {
+    dlg = document.createElement('dialog');
+    dlg.id = 'mp_dialog';
+    dlg.style.cssText = 'background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:16px 18px;min-width:320px;max-width:min(92vw,460px)';
+    document.body.appendChild(dlg);
+  }
+  dlg.innerHTML = `<form method="dialog" style="display:flex;flex-direction:column;gap:10px">
+    <b>${mpEscapeHtml(title)}</b>${body}
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
+      <button type="button" data-act="cancel">Cancel</button><button type="submit" data-act="save">Save</button></div></form>`;
+  dlg.querySelector('[data-act=cancel]').onclick = () => dlg.close();
+  dlg.showModal();
+  return dlg.querySelector('form');
+}
+const MP_FIELD = 'background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:4px 6px;width:100%;box-sizing:border-box';
+// The time of a row whose statement gives the day only: on that day (the
+// date stays), "approximate" ticked unless it's known to the minute.
+function mpEditTime(src, xid) {
+  const rows = mpExpRowsOf(src, xid);
+  const r = rows[0];
+  if (!r) return;
+  const form = mpDialog(`Time · ${r.day}`, `
+    <input type="time" name="t" value="${r.at || ''}" style="${MP_FIELD}" required>
+    <label><input type="checkbox" name="approx"${!r.handTime || r.approx ? ' checked' : ''}> примерное</label>
+    ${r.handTime ? '<button type="button" data-act="clear">Remove the time</button>' : ''}`);
+  const save = async (t, approx) => {
+    const { error } = await sb.from('bank_transactions').update({ authorized_at: t ? `${r.day}T${t}:00Z` : null, authorized_approx: !!t && approx })
+      .eq('external_source', src).eq('external_id', xid);
+    if (error) { alert(error.message); return; }
+    rows.forEach(x => { x.at = t || ''; x.handTime = !!t; x.approx = !!t && approx; x.ts = t ? `${x.day}T${t}:00Z` : x.day; });
+    form.closest('dialog').close();
+    mpRenderExpenses();
+  };
+  form.querySelector('[data-act=clear]')?.addEventListener('click', () => save(null, false));
+  form.addEventListener('submit', e => { e.preventDefault(); save(form.t.value, form.approx.checked); });
+}
+// A row's place and, a delivery, where it was brought to: one of the places
+// there are, or a new one -- a Google Maps link fills its fields (to check).
+function mpEditPlace(src, xid) {
+  const rows = mpExpRowsOf(src, xid);
+  const r = rows[0];
+  if (!r) return;
+  const list = mpExpCache?.placeList || [];
+  const opts = sel => `<option value="">—</option>${list.map(p => `<option value="${p.id}"${p.id === sel ? ' selected' : ''}>${mpEscapeHtml(p.name)}</option>`).join('')}<option value="new">+ new place…</option>`;
+  const form = mpDialog(`Place · ${r.day} · ${mpShortDesc(r.description)}`, `
+    <label>📍 Where<select name="from" style="${MP_FIELD}">${opts(r.placeId)}</select></label>
+    <label>→ 🏠 Delivered to<select name="to" style="${MP_FIELD}">${opts(r.deliveredToId)}</select></label>
+    <fieldset name="nw" style="display:none;border:1px solid #30363d;border-radius:6px;padding:8px;gap:6px;flex-direction:column">
+      <legend>New place</legend>
+      <input name="link" placeholder="Google Maps link -- fills the fields" style="${MP_FIELD}">
+      <input name="pname" placeholder="name" style="${MP_FIELD}">
+      <div style="display:flex;gap:6px"><input name="lat" placeholder="lat" style="${MP_FIELD}"><input name="lng" placeholder="lng" style="${MP_FIELD}"></div>
+      <input name="url" placeholder="map link" style="${MP_FIELD}">
+      <input name="gid" placeholder="Google id (0x…:0x…)" style="${MP_FIELD}">
+    </fieldset>`);
+  let target = null;   // which select the new place is for
+  const nw = form.querySelector('fieldset');
+  for (const name of ['from', 'to']) {
+    form[name].addEventListener('change', () => {
+      if (form[name].value !== 'new') return;
+      target = name;
+      nw.style.display = 'flex';
+      form.pname.required = true;
+      form.link.focus();
+    });
+  }
+  form.link.addEventListener('input', () => {
+    const p = mpPlaceFromLink(form.link.value.trim());
+    if (!p) return;
+    form.pname.value = p.name; form.lat.value = p.lat ?? ''; form.lng.value = p.lng ?? '';
+    form.url.value = p.url; form.gid.value = p.google_id ?? '';
+  });
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    let newId = null;
+    if (target) {
+      const num = v => (v.trim() === '' ? null : Number(v));
+      const place = { name: form.pname.value.trim(), lat: num(form.lat.value), lng: num(form.lng.value), url: form.url.value.trim() || null, google_id: form.gid.value.trim() || null };
+      const { data, error } = place.google_id
+        ? await sb.from('places').upsert(place, { onConflict: 'user_id,google_id' }).select('id, name, lat, lng, url, google_id').single()
+        : await sb.from('places').insert(place).select('id, name, lat, lng, url, google_id').single();
+      if (error) { alert(error.message); return; }
+      newId = data.id;
+      if (!list.some(p => p.id === data.id)) list.push(data);
+    }
+    const pick = name => (form[name].value === 'new' ? newId : form[name].value ? Number(form[name].value) : null);
+    const from = pick('from'), to = pick('to');
+    const { error } = await sb.from('bank_transactions').update({ place_id: from, delivery_place_id: to }).eq('external_source', src).eq('external_id', xid);
+    if (error) { alert(error.message); return; }
+    const byId = id => { const p = list.find(x => x.id === id); return p ? { name: p.name, url: p.url } : null; };
+    rows.forEach(x => { x.placeId = from; x.deliveredToId = to; x.place = byId(from); x.deliveredTo = byId(to); });
+    form.closest('dialog').close();
+    mpRenderExpenses();
+  });
+}
+document.getElementById('expenses').addEventListener('click', e => {
+  if (!mpIsSignedIn || e.target.closest('a')) return;
+  const time = e.target.closest('.exp-time');
+  if (time) { e.stopPropagation(); mpEditTime(time.dataset.src, time.dataset.xid); return; }
+  const place = e.target.closest('.exp-place');
+  if (place?.dataset.src) { e.stopPropagation(); mpEditPlace(place.dataset.src, place.dataset.xid); }
+});
 // A note on a row out or in, written in the expenses tab's tables: saved to the row
 // itself (bank_transactions.expense_note) and kept in the tab's cache.
 document.getElementById('expenses').addEventListener('click', async e => {
@@ -8782,8 +8918,8 @@ async function mpRenderExpenses() {
   const rowsTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th style="width:1%;text-align:left">Place</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
     // newest first, to the second -- rows with no time in their statement too,
     // by the importer's 00:00:SS (their order within the day)
-    list.slice().sort((a, b) => b.day.localeCompare(a.day) || String(b.ts).localeCompare(String(a.ts))).map(r => `<tr><td style="white-space:nowrap">${r.day}${r.at ? ` <span style="color:#6a7381">${r.at}</span>` : ''}</td><td style="text-align:left"${mpShortDesc(r.description) !== r.description ? ` title="${esc(r.description)}"` : ''}>${esc(mpShortDesc(r.description))}${groupedTop && MP_EXP_GROUPS[r.cat] ? ` <span style="color:#6a7381">· ${esc(r.cat)}</span>` : ''}</td>
-      <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" style="text-align:left;max-width:140px">${mpPlaceHtml(r.place, r.deliveredTo)}</td>
+    list.slice().sort((a, b) => b.day.localeCompare(a.day) || String(b.ts).localeCompare(String(a.ts))).map(r => `<tr><td style="white-space:nowrap">${r.day}${mpTimeHtml(r)}</td><td style="text-align:left"${mpShortDesc(r.description) !== r.description ? ` title="${esc(r.description)}"` : ''}>${esc(mpShortDesc(r.description))}${groupedTop && MP_EXP_GROUPS[r.cat] ? ` <span style="color:#6a7381">· ${esc(r.cat)}</span>` : ''}</td>
+      <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to set the place" style="text-align:left;max-width:140px;cursor:pointer">${mpPlaceHtml(r.place, r.deliveredTo)}</td>
       <td style="text-align:left">${esc(r.account)}</td>
       <td>${r.amt.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${r.ccy}</td><td>${rowMoney(conv(r))}</td></tr>`).join('')}</tbody></table></div>`;
   const catList = document.getElementById('exp_categories');
@@ -8858,7 +8994,7 @@ async function mpRenderExpenses() {
   const incTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th style="width:1%;text-align:left">Place</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
     list.slice().sort((x, y) => y.day.localeCompare(x.day)).map(r => `<tr><td style="white-space:nowrap">${r.day}</td>
       <td style="text-align:left">${esc(r.description || '')}</td>
-      <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" style="text-align:left;max-width:140px">${mpPlaceHtml(r.place, r.deliveredTo)}</td>
+      <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to set the place" style="text-align:left;max-width:140px;cursor:pointer">${mpPlaceHtml(r.place, r.deliveredTo)}</td>
       <td style="text-align:left">${esc(r.account)}</td>
       <td>${Number(r.amount).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${esc(r.currency || '')}</td><td>${rowMoney(incConv(r))}</td></tr>`).join('')}</tbody></table></div>`;
   incList.innerHTML = incCats.length ? incCats.map((c, i) => `<div class="exp-cat" data-i="${i}">
@@ -9211,8 +9347,8 @@ async function mpRenderExpenses() {
   const pairsTable = (list, extra = []) => `<div class="exp-rows"><table class="data-table pair-rows"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th style="width:1%;text-align:left">Place</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
     list.slice().sort((a, b) => b.day.localeCompare(a.day) || String(b.ts).localeCompare(String(a.ts))).map(r => {
       const p = pairOf.get(`${r.src}|${r.xid}`);
-      return legRow(r.day + (r.at ? ` <span style="color:#6a7381">${r.at}</span>` : ''), r.description, r.account, -r.amt, r.ccy, -conv(r),
-        `<td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" style="text-align:left;max-width:140px">${mpPlaceHtml(r.place, r.deliveredTo)}</td>`)
+      return legRow(r.day + mpTimeHtml(r), r.description, r.account, -r.amt, r.ccy, -conv(r),
+        `<td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to set the place" style="text-align:left;max-width:140px;cursor:pointer">${mpPlaceHtml(r.place, r.deliveredTo)}</td>`)
         + (p ? inRow(p) : '');
     }).join('')}${extra.map(p => legRow(p.out_day, p.out_description, p.out_account, Number(p.out_amount), p.out_currency,
       Number(p.out_usd) / usdPer(ccy, p.out_day), '<td></td><td></td>') + inRow(p)).join('')}</tbody></table></div>`;
@@ -9230,7 +9366,7 @@ async function mpRenderExpenses() {
     const name = chainKey(r.src, r.xid);
     if (!name || !Number.isFinite(r.usd)) continue;
     const p = pairOf.get(`${r.src}|${r.xid}`);
-    chainAdd(name, r.ts, legRow(r.day + (r.at ? ` <span style="color:#6a7381">${r.at}</span>` : ''), r.description, r.account, -r.amt, r.ccy, -conv(r),
+    chainAdd(name, r.ts, legRow(r.day + mpTimeHtml(r), r.description, r.account, -r.amt, r.ccy, -conv(r),
       `<td style="text-align:left;color:#8b949e">${r.note ? esc(r.note) : ''}</td>`) + (p ? inRow(p) : ''), -conv(r) + (p ? inConv(p) : 0), conv(r));
   }
   for (const p of mpExpCache.pairs || []) {
