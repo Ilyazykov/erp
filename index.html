@@ -8624,16 +8624,19 @@ function mpExpLifeBands(periods, buckets, lifeName) {
   return { shapes, legend, where };
 }
 // A Google Maps link's place (migration 163): its name, point, Google's id.
+// A link to a bare point on the map ("/maps/@41.70,44.78,21z" -- a place
+// the map doesn't know) gives the point alone, the name is one's own.
 function mpPlaceFromLink(url) {
+  if (!/google\.[a-z.]+\/maps\//.test(url)) return null;
   const name = url.match(/\/maps\/place\/([^/]+)/);
-  if (!name) return null;
   // the place's own point (!3d<lat>!4d<lng>), else the map's centre (@lat,lng);
   // a link from one place to another lists both -- the last is the one shown
   const pt = [...url.matchAll(/!3d(-?[\d.]+)!4d(-?[\d.]+)/g)].pop() || url.match(/@(-?[\d.]+),(-?[\d.]+)/);
   let clean = url;
   try { const u = new URL(url); u.search = ''; clean = u.toString(); } catch { /* as written */ }
   const gid = [...url.matchAll(/!1s(0x[0-9a-f]+:0x[0-9a-f]+)/gi)].pop();
-  return { name: decodeURIComponent(name[1].replace(/\+/g, ' ')), lat: pt ? Number(pt[1]) : null, lng: pt ? Number(pt[2]) : null, url: clean, google_id: gid ? gid[1] : null };
+  if (!name && !pt) return null;
+  return { name: name ? decodeURIComponent(name[1].replace(/\+/g, ' ')) : '', lat: pt ? Number(pt[1]) : null, lng: pt ? Number(pt[2]) : null, url: clean, google_id: gid ? gid[1] : null };
 }
 // A place's name, and when another has the same name, its address from the
 // city on, as far as it takes to tell them apart: the city, then the street,
@@ -8788,7 +8791,8 @@ function mpEditPlace(src, xid) {
   form.link.addEventListener('input', async () => {
     const p = mpPlaceFromLink(form.link.value.trim());
     if (!p) return;
-    form.pname.value = p.name; form.lat.value = p.lat ?? ''; form.lng.value = p.lng ?? '';
+    if (p.name) form.pname.value = p.name;
+    form.lat.value = p.lat ?? ''; form.lng.value = p.lng ?? '';
     form.url.value = p.url; form.gid.value = p.google_id ?? '';
     // the address at that point (to check): what tells two Spars apart
     if (p.lat == null) return;
