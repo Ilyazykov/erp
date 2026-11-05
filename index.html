@@ -8700,7 +8700,10 @@ function mpEditTime(src, xid) {
     if (error) { alert(error.message); return; }
     rows.forEach(x => { x.at = t || ''; x.handTime = !!t; x.approx = !!t && approx; x.ts = t ? `${x.day}T${t}:00Z` : x.day; });
     form.closest('dialog').close();
-    mpRenderExpenses();
+    // in place: a re-render would fold the open categories
+    document.querySelectorAll('#expenses .exp-time').forEach(c => {
+      if (c.dataset.src === src && c.dataset.xid === xid) c.outerHTML = mpTimeHtml(r).trim();
+    });
   };
   form.querySelector('[data-act=clear]')?.addEventListener('click', () => save(null, false));
   form.addEventListener('submit', e => { e.preventDefault(); save(form.t.value, form.approx.checked); });
@@ -8761,7 +8764,9 @@ function mpEditPlace(src, xid) {
     const byId = id => { const p = list.find(x => x.id === id); return p ? { name: p.name, url: p.url } : null; };
     rows.forEach(x => { x.placeId = from; x.deliveredToId = to; x.place = byId(from); x.deliveredTo = byId(to); });
     form.closest('dialog').close();
-    mpRenderExpenses();
+    document.querySelectorAll('#expenses .exp-place').forEach(c => {
+      if (c.dataset.src === src && c.dataset.xid === xid) c.innerHTML = mpPlaceHtml(r.place, r.deliveredTo);
+    });
   });
 }
 document.getElementById('expenses').addEventListener('click', e => {
