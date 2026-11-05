@@ -531,6 +531,7 @@
   <div class="form-row" style="gap:16px;justify-content:flex-end;margin:8px 0 -8px">
     <label><input type="checkbox" id="mat_deposits" checked> вклады</label>
     <label><input type="checkbox" id="mat_coupons" checked> купоны и проценты</label>
+    <label>лесенка с <input type="number" id="mat_from" style="width:70px"> по <input type="number" id="mat_to" style="width:70px"></label>
   </div>
   <div id="plot_mat_years" style="height:280px;margin-bottom:24px"></div>
   <div id="plot_mat"></div>
@@ -5256,7 +5257,20 @@ async function mpMoexBondDates(secids) {
   try { localStorage.setItem(MP_MAT_CACHE, JSON.stringify(cache)); } catch { /* no storage */ }
   return cache;
 }
-// the two switches over the chart by year: remembered, redraw the tab
+// the switches over the chart by year: remembered, redraw the tab
+{
+  // the ladder: the next five years by default
+  const y = new Date().getFullYear();
+  for (const [id, def] of [['mat_from', y + 1], ['mat_to', y + 5]]) {
+    let v = def;
+    try { v = Number(localStorage.getItem('mp_' + id)) || def; } catch { /* no storage */ }
+    document.getElementById(id).value = v;
+    document.getElementById(id).addEventListener('change', e => {
+      try { localStorage.setItem('mp_' + id, e.target.value); } catch { /* no storage */ }
+      mpRenderMaturities();
+    });
+  }
+}
 for (const id of ['mat_deposits', 'mat_coupons']) {
   try { const v = localStorage.getItem('mp_' + id); if (v) document.getElementById(id).checked = v === '1'; } catch { /* no storage */ }
   document.getElementById(id).addEventListener('change', e => {
@@ -5345,16 +5359,29 @@ async function mpRenderMaturities() {
     for (const f of r.face) add(faceBy, f.day, f.value * k);
     for (const c of r.coupons) add(couponBy, c.day, c.value * k);
   }
-  const ys = [...new Set([...faceBy.keys(), ...(withCoupons ? couponBy.keys() : [])])].sort();
+  const ys = [...new Set([...faceBy.keys(), ...(withCoupons ? couponBy.keys() : []), ...rungs])].sort();
   if (!withCoupons) couponBy.clear();
   const tot = y => (faceBy.get(y) || 0) + (couponBy.get(y) || 0);
+  // the target ladder (05.11.2026): the face of everything held, spread evenly
+  // over its years -- each year's maturing money bought into the far end
+  const from = Number(document.getElementById('mat_from').value), to = Number(document.getElementById('mat_to').value);
+  const rungs = [];
+  for (let y = from; y <= to && to - from < 40; y++) rungs.push(String(y));
+  const faceAll = [...faceBy.values()].reduce((t, v) => t + v, 0);
+  const perRung = rungs.length ? faceAll / rungs.length : 0;
+  for (const y of rungs) if (!faceBy.has(y)) faceBy.set(y, 0);
   Plotly.newPlot('plot_mat_years', [
     { type: 'bar', name: 'номинал (погашения, амортизации, вклад)', x: ys, y: ys.map(y => faceBy.get(y) || 0), marker: { color: '#58a6ff' }, hovertemplate: '%{y:$,.0f}' },
     { type: 'bar', name: 'купоны и проценты', x: ys, y: ys.map(y => couponBy.get(y) || 0), marker: { color: '#3dd68c' }, hovertemplate: '%{y:$,.0f}' },
     { type: 'scatter', mode: 'text', x: ys, y: ys.map(tot), text: ys.map(y => money(tot(y))), textposition: 'top center', showlegend: false, hoverinfo: 'skip', cliponaxis: false },
+    // the ladder's target per year: a tick over the bar; outside the ladder 0
+    { type: 'scatter', mode: 'markers', name: `цель лесенки ${from}–${to} (номинал)`, x: ys, y: ys.map(y => rungs.includes(y) ? perRung : 0),
+      marker: { symbol: 'line-ew-open', size: 34, line: { width: 3, color: '#f5c542' } },
+      customdata: ys.map(y => { const d = (faceBy.get(y) || 0) - (rungs.includes(y) ? perRung : 0); return `${d >= 0 ? 'перебор' : 'недобор'} ${money(Math.abs(d))}`; }),
+      hovertemplate: '%{y:$,.0f} — %{customdata}' },
   ], { ...dark, barmode: 'stack', title: 'Сколько придёт по годам — по графику MOEX, по сегодняшнему курсу', margin: { l: 50, r: 20, t: 50, b: 30 },
     hovermode: 'x unified', hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
-    legend: { orientation: 'h', y: -0.15 }, yaxis: { gridcolor: '#1e2830', tickprefix: '$', range: [0, Math.max(...ys.map(tot), 1) * 1.2] }, xaxis: { type: 'category' } },
+    legend: { orientation: 'h', y: -0.15 }, yaxis: { gridcolor: '#1e2830', tickprefix: '$', range: [0, Math.max(...ys.map(tot), perRung, 1) * 1.2] }, xaxis: { type: 'category' } },
     { responsive: true, displaylogo: false });
 }
 
