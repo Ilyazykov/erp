@@ -5247,7 +5247,7 @@ function mpAssetBuckets(rows, keep = null) {
 // has its offer (MOEX ISS, straight from the browser), and the term deposits'
 // ends (deposit_terms, set by hand: no statement gives them) -- a bar from
 // today to the date, its thickness the money in it. ----
-const MP_MAT_CACHE = 'mp_moex_bond_dates_v5';
+const MP_MAT_CACHE = 'mp_moex_bond_dates_v6';
 async function mpMoexBondDates(secids) {
   let cache = {};
   try { cache = JSON.parse(localStorage.getItem(MP_MAT_CACHE) || '{}'); } catch { /* none */ }
@@ -5462,6 +5462,7 @@ async function mpRenderMaturities() {
   // the ladder by the key rate; the yuan (and any other currency's) fixed
   // ones a ladder of their own, an even one (asked 05.11.2026)
   const faceBy = new Map(), couponBy = new Map(), floatFaceBy = new Map(), floatCouponBy = new Map(), cnyFaceBy = new Map(), cnyCouponBy = new Map();
+  let depositsAll = 0;   // the rouble deposits' sum: in the ladder, not in the floaters' pie
   const add = (m, day, usd) => { const y = day.slice(0, 4); m.set(y, (m.get(y) || 0) + usd); };
   for (const r of shown) {
     if (r.deposit) {
@@ -5469,6 +5470,7 @@ async function mpRenderMaturities() {
       const rate = Number(r.ticker.match(/([\d.]+)%/)?.[1] || 0) / 100;
       const rub = (r.currency || 'RUB') === 'RUB';
       add(rub ? faceBy : cnyFaceBy, r.mat, r.usd);
+      if (rub) depositsAll += r.usd;
       add(rub ? couponBy : cnyCouponBy, r.mat, r.usd * rate * Math.max(0, Date.parse(r.mat) - Date.now()) / (365 * 86400000));
       continue;
     }
@@ -5497,7 +5499,10 @@ async function mpRenderMaturities() {
   const key = odds.now != null ? { now: odds.now } : null;
   const levelPct = key && odds.pts.length ? Math.round(odds.share(key.now) * 10) / 10 : 0;
   const floatPct = key && odds.pts.length ? Math.round(odds.withTrend(key.now) * 10) / 10 : 0;
-  const ladderAll = faceAll * (1 - floatPct / 100);
+  // the floaters' share is of the rouble bonds (asked 05.11.2026: the pie is
+  // only them); the ladder -- the rouble face, deposits too, less the floaters' target
+  const bondsAll = faceAll - depositsAll;
+  const ladderAll = faceAll - bondsAll * floatPct / 100;
   const far = document.getElementById('mat_weights').value === 'far';
   // past the ladder's end, to the last year anything held matures, a tail
   // stepping down from the top rung to nothing (asked 05.11.2026): those years
@@ -5523,8 +5528,8 @@ async function mpRenderMaturities() {
   // the floaters against their share by the key rate, as the other target pies
   const pies = document.getElementById('mat_pies');
   pies.innerHTML = '';
-  mpTargetPie(pies, 'Постоянный и переменный купон (номинал)', [
-    { label: 'постоянный купон и вклады', usd: faceAll - floatAll, target: 100 - floatPct, color: '#58a6ff' },
+  mpTargetPie(pies, 'Российские облигации: постоянный и переменный купон (номинал)', [
+    { label: 'постоянный купон', usd: bondsAll - floatAll, target: 100 - floatPct, color: '#58a6ff' },
     { label: 'переменный купон', usd: floatAll, target: floatPct, color: '#a371f7' },
   ], !key || !odds.pts.length ? 'Таблица вероятностей ключевой ещё не посчитана (update-key-rate-odds, раз в месяц).'
     : `Ключевая ${key.now}% на ${odds.since}: по уровню флоатеров ${levelPct}%`
