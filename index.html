@@ -115,6 +115,7 @@
   <div class="tab" data-tab="charts">Charts</div>
   <div class="tab" data-tab="capital">Capital</div>
   <div class="tab" data-tab="capitalbrokers">Capital by broker</div>
+  <div class="tab" data-tab="cryptostrat">Crypto strategy</div>
   <div class="tab" data-tab="invested">Invested vs earned</div>
   <div class="tab" data-tab="expenses">Expenses</div>
   <div class="tab" data-tab="sigmoid">USD/RUB → CNY Weight (current + 5Y)</div>
@@ -518,6 +519,21 @@
     <p class="empty-note" id="brokers_status"></p>
     <div id="plot_capital_brokers" style="height:620px"></div>
   </div>
+</div>
+
+<div id="cryptostrat" class="chart-wrap">
+  <div class="section-title">Crypto strategy: AHR999</div>
+  <p class="note">Доля всей крипты в портфеле (цель 5%) ведётся по индексу BTC AHR999, раз в месяц после зарплаты.
+    🔴 <b>Красная зона</b> (&lt; 0.45): докупать на 1% портфеля в месяц, не выше 5%; после неё в нейтральной зоне — так же, пока не 5%, потом держать 5% пополнениями.
+    🟢 <b>Зелёная зона</b> (&gt; 1.2): продавать в месяц 1% портфеля при доле 1–10%, 2% при 10–20%, 3% при 20–30%; не ниже 1%.
+    🟡 <b>Нейтральная после зелёной</b>: ничего не делать до следующей красной.
+    AHR999 = (цена / средняя геометрическая 200 дневных закрытий) × (цена / 10<sup>5.84·log₁₀(дней с 03.01.2009) − 17.01</sup>),
+    считается здесь каждое утро по BTC-USD с Yahoo — с CoinGlass может расходиться в сотых.</p>
+  <div id="cs_cards" class="form-row" style="gap:12px;flex-wrap:wrap"></div>
+  <p class="empty-note" id="cs_status"></p>
+  <div id="plot_cs_ahr" style="height:420px"></div>
+  <div id="plot_cs_price" style="height:360px"></div>
+  <div id="plot_cs_share" style="height:320px"></div>
 </div>
 
 <div id="capital" class="chart-wrap">
@@ -953,6 +969,7 @@ function showTab(id) {
   }
   if (id === 'capital' && mpIsSignedIn) mpRenderCapital();
   if (id === 'capitalbrokers' && mpIsSignedIn) mpRenderCapitalBrokers();
+  if (id === 'cryptostrat') mpRenderCryptoStrategy();
   if (id === 'invested' && mpIsSignedIn) mpRenderInvested();
   if (id === 'expenses' && mpIsSignedIn) mpRenderExpenses();
   if (DATA && !rendered[id]) {
@@ -5190,6 +5207,121 @@ function mpAssetBuckets(rows, keep = null) {
     .map(([k, v]) => [MP_ASSET_CLASS_LABELS[k] || k, v]));
 }
 
+// ---- Crypto strategy (05.11.2026): the crypto share's target by BTC's
+// AHR999 (crypto_indicators, migration 172). Monthly, after the salary:
+//   red (< 0.45): buy 1% of the portfolio, up to 5%;
+//   neutral after red: the same until 5%, then keep 5% with new money;
+//   green (> 1.2): sell 1% of the portfolio at a share of 1-10%, 2% at
+//     10-20%, 3% at 20% and more; not below 1%;
+//   neutral after green: nothing -- not bought, not topped up -- until red.
+// It's the whole crypto's share (BTC moves the rest with it). ----
+const MP_AHR = { red: 0.45, green: 1.2, target: 5, floor: 1 };
+let mpCryptoInd = null;   // [{ day, btc, dca, fair, ahr }], oldest first
+async function mpLoadCryptoIndicators() {
+  if (mpCryptoInd) return mpCryptoInd;
+  const out = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await sb.from('crypto_indicators').select('day, btc_usd, dca200, fair_usd, ahr999').order('day').range(from, from + 999);
+    if (error) return [];   // no table yet: the plain 5%
+    out.push(...data);
+    if (data.length < 1000) break;
+  }
+  mpCryptoInd = out.map(r => ({ day: r.day, btc: Number(r.btc_usd), dca: Number(r.dca200), fair: Number(r.fair_usd), ahr: Number(r.ahr999) }));
+  return mpCryptoInd;
+}
+const mpAhrZone = a => (a < MP_AHR.red ? 'red' : a > MP_AHR.green ? 'green' : 'neutral');
+// This month's move for a crypto share of `share` % (of chart 3's total):
+// { day, ahr, zone, regime (the last red / green), target %, action, step } --
+// null with no indicators (the plain 5% then).
+function mpCryptoPlan(share, ind = mpCryptoInd) {
+  if (!ind?.length) return null;
+  const last = ind[ind.length - 1];
+  const zone = mpAhrZone(last.ahr);
+  let regime = null;
+  for (let i = ind.length - 1; i >= 0 && !regime; i--) { const z = mpAhrZone(ind[i].ahr); if (z !== 'neutral') regime = z; }
+  let target = share, step = 0, why;
+  if (zone === 'green') {
+    step = share >= 20 ? 3 : share >= 10 ? 2 : 1;
+    target = Math.max(MP_AHR.floor, share - step);
+    why = `зелёная зона: продать ${step}% портфеля, не ниже ${MP_AHR.floor}%`;
+  } else if (zone === 'red' || regime !== 'green') {
+    step = 1;
+    target = share < MP_AHR.target ? Math.min(MP_AHR.target, share + step) : share;
+    why = zone === 'red' ? `красная зона: докупить на 1% портфеля, до ${MP_AHR.target}%`
+      : `нейтральная после красной: докупать по 1% до ${MP_AHR.target}%, потом держать ${MP_AHR.target}%`;
+  } else why = 'нейтральная после зелёной: ничего не делать до красной зоны';
+  const action = target > share + 1e-9 ? 'buy' : target < share - 1e-9 ? 'sell' : 'hold';
+  return { day: last.day, ahr: last.ahr, zone, regime, target, action, step, why };
+}
+const MP_ZONE_NAME = { red: '🔴 красная', green: '🟢 зелёная', neutral: '🟡 нейтральная' };
+async function mpRenderCryptoStrategy() {
+  const status = document.getElementById('cs_status');
+  status.textContent = 'Loading…';
+  const ind = await mpLoadCryptoIndicators();
+  if (!ind.length) { status.textContent = 'Нет данных AHR999 (update-crypto-indicators ещё не запускался).'; return; }
+  // the crypto share by day (capital_daily_by_type: crypto of everything but real estate)
+  let shares = [];
+  if (mpIsSignedIn) {
+    const rows = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await sb.from('capital_daily_by_type').select('*').order('day').range(from, from + 999);
+      if (error || !data) break;
+      rows.push(...data);
+      if (data.length < 1000) break;
+    }
+    shares = rows.map(r => {
+      const total = Object.entries(r).filter(([k]) => /^(ru|fx)_/.test(k)).reduce((t, [, v]) => t + Number(v || 0), 0);
+      return { day: r.day, pct: total > 0 ? (Number(r.ru_crypto || 0) + Number(r.fx_crypto || 0)) / total * 100 : 0 };
+    }).filter(x => x.pct > 0 || x.day >= '2020-01-01');
+  }
+  status.textContent = '';
+  const share = shares.length ? shares[shares.length - 1].pct : null;
+  const plan = share === null ? mpCryptoPlan(0) : mpCryptoPlan(share);
+  const last = ind[ind.length - 1];
+  const card = (label, value, sub = '') => `<div class="card-reminder faint" style="flex-direction:column;align-items:flex-start;gap:2px;min-width:150px">
+    <span style="font-size:0.75rem">${label}</span><b style="font-size:1.15rem;color:#e6edf3">${value}</b>${sub ? `<span style="font-size:0.75rem">${sub}</span>` : ''}</div>`;
+  const actionText = !plan || share === null ? '—'
+    : plan.action === 'buy' ? `докупить до ${plan.target.toFixed(1)}%`
+    : plan.action === 'sell' ? `продать до ${plan.target.toFixed(1)}%` : 'ничего не делать';
+  document.getElementById('cs_cards').innerHTML = [
+    card('AHR999', last.ahr.toFixed(3), last.day),
+    card('Зона', MP_ZONE_NAME[plan.zone], plan.regime ? `последняя крайняя: ${MP_ZONE_NAME[plan.regime]}` : ''),
+    card('BTC', mpFormatUsd(last.btc), `DCA 200: ${mpFormatUsd(last.dca)} · fair: ${mpFormatUsd(last.fair)}`),
+    card('Доля крипты', share === null ? 'войдите' : `${share.toFixed(1)}%`, `цель стратегии: ${share === null ? '—' : plan.target.toFixed(1) + '%'}`),
+    card('В этом месяце', actionText, plan.why),
+  ].join('');
+  const dark = { paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', font: { color: '#c9d1d9' }, margin: { t: 30, r: 20, b: 40, l: 60 } };
+  const days = ind.map(r => r.day);
+  // zone bands as shapes: each run of red / green days
+  const shapes = [];
+  let runStart = null, runZone = null;
+  ind.forEach((r, i) => {
+    const z = mpAhrZone(r.ahr);
+    if (z !== runZone) {
+      if (runZone && runZone !== 'neutral') shapes.push({ type: 'rect', xref: 'x', yref: 'paper', x0: runStart, x1: r.day, y0: 0, y1: 1,
+        fillcolor: runZone === 'red' ? '#e05252' : '#3dd68c', opacity: 0.12, line: { width: 0 }, layer: 'below' });
+      runStart = r.day; runZone = z;
+    }
+    if (i === ind.length - 1 && runZone !== 'neutral') shapes.push({ type: 'rect', xref: 'x', yref: 'paper', x0: runStart, x1: r.day, y0: 0, y1: 1,
+      fillcolor: runZone === 'red' ? '#e05252' : '#3dd68c', opacity: 0.12, line: { width: 0 }, layer: 'below' });
+  });
+  const hline = (y, color) => ({ type: 'line', xref: 'paper', x0: 0, x1: 1, y0: y, y1: y, line: { color, width: 1, dash: 'dash' } });
+  Plotly.newPlot('plot_cs_ahr', [{ x: days, y: ind.map(r => r.ahr), type: 'scatter', mode: 'lines', name: 'AHR999', line: { color: '#f5c542', width: 1.5 } }],
+    { ...dark, title: 'AHR999', yaxis: { type: 'log', gridcolor: '#1e2830' }, xaxis: { gridcolor: '#1e2830' },
+      shapes: [...shapes, hline(MP_AHR.red, '#e05252'), hline(MP_AHR.green, '#3dd68c')] }, { responsive: true, displaylogo: false });
+  Plotly.newPlot('plot_cs_price', [
+    { x: days, y: ind.map(r => r.btc), type: 'scatter', mode: 'lines', name: 'BTC', line: { color: '#58a6ff', width: 1.5 } },
+    { x: days, y: ind.map(r => r.dca), type: 'scatter', mode: 'lines', name: 'DCA 200 дней', line: { color: '#8b949e', width: 1 } },
+    { x: days, y: ind.map(r => r.fair), type: 'scatter', mode: 'lines', name: 'справедливая (по возрасту)', line: { color: '#f2452b', width: 1, dash: 'dot' } },
+  ], { ...dark, title: 'BTC и его оценки, $', yaxis: { type: 'log', gridcolor: '#1e2830' }, xaxis: { gridcolor: '#1e2830' }, shapes,
+    legend: { orientation: 'h', y: -0.15 } }, { responsive: true, displaylogo: false });
+  if (shares.length) {
+    Plotly.newPlot('plot_cs_share', [{ x: shares.map(x => x.day), y: shares.map(x => x.pct), type: 'scatter', mode: 'lines', name: 'доля крипты, %', line: { color: '#ff9f1a', width: 1.5 } }],
+      { ...dark, title: 'Доля крипты в портфеле, %', yaxis: { gridcolor: '#1e2830', ticksuffix: '%' }, xaxis: { gridcolor: '#1e2830' },
+        shapes: [...shapes.map(x => ({ ...x })), hline(MP_AHR.target, '#8b949e'), hline(MP_AHR.floor, '#3dd68c')] }, { responsive: true, displaylogo: false });
+  } else document.getElementById('plot_cs_share').innerHTML = '<p class="empty-note">Войдите, чтобы увидеть долю крипты в портфеле.</p>';
+}
+
 // ---- Salary plan (Charts tab): where a month's salary goes, step by step,
 // against the charts' targets. Money is only ever added, except step 6. ----
 let mpSalaryCtx = null;
@@ -5244,14 +5376,23 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
   const newTotal3 = c.total3 + salary;
   parts.gold = take(0.05 * newTotal3 - c.gold);
   rows.push(['1', 'Gold up to 5%', parts.gold, `now ${(c.gold / c.total * 100).toFixed(1)}%`]);
-  const crypto = take(0.05 * newTotal3 - c.crypto);
+  // The crypto by the AHR999 strategy (mpCryptoPlan; the plain 5% without its data)
+  const cplan = mpCryptoPlan(c.total3 > 0 ? c.crypto / c.total3 * 100 : 0);
+  const cryptoPct = cplan ? cplan.target : 5;
+  const crypto = cplan?.action === 'sell' ? 0 : take(cryptoPct / 100 * newTotal3 - c.crypto);
+  // a sale in the green zone: the money joins the salary, taken from each coin by its size
+  const cryptoSell = cplan?.action === 'sell' ? Math.max(0, c.crypto - cryptoPct / 100 * newTotal3) : 0;
+  left += cryptoSell;
   // Split over the coins toward MP_CRYPTO_TARGETS: each short coin gets a share of its shortfall.
   const short = Object.entries(MP_CRYPTO_TARGETS)
     .map(([t, pct]) => [t, Math.max(0, pct / 100 * (c.crypto + crypto) - (c.coins[t] || 0))]).filter(([, v]) => v > 0);
   const shortSum = short.reduce((s, [, v]) => s + v, 0);
-  parts.coins = crypto > 0 && shortSum > 0 ? Object.fromEntries(short.map(([t, v]) => [t, v / shortSum * crypto])) : {};
-  rows.push(['2', 'Crypto up to 5%', crypto, [`now ${(c.crypto / c.total * 100).toFixed(1)}%`,
-    Object.entries(parts.coins).map(([t, v]) => `${t} ${mpFormatUsd(v)}`).join(', ')].filter(Boolean).join(' — ')]);
+  parts.coins = crypto > 0 && shortSum > 0 ? Object.fromEntries(short.map(([t, v]) => [t, v / shortSum * crypto]))
+    : cryptoSell > 0 && c.crypto > 0 ? Object.fromEntries(Object.entries(c.coins).map(([t, v]) => [t, -cryptoSell * v / c.crypto])) : {};
+  const ahrNote = cplan ? `AHR999 ${cplan.ahr.toFixed(2)}, ${cplan.why}` : '';
+  rows.push(['2', cryptoSell ? `Crypto: sell down to ${cryptoPct.toFixed(1)}%` : `Crypto up to ${cryptoPct.toFixed(1)}%`, cryptoSell ? -cryptoSell : crypto,
+    [`now ${(c.crypto / c.total * 100).toFixed(1)}%`, ahrNote,
+      Object.entries(parts.coins).map(([t, v]) => `${t} ${mpFormatUsd(v)}`).join(', ')].filter(Boolean).join(' — ')]);
   const ruAdd = take(0.05 * newTotal - c.ruTotal);
   rows.push(['3', 'Russian infrastructure up to 5%', ruAdd, `now ${(c.ruTotal / c.total * 100).toFixed(1)}%`]);
 
@@ -5586,6 +5727,7 @@ async function mpRenderCharts() {
   // Sign-in can fire this twice in a row: only the latest run draws.
   const run = ++mpChartsRun;
   status.textContent = 'Loading…';
+  await mpLoadCryptoIndicators().catch(() => []);
   try { mpChartsBase = await mpLoadPortfolioBase(); }
   catch (error) { status.textContent = error.message; return; }
   await mpDrawCharts(run);
@@ -5791,7 +5933,10 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   //   8: stocks at the US ERP tab's target share of chart 8's own total,
   //      bonds / deposits / liquid assets the rest in their current proportions;
   //   3: those four at chart 8's dollars, the emergency fund $10,000, gold 5%, crypto 5%.
-  const GOLD_TARGET_PCT = 5, CRYPTO_TARGET_PCT = 5;
+  const GOLD_TARGET_PCT = 5;
+  // crypto: the AHR999 strategy's target for this month (mpCryptoPlan), 5% without its data
+  const cryptoNow = types[MP_ASSET_CLASS_LABELS.crypto] || 0, total3Now = Object.values(types).reduce((s, v) => s + v, 0);
+  const CRYPTO_TARGET_PCT = mpCryptoPlan(total3Now > 0 ? cryptoNow / total3Now * 100 : 0)?.target ?? 5;
   const total3 = Object.values(types).reduce((s, v) => s + v, 0);
   // The emergency fund's money (30.10.2026) is out of chart 9 and the group
   // its targets are split over: Revolut's euro fund and TBC's savings in it
