@@ -5556,11 +5556,13 @@ async function mpRenderMaturities() {
   // [{ name, mat, offer, usd, n, kind: 'fixed' | 'float' | 'cny' }], a bar each, hatched
   const el = document.getElementById('plot_mat');
   const drawGantt = (plan = []) => {
-    const all = [...shown, ...plan.map(p => ({ ...p, planned: true, unit: p.kind === 'cny' ? 'CNY' : 'RUB', floating: p.kind === 'float', qty: p.n }))]
+    // a bond held takes its plan into its own row (06.11.2026: it was doubled)
+    const held = shown.map(r => { const p = plan.find(q => q.secid === r.ticker); return p ? { ...r, planN: p.n, planUsd: p.usd } : r; });
+    const all = [...held, ...plan.filter(p => !shown.some(r => r.ticker === p.secid)).map(p => ({ ...p, planned: true, unit: p.kind === 'cny' ? 'CNY' : 'RUB', floating: p.kind === 'float', qty: p.n }))]
       .sort((a, b) => (a.offer || a.mat || '9999').localeCompare(b.offer || b.mat || '9999'));
     const lab = r => (r.planned ? '+ ' : '') + label(r);
     const yy = all.map((r, i) => r.planned ? `${lab(r)}\u200b${i}` : lab(r));   // a planned row its own, even of a bond held
-    const maxU = Math.max(...all.map(r => r.usd), 1), wd = r => 0.25 + 0.6 * Math.sqrt(r.usd / maxU);
+    const maxU = Math.max(...all.map(r => r.usd + (r.planUsd || 0)), 1), wd = r => 0.25 + 0.6 * Math.sqrt((r.usd + (r.planUsd || 0)) / maxU);
     const colorOf = r => r.deposit ? '#2bb5a8' : r.floating ? (r.offer ? 'rgba(163,113,247,0.45)' : '#a371f7')
       : r.unit === 'CNY' ? (r.offer ? 'rgba(247,120,186,0.45)' : '#f778ba') : r.offer ? 'rgba(88,166,255,0.45)' : '#58a6ff';
     const pattern = { shape: all.map(r => r.planned ? '/' : ''), fgcolor: '#0d1117', solidity: 0.35 };
@@ -5572,7 +5574,8 @@ async function mpRenderMaturities() {
         hovertemplate: '%{y}: погашение %{customdata}<extra></extra>', customdata: all.map(r => r.mat || 'не указано') },
     ];
     const annotations = all.map((r, i) => ({ x: endOrMax(r), y: yy[i], xanchor: 'left', xshift: 6, showarrow: false, font: { size: 11, color: r.planned ? '#3dd68c' : '#8b949e' },
-      text: r.planned ? `план: +${r.n} шт · ${money(r.usd)}` : `${r.deposit ? '' : `${r.floating ? 'перем.' : 'пост.'} · ${Math.round(r.qty)} шт · `}${money(r.usd)}${r.next ? '' : ' · срок?'}` }));
+      text: r.planned ? `план: +${r.n} шт · ${money(r.usd)}` : `${r.deposit ? '' : `${r.floating ? 'перем.' : 'пост.'} · ${Math.round(r.qty)} шт · `}${money(r.usd)}${r.next ? '' : ' · срок?'}`
+        + (r.planN ? ` · <span style="color:#3dd68c">план +${r.planN} шт · ${money(r.planUsd)}</span>` : '') }));
     el.style.height = `${Math.max(300, all.length * 26 + 110)}px`;
     Plotly.newPlot(el, traces, { ...dark, barmode: 'overlay', showlegend: false, margin: { l: 260, r: 140, t: 50, b: 30 },
       xaxis: { type: 'date', gridcolor: '#1e2830', range: [today, [...all.map(endOrMax)].sort().pop()], side: 'top' },
@@ -6026,7 +6029,10 @@ async function mpRenderMaturities() {
         for (let guard = 0; guard < 100000; guard++) {
           const can = rows.filter(r => r.b && (whole ? costOf(r) <= left + 1e-9 : left > 1e-9));
           if (!can.length) break;
-          const r = can.sort((a, c) => (c.t - c.cur - c.spent) - (a.t - a.cur - a.spent))[0];
+          // the furthest from its target in share of it (06.11.2026: by roubles
+          // short the small years at the ladder's ends stayed under)
+          const fill = r => r.t > 0 ? (r.cur + r.spent) / r.t : Infinity;
+          const r = can.sort((a, c) => fill(a) - fill(c))[0];
           const amt = whole ? costOf(r) : Math.min(step, left);
           r.spent += amt; left -= amt; if (whole) r.n++;
         }
@@ -6065,7 +6071,7 @@ async function mpRenderMaturities() {
       drawYears(money > 0 ? { fixed: fFixed, float: fFloat } : null);
       drawCnyYears(money > 0 ? fCny : null);
       drawFloat(money > 0 ? bought.filter(p => p.kind === 'float').map(p => ({ secid: p.b.secid, name: p.b.name, mat: p.b.mat, usd: p.spent, n: whole ? p.n : Math.round(p.n * 10) / 10 })) : []);
-      drawGantt(money > 0 ? bought.map(p => ({ name: p.b.name, mat: p.b.mat, offer: p.kind === 'cny' ? p.b.offer : null, usd: p.spent,
+      drawGantt(money > 0 ? bought.map(p => ({ secid: p.b.secid, name: p.b.name, mat: p.b.mat, offer: p.kind === 'cny' ? p.b.offer : null, usd: p.spent,
         n: whole ? p.n : Math.round(p.n * 10) / 10, kind: p.kind })) : []);
       const spent = plans.reduce((t, r) => t + r.spent, 0);
       const planOf = (kind, y) => plans.find(p => p.kind === kind && (kind === 'float' || p.key === y));
@@ -6130,7 +6136,7 @@ async function mpRenderMaturities() {
           ${body.join('')}
           <tr style="border-top:2px solid #30363d"><td ${td} colspan="8"><b>Итого к покупке</b>${money ? ` · не потрачено ${rub(left)}` : ''}</td><td ${tdr}><b>${rub(spent)}</b></td><td colspan="3"></td></tr>
           </tbody></table></div>
-        <p class="note">${money ? 'Деньги раскладываются по одной облигации: каждая — туда, где сейчас больше всего не хватает до цели (цели — с учётом вложенного: юани и рубли по w_CNY, в рублях флоатеры по своей доле, остальное — лесенка).'
+        <p class="note">${money ? 'Деньги раскладываются по одной облигации: каждая — туда, где меньше всего набрано в процентах от цели (цели — с учётом вложенного: юани и рубли по w_CNY, в рублях флоатеры по своей доле, остальное — лесенка).'
           : 'Введи сумму — появится, что на неё купить.'} Зелёным — что купить. Стоимость и цели — по рыночной цене, в рублях; цена покупки — прошлого дня с НКД.</p>`;
       box.querySelector('#mat_invest').addEventListener('change', e => {
         money = Math.max(0, Number(e.target.value) || 0);
