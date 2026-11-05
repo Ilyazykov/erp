@@ -5666,103 +5666,104 @@ async function mpRenderMaturities() {
   document.getElementById('kr_ladder_note').innerHTML = mpLadderNote(auto, odds.now, age, from);
   // the floaters against their share by the key rate, as the other target pies
   const pies = document.getElementById('mat_pies');
-  pies.innerHTML = '';
-  let pieRub = 0, pieCny = 0, pieLiquid = 0, pieW = null;   // the first pie's, for the buy plan
-  // yuan vs rouble (06.11.2026, as the chart in USD/RUB -> CNY Weight): the
-  // Russian infrastructure's bonds, deposits and money-market funds by what
-  // they hold; the target -- w_CNY by USD/RUB, when that tab has it
-  {
-    const { data: ruRows } = await sb.from('portfolio_value_usd_by_account').select('value_usd, underlying_currency, instrument_type')
-      .eq('infra_region', 'ru').in('instrument_type', ['bond', 'deposit', 'liquid']).gt('quantity', 0);
-    const rub = (ruRows || []).filter(r => (r.underlying_currency || 'RUB') === 'RUB').reduce((t, r) => t + Number(r.value_usd || 0), 0);
-    const cny = (ruRows || []).filter(r => (r.underlying_currency || 'RUB') !== 'RUB').reduce((t, r) => t + Number(r.value_usd || 0), 0);
-    const w = typeof DATA !== 'undefined' && DATA?.currentWCny != null ? DATA.currentWCny * 100 : null;
-    const tot = rub + cny || 1;
-    pieRub = rub; pieCny = cny; pieW = w;
-    pieLiquid = (ruRows || []).filter(r => r.instrument_type === 'liquid' && (r.underlying_currency || 'RUB') === 'RUB').reduce((t, r) => t + Number(r.value_usd || 0), 0);
-    mpTargetPie(pies, 'Облигации, вклады и фонды ликвидности: юани и рубли', [
-      { label: 'в юанях', usd: cny, target: w ?? cny / tot * 100, color: '#f778ba' },
-      { label: 'в рублях', usd: rub, target: w != null ? 100 - w : rub / tot * 100, color: '#58a6ff' },
-    ], w != null ? `Цель — w_CNY ${Math.round(w)}% по курсу USD/RUB (вкладка «USD/RUB → CNY Weight»).` : 'Цель w_CNY ещё не посчитана — открой вкладку «USD/RUB → CNY Weight».');
-  }
-  // which floater to buy (06.11.2026): an OFZ-PK 1-3 years out, the most traded
-  const rubPie = v => `${Math.round(v / (usdPer('RUB') || 1)).toLocaleString('ru-RU')} ₽`;
-  const floatShort = mvBonds * floatPct / 100 - mvFloat;
-  const floatHover = await (async () => {
-    if (floatShort <= 5) return 'флоатеров достаточно — новых не покупать';
-    const y = new Date().getFullYear();
-    const pk = (await mpOfzList()).filter(b => b.pk && (b.turnover || 0) > 1e6 && b.mat > `${y + 1}` && b.mat < `${y + 4}`).sort((a, b) => b.turnover - a.turnover)[0];
-    if (!pk) return `недобор ${rubPie(floatShort)}; подходящей ОФЗ-ПК нет`;
-    const n = Math.max(1, Math.round(floatShort / (((pk.price || 100) / 100 * pk.face + (pk.accrued || 0)) * usdPer('RUB'))));
-    return `купить: ${mpEscapeHtml(pk.name)} (ОФЗ-ПК, до ${pk.mat.slice(5, 7)}.${pk.mat.slice(0, 4)}) — ${n} шт`;
-  })();
-  mpTargetPie(pies, 'Российские облигации: постоянный и переменный купон (по рыночной цене)', [
-    { label: 'постоянный купон', usd: mvBonds - mvFloat, target: 100 - floatPct, color: '#58a6ff', hover: 'что покупать по годам — на диаграмме лесенки' },
-    { label: 'переменный купон', usd: mvFloat, target: floatPct, color: '#a371f7', hover: floatHover },
-  ], !key || !odds.pts.length ? 'Таблица вероятностей ключевой ещё не посчитана (update-key-rate-odds, раз в месяц).'
-    : `Ключевая ${key.now}% на ${odds.since}: по уровню флоатеров ${levelPct}%`
-      + (odds.change != null ? `; за год ${odds.change > 0 ? '+' : ''}${odds.change} пп — шансы повышения ×${odds.ratio}^${MP_TREND_BETA} = ×${odds.kb.toFixed(2)}` : '')
-      + ` → ${floatPct}%. Вероятность, что за 1–3 года её повысят, против того, что понизят — по истории ЦБ с 2013 г.`, null, false, null, rubPie);
-  // the fixed coupons by year against the ladder (06.11.2026): a slice a
-  // ladder year, its target its weight; what's outside the ladder (sooner,
-  // later) -- one grey slice, target 0; in roubles; the buy list under it
-  {
-    const KR0 = 1 / (usdPer('RUB') || 1);
-    const rubFmt = v => `${Math.round(v * KR0).toLocaleString('ru-RU')} ₽`;
-    // what to buy for a short year, as in the buy list below
-    const ofz0 = (await mpOfzList()).filter(b => b.pd && (b.turnover || 0) > 1e6 && b.yield > 0);
-    const buyLine = y => {
-      const short = targetMV(y) - fixedMV(y);
-      if (short <= 5) return 'недобора нет';
-      const b = ofz0.filter(o => o.mat.startsWith(y)).sort((a, c) => c.yield - a.yield)[0];
-      if (!b) return `недобор ${rubFmt(short)}; ОФЗ-ПД с погашением в этом году нет`;
-      const n = Math.max(1, Math.round(short / (((b.price || 100) / 100 * b.face + (b.accrued || 0)) * usdPer('RUB'))));
-      return `купить: ${mpEscapeHtml(b.name)} (до ${b.mat.slice(5, 7)}.${b.mat.slice(0, 4)}, ${b.yield.toFixed(1)}%) — ${n} шт`;
-    };
-    const ladderFixed = rungs.reduce((t, y) => t + fixedMV(y), 0);
-    const outside = [...mvFixedBy.keys()].filter(y => !rungs.includes(y)).reduce((t, y) => t + fixedMV(y), 0);
-    const tw = rungs.reduce((t, y) => t + targetMV(y), 0) || 1;
-    const shade = i => { const t = rungs.length > 1 ? i / (rungs.length - 1) : 0; const c = [[168, 208, 255], [31, 86, 160]];
-      return '#' + c[0].map((a, k) => Math.round(a + (c[1][k] - a) * t).toString(16).padStart(2, '0')).join(''); };
-    mpTargetPie(pies, 'Рублёвые с постоянным купоном: по годам лесенки (по рыночной цене)', [
-      ...rungs.map((y, i) => ({ label: y, usd: fixedMV(y), target: targetMV(y) / tw * 100, color: shade(i), hover: buyLine(y) })),
-      ...(outside > 0 ? [{ label: 'вне лесенки', usd: outside, target: 0, color: '#6e7681' }] : []),
-    ], `Цель — веса лесенки ${from}–${to} по вероятностям ЦБ; «вне лесенки» — погашения раньше и позже, их деньги идут в ступени с недобором. Сейчас в лесенке ${rubFmt(ladderFixed)}.`,
-      null, false, null, rubFmt);
-  }
-  // the yuan ladder (by the PBoC's rate) and its pie, as the rouble one's
+  // the first pie's money: the Russian infrastructure's bonds, deposits and
+  // money-market funds by what they hold; the target -- w_CNY by USD/RUB
+  const { data: ruRows } = await sb.from('portfolio_value_usd_by_account').select('value_usd, underlying_currency, instrument_type')
+    .eq('infra_region', 'ru').in('instrument_type', ['bond', 'deposit', 'liquid']).gt('quantity', 0);
+  const pieRub = (ruRows || []).filter(r => (r.underlying_currency || 'RUB') === 'RUB').reduce((t, r) => t + Number(r.value_usd || 0), 0);
+  const pieCny = (ruRows || []).filter(r => (r.underlying_currency || 'RUB') !== 'RUB').reduce((t, r) => t + Number(r.value_usd || 0), 0);
+  const pieLiquid = (ruRows || []).filter(r => r.instrument_type === 'liquid' && (r.underlying_currency || 'RUB') === 'RUB').reduce((t, r) => t + Number(r.value_usd || 0), 0);
+  const pieW = typeof DATA !== 'undefined' && DATA?.currentWCny != null ? DATA.currentWCny * 100 : null;
+  // the yuan ladder (by the PBoC's rate)
   const cnyAll = [...cnyFaceBy.values()].reduce((t, v) => t + v, 0);
   const cauto = mpLadderAuto(odds.horizonCN, odds.cnNow, age, 0.5);
   const cf = new Date().getFullYear() + 1, ct = cf + (cauto ? cauto.years : 5) - 1;
   const cr = []; for (let y = cf; y <= ct; y++) cr.push(String(y));
   const ctarget = y => { const i = cr.indexOf(y); return i < 0 ? 0 : cnyAll * (cauto ? cauto.weights[i] : 1 / cr.length); };
-  if (cnyAll > 0) {
-    const KC0 = 1 / (usdPer('CNY') || 1);
-    const yuanFmt = v => `${Math.round(v * KC0).toLocaleString('ru-RU')} ¥`;
-    const cnyMV = sumMap(mvCnyBy), ctargetMV = y => { const i = cr.indexOf(y); return i < 0 ? 0 : cnyMV * (cauto ? cauto.weights[i] : 1 / cr.length); };
-    const outside = [...mvCnyBy.keys()].filter(y => !cr.includes(y)).reduce((t, y) => t + (mvCnyBy.get(y) || 0), 0);
-    const tw = cr.reduce((t, y) => t + ctargetMV(y), 0) || 1;
-    // what to buy for a short year: the best yield of the reliable yuan corporates due that year
-    const cnyBonds = await mpCnyBondList();
-    const cnyBuy = y => {
-      const short = ctargetMV(y) - (mvCnyBy.get(y) || 0);
-      if (short <= 5) return 'недобора нет';
-      const b = cnyBonds.filter(o => o.due.startsWith(y)).sort((a, c) => c.yield - a.yield || c.turnover - a.turnover)[0];
-      if (!b) return `недобор ${yuanFmt(short)}; надёжных юаневых выпусков с погашением или офертой в этом году нет`;
-      const n = Math.max(1, Math.round(short / ((b.price / 100 * b.face + b.accrued) * usdPer('CNY'))));
-      return `купить: ${mpEscapeHtml(b.name)} (${b.offer ? 'оферта' : 'до'} ${b.due.slice(5, 7)}.${b.due.slice(0, 4)}, ${b.yield.toFixed(1)}%, номинал ${b.face} ¥) — ${n} шт`;
-    };
-    const shade = i => { const t = cr.length > 1 ? i / (cr.length - 1) : 0; const c = [[255, 196, 226], [176, 52, 120]];
-      return '#' + c[0].map((a, k) => Math.round(a + (c[1][k] - a) * t).toString(16).padStart(2, '0')).join(''); };
-    mpTargetPie(pies, 'Юаневые: по годам лесенки (по рыночной цене)', [
-      ...cr.map((y, i) => ({ label: y, usd: mvCnyBy.get(y) || 0, target: ctargetMV(y) / tw * 100, color: shade(i), hover: cnyBuy(y) })),
-      ...(outside > 0 ? [{ label: 'вне лесенки', usd: outside, target: 0, color: '#6e7681' }] : []),
-    ], `Цель — веса юаневой лесенки ${cf}–${ct} по ставке Банка Китая (${odds.cnNow ?? '—'}%); «вне лесенки» — погашения позже, их деньги идут в годы с недобором.`,
-      null, false, null, yuanFmt);
-  }
-  // the pies drawn one by one: each later one narrowed the row under the ones
-  // before (06.11.2026: the first one clipped) -- all of them refit now
-  requestAnimationFrame(() => pies.querySelectorAll('.pie-plot').forEach(el => Plotly.Plots.resize(el)));
+  const ofzAll = await mpOfzList(), cnyBondList = await mpCnyBondList();
+  const rubPie = v => `${Math.round(v / (usdPer('RUB') || 1)).toLocaleString('ru-RU')} ₽`;
+  const yuanPie = v => `${Math.round(v / (usdPer('CNY') || 1)).toLocaleString('ru-RU')} ¥`;
+  const shadeOf = (n, from, to) => i => { const t = n > 1 ? i / (n - 1) : 0;
+    return '#' + from.map((a, k) => Math.round(a + (to[k] - a) * t).toString(16).padStart(2, '0')).join(''); };
+  // The four pies; `add` -- the buy plan's purchases (06.11.2026: entering a
+  // sum redraws them with what it buys): { fixed: year -> $, float: $, cny: year -> $ }
+  const drawPies = add => {
+    pies.innerHTML = '';
+    const aFixed = y => add?.fixed.get(y) || 0, aCny = y => add?.cny.get(y) || 0, aFloat = add?.float || 0;
+    const aFixedAll = add ? [...add.fixed.values()].reduce((t, v) => t + v, 0) : 0, aCnyAll = add ? [...add.cny.values()].reduce((t, v) => t + v, 0) : 0;
+    const withBuys = add && (aFixedAll + aFloat + aCnyAll) > 0 ? ' — с покупками' : '';
+    // 1. yuan vs rouble, as the chart in USD/RUB -> CNY Weight
+    {
+      const rub = pieRub + aFixedAll + aFloat, cny = pieCny + aCnyAll, tot = rub + cny || 1, w = pieW;
+      mpTargetPie(pies, `Облигации, вклады и фонды ликвидности: юани и рубли${withBuys}`, [
+        { label: 'в юанях', usd: cny, target: w ?? cny / tot * 100, color: '#f778ba' },
+        { label: 'в рублях', usd: rub, target: w != null ? 100 - w : rub / tot * 100, color: '#58a6ff' },
+      ], w != null ? `Цель — w_CNY ${Math.round(w)}% по курсу USD/RUB (вкладка «USD/RUB → CNY Weight»).` : 'Цель w_CNY ещё не посчитана — открой вкладку «USD/RUB → CNY Weight».');
+    }
+    // 2. fixed vs floating; which floater to buy: an OFZ-PK 1-3 years out, the most traded
+    {
+      const fl = mvFloat + aFloat, bonds = mvBonds + aFixedAll + aFloat;
+      const short = bonds * floatPct / 100 - fl, y = new Date().getFullYear();
+      const pk = ofzAll.filter(b => b.pk && (b.turnover || 0) > 1e6 && b.mat > `${y + 1}` && b.mat < `${y + 4}`).sort((a, b) => b.turnover - a.turnover)[0];
+      const hover = short <= 5 ? 'флоатеров достаточно — новых не покупать' : !pk ? `недобор ${rubPie(short)}; подходящей ОФЗ-ПК нет`
+        : `купить: ${mpEscapeHtml(pk.name)} (ОФЗ-ПК, до ${pk.mat.slice(5, 7)}.${pk.mat.slice(0, 4)}) — ${Math.max(1, Math.round(short / (((pk.price || 100) / 100 * pk.face + (pk.accrued || 0)) * usdPer('RUB'))))} шт`;
+      mpTargetPie(pies, `Российские облигации: постоянный и переменный купон (по рыночной цене)${withBuys}`, [
+        { label: 'постоянный купон', usd: bonds - fl, target: 100 - floatPct, color: '#58a6ff', hover: 'что покупать по годам — на диаграмме лесенки' },
+        { label: 'переменный купон', usd: fl, target: floatPct, color: '#a371f7', hover },
+      ], !key || !odds.pts.length ? 'Таблица вероятностей ключевой ещё не посчитана (update-key-rate-odds, раз в месяц).'
+        : `Ключевая ${key.now}% на ${odds.since}: по уровню флоатеров ${levelPct}%`
+          + (odds.change != null ? `; за год ${odds.change > 0 ? '+' : ''}${odds.change} пп — шансы повышения ×${odds.ratio}^${MP_TREND_BETA} = ×${odds.kb.toFixed(2)}` : '')
+          + ` → ${floatPct}%. Вероятность, что за 1–3 года её повысят, против того, что понизят — по истории ЦБ с 2013 г.`, null, false, null, rubPie);
+    }
+    // 3. the rouble fixed coupons by ladder year; what's outside the ladder -- one grey slice, target 0
+    {
+      const fx = y => fixedMV(y) + aFixed(y);
+      const outside = [...new Set([...mvFixedBy.keys(), ...(add ? add.fixed.keys() : [])])].filter(y => !rungs.includes(y)).reduce((t, y) => t + fx(y), 0);
+      const tw = rungs.reduce((t, y) => t + targetMV(y), 0) || 1;
+      const total = rungs.reduce((t, y) => t + fx(y), 0) + outside;
+      const ofz0 = ofzAll.filter(b => b.pd && (b.turnover || 0) > 1e6 && b.yield > 0);
+      const buyLine = y => {
+        const short = total * targetMV(y) / tw - fx(y);
+        if (short <= 5) return 'недобора нет';
+        const b = ofz0.filter(o => o.mat.startsWith(y)).sort((a, c) => c.yield - a.yield)[0];
+        if (!b) return `недобор ${rubPie(short)}; ОФЗ-ПД с погашением в этом году нет`;
+        const n = Math.max(1, Math.round(short / (((b.price || 100) / 100 * b.face + (b.accrued || 0)) * usdPer('RUB'))));
+        return `купить: ${mpEscapeHtml(b.name)} (до ${b.mat.slice(5, 7)}.${b.mat.slice(0, 4)}, ${b.yield.toFixed(1)}%) — ${n} шт`;
+      };
+      const shade = shadeOf(rungs.length, [168, 208, 255], [31, 86, 160]);
+      mpTargetPie(pies, `Рублёвые с постоянным купоном: по годам лесенки (по рыночной цене)${withBuys}`, [
+        ...rungs.map((y, i) => ({ label: y, usd: fx(y), target: targetMV(y) / tw * 100, color: shade(i), hover: buyLine(y) })),
+        ...(outside > 0 ? [{ label: 'вне лесенки', usd: outside, target: 0, color: '#6e7681' }] : []),
+      ], `Цель — веса лесенки ${from}–${to} по вероятностям ЦБ; «вне лесенки» — погашения раньше и позже, их деньги идут в ступени с недобором.`,
+        null, false, null, rubPie);
+    }
+    // 4. the yuan ones by ladder year
+    if (cnyAll > 0) {
+      const cy = y => (mvCnyBy.get(y) || 0) + aCny(y);
+      const outside = [...mvCnyBy.keys()].filter(y => !cr.includes(y)).reduce((t, y) => t + cy(y), 0);
+      const tw = cr.reduce((t, y, i) => t + (cauto ? cauto.weights[i] : 1 / cr.length), 0) || 1;
+      const total = cr.reduce((t, y) => t + cy(y), 0) + outside;
+      const share = y => { const i = cr.indexOf(y); return (cauto ? cauto.weights[i] : 1 / cr.length) / tw; };
+      const cnyBuy = y => {
+        const short = total * share(y) - cy(y);
+        if (short <= 5) return 'недобора нет';
+        const b = cnyBondList.filter(o => o.due.startsWith(y)).sort((a, c) => c.yield - a.yield || c.turnover - a.turnover)[0];
+        if (!b) return `недобор ${yuanPie(short)}; надёжных юаневых выпусков с погашением или офертой в этом году нет`;
+        const n = Math.max(1, Math.round(short / ((b.price / 100 * b.face + b.accrued) * usdPer('CNY'))));
+        return `купить: ${mpEscapeHtml(b.name)} (${b.offer ? 'оферта' : 'до'} ${b.due.slice(5, 7)}.${b.due.slice(0, 4)}, ${b.yield.toFixed(1)}%, номинал ${b.face} ¥) — ${n} шт`;
+      };
+      const shade = shadeOf(cr.length, [255, 196, 226], [176, 52, 120]);
+      mpTargetPie(pies, `Юаневые: по годам лесенки (по рыночной цене)${withBuys}`, [
+        ...cr.map((y, i) => ({ label: y, usd: cy(y), target: share(y) * 100, color: shade(i), hover: cnyBuy(y) })),
+        ...(outside > 0 ? [{ label: 'вне лесенки', usd: outside, target: 0, color: '#6e7681' }] : []),
+      ], `Цель — веса юаневой лесенки ${cf}–${ct} по ставке Банка Китая (${odds.cnNow ?? '—'}%); «вне лесенки» — погашения позже, их деньги идут в годы с недобором.`,
+        null, false, null, yuanPie);
+    }
+    // the pies drawn one by one: each later one narrowed the row under the ones
+    // before (06.11.2026: the first one clipped) -- all of them refit now
+    requestAnimationFrame(() => pies.querySelectorAll('.pie-plot').forEach(el => Plotly.Plots.resize(el)));
+  };
+  drawPies(null);
   // the share's function of the key rate, today's key rate on it
   const op = odds.pts;
   // the odds table: up / the same / down per bucket of the key rate, and
@@ -5966,6 +5967,16 @@ async function mpRenderMaturities() {
     const GROUPS = [['float', '₽ флоатер'], ['fixed', '₽ постоянный'], ['cny', '¥ постоянный'], ['cnyfloat', '¥ флоатер']];
     const draw = () => {
       const { rows: plans, left } = plan();
+      // the pies with what the money buys (none without a sum)
+      if (money > 0) {
+        const fixed = new Map(), cny = new Map(); let fl = 0;
+        for (const p of plans) {
+          if (!p.spent) continue;
+          if (p.kind === 'float') fl += p.spent;
+          else (p.kind === 'cny' ? cny : fixed).set(p.key, ((p.kind === 'cny' ? cny : fixed).get(p.key) || 0) + p.spent);
+        }
+        drawPies({ fixed, float: fl, cny });
+      } else drawPies(null);
       const spent = plans.reduce((t, r) => t + r.spent, 0);
       const planOf = (kind, y) => plans.find(p => p.kind === kind && (kind === 'float' || p.key === y));
       const body = [];
