@@ -5339,15 +5339,15 @@ async function mpRenderCryptoStrategy() {
       months.set(m, cur);
     }
     const marks = [...months.values()];
-    // the neutral zone shaded too, faint, as on the back-test chart
+    // the red and green zones shaded (the neutral left blank)
     const zoneShapes = [];
     let zStart = null, zZone = null;
-    const zoneColor = { red: '#e05252', green: '#3dd68c', neutral: '#d4b84a' };
+    const zoneColor = { red: '#e05252', green: '#3dd68c' };
     const span = ind.filter(r => r.day >= start);
     span.forEach((r, i) => {
       const z = mpAhrZone(r.ahr);
-      const close = end => zoneShapes.push({ type: 'rect', xref: 'x', yref: 'paper', x0: zStart, x1: end, y0: 0, y1: 1,
-        fillcolor: zoneColor[zZone], opacity: zZone === 'neutral' ? 0.07 : 0.15, line: { width: 0 }, layer: 'below' });
+      const close = end => zZone !== 'neutral' && zoneShapes.push({ type: 'rect', xref: 'x', yref: 'paper', x0: zStart, x1: end, y0: 0, y1: 1,
+        fillcolor: zoneColor[zZone], opacity: 0.15, line: { width: 0 }, layer: 'below' });
       if (z !== zZone) { if (zZone) close(r.day); zStart = r.day; zZone = z; }
       if (i === span.length - 1) close(r.day);
     });
