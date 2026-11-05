@@ -5316,8 +5316,8 @@ async function mpRenderCryptoStrategy() {
   ], { ...dark, title: 'BTC и его оценки, $', yaxis: { type: 'log', gridcolor: '#1e2830' }, xaxis: { gridcolor: '#1e2830' }, shapes,
     legend: { orientation: 'h', y: -0.15 } }, { responsive: true, displaylogo: false });
   if (shares.length) {
-    // From the first crypto bought while living in Cyprus (life_periods) -- the
-    // strategy's start; before it the crypto was next to nothing.
+    // From the move to Cyprus (life_periods) -- the strategy's start: the
+    // crypto at zero before its first buys there.
     // Buys: the money sent to crypto (expenses 'Crypto': card payments to
     // Mercuryo, Crypto.com, ...), a marker a month with its sum in euros, as
     // on the strategy's back-test chart. Sales: crypto sold for money -- none
@@ -5328,7 +5328,8 @@ async function mpRenderCryptoStrategy() {
       sb.from('fx_history').select('day, usd_per_unit').eq('currency', 'EUR').gte('day', '2025-01-01').order('day'),
     ]);
     const cyprus = (periods || []).find(p => /cyprus/i.test(p.place))?.start_day;
-    const start = (cyprus && (buys || []).find(b => b.day >= cyprus)?.day) || cyprus || shares[0].day;
+    // from the move to Cyprus: the share still at zero, then the first buys
+    const start = cyprus || shares[0].day;
     const shown = shares.filter(x => x.day >= start);
     const shareOn = day => { let v = null; for (const x of shown) { if (x.day > day) break; v = x.pct; } return v ?? shown[0]?.pct ?? 0; };
     const eurOn = day => { let v = null; for (const r of eur || []) { if (r.day > day) break; v = Number(r.usd_per_unit); } return v || 1.1; };
@@ -5371,7 +5372,7 @@ async function mpRenderCryptoStrategy() {
         marker: { symbol: 'triangle-up', size: 12, color: '#58a6ff', line: { color: '#e6edf3', width: 1 } },
         text: marks.map(m => `€${Math.round(m.eur).toLocaleString('en-US')}`), textposition: 'top center', textfont: { color: '#58a6ff', size: 11 },
         hovertemplate: '%{x}: покупка %{text}<extra></extra>' },
-    ], { ...dark, title: 'Доля крипты в портфеле, % — с первой покупки на Кипре', yaxis: { gridcolor: '#1e2830', ticksuffix: '%', rangemode: 'tozero' },
+    ], { ...dark, title: 'Доля крипты в портфеле, % — с переезда на Кипр', yaxis: { gridcolor: '#1e2830', ticksuffix: '%', range: [0, Math.max(MP_AHR.target, ...shown.map(x => x.pct)) * 1.12], zeroline: true, zerolinecolor: '#8b949e' },
       xaxis: { gridcolor: '#1e2830' }, legend: { orientation: 'h', y: -0.15 },
       shapes: [...zoneShapes, hline(MP_AHR.target, '#8b949e'), hline(MP_AHR.floor, '#8b949e')],
       annotations: [[MP_AHR.target, `цель ${MP_AHR.target}%`], [MP_AHR.floor, `минимум ${MP_AHR.floor}%`]].map(([y, text]) =>
