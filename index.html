@@ -5956,25 +5956,80 @@ async function mpRenderMaturities() {
       rows.forEach(r => { const short = r.t - r.cur; if (short > 5 && r.b) { r.n = Math.max(1, Math.round(short / costOf(r))); r.spent = r.n * costOf(r); } });
       return { rows, left: 0 };
     };
+    // the table (06.11.2026): what's held and what to buy, by kind (rouble
+    // floaters, rouble fixed, yuan fixed, yuan floaters), then by year of
+    // maturity; a year's (the floaters' -- the group's) target and what it
+    // becomes once per year
+    const yieldOf = new Map([...ofz.map(b => [b.secid, b.yield]), ...cnyBondsAll.map(b => [b.secid, b.yield])]);
+    const heldKind = r => r.deposit ? ((r.currency || 'RUB') === 'RUB' ? 'fixed' : null)
+      : r.unit === 'RUB' ? (r.floating ? 'float' : 'fixed') : (r.floating ? 'cnyfloat' : 'cny');
+    const GROUPS = [['float', '₽ флоатер'], ['fixed', '₽ постоянный'], ['cny', '¥ постоянный'], ['cnyfloat', '¥ флоатер']];
     const draw = () => {
-      const { rows, left } = plan();
-      const spent = rows.reduce((t, r) => t + r.spent, 0);
-      const shown = rows.filter(r => r.spent > 0 || (money > 0 && r.t - r.cur > 5) || (!money && r.t - r.cur > 5));
-      box.innerHTML = `<div class="section-title" style="font-size:0.95rem">Что докупить</div>
+      const { rows: plans, left } = plan();
+      const spent = plans.reduce((t, r) => t + r.spent, 0);
+      const planOf = (kind, y) => plans.find(p => p.kind === kind && (kind === 'float' || p.key === y));
+      const body = [];
+      for (const [kind, label] of GROUPS) {
+        const held = shown.filter(r => heldKind(r) === kind && r.mat);
+        const years = new Set(held.map(r => r.mat.slice(0, 4)));
+        if (kind === 'fixed') rungs.forEach(y => years.add(y));
+        if (kind === 'cny') cr.forEach(y => years.add(y));
+        const fp = kind === 'float' ? planOf('float') : null;
+        if (fp && fp.n && fp.b) years.add(fp.b.mat.slice(0, 4));
+        const groupRows = [];
+        for (const y of [...years].sort()) {
+          const p = kind === 'float' ? (fp?.b?.mat.startsWith(y) ? fp : null) : planOf(kind, y);
+          const items = held.filter(r => r.mat.startsWith(y)).map(r => ({ name: r.name, sub: r.offer ? `оферта ${r.offer.slice(5, 7)}.${r.offer.slice(0, 4)}` : '',
+            yld: yieldOf.get(r.ticker), qty: r.deposit ? null : r.qty, each: r.deposit ? null : r.usd / (r.qty || 1), value: r.usd, n: 0, sum: 0, secid: r.ticker }));
+          if (p && p.b && p.n) {
+            const mine = items.find(i => i.secid === p.b.secid);
+            const each = costOf(p);
+            if (mine) { mine.n = p.n; mine.sum = p.spent; mine.each = each; }
+            else items.push({ name: p.b.name, sub: kind === 'cny' && p.b.offer ? `оферта ${p.b.offer.slice(5, 7)}.${p.b.offer.slice(0, 4)}` : 'рекомендация',
+              yld: p.b.yield || null, qty: 0, each, value: 0, n: p.n, sum: p.spent, rec: true });
+          }
+          const cur = kind === 'fixed' ? fixedMV(y) : kind === 'cny' ? (mvCnyBy.get(y) || 0) : null;
+          const t = kind === 'fixed' || kind === 'cny' ? (p ? p.t : 0) : null;
+          const ySpent = items.reduce((s2, i) => s2 + i.sum, 0);
+          if (!items.length && !(t > 5)) continue;
+          if (!items.length) items.push({ name: kind === 'cny' ? 'надёжных юаневых выпусков на этот год нет' : 'ОФЗ-ПД с погашением в этом году нет', empty: true });
+          groupRows.push({ y, items, cur, t, after: cur != null ? cur + ySpent : null });
+        }
+        if (!groupRows.length) continue;
+        // the floaters: one target for the group
+        const gT = kind === 'float' ? fp?.t : null, gCur = kind === 'float' ? mvFloat : null, gSpent = kind === 'float' ? (fp?.spent || 0) : 0;
+        const gSpan = groupRows.reduce((t2, g) => t2 + g.items.length, 0);
+        let firstOfGroup = true;
+        for (const g of groupRows) g.items.forEach((i, k) => {
+          const cells = [];
+          cells.push(`<td ${td}>${firstOfGroup ? label : ''}</td>`);
+          cells.push(`<td ${td}>${k === 0 ? g.y : ''}</td>`);
+          cells.push(i.empty ? `<td ${td} colspan="6" style="color:#8b949e">${i.name}</td>`
+            : `<td ${td}>${mpEscapeHtml(i.name)}${i.sub ? ` <span style="color:${i.rec ? '#3dd68c' : '#8b949e'}">${i.sub}</span>` : ''}</td>`
+              + `<td ${tdr}>${i.yld ? i.yld.toFixed(1) + '%' : '—'}</td><td ${tdr}>${i.each ? rub(i.each) : '—'}</td>`
+              + `<td ${tdr}>${i.qty == null ? 'вклад' : i.qty || '—'}</td><td ${tdr}>${i.value ? rub(i.value) : '—'}</td>`
+              + `<td ${tdr}>${i.n ? `<b style="color:#3dd68c">+${whole ? i.n : i.n.toFixed(1)}</b>` : ''}</td>`);
+          cells.push(`<td ${tdr}>${i.sum ? rub(i.sum) : ''}</td>`);
+          if (kind === 'float') { if (firstOfGroup) cells.push(`<td ${tdr} rowspan="${gSpan}">${rub(gCur)}</td><td ${tdr} rowspan="${gSpan}">${rub(gT || 0)}</td><td ${tdr} rowspan="${gSpan}"><b>${rub(gCur + gSpent)}</b></td>`); }
+          else if (kind === 'cnyfloat') { if (firstOfGroup) cells.push(`<td ${tdr} rowspan="${gSpan}" colspan="3" style="color:#8b949e">цели нет</td>`); }
+          else if (k === 0) cells.push(`<td ${tdr} rowspan="${g.items.length}">${rub(g.cur)}</td><td ${tdr} rowspan="${g.items.length}">${rub(g.t)}</td><td ${tdr} rowspan="${g.items.length}"><b>${rub(g.after)}</b></td>`);
+          body.push(`<tr${firstOfGroup ? ' style="border-top:2px solid #30363d"' : ''}>${cells.join('')}</tr>`);
+          firstOfGroup = false;
+        });
+      }
+      box.innerHTML = `<div class="section-title" style="font-size:0.95rem">Облигации: что есть и что докупить</div>
         <div class="form-row" style="gap:16px;margin:4px 0 8px">
           <label>Сколько вложить, ₽: <input type="number" id="mat_invest" min="0" step="1000" value="${money || ''}" placeholder="0 — закрыть весь недобор" style="width:190px"></label>
           <label><input type="checkbox" id="mat_invest_whole"${whole ? ' checked' : ''}> целыми облигациями</label>
         </div>
-        ${!shown.length ? '<p class="note">Недобора по лесенке нет.</p>' : `<div><table class="data-table" style="width:auto"><thead><tr>
-          <th ${td}>Вид</th><th ${td}>Год</th><th ${td}>Облигация</th><th ${tdr}>Доходность</th><th ${tdr}>За штуку</th><th ${tdr}>Сейчас</th><th ${tdr}>Цель</th><th ${tdr}>Купить, шт</th><th ${tdr}>На сумму</th><th ${tdr}>Станет</th></tr></thead><tbody>
-          ${shown.map(r => `<tr><td ${td}>${KIND[r.kind]}</td><td ${td}>${r.key}</td>${r.b
-            ? `<td ${td}>${mpEscapeHtml(r.b.name)} <span style="color:#8b949e">${r.kind === 'float' ? 'ОФЗ-ПК · ' : ''}${r.kind === 'cny' && r.b.offer ? 'оферта ' + till(r.b.due).slice(3) : till(r.kind === 'cny' ? r.b.due : r.b.mat)}</span></td><td ${tdr}>${r.kind === 'float' ? '—' : r.b.yield.toFixed(1) + '%'}</td><td ${tdr}>${rub(costOf(r))}</td>`
-            : `<td ${td} colspan="3" style="color:#8b949e">${r.kind === 'float' ? 'подходящей ОФЗ-ПК нет' : r.kind === 'cny' ? 'надёжных юаневых выпусков на этот год нет' : 'ОФЗ-ПД с погашением в этом году нет'}</td>`}
-            <td ${tdr}>${rub(r.cur)}</td><td ${tdr}>${rub(r.t)}</td><td ${tdr}><b>${r.n ? (whole ? r.n : r.n.toFixed(1)) : '—'}</b></td><td ${tdr}>${r.spent ? rub(r.spent) : '—'}</td><td ${tdr}>${rub(r.cur + r.spent)}</td></tr>`).join('')}
-          <tr><td ${td} colspan="8"><b>Итого</b>${money ? ` · не потрачено ${rub(left)}` : ''}</td><td ${tdr}><b>${rub(spent)}</b></td><td></td></tr>
-          </tbody></table></div>`}
+        <div><table class="data-table" style="width:auto"><thead><tr>
+          <th ${td}>Вид</th><th ${td}>Год</th><th ${td}>Облигация</th><th ${tdr}>Доходность</th><th ${tdr}>За штуку</th><th ${tdr}>Есть, шт</th><th ${tdr}>Стоимость</th>
+          <th ${tdr}>Купить, шт</th><th ${tdr}>На сумму</th><th ${tdr}>Год: сейчас</th><th ${tdr}>Цель</th><th ${tdr}>Станет</th></tr></thead><tbody>
+          ${body.join('')}
+          <tr style="border-top:2px solid #30363d"><td ${td} colspan="8"><b>Итого к покупке</b>${money ? ` · не потрачено ${rub(left)}` : ''}</td><td ${tdr}><b>${rub(spent)}</b></td><td colspan="3"></td></tr>
+          </tbody></table></div>
         <p class="note">${money ? 'Деньги раскладываются по одной облигации: каждая — туда, где сейчас больше всего не хватает до цели (цели — с учётом вложенного: юани и рубли по w_CNY, в рублях флоатеры по своей доле, остальное — лесенка).'
-          : 'Без суммы — сколько купить, чтобы закрыть весь недобор.'} По цене прошлого дня с НКД.</p>`;
+          : 'Без суммы — сколько купить, чтобы закрыть весь недобор.'} Зелёным — что купить. Стоимость и цели — по рыночной цене, в рублях; цена покупки — прошлого дня с НКД.</p>`;
       box.querySelector('#mat_invest').addEventListener('change', e => {
         money = Math.max(0, Number(e.target.value) || 0);
         try { localStorage.setItem('mp_mat_invest', String(money)); } catch { /* no storage */ }
