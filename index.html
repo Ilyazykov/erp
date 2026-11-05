@@ -8635,20 +8635,20 @@ function mpPlaceFromLink(url) {
   const gid = [...url.matchAll(/!1s(0x[0-9a-f]+:0x[0-9a-f]+)/gi)].pop();
   return { name: decodeURIComponent(name[1].replace(/\+/g, ' ')), lat: pt ? Number(pt[1]) : null, lng: pt ? Number(pt[2]) : null, url: clean, google_id: gid ? gid[1] : null };
 }
-// A place's name, and when another has the same name, as much of its address
-// as tells them apart: the city, then the street, then the house number
-// ("Spar · Merab Kostava Street"); with no address to tell by, its point.
+// A place's name, and when another has the same name, its address from the
+// city on, as far as it takes to tell them apart: the city, then the street,
+// then the house ("Spar · Tbilisi, Merab Kostava Street"); with no address to
+// tell by, its point.
 function mpPlaceLabel(p, list) {
   const same = list.filter(o => o.id !== p.id && o.name.toLowerCase() === p.name.toLowerCase());
   if (!same.length) return p.name;
-  const levels = [o => [o.city], o => [o.street], o => [o.street, o.house], o => [o.city, o.street, o.house]];
-  const tail = (o, f) => f(o).filter(Boolean).join(' ');
-  for (const f of levels) {
-    const mine = tail(p, f);
-    if (mine && same.every(o => tail(o, f) !== mine)) return `${p.name} · ${mine}`;
+  const addr = (o, n) => [o.city, [o.street, n > 2 ? o.house : ''].filter(Boolean).join(' ')].slice(0, n > 1 ? 2 : 1).filter(Boolean).join(', ');
+  for (const n of [1, 2, 3]) {
+    const mine = addr(p, n);
+    if (mine && same.every(o => addr(o, n) !== mine)) return `${p.name} · ${mine}`;
   }
-  const full = tail(p, levels[3]);
-  return p.lat != null ? `${p.name} · ${full ? full + ' · ' : ''}${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}` : `${p.name}${full ? ' · ' + full : ''}`;
+  const full = addr(p, 3);
+  return p.lat != null ? `${p.name} · ${full ? full + ', ' : ''}${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}` : `${p.name}${full ? ' · ' + full : ''}`;
 }
 // A point's address, from OpenStreetMap (Nominatim): city, street, house.
 async function mpAddressAt(lat, lng) {
@@ -8658,12 +8658,16 @@ async function mpAddressAt(lat, lng) {
   return { city: a.city || a.town || a.village || '', street: a.road || a.pedestrian || '', house: a.house_number || '' };
 }
 // A row's place, its own column: the name, a click opens the map (when
-// there's a link); a delivery's also where it was brought to, on a line of
-// its own ("→ 🏠 ..."). A long name is cut short, the whole of it on hover.
+// there's a link), under it what tells it from another of its name; a
+// delivery's also where it was brought to, on a line of its own ("→ 🏠 ...").
 function mpPlaceHtml(place, to) {
-  const one = (p, icon) => `<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.url
-    ? `<a href="${mpEscapeHtml(p.url)}" target="_blank" rel="noopener" title="${mpEscapeHtml(p.name)}" style="color:#58a6ff">${icon} ${mpEscapeHtml(p.name)}</a>`
-    : `<span title="${mpEscapeHtml(p.name)}">${icon} ${mpEscapeHtml(p.name)}</span>`}</div>`;
+  const one = (p, icon) => {
+    const [name, addr] = [p.name.split(' · ')[0], p.name.split(' · ').slice(1).join(' · ')];
+    const text = `${icon} ${mpEscapeHtml(name)}${addr ? `<br><span style="font-size:0.85em;color:#8b949e">${mpEscapeHtml(addr)}</span>` : ''}`;
+    return `<div>${p.url
+      ? `<a href="${mpEscapeHtml(p.url)}" target="_blank" rel="noopener" style="color:#58a6ff">${text}</a>`
+      : `<span>${text}</span>`}</div>`;
+  };
   return [place && one(place, '📍'), to && one(to, '→ 🏠')].filter(Boolean).join('');
 }
 // A note's text with its links cut short: a Google Maps place shows as its
@@ -8974,7 +8978,7 @@ async function mpRenderExpenses() {
     // newest first, to the second -- rows with no time in their statement too,
     // by the importer's 00:00:SS (their order within the day)
     list.slice().sort((a, b) => b.day.localeCompare(a.day) || String(b.ts).localeCompare(String(a.ts))).map(r => `<tr><td style="white-space:nowrap">${r.day}${mpTimeHtml(r)}</td><td style="text-align:left"${mpShortDesc(r.description) !== r.description ? ` title="${esc(r.description)}"` : ''}>${esc(mpShortDesc(r.description))}${groupedTop && MP_EXP_GROUPS[r.cat] ? ` <span style="color:#6a7381">· ${esc(r.cat)}</span>` : ''}</td>
-      <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to set the place" style="text-align:left;max-width:140px;cursor:pointer">${mpPlaceHtml(r.place, r.deliveredTo)}</td>
+      <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to set the place" style="text-align:left;max-width:180px;cursor:pointer">${mpPlaceHtml(r.place, r.deliveredTo)}</td>
       <td style="text-align:left">${esc(r.account)}</td>
       <td>${r.amt.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${r.ccy}</td><td>${rowMoney(conv(r))}</td></tr>`).join('')}</tbody></table></div>`;
   const catList = document.getElementById('exp_categories');
@@ -9056,7 +9060,7 @@ async function mpRenderExpenses() {
   const incTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th style="width:1%;text-align:left">Place</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
     list.slice().sort((x, y) => y.day.localeCompare(x.day)).map(r => `<tr><td style="white-space:nowrap">${r.day}</td>
       <td style="text-align:left">${esc(r.description || '')}</td>
-      <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to set the place" style="text-align:left;max-width:140px;cursor:pointer">${mpPlaceHtml(r.place, r.deliveredTo)}</td>
+      <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to set the place" style="text-align:left;max-width:180px;cursor:pointer">${mpPlaceHtml(r.place, r.deliveredTo)}</td>
       <td style="text-align:left">${esc(r.account)}</td>
       <td>${Number(r.amount).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${esc(r.currency || '')}</td><td>${rowMoney(incConv(r))}</td></tr>`).join('')}</tbody></table></div>`;
   incList.innerHTML = incCats.length ? incCats.map((c, i) => `<div class="exp-cat" data-i="${i}">
@@ -9410,7 +9414,7 @@ async function mpRenderExpenses() {
     list.slice().sort((a, b) => b.day.localeCompare(a.day) || String(b.ts).localeCompare(String(a.ts))).map(r => {
       const p = pairOf.get(`${r.src}|${r.xid}`);
       return legRow(r.day + mpTimeHtml(r), r.description, r.account, -r.amt, r.ccy, -conv(r),
-        `<td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to set the place" style="text-align:left;max-width:140px;cursor:pointer">${mpPlaceHtml(r.place, r.deliveredTo)}</td>`)
+        `<td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to set the place" style="text-align:left;max-width:180px;cursor:pointer">${mpPlaceHtml(r.place, r.deliveredTo)}</td>`)
         + (p ? inRow(p) : '');
     }).join('')}${extra.map(p => legRow(p.out_day, p.out_description, p.out_account, Number(p.out_amount), p.out_currency,
       Number(p.out_usd) / usdPer(ccy, p.out_day), '<td></td><td></td>') + inRow(p)).join('')}</tbody></table></div>`;
