@@ -38,6 +38,8 @@
 //    odds ratio k; the tab multiplies the level's odds (5) by it. Clamped to
 //    0.2-5; a cell under 20 (weighted) observations -- 1.
 //
+// 7. The bond ladder's tables -- see horizonOdds.
+//
 // Called by pg_cron daily and once a month with the odds (deployed with
 // --no-verify-jwt; it only ever writes public data, with the service role).
 
@@ -97,7 +99,8 @@ function position(v: number[], i: number) {
   return rel < -0.5 ? 0 : rel > 0.5 ? 2 : 1;
 }
 
-async function worldTrendOdds(weight: (h: number) => number) {
+// the BIS policy rates, monthly, per country: month -> rate
+async function bisRates() {
   const url = 'https://stats.bis.org/api/v2/data/dataflow/BIS/WS_CBPOL/1.0/M.?format=csv&detail=dataonly&c%5BTIME_PERIOD%5D=ge:1980-01';
   const res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
   if (!res.ok) throw new Error(`BIS: HTTP ${res.status}`);
@@ -111,6 +114,10 @@ async function worldTrendOdds(weight: (h: number) => number) {
     byCountry.get(f[ci])!.set(f[ti], v);
   }
   if (byCountry.size < 30) throw new Error(`BIS: ${byCountry.size} countries`);
+  return byCountry;
+}
+
+function worldTrendOdds(byCountry: Map<string, Map<string, number>>, weight: (h: number) => number) {
   // [bucket][position]: [up (weighted), all (weighted)]; per position the same
   const cell = TREND.map(() => [0, 1, 2].map(() => [0, 0]));
   const pos = [0, 1, 2].map(() => [0, 0]);
@@ -134,6 +141,74 @@ async function worldTrendOdds(weight: (h: number) => number) {
     const ratio = n < 20 ? 1 : Math.min(5, Math.max(0.2, odds(obs) / odds(exp)));
     return { trend_from: from, trend_to: to, position: p, n: Math.round(n), obs_up: Math.round(obs * 10000) / 10000,
       exp_up: Math.round(exp * 10000) / 10000, odds_ratio: Math.round(ratio * 1000) / 1000 };
+  }));
+}
+
+// 7. The bond ladder's weights (asked 05.11.2026): per horizon 1-15 years x
+//    key rate 4-21% (1 pp buckets) -- how often the rate was lower in that
+//    many years (down) and not higher (not_up = down + the same). Russia's
+//    rate by the BIS's monthly series, month-ends since 1992 (the CBR's
+//    refinancing rate before 13.09.2013, the key rate after; a month at 22%
+//    and over not counted) -- the key rate alone, since 2013, has no 15
+//    years yet. Both tables made monotone both ways -- down and not_up rise
+//    with the rate and with the horizon: a weighted least-squares fit
+//    (Dykstra's alternating projections, rows and columns by pool-adjacent-
+//    violators, a cell weighted by its months; a cell of no months takes
+//    what its neighbours give) -- then strictly so: 95% the fit + 5% a grid
+//    rising from 0 (4%, 1 year) to 1 (21%, 15 years).
+const LADDER_RATES = Array.from({ length: 18 }, (_, i) => i + 4);
+const LADDER_YEARS = Array.from({ length: 15 }, (_, i) => i + 1);
+
+function pava(ys: number[], ws: number[]) {
+  const bl: { y: number; w: number; n: number }[] = [];
+  ys.forEach((y, i) => {
+    bl.push({ y, w: ws[i], n: 1 });
+    while (bl.length > 1 && bl.at(-2)!.y > bl.at(-1)!.y) {
+      const b = bl.pop()!, a = bl.pop()!;
+      bl.push({ y: (a.y * a.w + b.y * b.w) / (a.w + b.w), w: a.w + b.w, n: a.n + b.n });
+    }
+  });
+  return bl.flatMap(b => Array(b.n).fill(b.y) as number[]);
+}
+
+// non-decreasing along the rows and the columns, cells weighted
+function isotonic2d(X0: number[][], W: number[][]) {
+  let X = X0.map(r => [...r]);
+  let P = X.map(r => r.map(() => 0)), Q = X.map(r => r.map(() => 0));
+  for (let it = 0; it < 2000; it++) {
+    const A = X.map((r, i) => r.map((x, j) => x + P[i][j]));
+    const Ar = A.map((r, i) => pava(r, W[i]));
+    P = A.map((r, i) => r.map((a, j) => a - Ar[i][j]));
+    const B = Ar.map((r, i) => r.map((x, j) => x + Q[i][j]));
+    const Bc = B.map(r => [...r]);
+    for (let j = 0; j < X[0].length; j++) pava(B.map(r => r[j]), W.map(r => r[j])).forEach((x, i) => { Bc[i][j] = x; });
+    Q = B.map((r, i) => r.map((b, j) => b - Bc[i][j]));
+    X = Bc;
+  }
+  return X;
+}
+
+function horizonOdds(ru: Map<string, number>) {
+  const ms = [...ru.keys()].sort(), v = ms.map(m => ru.get(m)!);
+  const cells = LADDER_YEARS.map(h => LADDER_RATES.map(k => {
+    let down = 0, notUp = 0, n = 0;
+    for (let i = 0; i + 12 * h < v.length; i++) {
+      if (Math.floor(v[i]) !== k || v[i] >= 22) continue;
+      const later = v[i + 12 * h];
+      n++; if (later < v[i]) down++; if (later <= v[i]) notUp++;
+    }
+    return { n, down: n ? down / n : 0.5, notUp: n ? notUp / n : 0.5 };
+  }));
+  const W = cells.map(r => r.map(c => c.n || 0.01));
+  const fitD = isotonic2d(cells.map(r => r.map(c => c.down)), W);
+  const fitN = isotonic2d(cells.map(r => r.map(c => c.notUp)), W);
+  const L = 0.05, grid = (i: number, j: number) => (j / (LADDER_RATES.length - 1) + i / (LADDER_YEARS.length - 1)) / 2;
+  return LADDER_YEARS.flatMap((h, i) => LADDER_RATES.map((k, j) => {
+    let d = fitD[i][j], nu = fitN[i][j];
+    nu = Math.max(nu, d);   // not up holds down
+    return { horizon: h, rate: k, months: cells[i][j].n,
+      down: Math.round(((1 - L) * d + L * grid(i, j)) * 10000) / 10000,
+      not_up: Math.round(((1 - L) * nu + L * grid(i, j)) * 10000) / 10000 };
   }));
 }
 
@@ -206,12 +281,21 @@ Deno.serve(async (req) => {
     const { error } = await db.from('key_rate_odds').insert(out);
     if (error) throw new Error(error.message);
     // 6. the trend, the world's
-    const world = await worldTrendOdds(weight);
+    const bis = await bisRates();
+    const world = worldTrendOdds(bis, weight);
     const trendRows = world.map(r => ({ ...r, computed_at }));
     const { error: delTrend } = await db.from('key_rate_trend_odds').delete().gte('trend_from', -1000);
     if (delTrend) throw new Error(delTrend.message);
     const { error: trendErr } = await db.from('key_rate_trend_odds').insert(trendRows);
     if (trendErr) throw new Error(trendErr.message);
+    // 7. the ladder's tables
+    const ru = bis.get('RU');
+    if (!ru || ru.size < 300) throw new Error(`BIS: Russia ${ru?.size} months`);
+    const ladder = horizonOdds(ru).map(r => ({ ...r, computed_at }));
+    const { error: delLadder } = await db.from('key_rate_horizon_odds').delete().gte('horizon', 0);
+    if (delLadder) throw new Error(delLadder.message);
+    const { error: ladderErr } = await db.from('key_rate_horizon_odds').insert(ladder);
+    if (ladderErr) throw new Error(ladderErr.message);
     return json({ key_rate: now, buckets: out.length, odds: out.map(r => `${r.rate_from}-${r.rate_to}%: ${r.floaters_pct}%`),
       trend: trendRows.map(t => `${t.trend_from}..${t.trend_to} of range, position ${t.position}: x${t.odds_ratio}`) });
   } catch (e) {

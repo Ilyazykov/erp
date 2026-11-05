@@ -534,7 +534,8 @@
     <label><input type="checkbox" id="mat_coupons" checked> купоны и проценты</label>
     <label><input type="checkbox" id="mat_floaters"> флоатеры</label>
     <label>лесенка с <input type="number" id="mat_from" style="width:70px"> по <input type="number" id="mat_to" style="width:70px"></label>
-    <label><select id="mat_weights"><option value="far">больше в дальние</option><option value="even">поровну</option></select></label>
+    <label><select id="mat_weights"><option value="prob">по вероятностям ЦБ (авто)</option><option value="far">больше в дальние</option><option value="even">поровну</option></select></label>
+    <label>год рождения <input type="number" id="mat_birth" style="width:70px"></label>
   </div>
   <div id="plot_mat_years" style="height:280px;margin-bottom:24px"></div>
   <div class="form-row" id="mat_cny_row" style="gap:16px;justify-content:flex-end;margin:8px 0 -8px">
@@ -546,6 +547,11 @@
       <div class="form-row" style="gap:8px;margin:8px 4px 0"><label>степень над k <input type="number" id="mat_beta" min="0" max="1" step="0.05" style="width:70px"></label>
         <span class="note" style="margin:0">0 — без инерции, 1 — k целиком</span></div>
       <p class="note" id="kr_formula" style="margin:8px 4px"></p></div></div>
+  <div class="pie-grid" style="margin-bottom:24px">
+    <div class="pie-card"><h4>Лесенка: вероятность, что через N лет ставка будет НИЖЕ, % (история ЦБ с 1992)</h4><div id="plot_kr_h_down" style="height:420px"></div></div>
+    <div class="pie-card"><h4>Лесенка: вероятность, что через N лет ставка будет НЕ ВЫШЕ, %</h4><div id="plot_kr_h_notup" style="height:420px"></div>
+      <p class="note" id="kr_ladder_note" style="margin:8px 4px"></p></div>
+  </div>
   <div class="pie-grid" style="margin-bottom:24px">
     <div class="pie-card"><h4>Куда пошла ключевая за 1–3 года — от её уровня (история ЦБ с 2013)</h4><div id="plot_kr_odds" style="height:380px"></div></div>
     <div class="pie-card"><h4>Без «не изменится»: флоатеры и постоянный купон</h4><div id="plot_kr_split" style="height:380px"></div></div>
@@ -5296,7 +5302,7 @@ async function mpMoexBondDates(secids) {
 {
   // the ladder: the next five years by default
   const y = new Date().getFullYear();
-  for (const [id, def] of [['mat_from', y + 1], ['mat_to', y + 5], ['mat_cny_from', y + 1], ['mat_cny_to', y + 5]]) {
+  for (const [id, def] of [['mat_from', y + 1], ['mat_to', y + 5], ['mat_cny_from', y + 1], ['mat_cny_to', y + 5], ['mat_birth', 1991]]) {
     let v = def;
     try { v = Number(localStorage.getItem('mp_' + id)) || def; } catch { /* no storage */ }
     document.getElementById(id).value = v;
@@ -5351,12 +5357,13 @@ async function mpKeyRateOdds() {
   const t0 = new Date();
   for (let m = 1; m <= 120; m++) monthEnds.push(new Date(Date.UTC(t0.getUTCFullYear(), t0.getUTCMonth() - m + 1, 0)).toISOString().slice(0, 10));
   const yearAgo = new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10);
-  const [{ data: odds }, { data: last }, { data: before }, { data: trend }, { data: decade }] = await Promise.all([
+  const [{ data: odds }, { data: last }, { data: before }, { data: trend }, { data: decade }, { data: horizon }] = await Promise.all([
     sb.from('key_rate_odds').select('rate_from, rate_to, rate, days, up, down, floaters_pct').order('rate'),
     sb.from('key_rates').select('day, rate').order('day', { ascending: false }).limit(1),
     sb.from('key_rates').select('day, rate').lte('day', yearAgo).order('day', { ascending: false }).limit(1),
     sb.from('key_rate_trend_odds').select('trend_from, trend_to, position, n, obs_up, exp_up, odds_ratio').order('trend_from').order('position'),
     sb.from('key_rates').select('day, rate').in('day', monthEnds),
+    sb.from('key_rate_horizon_odds').select('horizon, rate, months, down, not_up').order('horizon').order('rate'),
   ]);
   const pts = (odds || []).map(o => ({ ...o, rate: Number(o.rate), up: Number(o.up), down: Number(o.down), floaters_pct: Number(o.floaters_pct) }));
   const share = x => {
@@ -5386,7 +5393,32 @@ async function mpKeyRateOdds() {
   // and k^1 within 0.03 pp a year)
   const kb = ratio ** MP_TREND_BETA;
   const withTrend = x => { const p = share(x) / 100; return p <= 0 || p >= 1 ? p * 100 : 100 * p * kb / (p * kb + 1 - p); };
-  return { pts, share, withTrend, ratio, kb, change, rel, position, range, trend: tb, trends: trend || [], now, since: last?.[0]?.day || null };
+  return { pts, share, withTrend, ratio, kb, change, rel, position, range, trend: tb, trends: trend || [], now, since: last?.[0]?.day || null,
+    horizon: (horizon || []).map(r => ({ h: r.horizon, rate: r.rate, months: r.months, down: Number(r.down), notUp: Number(r.not_up) })) };
+}
+
+// The fixed coupons' ladder by the CBR's odds (asked 05.11.2026), from
+// key_rate_horizon_odds at today's key rate (its 1 pp bucket):
+//   s -- how likely a cut is at all: the mean of "down" over 1-15 years;
+//   its length -- 5 years + 10 * s (a high rate, a cut likely: long; a low
+//     one: short), no longer than the age allows: (80 - age) / 3 up to 65,
+//     5 to 15 years (35: 15, 50: 10, 65: 5); past 65 a year less every six,
+//     not under 2 (71: 4, 77: 3, 83: 2);
+//   a year's weight -- half its share of "down" over the ladder's years,
+//     half its share of "not up" -- taken as far as s: the rest even (a low
+//     rate, a cut unlikely anyway: an even ladder; a high one: rising).
+function mpLadderAuto(odds, age) {
+  if (odds.now == null || !odds.horizon.length) return null;
+  const rate = Math.min(21, Math.max(4, Math.floor(odds.now)));
+  const col = odds.horizon.filter(r => r.rate === rate).sort((a, b) => a.h - b.h);
+  if (col.length < 15) return null;
+  const s = col.reduce((t, r) => t + r.down, 0) / col.length;
+  const nRate = Math.round(5 + 10 * s);
+  const nAge = age <= 65 ? Math.min(15, Math.max(5, Math.round((80 - age) / 3))) : Math.max(2, 5 - Math.floor((age - 65) / 6));
+  const years = Math.min(nRate, nAge), cc = col.slice(0, years);
+  const sd = cc.reduce((t, r) => t + r.down, 0), sn = cc.reduce((t, r) => t + r.notUp, 0);
+  const weights = cc.map(r => s * (0.5 * r.down / sd + 0.5 * r.notUp / sn) + (1 - s) / years);
+  return { rate, s, nRate, nAge, years, weights };
 }
 
 async function mpRenderMaturities() {
@@ -5491,11 +5523,17 @@ async function mpRenderMaturities() {
   // a floater's money, at its redemption or offer, goes into the rungs short
   // of their target (asked 05.11.2026). The floaters have their own share by
   // the key rate's odds (mpKeyRateOdds); the rungs share the rest
-  const from = Number(document.getElementById('mat_from').value), to = Number(document.getElementById('mat_to').value);
+  const odds = await mpKeyRateOdds();
+  const mode = document.getElementById('mat_weights').value;
+  const age = new Date().getFullYear() - Number(document.getElementById('mat_birth').value || 1991);
+  const auto = mode === 'prob' ? mpLadderAuto(odds, age) : null;
+  const fromEl = document.getElementById('mat_from'), toEl = document.getElementById('mat_to');
+  if (auto) { fromEl.value = new Date().getFullYear() + 1; toEl.value = Number(fromEl.value) + auto.years - 1; }
+  fromEl.disabled = toEl.disabled = !!auto;
+  const from = Number(fromEl.value), to = Number(toEl.value);
   const rungs = [];
   for (let y = from; y <= to && to - from < 40; y++) rungs.push(String(y));
   const faceAll = [...faceBy.values()].reduce((t, v) => t + v, 0);
-  const odds = await mpKeyRateOdds();
   const key = odds.now != null ? { now: odds.now } : null;
   const levelPct = key && odds.pts.length ? Math.round(odds.share(key.now) * 10) / 10 : 0;
   const floatPct = key && odds.pts.length ? Math.round(odds.withTrend(key.now) * 10) / 10 : 0;
@@ -5503,13 +5541,13 @@ async function mpRenderMaturities() {
   // only them); the ladder -- the rouble face, deposits too, less the floaters' target
   const bondsAll = faceAll - depositsAll;
   const ladderAll = faceAll - bondsAll * floatPct / 100;
-  const far = document.getElementById('mat_weights').value === 'far';
+  const far = mode === 'far';
   // past the ladder's end, to the last year anything held matures, a tail
   // stepping down from the top rung to nothing (asked 05.11.2026): those years
   // may hold some too, less the farther
   const lastYear = Math.max(to, ...[...faceBy.entries()].filter(([, v]) => v > 0).map(([y]) => Number(y)));
-  const weightOf = new Map(rungs.map((y, i) => [y, far ? i + 1 : 1]));
-  const peak = far ? rungs.length : 1, tail = lastYear - to;
+  const weightOf = new Map(rungs.map((y, i) => [y, auto ? auto.weights[i] : far ? i + 1 : 1]));
+  const peak = auto ? auto.weights.at(-1) : far ? rungs.length : 1, tail = lastYear - to;
   for (let j = 1; j <= tail && rungs.length; j++) { const y = String(to + j); weightOf.set(y, peak * (tail + 1 - j) / (tail + 1)); rungs.push(y); }
   const weightSum = [...weightOf.values()].reduce((t, w) => t + w, 0);
   const targetOf = y => weightOf.has(y) ? ladderAll * weightOf.get(y) / weightSum : 0;
@@ -5525,6 +5563,32 @@ async function mpRenderMaturities() {
   const tot = y => shownFace(y) + shownCoupon(y);
   const fixedOf = y => (faceBy.get(y) || 0) - (floatFaceBy.get(y) || 0);
   const floatAll = [...floatFaceBy.values()].reduce((t, v) => t + v, 0);
+  // the ladder's tables: down / not up per horizon x key rate, today's rate's
+  // column and the ladder's years outlined
+  if (odds.horizon.length) {
+    const xs = [...new Set(odds.horizon.map(r => r.rate))].sort((a, b) => a - b), hs = [...new Set(odds.horizon.map(r => r.h))].sort((a, b) => a - b);
+    const cell = (h, k) => odds.horizon.find(r => r.h === h && r.rate === k);
+    const curRate = odds.now != null ? Math.min(21, Math.max(4, Math.floor(odds.now))) : null;
+    const heat = (id, field, scale) => Plotly.newPlot(id, [{
+      type: 'heatmap', x: xs.map(k => `${k}%`), y: hs.map(h => `${h} г`), z: hs.map(h => xs.map(k => cell(h, k)?.[field] * 100)),
+      text: hs.map(h => xs.map(k => { const c = cell(h, k); return c ? `${Math.round(c[field] * 100)}${c.months ? '' : '*'}` : ''; })),
+      texttemplate: '%{text}', textfont: { size: 9 }, colorscale: scale, zmin: 0, zmax: 100, showscale: false,
+      customdata: hs.map(h => xs.map(k => cell(h, k)?.months ?? 0)),
+      hovertemplate: 'ставка %{x}, через %{y}: %{z:.1f}%<br>месяцев в истории: %{customdata} (0 — по соседним)<extra></extra>' }],
+      { ...dark, margin: { l: 45, r: 10, t: 10, b: 40 }, hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
+        xaxis: { title: { text: 'ключевая ставка сейчас', font: { size: 11 } }, tickfont: { size: 10 } }, yaxis: { autorange: 'reversed', tickfont: { size: 10 } },
+        shapes: [
+          ...(curRate != null ? [{ type: 'rect', xref: 'x', yref: 'paper', x0: xs.indexOf(curRate) - 0.5, x1: xs.indexOf(curRate) + 0.5, y0: 0, y1: 1, line: { color: '#f85149', width: 2 } }] : []),
+          ...(auto ? [{ type: 'rect', xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: -0.5, y1: auto.years - 0.5, line: { color: '#f5c542', width: 1, dash: 'dot' } }] : []),
+        ] }, { responsive: true, displaylogo: false, displayModeBar: false });
+    heat('plot_kr_h_down', 'down', [[0, '#0d1117'], [1, '#58a6ff']]);
+    heat('plot_kr_h_notup', 'notUp', [[0, '#0d1117'], [1, '#3dd68c']]);
+    document.getElementById('kr_ladder_note').innerHTML = !auto ? (mode === 'prob' ? 'Ставка или таблицы ещё не загружены.' : 'Режим лесенки — не «по вероятностям ЦБ»: таблицы для справки.')
+      : `Сейчас ${odds.now}% (столбец ${auto.rate}%): снижение за 1–15 лет в среднем ${Math.round(auto.s * 100)}% → лесенка 5 + 10 × ${auto.s.toFixed(2)} = ${auto.nRate} лет,
+        по возрасту (${age}) не больше ${auto.nAge} → <b>${auto.years} лет</b> (${from}–${to}, жёлтая рамка).
+        Вес года: ${Math.round(auto.s * 100)}% — пополам по «ниже» и «не выше» (доля года в сумме по лесенке), ${Math.round((1 - auto.s) * 100)}% — ровно.
+        Веса: ${auto.weights.map((w, i) => `${from + i} — ${(w * 100).toFixed(1)}%`).join(', ')}.`;
+  }
   // the floaters against their share by the key rate, as the other target pies
   const pies = document.getElementById('mat_pies');
   pies.innerHTML = '';
@@ -5651,7 +5715,7 @@ async function mpRenderMaturities() {
     { type: 'bar', name: 'купоны и проценты', x: ys, y: ys.map(shownCoupon), marker: { color: '#3dd68c' }, hovertemplate: '%{y:$,.0f}' },
     { type: 'scatter', mode: 'text', x: ys, y: ys.map(tot), text: ys.map(y => money(tot(y))), textposition: 'top center', showlegend: false, hoverinfo: 'skip', cliponaxis: false },
     // the ladder's target per year: a tick over the bar; outside the ladder 0
-    { type: 'scatter', mode: 'markers', name: `цель лесенки ${from}–${to}${tail > 0 ? `, дальше на спад до ${lastYear}` : ''} (номинал с постоянным купоном)`, x: ys, y: ys.map(targetOf),
+    { type: 'scatter', mode: 'markers', name: `цель лесенки ${from}–${to}${auto ? ` (по вероятностям ЦБ: ${auto.years} лет)` : ''}${tail > 0 ? `, дальше на спад до ${lastYear}` : ''} (номинал с постоянным купоном)`, x: ys, y: ys.map(targetOf),
       marker: { symbol: 'line-ew-open', size: 34, color: '#d62728', line: { width: 3, color: '#d62728' } },
       customdata: ys.map(y => { const d = fixedOf(y) - targetOf(y); return `${d >= 0 ? 'перебор' : 'недобор'} ${money(Math.abs(d))}${floatFaceBy.get(y) ? ' (флоатеры не в счёт)' : ''}`; }),
       hovertemplate: '%{y:$,.0f} — %{customdata}' },
