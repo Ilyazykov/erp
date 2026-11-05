@@ -6080,8 +6080,9 @@ async function mpRenderMaturities() {
           for (let guard = 0; guard < 100000; guard++) {
             const can = pool.filter(k => costOf(k) <= left + 1e-9);
             if (!can.length) break;
-            const gap = k => target(k) - k.cur - (spentBy.get(k.i) || 0);
-            const k = can.sort((a, c) => gap(c) - gap(a))[0];
+            // as the tab's: roubles short times the share of the target short
+            const score = k => { const t = target(k), g = t - k.cur - (spentBy.get(k.i) || 0); return t > 0 && g > 0 ? g * g / t : g; };
+            const k = can.sort((a, c) => score(c) - score(a))[0];
             const price = costOf(k);
             spentBy.set(k.i, (spentBy.get(k.i) || 0) + price); left -= price;
             const b = buys.get(k.b.secid) || { ticker: k.b.secid, name: k.b.name, units: 0, usd: 0 };
@@ -6192,9 +6193,11 @@ async function mpRenderMaturities() {
         for (let guard = 0; guard < 100000; guard++) {
           const can = rows.filter(r => r.b && (whole ? costOf(r) <= left + 1e-9 : left > 1e-9));
           if (!can.length) break;
-          // the most roubles short of its target (06.11.2026: by the share filled
-          // a short sum topped the small years at the ladder's ends up first)
-          const r = can.sort((a, c) => (c.t - c.cur - c.spent) - (a.t - a.cur - a.spent))[0];
+          // roubles short times the share of the target short -- short^2 / target
+          // (06.11.2026: by the share alone a small sum topped the small years
+          // at the ladder's ends up first; by the roubles alone they waited last)
+          const score = r => { const g = r.t - r.cur - r.spent; return r.t > 0 && g > 0 ? g * g / r.t : g; };
+          const r = can.sort((a, c) => score(c) - score(a))[0];
           const amt = whole ? costOf(r) : Math.min(step, left);
           r.spent += amt; left -= amt; if (whole) r.n++;
         }
@@ -6299,7 +6302,7 @@ async function mpRenderMaturities() {
           ${body.join('')}
           <tr style="border-top:2px solid #30363d"><td ${td} colspan="8"><b>Итого к покупке</b>${money ? ` · не потрачено ${rub(left)}` : ''}</td><td ${tdr}><b>${rub(spent)}</b></td><td colspan="3"></td></tr>
           </tbody></table></div>
-        <p class="note">${money ? 'Деньги раскладываются по одной облигации: каждая — туда, где до цели не хватает больше всего рублей (цели — с учётом вложенного: юани и рубли по w_CNY, в рублях флоатеры по своей доле, остальное — лесенка).'
+        <p class="note">${money ? 'Деньги раскладываются по одной облигации: каждая — туда, где больше всего «недостача в рублях × доля цели, которой не хватает» (цели — с учётом вложенного: юани и рубли по w_CNY, в рублях флоатеры по своей доле, остальное — лесенка).'
           : 'Введи сумму — появится, что на неё купить.'} Зелёным — что купить. Стоимость и цели — по рыночной цене, в рублях; цена покупки — прошлого дня с НКД.</p>`;
       box.querySelector('#mat_invest').addEventListener('change', e => {
         money = Math.max(0, Number(e.target.value) || 0);
