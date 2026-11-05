@@ -5486,21 +5486,7 @@ async function mpRenderCryptoStrategy() {
     };
     const marks = toMarks(buys), sellMarks = toMarks(sells);
     const inUsd = document.getElementById('cs_label').value === 'usd';
-    // labels in rows, stair-like: one goes a row up when the one before in
-    // its row is closer than a label's width (some 60 px, in days on this chart)
-    const spanDays = (Date.parse(shown[shown.length - 1].day) - Date.parse(shown[0].day)) / 86400000 || 1;
-    const plotPx = Math.max(300, (document.getElementById('plot_cs_share').clientWidth || 1000) - 80);
-    const labelDays = spanDays * 64 / plotPx;
-    const rowEnds = [];
-    for (const m of [...marks.map(x => ({ x, sell: false })), ...sellMarks.map(x => ({ x, sell: true }))].sort((a, b) => a.x.day.localeCompare(b.x.day))) {
-      const t = Date.parse(m.x.day) / 86400000;
-      let r = rowEnds.findIndex(end => t >= end);
-      if (r < 0) { r = rowEnds.length; rowEnds.push(0); }
-      rowEnds[r] = t + labelDays;
-      m.x.row = r;
-    }
     const yMax = Math.max(MP_AHR.target, ...shown.map(x => x.pct)) * 1.12;
-    const rowY = r => 0.25 + r * yMax * 0.055;
     // the red and green zones shaded (the neutral left blank)
     const zoneShapes = [];
     let zStart = null, zZone = null;
@@ -5546,9 +5532,11 @@ async function mpRenderCryptoStrategy() {
           list.map(m => ({ type: 'line', xref: 'x', yref: 'paper', x0: m.day, x1: m.day, y0: 0, y1: 1, line: { color, width: 1, dash: 'dot' }, opacity: 0.6 })))],
       annotations: [...[[MP_AHR.target, `цель ${MP_AHR.target}%`], [MP_AHR.floor, `минимум ${MP_AHR.floor}%`]].map(([y, text]) =>
         ({ xref: 'paper', x: 0, xanchor: 'left', y, yanchor: 'bottom', text, showarrow: false, font: { color: '#8b949e', size: 11 } })),
-        // the move, small, right of its marker at the bottom: kept off the line
+        // upright along their dotted lines, just right of them, small and
+        // without a background: deals days apart don't run into each other,
+        // and the share's line shows through
         ...[[marks, '#58a6ff'], [sellMarks, '#e05252']].flatMap(([list, color]) =>
-          list.map(m => ({ x: m.day, y: rowY(m.row), yanchor: 'middle', xanchor: 'left', xshift: m.row ? 3 : 7, showarrow: false, bgcolor: '#0d1117',
+          list.map(m => ({ x: m.day, y: 0.5, yanchor: 'bottom', xanchor: 'left', xshift: 2, textangle: -90, showarrow: false,
             text: `${color === '#e05252' ? '−' : '+'}${inUsd ? '$' + Math.round(m.usd).toLocaleString('en-US') : m.pp.toFixed(2)}`, font: { color, size: 10 } })))] },
       { responsive: true, displaylogo: false });
   } else document.getElementById('plot_cs_share').innerHTML = '<p class="empty-note">Войдите, чтобы увидеть долю крипты в портфеле.</p>';
