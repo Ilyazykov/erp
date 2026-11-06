@@ -956,19 +956,22 @@ function autoFitYOnXChange(divId, traces) {
 // rate's 90-day volatility; yuan are bought (wCnyAim)
 // only under the buy line, sold only over the sell one (06.11.2026: "the
 // dollar's only 5 roubles down -- too early to buy back"): m -/+ LINE_SIGMA
-// σ₉₀, both shifted down by what yuan cost against roubles over the same 90
-// days -- the CBR's key rate less the PBoC's, of m (no hand-set asymmetry:
-// the dearer roubles pay, the harder yuan are to buy and the easier to sell).
+// σ₉₀, both shifted down by what yuan cost against roubles over CARRY_DAYS
+// -- the CBR's key rate less the PBoC's, of m (no hand-set asymmetry: the
+// dearer roubles pay, the harder yuan are to buy and the easier to sell).
+// Half of σ's 90 days: the rouble does weaken over time, by less than the
+// rates' gap says (interest parity holds in part) -- so a part of the gap;
+// in the test 45 days was as good as 90 or better, with lines closer to even.
 // The lines won the walk-forward test (2015-2026, monthly) over trading
 // toward the target every month; a ±10 pp band on the share as well added
 // nothing over them and was dropped; the 2-year average was tried and turned
 // down -- it wants more yuan when the rouble has been weakening for years.
-const WCNY = { WIN: 365, LINE_SIGMA: 1.5, K: 15, SIGMA_WIN: 90, SIGMA_REF: 0.0209, LO: 0.20, HI: 0.80 };
+const WCNY = { WIN: 365, LINE_SIGMA: 1.5, CARRY_DAYS: 45, K: 15, SIGMA_WIN: 90, SIGMA_REF: 0.0209, LO: 0.20, HI: 0.80 };
 // today's x, m, sigma, carry (loadData sets it): the buy / sell lines
 let wCnyNow = null;
 const wCnyLines = (p = wCnyNow) => {
   if (!p) return null;
-  const shift = p.m * (p.carry || 0) * WCNY.SIGMA_WIN / 365;
+  const shift = p.m * (p.carry || 0) * WCNY.CARRY_DAYS / 365;
   return { buy: p.m - WCNY.LINE_SIGMA * p.sigma - shift, sell: p.m + WCNY.LINE_SIGMA * p.sigma - shift, shift };
 };
 function wCny(x, m) {
@@ -1773,8 +1776,8 @@ async function loadData() {
     m − ${WCNY.LINE_SIGMA}σ₉₀ − c = <span class="stat">${lines.buy.toFixed(2)}</span>
     and sold only while it's over m + ${WCNY.LINE_SIGMA}σ₉₀ − c = <span class="stat">${lines.sell.toFixed(2)}</span>;
     in between (gray) — nothing is bought or sold, whatever the target (new money is split as already held).
-    c = m × (key rate − PBoC rate) × ${WCNY.SIGMA_WIN}/365 = <span class="stat">${lines.shift.toFixed(2)}</span>
-    (key rate − PBoC now: <span class="stat">${(wNow.carry * 100).toFixed(2)} pp</span>) — what yuan cost against roubles over ${WCNY.SIGMA_WIN} days.<br>
+    c = m × (key rate − PBoC rate) × ${WCNY.CARRY_DAYS}/365 = <span class="stat">${lines.shift.toFixed(2)}</span>
+    (key rate − PBoC now: <span class="stat">${(wNow.carry * 100).toFixed(2)} pp</span>) — what yuan cost against roubles over ${WCNY.CARRY_DAYS} days.<br>
     Data as of ${dates5y[dates5y.length - 1]}. Set in one place (WCNY in the code): every tab uses it.
   `;
 
