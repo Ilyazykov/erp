@@ -141,7 +141,8 @@
   USD/RUB rate as of that day. <b>Purple</b> — the target.
   <b>Green / orange dashed</b> — the buy / sell lines as targets (the curve's value at their rates):
   purple above the green — the dollar's under the buy line, yuan are bought up to the target; purple under the orange — sold;
-  in between — nothing. USD/RUB rate (gray) on the right axis.
+  in between — nothing. <b>Shaded</b> — the days it's so: green — yuan may be bought, orange — sold.
+  USD/RUB rate (gray) on the right axis.
 </p>
 <h3 class="section-title" id="mp_pie_deposits_title" style="display:none">Your current portfolio — bonds &amp; deposits, RUB vs non-RUB</h3>
 <div id="plot_mp_pie_deposits" style="height:420px; max-width:520px; margin:8px auto 0; display:none"></div>
@@ -1183,7 +1184,7 @@ function renderChart(id) {
           title: 'USD/RUB rate', overlaying: 'y', side: 'right',
           gridcolor: '#1e2830', linecolor: '#1e2830', color: '#9ca3af',
         },
-        shapes: [HLINE(20, '#6a7381', 'dot'), HLINE(50, '#6a7381', 'dot'), HLINE(80, '#6a7381', 'dot')],
+        shapes: [...(DATA.wCny5yZones || []), HLINE(20, '#6a7381', 'dot'), HLINE(50, '#6a7381', 'dot'), HLINE(80, '#6a7381', 'dot')],
       }), CONFIG);
   }
 }
@@ -1785,6 +1786,19 @@ async function loadData() {
 
   // w_CNY(t) over the history, with the buy / sell lines
   const wCny5yDates = wSeries.map(p => p.date);
+  // the days the rule lets yuan be bought (the dollar under the buy line) or
+  // sold (over the sell one), as shaded spans
+  const wCny5yZones = [];
+  {
+    let kind = null, from = null;
+    const close = to => { if (kind) wCny5yZones.push({ type: 'rect', xref: 'x', yref: 'paper', x0: from, x1: to, y0: 0, y1: 1, layer: 'below', line: { width: 0 },
+      fillcolor: kind === 'buy' ? 'rgba(61,214,140,0.15)' : 'rgba(240,180,41,0.13)' }); };
+    wSeries.forEach((p, i) => {
+      const l = wCnyLines(p), k = p.x < l.buy ? 'buy' : p.x > l.sell ? 'sell' : null;
+      if (k !== kind) { close(p.date); kind = k; from = p.date; }
+      if (i === wSeries.length - 1) close(p.date);
+    });
+  }
   const wCny5yCombined = [
     {
       x: wCny5yDates, y: wSeries.map(p => p.w * 100), name: 'w_CNY(t) — the target',
@@ -2078,7 +2092,7 @@ async function loadData() {
            usTargetWeights, usTargetWeightsLayout, usErp, usErpZChart, usErpDefaultRange, damodaranZChart,
            usAllocTarget: usAllocTargetTrace, usAllocTargetLayout,
            usAllocTargetRaw: usAllocTarget,
-           sigmoidAmp, sigmoidAmpShapes, sigmoidAmpAnnotations, wCny5yCombined,
+           sigmoidAmp, sigmoidAmpShapes, sigmoidAmpAnnotations, wCny5yCombined, wCny5yZones,
            targetWeights, targetWeightsLayout, allocTarget: allocTargetTrace, allocTargetLayout,
            sigmoidAxisRange: [axisMin, axisMax],
            // Raw (non-chart-trace) target figures, reused by the My Portfolio
