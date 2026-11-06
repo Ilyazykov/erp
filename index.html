@@ -139,7 +139,9 @@
 <p class="note">
   w_CNY(t) computed daily: x(t) is that day's USD/RUB rate, m(t) is the trailing 365-day average
   USD/RUB rate as of that day. <b>Purple</b> — the target.
-  USD/RUB rate on the right axis, with the lines yuan are bought under (<b>green</b>) and sold over (<b>orange</b>).
+  <b>Green / orange dashed</b> — the buy / sell lines as targets (the curve's value at their rates):
+  purple above the green — the dollar's under the buy line, yuan are bought up to the target; purple under the orange — sold;
+  in between — nothing. USD/RUB rate (gray) on the right axis.
 </p>
 <h3 class="section-title" id="mp_pie_deposits_title" style="display:none">Your current portfolio — bonds &amp; deposits, RUB vs non-RUB</h3>
 <div id="plot_mp_pie_deposits" style="height:420px; max-width:520px; margin:8px auto 0; display:none"></div>
@@ -1791,15 +1793,20 @@ async function loadData() {
       yaxis: 'y',
       hovertemplate: '%{x}<br>w_CNY: <b>%{y:.0f}%</b><extra></extra>',
     },
+    // the buy / sell lines on the target's axis: the target the curve gives
+    // at each line's rate -- the curve falls with the rate, so the target over
+    // the green is the rate under the buy line (the same rule, read off purple)
     {
-      x: wCny5yDates, y: wSeries.map(p => wCnyLines(p).buy), name: `buy yuan below (m − ${WCNY.LINE_SIGMA}σ − c)`,
-      type: 'scatter', mode: 'lines', line: { color: '#3dd68c', width: 1, dash: 'dash' }, yaxis: 'y2',
-      hovertemplate: '%{x}<br>buy yuan below: <b>%{y:.2f}</b><extra></extra>',
+      x: wCny5yDates, y: wSeries.map(p => wCnyAmplified(wCnyLines(p).buy, p.m, p.sigma) * 100), name: 'buy yuan: purple above',
+      type: 'scatter', mode: 'lines', line: { color: '#3dd68c', width: 1.2, dash: 'dash' }, yaxis: 'y',
+      customdata: wSeries.map(p => wCnyLines(p).buy),
+      hovertemplate: '%{x}<br>buy line: <b>%{y:.0f}%</b> (USD/RUB %{customdata:.2f})<extra></extra>',
     },
     {
-      x: wCny5yDates, y: wSeries.map(p => wCnyLines(p).sell), name: `sell yuan above (m + ${WCNY.LINE_SIGMA}σ − c)`,
-      type: 'scatter', mode: 'lines', line: { color: '#f0b429', width: 1, dash: 'dash' }, yaxis: 'y2',
-      hovertemplate: '%{x}<br>sell yuan above: <b>%{y:.2f}</b><extra></extra>',
+      x: wCny5yDates, y: wSeries.map(p => wCnyAmplified(wCnyLines(p).sell, p.m, p.sigma) * 100), name: 'sell yuan: purple below',
+      type: 'scatter', mode: 'lines', line: { color: '#f0b429', width: 1.2, dash: 'dash' }, yaxis: 'y',
+      customdata: wSeries.map(p => wCnyLines(p).sell),
+      hovertemplate: '%{x}<br>sell line: <b>%{y:.0f}%</b> (USD/RUB %{customdata:.2f})<extra></extra>',
     },
     {
       x: wCny5yDates, y: wSeries.map(p => p.x), name: 'USD/RUB rate',
