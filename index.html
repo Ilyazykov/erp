@@ -138,7 +138,7 @@
 <div id="plot_wcny5y_combined" style="height:480px; margin-top:8px"></div>
 <p class="note">
   w_CNY(t) computed daily: x(t) is that day's USD/RUB rate, m(t) is the trailing 365-day average
-  USD/RUB rate as of that day. <b>Purple</b> — the target, with its ±10 pp no-trading band.
+  USD/RUB rate as of that day. <b>Purple</b> — the target.
   USD/RUB rate on the right axis, with the lines yuan are bought under (<b>green</b>) and sold over (<b>orange</b>).
 </p>
 <h3 class="section-title" id="mp_pie_deposits_title" style="display:none">Your current portfolio — bonds &amp; deposits, RUB vs non-RUB</h3>
@@ -953,17 +953,17 @@ function autoFitYOnXChange(divId, traces) {
 
 // The yuan's target share -- set here only, every tab takes it (06.11.2026):
 // the sigmoid of USD/RUB against its WIN-day average, sharpened by the
-// rate's 90-day volatility; while the yuan's share is within BAND of the
-// target, no currency is bought or sold (wCnyAim); and yuan are bought
+// rate's 90-day volatility; yuan are bought (wCnyAim)
 // only under the buy line, sold only over the sell one (06.11.2026: "the
 // dollar's only 5 roubles down -- too early to buy back"): m -/+ LINE_SIGMA
 // σ₉₀, both shifted down by what yuan cost against roubles over the same 90
 // days -- the CBR's key rate less the PBoC's, of m (no hand-set asymmetry:
 // the dearer roubles pay, the harder yuan are to buy and the easier to sell).
-// Both won the walk-forward test (2015-2026, monthly) over trading toward
-// the target every month; the 2-year average was tried and turned down --
-// it wants more yuan when the rouble has been weakening for years.
-const WCNY = { WIN: 365, BAND: 0.10, LINE_SIGMA: 1.5, K: 15, SIGMA_WIN: 90, SIGMA_REF: 0.0209, LO: 0.20, HI: 0.80 };
+// The lines won the walk-forward test (2015-2026, monthly) over trading
+// toward the target every month; a ±10 pp band on the share as well added
+// nothing over them and was dropped; the 2-year average was tried and turned
+// down -- it wants more yuan when the rouble has been weakening for years.
+const WCNY = { WIN: 365, LINE_SIGMA: 1.5, K: 15, SIGMA_WIN: 90, SIGMA_REF: 0.0209, LO: 0.20, HI: 0.80 };
 // today's x, m, sigma, carry (loadData sets it): the buy / sell lines
 let wCnyNow = null;
 const wCnyLines = (p = wCnyNow) => {
@@ -1004,11 +1004,11 @@ function wCnySeries(dates, rates, win = WCNY.WIN, carryAt = () => 0) {
   return out;
 }
 
-// The share to aim at given the yuan's share now: the target once it's
-// more than BAND off -- and up only with the dollar under the buy line, down
-// only over the sell line -- else what's held (new money split as held)
+// The share to aim at given the yuan's share now: the target -- up only
+// with the dollar under the buy line, down only over the sell line -- else
+// what's held (new money split as held)
 function wCnyAim(w, cur) {
-  if (cur == null || !Number.isFinite(cur) || Math.abs(cur - w) <= WCNY.BAND) return cur == null || !Number.isFinite(cur) ? w : cur;
+  if (cur == null || !Number.isFinite(cur)) return w;
   const l = wCnyLines();
   if (l && w > cur && !(wCnyNow.x < l.buy)) return cur;
   if (l && w < cur && !(wCnyNow.x > l.sell)) return cur;
@@ -1708,7 +1708,6 @@ async function loadData() {
   const sigmoidMWCnyAmp = wCnyAmplified(sigmoidM, sigmoidM, sigmoidSigma);
   const sigmoidWRubAmp = 1 - sigmoidWCnyAmp;
   const curveYAmp = curveX.map(px => wCnyAmplified(px, sigmoidM, sigmoidSigma) * 100);
-  const bandLo = Math.max(0, sigmoidWCnyAmp - WCNY.BAND) * 100, bandHi = Math.min(1, sigmoidWCnyAmp + WCNY.BAND) * 100;
 
   const sigmoidAmp = [
     {
@@ -1736,9 +1735,6 @@ async function loadData() {
     { type: 'rect', x0: lines.buy, x1: lines.sell, y0: 0, y1: 100, fillcolor: 'rgba(156,163,175,0.07)', line: { width: 0 }, layer: 'below' },
     { type: 'line', x0: lines.buy, x1: lines.buy, y0: 0, y1: 100, line: { color: '#3dd68c', width: 2 } },
     { type: 'line', x0: lines.sell, x1: lines.sell, y0: 0, y1: 100, line: { color: '#f0b429', width: 2 } },
-    // the no-trade band: the yuan's share within it -- nothing bought or sold
-    { type: 'rect', xref: 'paper', x0: 0, x1: 1, y0: bandLo, y1: bandHi,
-      fillcolor: 'rgba(224,82,82,0.08)', line: { width: 0 }, layer: 'below' },
     { type: 'line', x0: sigmoidM, x1: sigmoidM, y0: 0, y1: 100,
       line: { color: '#a78bfa', dash: 'dash', width: 1 } },
     { type: 'line', xref: 'paper', x0: 0, x1: 1, y0: sigmoidMWCnyAmp * 100, y1: sigmoidMWCnyAmp * 100,
@@ -1773,29 +1769,18 @@ async function loadData() {
     <b>Red</b> — current rate (x = <span class="stat">${sigmoidX.toFixed(2)}</span>) and resulting
     w_CNY = <span class="stat">${(sigmoidWCnyAmp * 100).toFixed(0)}%</span>,
     w_RUB = <span class="stat">${(sigmoidWRubAmp * 100).toFixed(0)}%</span>.
-    <b>Pink band</b> — ±${Math.round(WCNY.BAND * 100)} pp: while the yuan's share is inside it, no currency is bought or sold
-    (new money is split as already held).<br>
-    <b>Green / orange lines</b> — outside the band, yuan are bought only while USD/RUB is under
+    <b>Green / orange lines</b> — yuan are bought (up to the target) only while USD/RUB is under
     m − ${WCNY.LINE_SIGMA}σ₉₀ − c = <span class="stat">${lines.buy.toFixed(2)}</span>
     and sold only while it's over m + ${WCNY.LINE_SIGMA}σ₉₀ − c = <span class="stat">${lines.sell.toFixed(2)}</span>;
-    in between (gray) — nothing is bought or sold, whatever the target.
+    in between (gray) — nothing is bought or sold, whatever the target (new money is split as already held).
     c = m × (key rate − PBoC rate) × ${WCNY.SIGMA_WIN}/365 = <span class="stat">${lines.shift.toFixed(2)}</span>
     (key rate − PBoC now: <span class="stat">${(wNow.carry * 100).toFixed(2)} pp</span>) — what yuan cost against roubles over ${WCNY.SIGMA_WIN} days.<br>
     Data as of ${dates5y[dates5y.length - 1]}. Set in one place (WCNY in the code): every tab uses it.
   `;
 
-  // w_CNY(t) over the history, with its no-trading band
+  // w_CNY(t) over the history, with the buy / sell lines
   const wCny5yDates = wSeries.map(p => p.date);
   const wCny5yCombined = [
-    // the band around the target: upper edge, then lower filled up to it
-    {
-      x: wCny5yDates, y: wSeries.map(p => Math.min(1, p.w + WCNY.BAND) * 100), name: `±${Math.round(WCNY.BAND * 100)} pp — no trading`,
-      type: 'scatter', mode: 'lines', line: { width: 0 }, yaxis: 'y', hoverinfo: 'skip', showlegend: false,
-    },
-    {
-      x: wCny5yDates, y: wSeries.map(p => Math.max(0, p.w - WCNY.BAND) * 100), name: `±${Math.round(WCNY.BAND * 100)} pp — no trading`,
-      type: 'scatter', mode: 'lines', line: { width: 0 }, fill: 'tonexty', fillcolor: 'rgba(167,139,250,0.15)', yaxis: 'y', hoverinfo: 'skip',
-    },
     {
       x: wCny5yDates, y: wSeries.map(p => p.w * 100), name: 'w_CNY(t) — the target',
       type: 'scatter', mode: 'lines',
@@ -5837,7 +5822,6 @@ async function mpRenderMaturities() {
       ], w != null ? `Цель — w_CNY ${Math.round(w)}% по курсу USD/RUB (вкладка «USD/RUB → CNY Weight»). `
         + (() => {
           const l = wCnyLines(), fx = v => v.toFixed(1).replace('.', ',');
-          if (Math.abs(cny / tot * 100 - w) <= WCNY.BAND * 100) return `Юани в пределах ±${Math.round(WCNY.BAND * 100)} пп от цели — валюту не покупать и не продавать, новые деньги делить как сейчас.`;
           if (cny / tot * 100 < w) return l && !(wCnyNow.x < l.buy) ? `Юаней меньше цели, но доллар ${fx(wCnyNow.x)} — выше линии покупки ${fx(l.buy)} (вкладка «USD/RUB → CNY Weight»): юани не покупать, новые деньги делить как сейчас.` : 'Юаней меньше цели и доллар дешёвый — докупить до цели.';
           return l && !(wCnyNow.x > l.sell) ? `Юаней больше цели, но доллар ${fx(wCnyNow.x)} — ниже линии продажи ${fx(l.sell)} (вкладка «USD/RUB → CNY Weight»): юани не продавать.` : 'Юаней больше цели и доллар дорогой — продать до цели.';
         })() : 'Цель w_CNY ещё не посчитана — открой вкладку «USD/RUB → CNY Weight».', null, false, null, rubPie);
