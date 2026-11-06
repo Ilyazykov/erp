@@ -5771,9 +5771,11 @@ async function mpRenderMaturities() {
   // sum redraws them with what it buys): { fixed: year -> $, float: $, cny: year -> $ }
   const drawPies = add => {
     pies.innerHTML = '';
-    const aFixed = y => add?.fixed.get(y) || 0, aCny = y => add?.cny.get(y) || 0, aFloat = add?.float || 0;
-    const aFixedAll = add ? [...add.fixed.values()].reduce((t, v) => t + v, 0) : 0, aCnyAll = add ? [...add.cny.values()].reduce((t, v) => t + v, 0) : 0;
-    const withBuys = add && (aFixedAll + aFloat + aCnyAll) > 0 ? ' — с покупками' : '';
+    // a deposit the money comes from (06.11.2026): out of its year, not of the bonds
+    const aDep = add?.dep?.usd || 0, depY = add?.dep?.y;
+    const aFixed = y => (add?.fixed.get(y) || 0) - (y === depY ? aDep : 0), aCny = y => add?.cny.get(y) || 0, aFloat = add?.float || 0;
+    const aFixedAll = add ? [...add.fixed.values()].reduce((t, v) => t + v, 0) - aDep : 0, aCnyAll = add ? [...add.cny.values()].reduce((t, v) => t + v, 0) : 0;
+    const withBuys = add && (aFixedAll + aDep + aFloat + aCnyAll) > 0 ? ' — с покупками' : '';
     // 1. yuan vs rouble, as the chart in USD/RUB -> CNY Weight
     {
       const rub = pieRub + aFixedAll + aFloat, cny = pieCny + aCnyAll, tot = rub + cny || 1, w = pieW;
@@ -5784,7 +5786,7 @@ async function mpRenderMaturities() {
     }
     // 2. fixed vs floating; which floater to buy: an OFZ-PK 1-3 years out, the most traded
     {
-      const fl = mvFloat + aFloat, bonds = mvBonds + aFixedAll + aFloat;
+      const fl = mvFloat + aFloat, bonds = mvBonds + aFixedAll + aDep + aFloat;
       const short = bonds * floatPct / 100 - fl, y = new Date().getFullYear();
       const pk = bestPk;
       const hover = short <= 5 ? 'флоатеров достаточно — новых не покупать' : !pk ? `недобор ${rubPie(short)}; подходящей ОФЗ-ПК нет`
@@ -5987,11 +5989,13 @@ async function mpRenderMaturities() {
   const drawYears = (add = null) => {
     const aF = y => add?.fixed.get(y) || 0, aL = y => add?.float.get(y) || 0;
     const addAll = add ? [...add.fixed.values(), ...add.float.values()].reduce((t, v) => t + v, 0) : 0;
+    // the deposit the money comes from: its year's bar less it
+    const dUsd = add?.dep?.usd || 0, dY = add?.dep?.y;
     // the targets as the pies': the ladder's share of the rouble market value, purchases in
-    const lAll = mvAll + addAll - (mvBonds + addAll) * floatPct / 100;
+    const lAll = mvAll - dUsd + addAll - (mvBonds + addAll) * floatPct / 100;
     const tOf = y => weightOf.has(y) ? lAll * weightOf.get(y) / weightSum : 0;
     const yys = [...new Set([...mvFixedBy.keys(), ...(withFloaters ? mvFloatBy.keys() : []), ...rungs, ...(add ? [...add.fixed.keys(), ...(withFloaters ? add.float.keys() : [])] : [])])].sort();
-    const fixedV = y => mvFixedBy.get(y) || 0, floatV = y => mvFloatBy.get(y) || 0;
+    const fixedV = y => (mvFixedBy.get(y) || 0) - (y === dY ? dUsd : 0), floatV = y => mvFloatBy.get(y) || 0;
     const totA = y => fixedV(y) + aF(y) + (withFloaters ? floatV(y) + aL(y) : 0);
     const perR = Math.max(0, ...rungs.map(tOf));
     const yTop = Math.max(perR * 2.2, 1);
@@ -6172,21 +6176,29 @@ async function mpRenderMaturities() {
     const td = 'style="padding:4px 10px;text-align:left;white-space:nowrap"', tdr = 'style="padding:4px 10px;text-align:right;white-space:nowrap"';
     const till = d => `до ${d.slice(5, 7)}.${d.slice(0, 4)}`;
     const box = document.getElementById('mat_buy');
-    let money = 0, whole = true;
+    let money = 0, whole = true, depFrom = '';
     // the sum starts at 0 every time (06.11.2026); the whole-bonds switch is remembered
     try { whole = localStorage.getItem('mp_mat_invest_whole') !== '0'; } catch { /* no storage */ }
+    // where the money comes from (06.11.2026: "90k -- the deposit closing in
+    // a month"): new money, or a rouble deposit closed -- then the deposit
+    // leaves the rouble part by as much and the whole stays
+    const rubDeposits = shown.filter(r => r.deposit && (r.currency || 'RUB') === 'RUB' && r.mat).sort((a, c) => a.mat.localeCompare(c.mat));
+    try { depFrom = localStorage.getItem('mp_mat_invest_from') || ''; } catch { /* no storage */ }
+    if (!rubDeposits.some(r => r.ticker === depFrom)) depFrom = '';
+    const depOf = M => { const r = rubDeposits.find(d => d.ticker === depFrom); return r ? { row: r, y: r.mat.slice(0, 4), usd: Math.min(M, r.usd) } : null; };
     const plan = () => {
       const M = money * rubUsd;   // dollars
       // the targets with the money in (or as they are, without it): yuan vs
       // rouble by w_CNY over the first pie's whole (the money-market funds
       // stay as they are), the rouble part -- floaters by their share of the
       // bonds, the rest the ladder
-      const whole0 = pieRub + pieCny + M;
+      const dep = M > 0 ? depOf(M) : null, D = dep ? dep.usd : 0;
+      const whole0 = pieRub - D + pieCny + M;
       const cnyT = pieW != null ? whole0 * pieW / 100 : cnyMVAll + M * (pieCny / ((pieRub + pieCny) || 1));
       const rubT = Math.max(0, whole0 - cnyT - pieLiquid);
-      const floatT = Math.max(0, rubT - mvDeposits) * floatPct / 100, ladderT = rubT - floatT;
+      const floatT = Math.max(0, rubT - (mvDeposits - D)) * floatPct / 100, ladderT = rubT - floatT;
       const target = k => k.kind === 'float' ? floatT : k.kind === 'cny' ? cnyT * k.w : ladderT * k.w;
-      const rows = buckets.map(k => ({ ...k, t: target(k), n: 0, spent: 0 }));
+      const rows = buckets.map(k => ({ ...k, cur: k.kind === 'fixed' && dep && k.key === dep.y ? k.cur - D : k.cur, t: target(k), n: 0, spent: 0 }));
       if (M > 0) {
         let left = M;
         const step = whole ? null : M / 500;
@@ -6202,10 +6214,10 @@ async function mpRenderMaturities() {
           r.spent += amt; left -= amt; if (whole) r.n++;
         }
         if (!whole) rows.forEach(r => { r.n = r.b ? r.spent / costOf(r) : 0; });
-        return { rows, left };
+        return { rows, left, dep };
       }
       // no money -- no purchases (06.11.2026: 0 bought what closed every shortfall)
-      return { rows, left: 0 };
+      return { rows, left: 0, dep: null };
     };
     // the table (06.11.2026): what's held and what to buy, by kind (rouble
     // floaters, rouble fixed, yuan fixed, yuan floaters), then by year of
@@ -6216,7 +6228,7 @@ async function mpRenderMaturities() {
       : r.unit === 'RUB' ? (r.floating ? 'float' : 'fixed') : (r.floating ? 'cnyfloat' : 'cny');
     const GROUPS = [['float', '₽ флоатер'], ['fixed', '₽ постоянный'], ['cny', '¥ постоянный'], ['cnyfloat', '¥ флоатер']];
     const draw = () => {
-      const { rows: plans, left } = plan();
+      const { rows: plans, left, dep } = plan();
       // the pies with what the money buys (none without a sum)
       if (money > 0) {
         const fixed = new Map(), cny = new Map(); let fl = 0;
@@ -6225,7 +6237,7 @@ async function mpRenderMaturities() {
           if (p.kind === 'float') fl += p.spent;
           else (p.kind === 'cny' ? cny : fixed).set(p.key, ((p.kind === 'cny' ? cny : fixed).get(p.key) || 0) + p.spent);
         }
-        drawPies({ fixed, float: fl, cny });
+        drawPies({ fixed, float: fl, cny, dep });
       } else drawPies(null);
       // the year charts and the bars, with the plan's bonds by face (06.11.2026)
       const bought = plans.filter(p => p.n > 0 && p.b);
@@ -6233,12 +6245,12 @@ async function mpRenderMaturities() {
       const yr = p => (p.kind === 'cny' ? p.b.due : p.b.mat).slice(0, 4);
       const fFixed = new Map(), fFloat = new Map(), fCny = new Map();
       for (const p of bought) { const m = p.kind === 'cny' ? fCny : p.kind === 'float' ? fFloat : fFixed; m.set(yr(p), (m.get(yr(p)) || 0) + faceUsd(p)); }
-      drawYears(money > 0 ? { fixed: fFixed, float: fFloat } : null);
+      drawYears(money > 0 ? { fixed: fFixed, float: fFloat, dep } : null);
       drawCnyYears(money > 0 ? fCny : null);
       drawFloat(money > 0 ? bought.filter(p => p.kind === 'float').map(p => ({ secid: p.b.secid, name: p.b.name, mat: p.b.mat, usd: p.spent, n: whole ? p.n : Math.round(p.n * 10) / 10 })) : []);
       drawGantt(money > 0 ? bought.map(p => ({ secid: p.b.secid, name: p.b.name, mat: p.b.mat, offer: p.kind === 'cny' ? p.b.offer : null, usd: p.spent,
         n: whole ? p.n : Math.round(p.n * 10) / 10, kind: p.kind })) : []);
-      const spent = plans.reduce((t, r) => t + r.spent, 0);
+      const spent = plans.reduce((t, r) => t + r.spent, 0);   // the purchases only: a deposit's money out isn't in
       const planOf = (kind, y) => plans.find(p => p.kind === kind && (kind === 'float' || p.key === y));
       const body = [];
       for (const [kind, label] of GROUPS) {
@@ -6252,7 +6264,8 @@ async function mpRenderMaturities() {
         for (const y of [...years].sort()) {
           const p = kind === 'float' ? (fp?.b?.mat.startsWith(y) ? fp : null) : planOf(kind, y);
           const items = held.filter(r => r.mat.startsWith(y)).map(r => ({ name: r.name, sub: r.offer ? `оферта ${r.offer.slice(5, 7)}.${r.offer.slice(0, 4)}` : '',
-            yld: yieldOf.get(r.ticker), qty: r.deposit ? null : r.qty, each: r.deposit ? null : r.usd / (r.qty || 1), value: r.usd, n: 0, sum: 0, secid: r.ticker }));
+            yld: yieldOf.get(r.ticker), qty: r.deposit ? null : r.qty, each: r.deposit ? null : r.usd / (r.qty || 1), value: r.usd, n: 0,
+            sum: dep && dep.row === r ? -dep.usd : 0, close: dep && dep.row === r, secid: r.ticker }));
           // the year's pick, marked whether or not the money reaches it (06.11.2026)
           if (p && p.b) {
             const mine = items.find(i => i.secid === p.b.secid);
@@ -6281,8 +6294,8 @@ async function mpRenderMaturities() {
             : `<td ${td}>${mpEscapeHtml(i.name)}${i.sub ? ` <span style="color:${i.rec ? '#3dd68c' : '#8b949e'}">${i.sub}</span>` : ''}</td>`
               + `<td ${tdr}>${i.yld ? i.yld.toFixed(1) + '%' : '—'}</td><td ${tdr}>${i.each ? rub(i.each) : '—'}</td>`
               + `<td ${tdr}>${i.qty == null ? 'вклад' : i.qty || '—'}</td><td ${tdr}>${i.value ? rub(i.value) : '—'}</td>`
-              + `<td ${tdr}>${i.n ? `<b style="color:#3dd68c">+${whole ? i.n : i.n.toFixed(1)}</b>` : i.rec ? '<span style="color:#8b949e">+0</span>' : ''}</td>`);
-          cells.push(`<td ${tdr}>${i.sum ? rub(i.sum) : ''}</td>`);
+              + `<td ${tdr}>${i.close ? '<b style="color:#f85149">закрыть</b>' : i.n ? `<b style="color:#3dd68c">+${whole ? i.n : i.n.toFixed(1)}</b>` : i.rec ? '<span style="color:#8b949e">+0</span>' : ''}</td>`);
+          cells.push(`<td ${tdr}>${i.sum ? (i.sum < 0 ? `<span style="color:#f85149">−${rub(-i.sum)}</span>` : rub(i.sum)) : ''}</td>`);
           if (kind === 'float') { if (firstOfGroup) cells.push(`<td ${tdr} rowspan="${gSpan}">${rub(gCur)}</td><td ${tdr} rowspan="${gSpan}">${rub(gT || 0)}</td><td ${tdr} rowspan="${gSpan}"><b>${rub(gCur + gSpent)}</b></td>`); }
           else if (kind === 'cnyfloat') { if (firstOfGroup) cells.push(`<td ${tdr} rowspan="${gSpan}" colspan="3" style="color:#8b949e">цели нет</td>`); }
           else if (k === 0) cells.push(`<td ${tdr} rowspan="${g.items.length}">${rub(g.cur)}</td><td ${tdr} rowspan="${g.items.length}">${rub(g.t)}</td><td ${tdr} rowspan="${g.items.length}"><b>${rub(g.after)}</b></td>`);
@@ -6294,6 +6307,7 @@ async function mpRenderMaturities() {
       box.innerHTML = `<div class="section-title" style="font-size:0.95rem">Облигации: что есть и что докупить</div>
         <div class="form-row" style="gap:16px;margin:4px 0 8px">
           <label>Сколько вложить, ₽: <input type="number" id="mat_invest" min="0" step="1000" value="${money}" style="width:190px"></label>
+          <label>Откуда: <select id="mat_invest_from"><option value="">новые деньги</option>${rubDeposits.map(r => `<option value="${mpEscapeHtml(r.ticker)}"${r.ticker === depFrom ? ' selected' : ''}>${mpEscapeHtml(r.name)} — ${rub(r.usd)}, до ${r.mat.slice(8, 10)}.${r.mat.slice(5, 7)}.${r.mat.slice(0, 4)}</option>`).join('')}</select></label>
           <label><input type="checkbox" id="mat_invest_whole"${whole ? ' checked' : ''}> целыми облигациями</label>
         </div>
         <div><table class="data-table" style="width:auto"><thead><tr>
@@ -6301,11 +6315,20 @@ async function mpRenderMaturities() {
           <th ${tdr}>Купить, шт</th><th ${tdr}>На сумму</th><th ${tdr}>Год: сейчас</th><th ${tdr}>Цель</th><th ${tdr}>Станет</th></tr></thead><tbody>
           ${body.join('')}
           <tr style="border-top:2px solid #30363d"><td ${td} colspan="8"><b>Итого к покупке</b>${money ? ` · не потрачено ${rub(left)}` : ''}</td><td ${tdr}><b>${rub(spent)}</b></td><td colspan="3"></td></tr>
+          ${dep ? `<tr><td ${td} colspan="8" style="color:#8b949e">из вклада: ${mpEscapeHtml(dep.row.name)}${dep.usd < dep.row.usd - 1e-6 ? ` (часть; остаётся ${rub(dep.row.usd - dep.usd)})` : ''}${money * rubUsd > dep.usd + 1e-6 ? ` · новых денег ${rub(money * rubUsd - dep.usd)}` : ''}</td><td ${tdr} style="color:#f85149">−${rub(dep.usd)}</td><td colspan="3"></td></tr>` : ''}
           </tbody></table></div>
         <p class="note">${money ? 'Деньги раскладываются по одной облигации: каждая — туда, где больше всего «недостача в рублях × доля цели, которой не хватает» (цели — с учётом вложенного: юани и рубли по w_CNY, в рублях флоатеры по своей доле, остальное — лесенка).'
           : 'Введи сумму — появится, что на неё купить.'} Зелёным — что купить. Стоимость и цели — по рыночной цене, в рублях; цена покупки — прошлого дня с НКД.</p>`;
       box.querySelector('#mat_invest').addEventListener('change', e => {
         money = Math.max(0, Number(e.target.value) || 0);
+        draw();
+      });
+      box.querySelector('#mat_invest_from').addEventListener('change', e => {
+        depFrom = e.target.value;
+        try { localStorage.setItem('mp_mat_invest_from', depFrom); } catch { /* no storage */ }
+        // no sum yet -- the deposit's whole
+        const d = rubDeposits.find(r => r.ticker === depFrom);
+        if (d && !money) money = Math.floor(d.usd / rubUsd);
         draw();
       });
       box.querySelector('#mat_invest_whole').addEventListener('change', e => {
