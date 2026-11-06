@@ -137,9 +137,9 @@
 </p>
 <div id="plot_wcny5y_combined" style="height:480px; margin-top:8px"></div>
 <p class="note">
-  w_CNY(t) computed daily over the last 5 years: x(t) is that day's USD/RUB rate, m(t) is the
-  trailing 365-day average USD/RUB rate as of that day. <b>Cyan</b> — original fixed-k formula.
-  <b>Purple</b> — volatility-amplified formula. USD/RUB rate overlaid on the right axis.
+  w_CNY(t) computed daily: x(t) is that day's USD/RUB rate, m(t) is the trailing 2-year average
+  USD/RUB rate as of that day. <b>Purple</b> — the target, with its no-trading band.
+  <b>Gray dotted</b> — the rule before 06.11.2026 (1-year average), to compare. USD/RUB rate on the right axis.
 </p>
 <h3 class="section-title" id="mp_pie_deposits_title" style="display:none">Your current portfolio — bonds &amp; deposits, RUB vs non-RUB</h3>
 <div id="plot_mp_pie_deposits" style="height:420px; max-width:520px; margin:8px auto 0; display:none"></div>
@@ -951,19 +951,49 @@ function autoFitYOnXChange(divId, traces) {
   });
 }
 
+// The yuan's target share -- set here only, every tab takes it (06.11.2026):
+// the sigmoid of USD/RUB against its WIN-day average, sharpened by the
+// rate's 90-day volatility; while the yuan's share is within BAND of the
+// target, no currency is bought or sold (wCnyAim). The 2-year average and
+// the band won the walk-forward test over the 1-year average without one
+// (2015-2026, roubles at the key rate, yuan at 3.5%, monthly).
+const WCNY = { WIN: 730, BAND: 0.10, K: 15, SIGMA_WIN: 90, SIGMA_REF: 0.0209, LO: 0.20, HI: 0.80 };
 function wCny(x, m) {
-  return 0.20 + 0.60 / (1 + Math.exp(15 * (x - m) / m));
+  return WCNY.LO + (WCNY.HI - WCNY.LO) / (1 + Math.exp(WCNY.K * (x - m) / m));
 }
 
-// EXPERIMENTAL: sensitivity amplified by volatility. sigma is the 90-day
-// rolling std dev of the rate (usd_rub_stats.json's sigma_90d field). At
-// typical historical volatility (SIGMA_REF) this reduces to the same k=15
-// as wCny() above; higher volatility steepens the curve, lower flattens it.
-const SIGMA_REF = 0.0209;
+// Sensitivity amplified by volatility. sigma is the 90-day rolling std dev
+// of the rate. At typical historical volatility (SIGMA_REF) this reduces to
+// the same k as wCny() above; higher volatility steepens the curve, lower flattens it.
+const SIGMA_REF = WCNY.SIGMA_REF;
 function wCnyAmplified(x, m, sigma) {
   if (sigma === null || sigma === undefined) return wCny(x, m);
-  const kEff = 15 * (sigma / m) / SIGMA_REF;
-  return 0.20 + 0.60 / (1 + Math.exp(kEff * (x - m) / m));
+  const kEff = WCNY.K * (sigma / m) / SIGMA_REF;
+  return WCNY.LO + (WCNY.HI - WCNY.LO) / (1 + Math.exp(kEff * (x - m) / m));
+}
+
+// The target over a history of daily rates: per day from the win-th on --
+// x, m (the trailing win-day average), sigma (90-day), w (amplified), wPlain
+function wCnySeries(dates, rates, win = WCNY.WIN) {
+  const out = [];
+  let sum = 0, sSum = 0, sSum2 = 0;
+  for (let i = 0; i < rates.length; i++) {
+    const x = rates[i];
+    sum += x; sSum += x; sSum2 += x * x;
+    if (i >= win) sum -= rates[i - win];
+    if (i >= WCNY.SIGMA_WIN) { sSum -= rates[i - WCNY.SIGMA_WIN]; sSum2 -= rates[i - WCNY.SIGMA_WIN] ** 2; }
+    if (i < win - 1) continue;
+    const m = sum / win, sm = sSum / WCNY.SIGMA_WIN;
+    const sigma = Math.sqrt(Math.max(sSum2 / WCNY.SIGMA_WIN - sm * sm, 0));
+    out.push({ date: dates[i], x, m, sigma, w: wCnyAmplified(x, m, sigma), wPlain: wCny(x, m) });
+  }
+  return out;
+}
+
+// The share to aim at given the yuan's share now: the target once it's
+// more than BAND off, else what's held (new money split as held)
+function wCnyAim(w, cur) {
+  return cur == null || !Number.isFinite(cur) || Math.abs(cur - w) > WCNY.BAND ? w : cur;
 }
 
 const LAYOUT_BASE = {
@@ -1627,8 +1657,16 @@ async function loadData() {
   ];
 
   const usdRubRates = usdRubRows.map(r => val(r.rate));
-  const sigmoidX = usdRubStats.x;
-  const sigmoidM = usdRubStats.m;
+  // the target from the 5-year history, today's rate (stats.json, the CBR's
+  // set for today) appended when the history doesn't have it yet
+  const rates5y = usdRub5yRows.map(r => val(r.rate));
+  const dates5y = usdRub5yRows.map(r => r.date);
+  if (usdRubStats.date && usdRubStats.date > dates5y[dates5y.length - 1]) { dates5y.push(usdRubStats.date); rates5y.push(usdRubStats.x); }
+  const wSeries = wCnySeries(dates5y, rates5y);
+  const wSeriesOld = wCnySeries(dates5y, rates5y, 365);   // before 06.11.2026: the 1-year average
+  const wNow = wSeries[wSeries.length - 1];
+  const sigmoidX = wNow.x;
+  const sigmoidM = wNow.m;
 
   const axisMin = Math.min(55, ...usdRubRates, sigmoidX, sigmoidM);
   const axisMax = Math.max(120, ...usdRubRates, sigmoidX, sigmoidM);
@@ -1636,36 +1674,38 @@ async function loadData() {
   const curveX = Array.from({ length: nPoints }, (_, i) => axisMin + i * (axisMax - axisMin) / (nPoints - 1));
   const curveY = curveX.map(px => wCny(px, sigmoidM) * 100);
 
-  // EXPERIMENTAL: sensitivity-amplified variant, using sigma_90d from
-  // usd_rub_stats.json (may be absent on older stats.json snapshots).
-  const sigmoidSigma = usdRubStats.sigma_90d !== undefined ? usdRubStats.sigma_90d : null;
-  const sigmoidWCnyAmp = wCnyAmplified(sigmoidX, sigmoidM, sigmoidSigma);
+  const sigmoidSigma = wNow.sigma;
+  const sigmoidWCnyAmp = wNow.w;
   const sigmoidMWCnyAmp = wCnyAmplified(sigmoidM, sigmoidM, sigmoidSigma);
   const sigmoidWRubAmp = 1 - sigmoidWCnyAmp;
   const curveYAmp = curveX.map(px => wCnyAmplified(px, sigmoidM, sigmoidSigma) * 100);
+  const bandLo = Math.max(0, sigmoidWCnyAmp - WCNY.BAND) * 100, bandHi = Math.min(1, sigmoidWCnyAmp + WCNY.BAND) * 100;
 
   const sigmoidAmp = [
     {
-      x: curveX, y: curveY, name: 'w_CNY(x) original (fixed k=15)',
+      x: curveX, y: curveY, name: `w_CNY(x) fixed k=${WCNY.K}`,
       type: 'scatter', mode: 'lines',
       line: { color: '#9ca3af', width: 1.5, dash: 'dash' },
-      hovertemplate: 'USD/RUB: %{x:.2f}<br>w_CNY (original): <b>%{y:.0f}%</b><extra></extra>',
+      hovertemplate: 'USD/RUB: %{x:.2f}<br>w_CNY (fixed k): <b>%{y:.0f}%</b><extra></extra>',
     },
     {
-      x: curveX, y: curveYAmp, name: 'w_CNY(x) amplified',
+      x: curveX, y: curveYAmp, name: 'w_CNY(x) amplified — the target',
       type: 'scatter', mode: 'lines',
       line: { color: '#a78bfa', width: 2.5 },
-      hovertemplate: 'USD/RUB: %{x:.2f}<br>w_CNY (amplified): <b>%{y:.0f}%</b><extra></extra>',
+      hovertemplate: 'USD/RUB: %{x:.2f}<br>w_CNY: <b>%{y:.0f}%</b><extra></extra>',
     },
     {
       x: [sigmoidX], y: [sigmoidWCnyAmp * 100], name: `current x = ${sigmoidX.toFixed(2)}`,
       type: 'scatter', mode: 'markers',
       marker: { color: '#e05252', size: 11 },
-      hovertemplate: `x = ${sigmoidX.toFixed(2)}<br>w_CNY (amplified) = ${(sigmoidWCnyAmp * 100).toFixed(0)}%<extra></extra>`,
+      hovertemplate: `x = ${sigmoidX.toFixed(2)}<br>w_CNY = ${(sigmoidWCnyAmp * 100).toFixed(0)}%<extra></extra>`,
     },
   ];
 
   const sigmoidAmpShapes = [
+    // the no-trade band: the yuan's share within it -- nothing bought or sold
+    { type: 'rect', xref: 'paper', x0: 0, x1: 1, y0: bandLo, y1: bandHi,
+      fillcolor: 'rgba(224,82,82,0.08)', line: { width: 0 }, layer: 'below' },
     { type: 'line', x0: sigmoidM, x1: sigmoidM, y0: 0, y1: 100,
       line: { color: '#a78bfa', dash: 'dash', width: 1 } },
     { type: 'line', xref: 'paper', x0: 0, x1: 1, y0: sigmoidMWCnyAmp * 100, y1: sigmoidMWCnyAmp * 100,
@@ -1685,84 +1725,50 @@ async function loadData() {
       font: { color: '#a78bfa', size: 12 } },
   ];
 
-  const sigmaStr = sigmoidSigma !== null ? sigmoidSigma.toFixed(2) : 'n/a';
+  const sigmaStr = sigmoidSigma.toFixed(2);
+  const winYears = WCNY.WIN / 365;
   document.getElementById('sigmoid_amp_note').innerHTML = `
-    <b>EXPERIMENTAL</b> — sensitivity amplified by volatility:
-    w_CNY(x) = 0.20 + 0.60 / (1 + exp(k_eff·(x−m)/m)), k_eff = 15 · (σ₉₀/m) / 0.0209
-    (σ₉₀ = 90-day rolling std dev of the rate, currently <span class="stat">${sigmaStr}</span>).
-    At typical volatility k_eff ≈ 15 (matches the original curve above); in high-volatility
-    regimes the signal is sharper, in calm regimes it's smoother.<br>
-    <b>Gray dashed</b> — original curve. <b>Purple</b> — amplified curve.
+    w_CNY(x) = ${WCNY.LO.toFixed(2)} + ${(WCNY.HI - WCNY.LO).toFixed(2)} / (1 + exp(k_eff·(x−m)/m)), k_eff = ${WCNY.K} · (σ₉₀/m) / ${WCNY.SIGMA_REF}
+    (m = the ${winYears}-year average USD/RUB, currently <span class="stat">${sigmoidM.toFixed(2)}</span>;
+    σ₉₀ = 90-day rolling std dev of the rate, currently <span class="stat">${sigmaStr}</span>).
+    At typical volatility k_eff ≈ ${WCNY.K}; a sharp move steepens the curve.<br>
+    <b>Gray dashed</b> — fixed k. <b>Purple</b> — the target curve.
     <b>Red</b> — current rate (x = <span class="stat">${sigmoidX.toFixed(2)}</span>) and resulting
     w_CNY = <span class="stat">${(sigmoidWCnyAmp * 100).toFixed(0)}%</span>,
-    w_RUB = <span class="stat">${(sigmoidWRubAmp * 100).toFixed(0)}%</span>.<br>
-    Data as of ${usdRubStats.date}.
+    w_RUB = <span class="stat">${(sigmoidWRubAmp * 100).toFixed(0)}%</span>.
+    <b>Pink band</b> — ±${Math.round(WCNY.BAND * 100)} pp: while the yuan's share is inside it, no currency is bought or sold
+    (new money is split as already held).<br>
+    Data as of ${dates5y[dates5y.length - 1]}. Set in one place (WCNY in the code): every tab uses it.
   `;
 
-  // w_CNY(t) over the 5-year history: m(t) is the trailing 365-day average
-  // as of each day (needs at least 365 preceding rows to be defined).
-  const rates5y = usdRub5yRows.map(r => val(r.rate));
-  const dates5y = usdRub5yRows.map(r => r.date);
-  const wCny5yDates = [];
-  const wCny5yValues = [];
-  const wCny5yRates = [];
-  const wCny5yMArr = [];
-  let windowSum = 0;
-  for (let i = 0; i < rates5y.length; i++) {
-    windowSum += rates5y[i];
-    if (i >= 365) windowSum -= rates5y[i - 365];
-    if (i >= 364) {
-      const mT = windowSum / 365;
-      const xT = rates5y[i];
-      wCny5yDates.push(dates5y[i]);
-      wCny5yValues.push(wCny(xT, mT) * 100);
-      wCny5yRates.push(xT);
-      wCny5yMArr.push(mT);
-    }
-  }
-  // Volatility-amplified series over the same history, using a trailing
-  // 90-day rolling sigma computed from rates5y. Aligned index-for-index
-  // with wCny5yDates/wCny5yMArr (both start at the same i >= 364 offset).
-  const SIGMA_WINDOW = 90;
-  const wCny5yAmpValues = [];
-  let sigWindowSum = 0;
-  let sigWindowSum2 = 0;
-  let alignedIdx = 0;
-  for (let i = 0; i < rates5y.length; i++) {
-    sigWindowSum += rates5y[i];
-    sigWindowSum2 += rates5y[i] * rates5y[i];
-    if (i >= SIGMA_WINDOW) {
-      sigWindowSum -= rates5y[i - SIGMA_WINDOW];
-      sigWindowSum2 -= rates5y[i - SIGMA_WINDOW] * rates5y[i - SIGMA_WINDOW];
-    }
-    if (i >= 364) {
-      const mT = wCny5yMArr[alignedIdx];
-      const xT = rates5y[i];
-      const sigMean = sigWindowSum / SIGMA_WINDOW;
-      const sigVar = Math.max(sigWindowSum2 / SIGMA_WINDOW - sigMean * sigMean, 0);
-      const sigmaT = Math.sqrt(sigVar);
-      wCny5yAmpValues.push(wCnyAmplified(xT, mT, sigmaT) * 100);
-      alignedIdx++;
-    }
-  }
-
+  // w_CNY(t) over the history: today's rule, and the old one (1-year average) to compare
+  const wCny5yDates = wSeries.map(p => p.date);
   const wCny5yCombined = [
+    // the band around the target: upper edge, then lower filled up to it
     {
-      x: wCny5yDates, y: wCny5yValues, name: 'w_CNY(t) original (fixed k=15)',
-      type: 'scatter', mode: 'lines',
-      line: { color: '#4da8c8', width: 1.5 },
-      yaxis: 'y',
-      hovertemplate: '%{x}<br>w_CNY (original): <b>%{y:.0f}%</b><extra></extra>',
+      x: wCny5yDates, y: wSeries.map(p => Math.min(1, p.w + WCNY.BAND) * 100), name: `±${Math.round(WCNY.BAND * 100)} pp — no trading`,
+      type: 'scatter', mode: 'lines', line: { width: 0 }, yaxis: 'y', hoverinfo: 'skip', showlegend: false,
     },
     {
-      x: wCny5yDates, y: wCny5yAmpValues, name: 'w_CNY(t) amplified',
+      x: wCny5yDates, y: wSeries.map(p => Math.max(0, p.w - WCNY.BAND) * 100), name: `±${Math.round(WCNY.BAND * 100)} pp — no trading`,
+      type: 'scatter', mode: 'lines', line: { width: 0 }, fill: 'tonexty', fillcolor: 'rgba(167,139,250,0.15)', yaxis: 'y', hoverinfo: 'skip',
+    },
+    {
+      x: wSeriesOld.map(p => p.date), y: wSeriesOld.map(p => p.w * 100), name: 'w_CNY(t) before 06.11.2026 (1-year average)',
+      type: 'scatter', mode: 'lines',
+      line: { color: '#9ca3af', width: 1.2, dash: 'dot' },
+      yaxis: 'y',
+      hovertemplate: '%{x}<br>w_CNY (1-year average): <b>%{y:.0f}%</b><extra></extra>',
+    },
+    {
+      x: wCny5yDates, y: wSeries.map(p => p.w * 100), name: `w_CNY(t) — the target (${winYears}-year average)`,
       type: 'scatter', mode: 'lines',
       line: { color: '#a78bfa', width: 2 },
       yaxis: 'y',
-      hovertemplate: '%{x}<br>w_CNY (amplified): <b>%{y:.0f}%</b><extra></extra>',
+      hovertemplate: '%{x}<br>w_CNY: <b>%{y:.0f}%</b><extra></extra>',
     },
     {
-      x: wCny5yDates, y: wCny5yRates, name: 'USD/RUB rate',
+      x: wCny5yDates, y: wSeries.map(p => p.x), name: 'USD/RUB rate',
       type: 'scatter', mode: 'lines',
       line: { color: '#9ca3af', width: 1 },
       opacity: 0.7,
@@ -5782,7 +5788,9 @@ async function mpRenderMaturities() {
       mpTargetPie(pies, `Облигации, вклады и фонды ликвидности: юани и рубли${withBuys}`, [
         { label: 'в юанях', usd: cny, target: w ?? cny / tot * 100, color: '#f778ba' },
         { label: 'в рублях', usd: rub, target: w != null ? 100 - w : rub / tot * 100, color: '#58a6ff' },
-      ], w != null ? `Цель — w_CNY ${Math.round(w)}% по курсу USD/RUB (вкладка «USD/RUB → CNY Weight»).` : 'Цель w_CNY ещё не посчитана — открой вкладку «USD/RUB → CNY Weight».', null, false, null, rubPie);
+      ], w != null ? `Цель — w_CNY ${Math.round(w)}% по курсу USD/RUB (вкладка «USD/RUB → CNY Weight»). `
+        + (Math.abs(cny / tot * 100 - w) <= WCNY.BAND * 100 ? `Юани в пределах ±${Math.round(WCNY.BAND * 100)} пп от цели — валюту не покупать и не продавать, новые деньги делить как сейчас.`
+          : `Юани дальше ±${Math.round(WCNY.BAND * 100)} пп от цели — довести до цели.`) : 'Цель w_CNY ещё не посчитана — открой вкладку «USD/RUB → CNY Weight».', null, false, null, rubPie);
     }
     // 2. fixed vs floating; which floater to buy: an OFZ-PK 1-3 years out, the most traded
     {
@@ -6194,7 +6202,9 @@ async function mpRenderMaturities() {
       // bonds, the rest the ladder
       const dep = M > 0 ? depOf(M) : null, D = dep ? dep.usd : 0;
       const whole0 = pieRub - D + pieCny + M;
-      const cnyT = pieW != null ? whole0 * pieW / 100 : cnyMVAll + M * (pieCny / ((pieRub + pieCny) || 1));
+      // within the band of w_CNY -- the yuan's share as held (no currency bought)
+      const aimW = pieW != null ? wCnyAim(pieW / 100, (pieCny / ((pieRub + pieCny) || 1))) * 100 : null;
+      const cnyT = aimW != null ? whole0 * aimW / 100 : cnyMVAll + M * (pieCny / ((pieRub + pieCny) || 1));
       const rubT = Math.max(0, whole0 - cnyT - pieLiquid);
       const floatT = Math.max(0, rubT - (mvDeposits - D)) * floatPct / 100, ladderT = rubT - floatT;
       const target = k => k.kind === 'float' ? floatT : k.kind === 'cny' ? cnyT * k.w : ladderT * k.w;
@@ -6766,8 +6776,13 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
   const ruNew = c.ruInfraTotal + ruAdd;   // chart 8's total
   const ruStockTarget = c.ruAlloc && (c.ruAlloc.Stocks + c.ruAlloc.Bonds) > 0
     ? c.ruAlloc.Stocks / (c.ruAlloc.Stocks + c.ruAlloc.Bonds) * ruNew : cell('stock', 'RUB');
-  // Yuan bonds' target: w_CNY of the non-stock part, less yuan deposits.
-  const cnyTarget = c.wCny !== null ? Math.max(0, c.wCny * (ruNew - ruStockTarget) - cell('deposit', 'CNY')) : null;
+  // Yuan bonds' target: w_CNY of the non-stock part, less yuan deposits --
+  // within the band of w_CNY the yuan's share as held (wCnyAim)
+  const nonStock = Object.entries(c.ruCells).filter(([l]) => !l.startsWith(MP_RU_INFRA_LABELS.stock));
+  const nonStockNow = nonStock.reduce((s, [, v]) => s + v, 0);
+  const cnyNow = nonStock.filter(([l]) => l.includes(MP_RU_INFRA_CURRENCIES.CNY)).reduce((s, [, v]) => s + v, 0);
+  const wAim = c.wCny !== null ? wCnyAim(c.wCny, nonStockNow ? cnyNow / nonStockNow : null) : null;
+  const cnyTarget = wAim !== null ? Math.max(0, wAim * (ruNew - ruStockTarget) - cell('deposit', 'CNY')) : null;
   parts.cnySold = flags.sellYuan && cnyTarget !== null && c.wCny < 0.3 ? Math.max(0, cell('bond', 'CNY') - cnyTarget) : 0;
   // (the Russian liquid assets are spent where they are, in step 8)
   parts.ruLiquid = flags.ruLiquid ? c.ruLiquidRaw : 0;
@@ -7423,8 +7438,10 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   let target11 = null;
   if (wCny !== null) {
     const total = Object.values(ruNoStocks).reduce((s, v) => s + v, 0);
+    // within the band of w_CNY -- the yuan's share as held
+    const aim = wCnyAim(wCny, total ? sumWhere(ruNoStocks, l => ccyOf(l) === 'CNY') / total : null);
     target11 = fixedTargets(ruNoStocks);
-    for (const [c, share] of [['RUB', 1 - wCny], ['CNY', wCny]]) {
+    for (const [c, share] of [['RUB', 1 - aim], ['CNY', aim]]) {
       target11[bondLabel(c)] = Math.max(0, share * total - sumWhere(target11, l => ccyOf(l) === c));
     }
   }
@@ -7445,7 +7462,9 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     const stock = `${MP_RU_INFRA_LABELS.stock} ${MP_RU_INFRA_CURRENCIES.RUB}`;
     target7[stock] = alloc.Stocks / (alloc.Stocks + alloc.Bonds) * ruTargetTotal;
     const nonStock = ruTargetTotal - target7[stock];
-    target7[bondLabel('CNY')] = Math.max(0, wCny * nonStock - sumWhere(target7, l => ccyOf(l) === 'CNY'));
+    const nonStockNow = sumWhere(ruAll, l => l !== stock);
+    const aim = wCnyAim(wCny, nonStockNow ? sumWhere(ruAll, l => l !== stock && ccyOf(l) === 'CNY') / nonStockNow : null);
+    target7[bondLabel('CNY')] = Math.max(0, aim * nonStock - sumWhere(target7, l => ccyOf(l) === 'CNY'));
     target7[bondLabel('RUB')] = Math.max(0, ruTargetTotal - sumWhere(target7, l => l !== bondLabel('RUB')));
   }
   // targetTotal given: the targets' own total (s2 for chart 12), which the
