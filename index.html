@@ -955,16 +955,22 @@ function autoFitYOnXChange(divId, traces) {
 // the sigmoid of USD/RUB against its WIN-day average, sharpened by the
 // rate's 90-day volatility; while the yuan's share is within BAND of the
 // target, no currency is bought or sold (wCnyAim); and yuan are bought
-// only once the dollar is BUY_SIGMA σ₉₀ under the average, sold only once
-// it's SELL_SIGMA σ₉₀ over it (06.11.2026: "the dollar's only 5 roubles
-// down -- too early to buy back"). Both won the walk-forward test
-// (2015-2026, roubles at the key rate, yuan at 3.5%, monthly) over trading
-// toward the target every month; the 2-year average was tried and turned
-// down -- it wants more yuan when the rouble has been weakening for years.
-const WCNY = { WIN: 365, BAND: 0.10, BUY_SIGMA: 2, SELL_SIGMA: 1, K: 15, SIGMA_WIN: 90, SIGMA_REF: 0.0209, LO: 0.20, HI: 0.80 };
-// today's x, m, sigma (loadData sets it): the buy / sell lines
+// only under the buy line, sold only over the sell one (06.11.2026: "the
+// dollar's only 5 roubles down -- too early to buy back"): m -/+ LINE_SIGMA
+// σ₉₀, both shifted down by what yuan cost against roubles over the same 90
+// days -- the CBR's key rate less the PBoC's, of m (no hand-set asymmetry:
+// the dearer roubles pay, the harder yuan are to buy and the easier to sell).
+// Both won the walk-forward test (2015-2026, monthly) over trading toward
+// the target every month; the 2-year average was tried and turned down --
+// it wants more yuan when the rouble has been weakening for years.
+const WCNY = { WIN: 365, BAND: 0.10, LINE_SIGMA: 1.5, K: 15, SIGMA_WIN: 90, SIGMA_REF: 0.0209, LO: 0.20, HI: 0.80 };
+// today's x, m, sigma, carry (loadData sets it): the buy / sell lines
 let wCnyNow = null;
-const wCnyLines = (p = wCnyNow) => p ? { buy: p.m - WCNY.BUY_SIGMA * p.sigma, sell: p.m + WCNY.SELL_SIGMA * p.sigma } : null;
+const wCnyLines = (p = wCnyNow) => {
+  if (!p) return null;
+  const shift = p.m * (p.carry || 0) * WCNY.SIGMA_WIN / 365;
+  return { buy: p.m - WCNY.LINE_SIGMA * p.sigma - shift, sell: p.m + WCNY.LINE_SIGMA * p.sigma - shift, shift };
+};
 function wCny(x, m) {
   return WCNY.LO + (WCNY.HI - WCNY.LO) / (1 + Math.exp(WCNY.K * (x - m) / m));
 }
@@ -980,8 +986,9 @@ function wCnyAmplified(x, m, sigma) {
 }
 
 // The target over a history of daily rates: per day from the win-th on --
-// x, m (the trailing win-day average), sigma (90-day), w (amplified), wPlain
-function wCnySeries(dates, rates, win = WCNY.WIN) {
+// x, m (the trailing win-day average), sigma (90-day), w (amplified), wPlain,
+// carry (the key rate less the PBoC's that day, a fraction; carryAt(date))
+function wCnySeries(dates, rates, win = WCNY.WIN, carryAt = () => 0) {
   const out = [];
   let sum = 0, sSum = 0, sSum2 = 0;
   for (let i = 0; i < rates.length; i++) {
@@ -992,7 +999,7 @@ function wCnySeries(dates, rates, win = WCNY.WIN) {
     if (i < win - 1) continue;
     const m = sum / win, sm = sSum / WCNY.SIGMA_WIN;
     const sigma = Math.sqrt(Math.max(sSum2 / WCNY.SIGMA_WIN - sm * sm, 0));
-    out.push({ date: dates[i], x, m, sigma, w: wCnyAmplified(x, m, sigma), wPlain: wCny(x, m) });
+    out.push({ date: dates[i], x, m, sigma, w: wCnyAmplified(x, m, sigma), wPlain: wCny(x, m), carry: carryAt(dates[i]) });
   }
   return out;
 }
@@ -1674,7 +1681,16 @@ async function loadData() {
   const rates5y = usdRub5yRows.map(r => val(r.rate));
   const dates5y = usdRub5yRows.map(r => r.date);
   if (usdRubStats.date && usdRubStats.date > dates5y[dates5y.length - 1]) { dates5y.push(usdRubStats.date); rates5y.push(usdRubStats.x); }
-  const wSeries = wCnySeries(dates5y, rates5y);
+  // the carry: the CBR's key rate (daily) less the PBoC's (monthly), each as of the day
+  const stepAt = rows => { const r = rows.filter(v => Number.isFinite(v[1])).sort((a, b) => a[0] < b[0] ? -1 : 1); return d => { let lo = 0, hi = r.length - 1, v = null; while (lo <= hi) { const mid = (lo + hi) >> 1; if (r[mid][0] <= d) { v = r[mid][1]; lo = mid + 1; } else hi = mid - 1; } return v; }; };
+  let ruAt = () => null, cnAt = () => null;
+  try { ruAt = stepAt((await fetchCsv(`${DATA_DIR}/key_rate.csv`)).map(r => [r.date, val(r.rate_pct)])); } catch { /* no carry then */ }
+  try {
+    const { data: cn } = await sb.from('cb_rates_monthly').select('month, rate').eq('country', 'CN');
+    cnAt = stepAt((cn || []).map(r => [r.month, Number(r.rate)]));
+  } catch { /* no carry then */ }
+  const carryAt = d => { const a = ruAt(d), b = cnAt(d); return a != null && b != null ? (a - b) / 100 : 0; };
+  const wSeries = wCnySeries(dates5y, rates5y, WCNY.WIN, carryAt);
   const wNow = wSeries[wSeries.length - 1];
   wCnyNow = wNow;
   const lines = wCnyLines();
@@ -1760,9 +1776,11 @@ async function loadData() {
     <b>Pink band</b> — ±${Math.round(WCNY.BAND * 100)} pp: while the yuan's share is inside it, no currency is bought or sold
     (new money is split as already held).<br>
     <b>Green / orange lines</b> — outside the band, yuan are bought only while USD/RUB is under
-    m − ${WCNY.BUY_SIGMA}σ₉₀ = <span class="stat">${lines.buy.toFixed(2)}</span>
-    and sold only while it's over m + ${WCNY.SELL_SIGMA}σ₉₀ = <span class="stat">${lines.sell.toFixed(2)}</span>;
-    in between (gray) — nothing is bought or sold, whatever the target.<br>
+    m − ${WCNY.LINE_SIGMA}σ₉₀ − c = <span class="stat">${lines.buy.toFixed(2)}</span>
+    and sold only while it's over m + ${WCNY.LINE_SIGMA}σ₉₀ − c = <span class="stat">${lines.sell.toFixed(2)}</span>;
+    in between (gray) — nothing is bought or sold, whatever the target.
+    c = m × (key rate − PBoC rate) × ${WCNY.SIGMA_WIN}/365 = <span class="stat">${lines.shift.toFixed(2)}</span>
+    (key rate − PBoC now: <span class="stat">${(wNow.carry * 100).toFixed(2)} pp</span>) — what yuan cost against roubles over ${WCNY.SIGMA_WIN} days.<br>
     Data as of ${dates5y[dates5y.length - 1]}. Set in one place (WCNY in the code): every tab uses it.
   `;
 
@@ -1786,12 +1804,12 @@ async function loadData() {
       hovertemplate: '%{x}<br>w_CNY: <b>%{y:.0f}%</b><extra></extra>',
     },
     {
-      x: wCny5yDates, y: wSeries.map(p => wCnyLines(p).buy), name: `buy yuan below (m − ${WCNY.BUY_SIGMA}σ)`,
+      x: wCny5yDates, y: wSeries.map(p => wCnyLines(p).buy), name: `buy yuan below (m − ${WCNY.LINE_SIGMA}σ − c)`,
       type: 'scatter', mode: 'lines', line: { color: '#3dd68c', width: 1, dash: 'dash' }, yaxis: 'y2',
       hovertemplate: '%{x}<br>buy yuan below: <b>%{y:.2f}</b><extra></extra>',
     },
     {
-      x: wCny5yDates, y: wSeries.map(p => wCnyLines(p).sell), name: `sell yuan above (m + ${WCNY.SELL_SIGMA}σ)`,
+      x: wCny5yDates, y: wSeries.map(p => wCnyLines(p).sell), name: `sell yuan above (m + ${WCNY.LINE_SIGMA}σ − c)`,
       type: 'scatter', mode: 'lines', line: { color: '#f0b429', width: 1, dash: 'dash' }, yaxis: 'y2',
       hovertemplate: '%{x}<br>sell yuan above: <b>%{y:.2f}</b><extra></extra>',
     },
@@ -5820,8 +5838,8 @@ async function mpRenderMaturities() {
         + (() => {
           const l = wCnyLines(), fx = v => v.toFixed(1).replace('.', ',');
           if (Math.abs(cny / tot * 100 - w) <= WCNY.BAND * 100) return `Юани в пределах ±${Math.round(WCNY.BAND * 100)} пп от цели — валюту не покупать и не продавать, новые деньги делить как сейчас.`;
-          if (cny / tot * 100 < w) return l && !(wCnyNow.x < l.buy) ? `Юаней меньше цели, но доллар ${fx(wCnyNow.x)} — выше линии покупки ${fx(l.buy)} (среднее за год − ${WCNY.BUY_SIGMA}σ): юани не покупать, новые деньги делить как сейчас.` : 'Юаней меньше цели и доллар дешёвый — докупить до цели.';
-          return l && !(wCnyNow.x > l.sell) ? `Юаней больше цели, но доллар ${fx(wCnyNow.x)} — ниже линии продажи ${fx(l.sell)} (среднее за год + ${WCNY.SELL_SIGMA}σ): юани не продавать.` : 'Юаней больше цели и доллар дорогой — продать до цели.';
+          if (cny / tot * 100 < w) return l && !(wCnyNow.x < l.buy) ? `Юаней меньше цели, но доллар ${fx(wCnyNow.x)} — выше линии покупки ${fx(l.buy)} (вкладка «USD/RUB → CNY Weight»): юани не покупать, новые деньги делить как сейчас.` : 'Юаней меньше цели и доллар дешёвый — докупить до цели.';
+          return l && !(wCnyNow.x > l.sell) ? `Юаней больше цели, но доллар ${fx(wCnyNow.x)} — ниже линии продажи ${fx(l.sell)} (вкладка «USD/RUB → CNY Weight»): юани не продавать.` : 'Юаней больше цели и доллар дорогой — продать до цели.';
         })() : 'Цель w_CNY ещё не посчитана — открой вкладку «USD/RUB → CNY Weight».', null, false, null, rubPie);
     }
     // 2. fixed vs floating; which floater to buy: an OFZ-PK 1-3 years out, the most traded
