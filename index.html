@@ -5819,14 +5819,17 @@ async function mpRenderMaturities() {
     // 1. yuan vs rouble, as the chart in USD/RUB -> CNY Weight
     {
       const rub = pieRub + aFixedAll + aFloat, cny = pieCny + aCnyAll, tot = rub + cny || 1, w = pieW;
+      // the target with the buy / sell lines (as the calculator's): w_CNY,
+      // or the yuan's share as held when the dollar's between the lines
+      const aimPct = w != null ? wCnyAim(w / 100, pieCny / ((pieRub + pieCny) || 1)) * 100 : null;
       mpTargetPie(pies, `Облигации, вклады и фонды ликвидности: юани и рубли${withBuys}`, [
-        { label: 'в юанях', usd: cny, target: w ?? cny / tot * 100, color: '#f778ba' },
-        { label: 'в рублях', usd: rub, target: w != null ? 100 - w : rub / tot * 100, color: '#58a6ff' },
-      ], w != null ? `Цель — w_CNY ${Math.round(w)}% по курсу USD/RUB (вкладка «USD/RUB → CNY Weight»). `
+        { label: 'в юанях', usd: cny, target: aimPct ?? cny / tot * 100, color: '#f778ba' },
+        { label: 'в рублях', usd: rub, target: aimPct != null ? 100 - aimPct : rub / tot * 100, color: '#58a6ff' },
+      ], w != null ? `w_CNY ${Math.round(w)}% по курсу USD/RUB (вкладка «USD/RUB → CNY Weight»). `
         + (() => {
           const l = wCnyLines(), fx = v => v.toFixed(1).replace('.', ',');
-          if (cny / tot * 100 < w) return l && !(wCnyNow.x < l.buy) ? `Юаней меньше цели, но доллар ${fx(wCnyNow.x)} — выше линии покупки ${fx(l.buy)} (вкладка «USD/RUB → CNY Weight»): юани не покупать, новые деньги делить как сейчас.` : 'Юаней меньше цели и доллар дешёвый — докупить до цели.';
-          return l && !(wCnyNow.x > l.sell) ? `Юаней больше цели, но доллар ${fx(wCnyNow.x)} — ниже линии продажи ${fx(l.sell)} (вкладка «USD/RUB → CNY Weight»): юани не продавать.` : 'Юаней больше цели и доллар дорогой — продать до цели.';
+          if (cny / tot * 100 < w) return l && !(wCnyNow.x < l.buy) ? `Юаней меньше, но доллар ${fx(wCnyNow.x)} — выше линии покупки ${fx(l.buy)}: юани не покупать, цель — держать их долю как сейчас, новые деньги делить так же.` : 'Юаней меньше и доллар ниже линии покупки — цель w_CNY, докупить.';
+          return l && !(wCnyNow.x > l.sell) ? `Юаней больше, но доллар ${fx(wCnyNow.x)} — ниже линии продажи ${fx(l.sell)}: юани не продавать, цель — держать их долю как сейчас.` : 'Юаней больше и доллар выше линии продажи — цель w_CNY, продать.';
         })() : 'Цель w_CNY ещё не посчитана — открой вкладку «USD/RUB → CNY Weight».', null, false, null, rubPie);
     }
     // 2. fixed vs floating; which floater to buy: an OFZ-PK 1-3 years out, the most traded
@@ -8491,7 +8494,8 @@ async function mpRenderPortfolioPies() {
   const nonRubCurrent = bondDepositRows.filter(r => r.underlying_currency !== 'RUB').reduce((s, r) => s + ruValue(r), 0);
   if (DATA.currentWCny !== undefined && DATA.currentWCny !== null) {
     const bdTotal = rubCurrent + nonRubCurrent;
-    const targetNonRubPct = DATA.currentWCny * 100;
+    // with the buy / sell lines: the share as held while the dollar's between them
+    const targetNonRubPct = wCnyAim(DATA.currentWCny, bdTotal ? nonRubCurrent / bdTotal : null) * 100;
     const targetRubPct = 100 - targetNonRubPct;
     mpDrawTargetDonut('plot_mp_pie_deposits', 'mp_pie_deposits_note', [
       { label: 'RUB', target: targetRubPct, current: bdTotal ? rubCurrent / bdTotal * 100 : 0, color: '#4da8c8' },
