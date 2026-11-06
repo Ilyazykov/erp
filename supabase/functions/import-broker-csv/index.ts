@@ -24,6 +24,10 @@
 // Statement over Snowball: Snowball rows of the same operations are removed
 // (_shared/statement_priority.ts), and import-trades-csv leaves them out of
 // later uploads. Upserted by content -- safe to re-upload.
+// ?replace=1 (a full broker report converted on the page -- Alfa's XML,
+// 06.11.2026): the file is the record of each of its accounts over the days
+// it spans, as import-bank-csv's -- a stored row of the account dated within
+// them that the file doesn't have (one from the app's screenshots) goes.
 
 import { reportPeriods } from '../_shared/app_rows.ts';
 import { createClient } from 'jsr:@supabase/supabase-js@2';
@@ -128,13 +132,41 @@ Deno.serve(async (req) => {
       const { error } = await supabase.from('trades').upsert(rows.slice(i, i + 500), { onConflict: 'user_id,external_source,external_id' });
       if (error) return json({ error: error.message }, 500);
     }
+    let replaced = 0;
+    if (new URL(req.url).searchParams.get('replace') === '1') {
+      const spans = new Map<string, { broker: string; acct: string; from: string; to: string; ids: Set<string> }>();
+      for (const r of rows) {
+        const acct = r.external_id.split(':')[0];
+        const g = spans.get(`${r.account}|${acct}`) ?? { broker: r.account, acct, from: r.trade_date, to: r.trade_date, ids: new Set<string>() };
+        g.ids.add(r.external_id);
+        if (r.trade_date < g.from) g.from = r.trade_date;
+        if (r.trade_date > g.to) g.to = r.trade_date;
+        spans.set(`${r.account}|${acct}`, g);
+      }
+      for (const g of spans.values()) {
+        const stale: string[] = [];
+        for (let off = 0; ; off += 1000) {
+          const { data, error } = await supabase.from('trades').select('id, external_id')
+            .eq('user_id', user.id).eq('external_source', SOURCE).eq('account', g.broker).like('external_id', `${g.acct}:%`)
+            .gte('trade_date', g.from).lte('trade_date', g.to).order('id').range(off, off + 999);
+          if (error) return json({ error: error.message }, 500);
+          for (const r of data ?? []) if (!g.ids.has(r.external_id)) stale.push(r.id);
+          if (!data || data.length < 1000) break;
+        }
+        for (let i = 0; i < stale.length; i += 200) {
+          const { error } = await supabase.from('trades').delete().in('id', stale.slice(i, i + 200));
+          if (error) return json({ error: error.message }, 500);
+        }
+        replaced += stale.length;
+      }
+    }
     const removedSnowball = await removeCoveredSnowball(supabase, user.id, rows);
     const round = (x: number) => Math.round(x * 1e8) / 1e8;
     return json({
       imported: rows.length, skipped,
       trades: rows.filter(r => r.side === 'buy' || r.side === 'sell').length,
       payouts: rows.filter(r => r.side !== 'buy' && r.side !== 'sell').length,
-      removed_snowball_duplicates: removedSnowball, covered_by_report: coveredByReport,
+      removed_snowball_duplicates: removedSnowball, covered_by_report: coveredByReport, replaced,
       holdings: Object.fromEntries(Object.entries(holdings).map(([t, q]) => [t, round(q)]).filter(([, q]) => q)),
     });
   } catch (err) {

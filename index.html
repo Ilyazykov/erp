@@ -289,7 +289,7 @@
       (built from the history in Walt, ex. Wallet in Telegram) — the file type is detected automatically from its header
       row or extension.</p>
     <div class="form-row">
-      <input type="file" id="mp_any_csv_file" accept=".csv,.xlsx,.json,.html,.htm" multiple>
+      <input type="file" id="mp_any_csv_file" accept=".csv,.xlsx,.json,.html,.htm,.xml" multiple>
       <button class="btn primary" id="mp_any_csv_upload">Upload</button>
     </div>
     <div id="mp_any_csv_drop" class="drop-zone">…or drop any number of files here — they're queued and imported one by one</div>
@@ -2796,6 +2796,116 @@ function tbcToBankCsv(text, fileName) {
     ...rows.map(r => ['TBC Bank', accountNumber, kind.product, kind.currency, r.date, '', '', r.description, r.amount, r.balance, r.type, fileName].map(v => q(String(v))).join(','))].join('\n');
 }
 
+// Alfa-Investments' broker report as XML (06.11.2026: the cabinet's
+// "Отчёт брокера" -> XML, namespace MyBroker) turned into this project's
+// two CSVs: the brokerage cash (import-bank-csv, product brokerage_cash --
+// every money movement, a deal's own ones dated by the deal) and the deals
+// and payouts (import-broker-csv -- a deal's side by its cash's sign, a bond's
+// price in money, coupons / dividends by the issue's registration number,
+// per unit held). Tickers as MOEX's secid (MOEX ISS, from the browser).
+const mpMoexIds = new Map();
+async function mpMoexBy(q, field) {
+  const key = `${field}:${q}`;
+  if (mpMoexIds.has(key)) return mpMoexIds.get(key);
+  const res = await fetch(`https://iss.moex.com/iss/securities.json?iss.meta=off&q=${encodeURIComponent(q)}&securities.columns=secid,isin,regnumber,shortname,type,is_traded`)
+    .then(r => r.json()).catch(() => null);
+  const rows = (res?.securities?.data || []).map(([secid, isin, regnumber, shortname, type, traded]) => ({ secid, isin, regnumber, shortname, type, traded }));
+  const exact = rows.filter(r => r[field] === q);
+  const hit = exact.find(r => r.traded) || exact[0] || null;
+  mpMoexIds.set(key, hit);
+  return hit;
+}
+async function alfaXmlToCsvs(text, fileName) {
+  const doc = new DOMParser().parseFromString(text.replace(/^﻿/, ''), 'application/xml');
+  if (doc.getElementsByTagName('parsererror').length) throw new Error(`${fileName}: not readable as XML`);
+  const all = (el, name) => Array.from(el.getElementsByTagNameNS('*', name));
+  const iso = d => { const [dd, mm, yy] = d.trim().slice(0, 10).split('.'); return `${yy}-${mm}-${dd}`; };
+  const num = v => Number(String(v ?? '').replace(',', '.')) || 0;
+  const r2 = x => Math.round(x * 100) / 100;
+  const q = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
+  const tradesEl = all(doc, 'Trades')[0];
+  const deals = (tradesEl ? all(tradesEl, 'Details') : []).map(d => ({
+    no: (d.getAttribute('trade_no') || '').trim().split(/\s+/)[0], date: iso(d.getAttribute('db_time') || ''),
+    acct: (d.getAttribute('acc_code') || '').split('-')[0], isin: d.getAttribute('isin_reg'), name: d.getAttribute('p_name'),
+    qty: num(d.getAttribute('qty')), price: num(d.getAttribute('Price')), sum: num(d.getAttribute('summ_trade')),
+    nkd: num(d.getAttribute('summ_nkd')), fee: num(d.getAttribute('bank_tax')), ccy: d.getAttribute('curr_calc') || 'RUB',
+  }));
+  const acct = deals[0]?.acct || all(doc, 'Textbox11').map(e => (e.getAttribute('acc_code') || '').split('-')[0]).find(Boolean)
+    || fileName.match(/\d{6,}/)?.[0];
+  if (!acct) throw new Error(`${fileName}: the account number isn't in the report`);
+  const dealOf = new Map(deals.map(d => [d.no, d]));
+  // the money: per settlement day, each operation's amount by currency
+  const ops = [];
+  for (const sd of all(doc, 'settlement_date')) {
+    const day = (sd.getAttribute('settlement_date') || '').slice(0, 10);
+    for (const ot of all(sd, 'oper_type')) {
+      const type = (ot.getAttribute('oper_type') || '').trim();
+      for (const cm of all(ot, 'comment')) {
+        const comment = (cm.getAttribute('comment') || '').trim();
+        for (const pc of all(cm, 'p_code').filter(e => e.hasAttribute('volume')))
+          ops.push({ day, type, comment, ccy: pc.getAttribute('p_code') || 'RUB', amount: r2(num(pc.getAttribute('volume'))) });
+      }
+    }
+  }
+  // a deal's money on the deal's day (as its trade); its accrued interest
+  // follows the deal of the same paper that day
+  let lastDeal = new Map();
+  for (const o of ops) {
+    const no = o.type.match(/по сделке (\d+)/)?.[1];
+    if (no && dealOf.has(no)) { o.date = dealOf.get(no).date; if (/^Расчеты/.test(o.type)) { lastDeal.set(`${o.day}|${o.comment}`, o.date); dealOf.get(no).sign = Math.sign(o.amount); } }
+    else if (/^НКД по сделке/.test(o.type)) o.date = lastDeal.get(`${o.day}|${o.comment}`) || o.day;
+    else o.date = o.day;
+  }
+  const opsSorted = ops.map((o, i) => ({ ...o, i })).sort((a, b) => a.date.localeCompare(b.date) || a.i - b.i);
+  const begin = {};
+  for (const pc of all(doc, 'money_volume_begin_Collection').flatMap(e => all(e, 'p_code')).filter(e => e.hasAttribute('volume')))
+    begin[pc.getAttribute('p_code') || 'RUB'] = num(pc.getAttribute('volume'));
+  const bal = { ...begin };
+  const cash = ['bank,account_number,product,currency,date,time,card,description,amount,balance,source_file',
+    ...opsSorted.map(o => {
+      bal[o.ccy] = r2((bal[o.ccy] || 0) + o.amount);
+      return ['Alfa', acct, 'brokerage_cash', o.ccy, o.date, '', '', `${o.type}: ${o.comment}`, o.amount.toFixed(2), bal[o.ccy].toFixed(2), fileName].map(q).join(',');
+    })].join('\n');
+  // the deals, then the payouts per unit held that day
+  const out = [];
+  const held = {};
+  for (const d of [...deals].sort((a, b) => a.date.localeCompare(b.date))) {
+    if (!d.sign) continue;   // not settled within the report
+    const m = await mpMoexBy(d.isin, 'isin');
+    const ticker = m?.secid || d.isin, bond = /bond/.test(m?.type || '') || d.nkd > 0;
+    // a sale's quantity comes negative; else the side by the deal's cash
+    const side = d.qty < 0 || (!d.qty && d.sign > 0) ? 'sell' : d.qty > 0 ? 'buy' : d.sign < 0 ? 'buy' : 'sell';
+    d.qty = Math.abs(d.qty);
+    const price = bond ? r2((d.sum - d.nkd) / d.qty) : d.price;
+    held[ticker] = (held[ticker] || 0) + (side === 'buy' ? d.qty : -d.qty);
+    out.push({ date: d.date, row: ['Alfa', acct, d.date, side, ticker, d.name, d.qty, price, d.ccy, d.nkd ? r2(d.nkd / d.qty) : '', d.fee || '',
+      (side === 'buy' ? -d.sum : d.sum).toFixed(2), '', fileName], ticker, side, qty: d.qty });
+  }
+  const heldOn = (ticker, date) => out.filter(t => t.ticker === ticker && t.date <= date && (t.side === 'buy' || t.side === 'sell'))
+    .reduce((s, t) => s + (t.side === 'buy' ? t.qty : -t.qty), 0);
+  const nameOf = ticker => out.find(t => t.ticker === ticker)?.row[5];
+  let unknown = 0;
+  for (const o of opsSorted) {
+    if (o.amount <= 0 || o.type !== 'Перевод') continue;
+    const coupon = o.comment.match(/погашение купона (\S+) .*?д\.ф\.(\d{2})\.(\d{2})\.(\d{2})/);
+    const part = o.comment.match(/(частичное погашение|погашение номинала|погашение облигаций)\D*?(\d\S*)/i);
+    const div = o.comment.match(/Дивиденды .*?по акциям .*\(([0-9A-Z-]+)\)\./);
+    const reg = coupon?.[1] || div?.[1] || part?.[2];
+    if (!reg) continue;
+    const m = await mpMoexBy(reg, 'regnumber');
+    if (!m) { unknown++; continue; }
+    const units = heldOn(m.secid, o.date) || 1;
+    const side = div || coupon ? 'dividend' : /частичное/i.test(part[1]) ? 'amortisation' : 'repayment';
+    const label = div ? 'дивиденды' : coupon ? 'купон' : 'погашение';
+    out.push({ date: o.date, row: ['Alfa', acct, o.date, side, m.secid, `${nameOf(m.secid) || m.shortname} (${label})`, o.amount,
+      Math.round(o.amount / units * 1e6) / 1e6, o.ccy, '', '', o.amount.toFixed(2), coupon ? `20${coupon[4]}-${coupon[3]}-${coupon[2]}` : '', fileName] });
+  }
+  out.sort((a, b) => a.date.localeCompare(b.date));
+  const trades = ['broker,account_number,date,operation,ticker,name,quantity,price,currency,nkd,fee,amount,record_date,source_file',
+    ...out.map(t => t.row.map(q).join(','))].join('\n');
+  return { cash, trades, unsettled: deals.filter(d => !d.sign).length, unknown };
+}
+
 async function mpImportOneFile(file, statusEl, session) {
   try {
     // Ziraat Bank's own export is a real .xlsx, not CSV -- detected by
@@ -2809,6 +2919,38 @@ async function mpImportOneFile(file, statusEl, session) {
       kind = 'xlsx';
     } else {
       csvText = await file.text();
+      // Alfa-Investments' broker report (XML): two of this project's CSVs, each to its importer
+      if (/\.xml$/i.test(file.name) && /xmlns="MyBroker"/.test(csvText.slice(0, 2000))) {
+        statusEl.textContent = 'Detected: Alfa-Investments broker report (XML). Converting…';
+        const conv = await alfaXmlToCsvs(csvText, file.name);
+        const post = async (fn, body) => {
+          const res = await fetch(`${SUPABASE_URL}/functions/v1/${fn}`, { method: 'POST', body,
+            headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'text/csv' } });
+          const out = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(`${fn} (HTTP ${res.status}): ${out.error || out.message || res.statusText}`);
+          return out;
+        };
+        statusEl.textContent = 'Detected: Alfa-Investments broker report (XML). Uploading the cash…';
+        const cashRes = await post('import-bank-csv', conv.cash);
+        statusEl.textContent = 'Detected: Alfa-Investments broker report (XML). Uploading the deals and payouts…';
+        // ?replace=1: the report is the record of its days -- the app-screenshot rows it covers go
+        const tradeRes = await post('import-broker-csv?replace=1', conv.trades);
+        mpImportedSinceRefresh = true;
+        mpLogUpload('bank_csv', file.name, conv.cash, cashRes);
+        mpLogUpload('broker_csv', file.name, conv.trades, tradeRes);
+        fetch(`${SUPABASE_URL}/functions/v1/sync-estimates`, { method: 'POST', body: '{}',
+          headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json' } }).catch(() => { /* the daily run */ });
+        statusEl.textContent = `Detected: Alfa-Investments broker report (XML). Cash: ${cashRes.imported ?? '?'} operations; `
+          + `deals and payouts: ${tradeRes.trades ?? 0} deals, ${tradeRes.payouts ?? 0} payouts`
+          + `${tradeRes.replaced ? `, ${tradeRes.replaced} older rows (app screenshots) replaced` : ''}`
+          + `${conv.unsettled ? `; ${conv.unsettled} deal(s) not settled within the report left out` : ''}`
+          + `${conv.unknown ? `; ${conv.unknown} payout(s) whose paper MOEX doesn't know left out` : ''}.`;
+        mpRenderPortfolioPies();
+        mpRenderBrokerCurrency();
+        mpRenderBrokerAssetClass();
+        mpRenderBondByType();
+        return;
+      }
       const headerLine = csvText.split(/\r\n|\r|\n/)[0] || '';
       kind = mpDetectCsvKind(headerLine, csvText);
       if (kind === 'tbc_account') {
