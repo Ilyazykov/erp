@@ -6266,6 +6266,10 @@ async function mpRenderMaturities() {
       const whole0 = pieRub - D + pieCny + M;
       // w_CNY of the whole -- or, the dollar between the lines, the yuan as held
       const cnyT = pieW != null ? wCnyTarget(pieW / 100, pieCny, whole0) : cnyMVAll + M * (pieCny / ((pieRub + pieCny) || 1));
+      // no yuan bought unless the yuan's target is over what's held (06.11.2026:
+      // the yuan's years under their share were topped up while the yuan as a
+      // whole were held as they are)
+      const cnyOk = cnyT > pieCny + 1e-6;
       const rubT = Math.max(0, whole0 - cnyT - pieLiquid);
       const floatT = Math.max(0, rubT - (mvDeposits - D)) * floatPct / 100, ladderT = rubT - floatT;
       const target = k => k.kind === 'float' ? floatT : k.kind === 'cny' ? cnyT * k.w : ladderT * k.w;
@@ -6274,7 +6278,7 @@ async function mpRenderMaturities() {
         let left = M;
         const step = whole ? null : M / 500;
         for (let guard = 0; guard < 100000; guard++) {
-          const can = rows.filter(r => r.b && (whole ? costOf(r) <= left + 1e-9 : left > 1e-9));
+          const can = rows.filter(r => r.b && (r.kind !== 'cny' || cnyOk) && (whole ? costOf(r) <= left + 1e-9 : left > 1e-9));
           if (!can.length) break;
           // roubles short times the share of the target short -- short^2 / target
           // (06.11.2026: by the share alone a small sum topped the small years
