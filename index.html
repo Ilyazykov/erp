@@ -137,9 +137,9 @@
 </p>
 <div id="plot_wcny5y_combined" style="height:480px; margin-top:8px"></div>
 <p class="note">
-  w_CNY(t) computed daily: x(t) is that day's USD/RUB rate, m(t) is the trailing 2-year average
-  USD/RUB rate as of that day. <b>Purple</b> — the target, with its no-trading band.
-  <b>Gray dotted</b> — the rule before 06.11.2026 (1-year average), to compare. USD/RUB rate on the right axis.
+  w_CNY(t) computed daily: x(t) is that day's USD/RUB rate, m(t) is the trailing 365-day average
+  USD/RUB rate as of that day. <b>Purple</b> — the target, with its ±10 pp no-trading band.
+  USD/RUB rate on the right axis, with the lines yuan are bought under (<b>green</b>) and sold over (<b>orange</b>).
 </p>
 <h3 class="section-title" id="mp_pie_deposits_title" style="display:none">Your current portfolio — bonds &amp; deposits, RUB vs non-RUB</h3>
 <div id="plot_mp_pie_deposits" style="height:420px; max-width:520px; margin:8px auto 0; display:none"></div>
@@ -954,10 +954,17 @@ function autoFitYOnXChange(divId, traces) {
 // The yuan's target share -- set here only, every tab takes it (06.11.2026):
 // the sigmoid of USD/RUB against its WIN-day average, sharpened by the
 // rate's 90-day volatility; while the yuan's share is within BAND of the
-// target, no currency is bought or sold (wCnyAim). The 2-year average and
-// the band won the walk-forward test over the 1-year average without one
-// (2015-2026, roubles at the key rate, yuan at 3.5%, monthly).
-const WCNY = { WIN: 730, BAND: 0.10, K: 15, SIGMA_WIN: 90, SIGMA_REF: 0.0209, LO: 0.20, HI: 0.80 };
+// target, no currency is bought or sold (wCnyAim); and yuan are bought
+// only once the dollar is BUY_SIGMA σ₉₀ under the average, sold only once
+// it's SELL_SIGMA σ₉₀ over it (06.11.2026: "the dollar's only 5 roubles
+// down -- too early to buy back"). Both won the walk-forward test
+// (2015-2026, roubles at the key rate, yuan at 3.5%, monthly) over trading
+// toward the target every month; the 2-year average was tried and turned
+// down -- it wants more yuan when the rouble has been weakening for years.
+const WCNY = { WIN: 365, BAND: 0.10, BUY_SIGMA: 2, SELL_SIGMA: 1, K: 15, SIGMA_WIN: 90, SIGMA_REF: 0.0209, LO: 0.20, HI: 0.80 };
+// today's x, m, sigma (loadData sets it): the buy / sell lines
+let wCnyNow = null;
+const wCnyLines = (p = wCnyNow) => p ? { buy: p.m - WCNY.BUY_SIGMA * p.sigma, sell: p.m + WCNY.SELL_SIGMA * p.sigma } : null;
 function wCny(x, m) {
   return WCNY.LO + (WCNY.HI - WCNY.LO) / (1 + Math.exp(WCNY.K * (x - m) / m));
 }
@@ -991,9 +998,14 @@ function wCnySeries(dates, rates, win = WCNY.WIN) {
 }
 
 // The share to aim at given the yuan's share now: the target once it's
-// more than BAND off, else what's held (new money split as held)
+// more than BAND off -- and up only with the dollar under the buy line, down
+// only over the sell line -- else what's held (new money split as held)
 function wCnyAim(w, cur) {
-  return cur == null || !Number.isFinite(cur) || Math.abs(cur - w) > WCNY.BAND ? w : cur;
+  if (cur == null || !Number.isFinite(cur) || Math.abs(cur - w) <= WCNY.BAND) return cur == null || !Number.isFinite(cur) ? w : cur;
+  const l = wCnyLines();
+  if (l && w > cur && !(wCnyNow.x < l.buy)) return cur;
+  if (l && w < cur && !(wCnyNow.x > l.sell)) return cur;
+  return w;
 }
 
 const LAYOUT_BASE = {
@@ -1663,8 +1675,9 @@ async function loadData() {
   const dates5y = usdRub5yRows.map(r => r.date);
   if (usdRubStats.date && usdRubStats.date > dates5y[dates5y.length - 1]) { dates5y.push(usdRubStats.date); rates5y.push(usdRubStats.x); }
   const wSeries = wCnySeries(dates5y, rates5y);
-  const wSeriesOld = wCnySeries(dates5y, rates5y, 365);   // before 06.11.2026: the 1-year average
   const wNow = wSeries[wSeries.length - 1];
+  wCnyNow = wNow;
+  const lines = wCnyLines();
   const sigmoidX = wNow.x;
   const sigmoidM = wNow.m;
 
@@ -1703,6 +1716,10 @@ async function loadData() {
   ];
 
   const sigmoidAmpShapes = [
+    // the buy / sell lines: yuan bought only left of the green, sold only right of the orange
+    { type: 'rect', x0: lines.buy, x1: lines.sell, y0: 0, y1: 100, fillcolor: 'rgba(156,163,175,0.07)', line: { width: 0 }, layer: 'below' },
+    { type: 'line', x0: lines.buy, x1: lines.buy, y0: 0, y1: 100, line: { color: '#3dd68c', width: 2 } },
+    { type: 'line', x0: lines.sell, x1: lines.sell, y0: 0, y1: 100, line: { color: '#f0b429', width: 2 } },
     // the no-trade band: the yuan's share within it -- nothing bought or sold
     { type: 'rect', xref: 'paper', x0: 0, x1: 1, y0: bandLo, y1: bandHi,
       fillcolor: 'rgba(224,82,82,0.08)', line: { width: 0 }, layer: 'below' },
@@ -1717,6 +1734,10 @@ async function loadData() {
   ];
 
   const sigmoidAmpAnnotations = [
+    { x: lines.buy, y: 97, text: `buy yuan only below ${lines.buy.toFixed(1)}`, showarrow: false, xanchor: 'right', xshift: -6,
+      font: { color: '#3dd68c', size: 12 } },
+    { x: lines.sell, y: 97, text: `sell yuan only above ${lines.sell.toFixed(1)}`, showarrow: false, xanchor: 'left', xshift: 6,
+      font: { color: '#f0b429', size: 12 } },
     { x: sigmoidX, y: sigmoidWCnyAmp * 100, text: `w_CNY = ${(sigmoidWCnyAmp * 100).toFixed(0)}%`,
       showarrow: false, xanchor: 'left', xshift: 12, yshift: 10,
       font: { color: '#e05252', size: 13 } },
@@ -1726,10 +1747,10 @@ async function loadData() {
   ];
 
   const sigmaStr = sigmoidSigma.toFixed(2);
-  const winYears = WCNY.WIN / 365;
+  const winYears = WCNY.WIN / 365;   // 1
   document.getElementById('sigmoid_amp_note').innerHTML = `
     w_CNY(x) = ${WCNY.LO.toFixed(2)} + ${(WCNY.HI - WCNY.LO).toFixed(2)} / (1 + exp(k_eff·(x−m)/m)), k_eff = ${WCNY.K} · (σ₉₀/m) / ${WCNY.SIGMA_REF}
-    (m = the ${winYears}-year average USD/RUB, currently <span class="stat">${sigmoidM.toFixed(2)}</span>;
+    (m = the ${winYears === 1 ? '' : `${winYears}-`}year average USD/RUB, currently <span class="stat">${sigmoidM.toFixed(2)}</span>;
     σ₉₀ = 90-day rolling std dev of the rate, currently <span class="stat">${sigmaStr}</span>).
     At typical volatility k_eff ≈ ${WCNY.K}; a sharp move steepens the curve.<br>
     <b>Gray dashed</b> — fixed k. <b>Purple</b> — the target curve.
@@ -1738,10 +1759,14 @@ async function loadData() {
     w_RUB = <span class="stat">${(sigmoidWRubAmp * 100).toFixed(0)}%</span>.
     <b>Pink band</b> — ±${Math.round(WCNY.BAND * 100)} pp: while the yuan's share is inside it, no currency is bought or sold
     (new money is split as already held).<br>
+    <b>Green / orange lines</b> — outside the band, yuan are bought only while USD/RUB is under
+    m − ${WCNY.BUY_SIGMA}σ₉₀ = <span class="stat">${lines.buy.toFixed(2)}</span>
+    and sold only while it's over m + ${WCNY.SELL_SIGMA}σ₉₀ = <span class="stat">${lines.sell.toFixed(2)}</span>;
+    in between (gray) — nothing is bought or sold, whatever the target.<br>
     Data as of ${dates5y[dates5y.length - 1]}. Set in one place (WCNY in the code): every tab uses it.
   `;
 
-  // w_CNY(t) over the history: today's rule, and the old one (1-year average) to compare
+  // w_CNY(t) over the history, with its no-trading band
   const wCny5yDates = wSeries.map(p => p.date);
   const wCny5yCombined = [
     // the band around the target: upper edge, then lower filled up to it
@@ -1754,18 +1779,21 @@ async function loadData() {
       type: 'scatter', mode: 'lines', line: { width: 0 }, fill: 'tonexty', fillcolor: 'rgba(167,139,250,0.15)', yaxis: 'y', hoverinfo: 'skip',
     },
     {
-      x: wSeriesOld.map(p => p.date), y: wSeriesOld.map(p => p.w * 100), name: 'w_CNY(t) before 06.11.2026 (1-year average)',
-      type: 'scatter', mode: 'lines',
-      line: { color: '#9ca3af', width: 1.2, dash: 'dot' },
-      yaxis: 'y',
-      hovertemplate: '%{x}<br>w_CNY (1-year average): <b>%{y:.0f}%</b><extra></extra>',
-    },
-    {
-      x: wCny5yDates, y: wSeries.map(p => p.w * 100), name: `w_CNY(t) — the target (${winYears}-year average)`,
+      x: wCny5yDates, y: wSeries.map(p => p.w * 100), name: 'w_CNY(t) — the target',
       type: 'scatter', mode: 'lines',
       line: { color: '#a78bfa', width: 2 },
       yaxis: 'y',
       hovertemplate: '%{x}<br>w_CNY: <b>%{y:.0f}%</b><extra></extra>',
+    },
+    {
+      x: wCny5yDates, y: wSeries.map(p => wCnyLines(p).buy), name: `buy yuan below (m − ${WCNY.BUY_SIGMA}σ)`,
+      type: 'scatter', mode: 'lines', line: { color: '#3dd68c', width: 1, dash: 'dash' }, yaxis: 'y2',
+      hovertemplate: '%{x}<br>buy yuan below: <b>%{y:.2f}</b><extra></extra>',
+    },
+    {
+      x: wCny5yDates, y: wSeries.map(p => wCnyLines(p).sell), name: `sell yuan above (m + ${WCNY.SELL_SIGMA}σ)`,
+      type: 'scatter', mode: 'lines', line: { color: '#f0b429', width: 1, dash: 'dash' }, yaxis: 'y2',
+      hovertemplate: '%{x}<br>sell yuan above: <b>%{y:.2f}</b><extra></extra>',
     },
     {
       x: wCny5yDates, y: wSeries.map(p => p.x), name: 'USD/RUB rate',
@@ -5789,8 +5817,12 @@ async function mpRenderMaturities() {
         { label: 'в юанях', usd: cny, target: w ?? cny / tot * 100, color: '#f778ba' },
         { label: 'в рублях', usd: rub, target: w != null ? 100 - w : rub / tot * 100, color: '#58a6ff' },
       ], w != null ? `Цель — w_CNY ${Math.round(w)}% по курсу USD/RUB (вкладка «USD/RUB → CNY Weight»). `
-        + (Math.abs(cny / tot * 100 - w) <= WCNY.BAND * 100 ? `Юани в пределах ±${Math.round(WCNY.BAND * 100)} пп от цели — валюту не покупать и не продавать, новые деньги делить как сейчас.`
-          : `Юани дальше ±${Math.round(WCNY.BAND * 100)} пп от цели — довести до цели.`) : 'Цель w_CNY ещё не посчитана — открой вкладку «USD/RUB → CNY Weight».', null, false, null, rubPie);
+        + (() => {
+          const l = wCnyLines(), fx = v => v.toFixed(1).replace('.', ',');
+          if (Math.abs(cny / tot * 100 - w) <= WCNY.BAND * 100) return `Юани в пределах ±${Math.round(WCNY.BAND * 100)} пп от цели — валюту не покупать и не продавать, новые деньги делить как сейчас.`;
+          if (cny / tot * 100 < w) return l && !(wCnyNow.x < l.buy) ? `Юаней меньше цели, но доллар ${fx(wCnyNow.x)} — выше линии покупки ${fx(l.buy)} (среднее за год − ${WCNY.BUY_SIGMA}σ): юани не покупать, новые деньги делить как сейчас.` : 'Юаней меньше цели и доллар дешёвый — докупить до цели.';
+          return l && !(wCnyNow.x > l.sell) ? `Юаней больше цели, но доллар ${fx(wCnyNow.x)} — ниже линии продажи ${fx(l.sell)} (среднее за год + ${WCNY.SELL_SIGMA}σ): юани не продавать.` : 'Юаней больше цели и доллар дорогой — продать до цели.';
+        })() : 'Цель w_CNY ещё не посчитана — открой вкладку «USD/RUB → CNY Weight».', null, false, null, rubPie);
     }
     // 2. fixed vs floating; which floater to buy: an OFZ-PK 1-3 years out, the most traded
     {
