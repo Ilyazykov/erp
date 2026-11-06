@@ -956,7 +956,7 @@ function autoFitYOnXChange(divId, traces) {
 
 // The yuan's target share -- set here only, every tab takes it (06.11.2026):
 // the sigmoid of USD/RUB against its WIN-day average, sharpened by the
-// rate's 90-day volatility; yuan are bought (wCnyAim)
+// rate's 90-day volatility; yuan are bought (wCnyTarget)
 // only under the buy line, sold only over the sell one (06.11.2026: "the
 // dollar's only 5 roubles down -- too early to buy back"): m -/+ LINE_SIGMA
 // σ₉₀, both shifted down by what yuan cost against roubles over CARRY_DAYS
@@ -1010,15 +1010,16 @@ function wCnySeries(dates, rates, win = WCNY.WIN, carryAt = () => 0) {
   return out;
 }
 
-// The share to aim at given the yuan's share now: the target -- up only
-// with the dollar under the buy line, down only over the sell line -- else
-// what's held (new money split as held)
-function wCnyAim(w, cur) {
-  if (cur == null || !Number.isFinite(cur)) return w;
+// The yuan to hold, in money, given what's held now and the whole they're
+// a part of: w of the whole -- up only with the dollar under the buy line,
+// down only over the sell line -- else the yuan as they are (06.11.2026: new
+// money, or a stock sale's, all into roubles then -- no yuan bought at all)
+function wCnyTarget(w, cnyNow, total) {
+  const t = w * total;
   const l = wCnyLines();
-  if (l && w > cur && !(wCnyNow.x < l.buy)) return cur;
-  if (l && w < cur && !(wCnyNow.x > l.sell)) return cur;
-  return w;
+  if (l && t > cnyNow && !(wCnyNow.x < l.buy)) return Math.min(cnyNow, total);
+  if (l && t < cnyNow && !(wCnyNow.x > l.sell)) return Math.min(cnyNow, total);
+  return t;
 }
 
 const LAYOUT_BASE = {
@@ -1778,7 +1779,7 @@ async function loadData() {
     <b>Green / orange lines</b> — yuan are bought (up to the target) only while USD/RUB is under
     m − ${WCNY.LINE_SIGMA}σ₉₀ − c = <span class="stat">${lines.buy.toFixed(2)}</span>
     and sold only while it's over m + ${WCNY.LINE_SIGMA}σ₉₀ − c = <span class="stat">${lines.sell.toFixed(2)}</span>;
-    in between (gray) — nothing is bought or sold, whatever the target (new money is split as already held).
+    in between (gray) — nothing is bought or sold, whatever the target (yuan held as they are, new money into roubles).
     c = m × (key rate − PBoC rate) × ${WCNY.CARRY_DAYS}/365 = <span class="stat">${lines.shift.toFixed(2)}</span>
     (key rate − PBoC now: <span class="stat">${(wNow.carry * 100).toFixed(2)} pp</span>) — what yuan cost against roubles over ${WCNY.CARRY_DAYS} days.<br>
     Data as of ${dates5y[dates5y.length - 1]}. Set in one place (WCNY in the code): every tab uses it.
@@ -5841,16 +5842,16 @@ async function mpRenderMaturities() {
     {
       const rub = pieRub + aFixedAll + aFloat, cny = pieCny + aCnyAll, tot = rub + cny || 1, w = pieW;
       // the target with the buy / sell lines (as the calculator's): w_CNY,
-      // or the yuan's share as held when the dollar's between the lines
-      const aimPct = w != null ? wCnyAim(w / 100, pieCny / ((pieRub + pieCny) || 1)) * 100 : null;
+      // or the yuan as held when the dollar's between the lines
+      const aimPct = w != null ? wCnyTarget(w / 100, pieCny, tot) / tot * 100 : null;
       mpTargetPie(pies, `Облигации, вклады и фонды ликвидности: юани и рубли${withBuys}`, [
         { label: 'в юанях', usd: cny, target: aimPct ?? cny / tot * 100, color: '#f778ba' },
         { label: 'в рублях', usd: rub, target: aimPct != null ? 100 - aimPct : rub / tot * 100, color: '#58a6ff' },
       ], w != null ? `w_CNY ${Math.round(w)}% по курсу USD/RUB (вкладка «USD/RUB → CNY Weight»). `
         + (() => {
           const l = wCnyLines(), fx = v => v.toFixed(1).replace('.', ',');
-          if (cny / tot * 100 < w) return l && !(wCnyNow.x < l.buy) ? `Юаней меньше, но доллар ${fx(wCnyNow.x)} — выше линии покупки ${fx(l.buy)}: юани не покупать, цель — держать их долю как сейчас, новые деньги делить так же.` : 'Юаней меньше и доллар ниже линии покупки — цель w_CNY, докупить.';
-          return l && !(wCnyNow.x > l.sell) ? `Юаней больше, но доллар ${fx(wCnyNow.x)} — ниже линии продажи ${fx(l.sell)}: юани не продавать, цель — держать их долю как сейчас.` : 'Юаней больше и доллар выше линии продажи — цель w_CNY, продать.';
+          if (cny / tot * 100 < w) return l && !(wCnyNow.x < l.buy) ? `Юаней меньше, но доллар ${fx(wCnyNow.x)} — выше линии покупки ${fx(l.buy)}: юани не покупать, цель — держать их как есть, новые деньги — в рубли.` : 'Юаней меньше и доллар ниже линии покупки — цель w_CNY, докупить.';
+          return l && !(wCnyNow.x > l.sell) ? `Юаней больше, но доллар ${fx(wCnyNow.x)} — ниже линии продажи ${fx(l.sell)}: юани не продавать, цель — держать их как есть.` : 'Юаней больше и доллар выше линии продажи — цель w_CNY, продать.';
         })() : 'Цель w_CNY ещё не посчитана — открой вкладку «USD/RUB → CNY Weight».', null, false, null, rubPie);
     }
     // 2. fixed vs floating; which floater to buy: an OFZ-PK 1-3 years out, the most traded
@@ -6263,9 +6264,8 @@ async function mpRenderMaturities() {
       // bonds, the rest the ladder
       const dep = M > 0 ? depOf(M) : null, D = dep ? dep.usd : 0;
       const whole0 = pieRub - D + pieCny + M;
-      // within the band of w_CNY -- the yuan's share as held (no currency bought)
-      const aimW = pieW != null ? wCnyAim(pieW / 100, (pieCny / ((pieRub + pieCny) || 1))) * 100 : null;
-      const cnyT = aimW != null ? whole0 * aimW / 100 : cnyMVAll + M * (pieCny / ((pieRub + pieCny) || 1));
+      // w_CNY of the whole -- or, the dollar between the lines, the yuan as held
+      const cnyT = pieW != null ? wCnyTarget(pieW / 100, pieCny, whole0) : cnyMVAll + M * (pieCny / ((pieRub + pieCny) || 1));
       const rubT = Math.max(0, whole0 - cnyT - pieLiquid);
       const floatT = Math.max(0, rubT - (mvDeposits - D)) * floatPct / 100, ladderT = rubT - floatT;
       const target = k => k.kind === 'float' ? floatT : k.kind === 'cny' ? cnyT * k.w : ladderT * k.w;
@@ -6838,12 +6838,10 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
   const ruStockTarget = c.ruAlloc && (c.ruAlloc.Stocks + c.ruAlloc.Bonds) > 0
     ? c.ruAlloc.Stocks / (c.ruAlloc.Stocks + c.ruAlloc.Bonds) * ruNew : cell('stock', 'RUB');
   // Yuan bonds' target: w_CNY of the non-stock part, less yuan deposits --
-  // within the band of w_CNY the yuan's share as held (wCnyAim)
-  const nonStock = Object.entries(c.ruCells).filter(([l]) => !l.startsWith(MP_RU_INFRA_LABELS.stock));
-  const nonStockNow = nonStock.reduce((s, [, v]) => s + v, 0);
-  const cnyNow = nonStock.filter(([l]) => l.includes(MP_RU_INFRA_CURRENCIES.CNY)).reduce((s, [, v]) => s + v, 0);
-  const wAim = c.wCny !== null ? wCnyAim(c.wCny, nonStockNow ? cnyNow / nonStockNow : null) : null;
-  const cnyTarget = wAim !== null ? Math.max(0, wAim * (ruNew - ruStockTarget) - cell('deposit', 'CNY')) : null;
+  // the dollar between the buy / sell lines -- the yuan as held (wCnyTarget)
+  const cnyNow = Object.entries(c.ruCells).filter(([l]) => !l.startsWith(MP_RU_INFRA_LABELS.stock) && l.includes(MP_RU_INFRA_CURRENCIES.CNY))
+    .reduce((s, [, v]) => s + v, 0);
+  const cnyTarget = c.wCny !== null ? Math.max(0, wCnyTarget(c.wCny, cnyNow, ruNew - ruStockTarget) - cell('deposit', 'CNY')) : null;
   parts.cnySold = flags.sellYuan && cnyTarget !== null && c.wCny < 0.3 ? Math.max(0, cell('bond', 'CNY') - cnyTarget) : 0;
   // (the Russian liquid assets are spent where they are, in step 8)
   parts.ruLiquid = flags.ruLiquid ? c.ruLiquidRaw : 0;
@@ -7499,11 +7497,11 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   let target11 = null;
   if (wCny !== null) {
     const total = Object.values(ruNoStocks).reduce((s, v) => s + v, 0);
-    // within the band of w_CNY -- the yuan's share as held
-    const aim = wCnyAim(wCny, total ? sumWhere(ruNoStocks, l => ccyOf(l) === 'CNY') / total : null);
+    // the dollar between the buy / sell lines -- the yuan as held
+    const cnyT = wCnyTarget(wCny, sumWhere(ruNoStocks, l => ccyOf(l) === 'CNY'), total);
     target11 = fixedTargets(ruNoStocks);
-    for (const [c, share] of [['RUB', 1 - aim], ['CNY', aim]]) {
-      target11[bondLabel(c)] = Math.max(0, share * total - sumWhere(target11, l => ccyOf(l) === c));
+    for (const [c, sum] of [['RUB', total - cnyT], ['CNY', cnyT]]) {
+      target11[bondLabel(c)] = Math.max(0, sum - sumWhere(target11, l => ccyOf(l) === c));
     }
   }
   // Chart 7's whole is chart 10's target: Russian infrastructure at
@@ -7523,9 +7521,8 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     const stock = `${MP_RU_INFRA_LABELS.stock} ${MP_RU_INFRA_CURRENCIES.RUB}`;
     target7[stock] = alloc.Stocks / (alloc.Stocks + alloc.Bonds) * ruTargetTotal;
     const nonStock = ruTargetTotal - target7[stock];
-    const nonStockNow = sumWhere(ruAll, l => l !== stock);
-    const aim = wCnyAim(wCny, nonStockNow ? sumWhere(ruAll, l => l !== stock && ccyOf(l) === 'CNY') / nonStockNow : null);
-    target7[bondLabel('CNY')] = Math.max(0, aim * nonStock - sumWhere(target7, l => ccyOf(l) === 'CNY'));
+    const cnyT = wCnyTarget(wCny, sumWhere(ruAll, l => l !== stock && ccyOf(l) === 'CNY'), nonStock);
+    target7[bondLabel('CNY')] = Math.max(0, cnyT - sumWhere(target7, l => ccyOf(l) === 'CNY'));
     target7[bondLabel('RUB')] = Math.max(0, ruTargetTotal - sumWhere(target7, l => l !== bondLabel('RUB')));
   }
   // targetTotal given: the targets' own total (s2 for chart 12), which the
@@ -8515,8 +8512,8 @@ async function mpRenderPortfolioPies() {
   const nonRubCurrent = bondDepositRows.filter(r => r.underlying_currency !== 'RUB').reduce((s, r) => s + ruValue(r), 0);
   if (DATA.currentWCny !== undefined && DATA.currentWCny !== null) {
     const bdTotal = rubCurrent + nonRubCurrent;
-    // with the buy / sell lines: the share as held while the dollar's between them
-    const targetNonRubPct = wCnyAim(DATA.currentWCny, bdTotal ? nonRubCurrent / bdTotal : null) * 100;
+    // with the buy / sell lines: the yuan as held while the dollar's between them
+    const targetNonRubPct = bdTotal ? wCnyTarget(DATA.currentWCny, nonRubCurrent, bdTotal) / bdTotal * 100 : DATA.currentWCny * 100;
     const targetRubPct = 100 - targetNonRubPct;
     mpDrawTargetDonut('plot_mp_pie_deposits', 'mp_pie_deposits_note', [
       { label: 'RUB', target: targetRubPct, current: bdTotal ? rubCurrent / bdTotal * 100 : 0, color: '#4da8c8' },
