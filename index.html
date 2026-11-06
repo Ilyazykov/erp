@@ -6758,7 +6758,30 @@ async function mpRenderCryptoStrategy() {
 // ---- Salary plan (Charts tab): where a month's salary goes, step by step,
 // against the charts' targets. Money is only ever added, except step 6. ----
 let mpSalaryCtx = null;
-const FREEDOM_SHARE = 0.2;   // Freedom's target share of IBKR + Freedom (chart 9)
+// Freedom's target share of IBKR + Freedom (chart 10); 06.11.2026: 0.2 -> 0.12,
+// by safety (Freedom 7% of everything against IBKR's ~53%, MP_BROKER_TARGETS)
+const FREEDOM_SHARE = 0.12;
+// Russian infrastructure's target, % of everything but real estate (charts 2, 8, 11)
+const RU_TARGET_PCT = 5;
+// Where the money's kept, by safety (06.11.2026): % of everything but real
+// estate per bank / broker / wallet -- the odds of losing it and of a freeze
+// (a Russian citizen whose Cyprus / Serbia / Turkey residence permits are
+// gone): Georgia (where one lives, two banks under the 30 000 GEL insurance
+// each), Revolut and the exchanges low (EU sanctions, re-KYC, hacks), the
+// crypto in one's own wallet; Russia -- RU_TARGET_PCT, split Sber 3 : T-Bank
+// 3 : Alfa 2; IBKR + Freedom -- the rest, Freedom FREEDOM_SHARE of it.
+// Anything else (Ziraat, Raif, Telegram, cash) -- 0.
+const MP_BROKER_TARGETS = { 'TBC Bank': 8, 'Credo Bank': 7, Revolut: 8, Trust: 10, Bybit: 1, 'Crypto.com': 1 };
+const MP_RU_BANK_SPLIT = { Sber: 3, 'T-Bank': 3, Alfa: 2 };
+function mpBrokerTargets() {
+  const t = { ...MP_BROKER_TARGETS };
+  const ruW = Object.values(MP_RU_BANK_SPLIT).reduce((a, v) => a + v, 0);
+  for (const [a, w] of Object.entries(MP_RU_BANK_SPLIT)) t[a] = RU_TARGET_PCT * w / ruW;
+  const rest = 100 - Object.values(t).reduce((a, v) => a + v, 0);
+  t.Freedom24 = rest * FREEDOM_SHARE;
+  t.IBKR = rest - t.Freedom24;
+  return t;
+}
 // Target split of the crypto (chart 6, salary step 2); any other coin: 0.
 const MP_CRYPTO_TARGETS = { BTC: 76, ETH: 18, SOL: 3, GRAM: 2, TAO: 1 };
 const MP_SALARY_KEY = 'mp_salary_usd';
@@ -7248,7 +7271,6 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   // into liquid assets instead), no real estate.
   const byBroker = {};
   for (const r of curRows) if (!isRealEstate(r)) mpAdd(byBroker, r.account, r.value_usd);
-  const brokerBuckets = Object.fromEntries(Object.entries(byBroker).map(([a, v]) => [brokerName(a), v]));
   // 3 / 7 / 11. Asset types -- the broker x asset-class table's total row.
   const types = mpAssetBuckets(assetRows.filter(r => !isRealEstate(r)));
   // 4. Stocks by country: shares by their own country, funds split by what they hold.
@@ -7441,7 +7463,16 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     return isFiatLabel(l) ? (i >= 0 ? i : 100) : 1000 + (i >= 0 ? i : 500);
   };
   pie(grid, '1. Currencies', byCurrency, '', currencyRank, true, l => (isFiatLabel(l) ? 0 : 1), currencyColor);
-  pie(grid, '2. Banks & brokers', brokerBuckets, '', brokerOrder, true, () => 0, brokerColor);
+  {
+    // the target by safety (MP_BROKER_TARGETS); what's held elsewhere -- 0
+    const t = mpBrokerTargets();
+    const rank = a => { const i = brokerOrder.indexOf(brokerName(a)); return i < 0 ? 99 : i; };
+    const accts = [...new Set([...Object.keys(byBroker), ...Object.keys(t)])]
+      .filter(a => (byBroker[a] || 0) > 0.5 || t[a] > 0).sort((a, b) => rank(a) - rank(b));
+    tpie(grid, '2. Banks & brokers', accts.map(a => ({
+      label: brokerName(a), usd: Math.max(0, byBroker[a] || 0), target: t[a] || 0, color: brokerColor(brokerName(a)) || MP_OTHER_COLOR,
+    })), 'Target by safety: the odds of losing the money or of the account frozen (MP_BROKER_TARGETS).');
+  }
   if (target3) {
     const labels = [...new Set([...Object.keys(types3), ...Object.keys(target3)])].sort((a, b) => typeOrder.indexOf(a) - typeOrder.indexOf(b));
     const sum3 = Object.values(target3).reduce((s, v) => s + v, 0);
@@ -7514,7 +7545,6 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   // part minus yuan deposits (chart 11's rule), rouble bonds the rest.
   // Only ever grown toward the 5%: when Russia already holds more, today's
   // total is the target (nothing gets pulled out to shrink it).
-  const RU_TARGET_PCT = 5;
   const ruAll = ruBuckets();
   // (chart 8's whole is what Russia holds -- after the salary plan when one is
   // typed in, which tops it up to 5%; its targets redistribute that)
