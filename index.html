@@ -10325,12 +10325,15 @@ async function mpExpLoad(range) {
       if (last) return out;
     }
   };
-  const [rows, eur, rub] = await Promise.all([
+  const [rows, eur, rub, expMonths, incMonths] = await Promise.all([
     page(() => within(sb.from('expenses')
       .select('day, paid_day, paid_at, account, description, amount, currency, usd, category, counted, extrapolated, note, external_source, external_id'), 'day')
       .order('day').order('id')),
     // for showing in euros or roubles
     ...['EUR', 'RUB'].map(c => page(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', c).order('day'))),
+    // monthly totals (migration 189), the whole history: the views are small
+    page(() => sb.from('expense_months').select('month, category, counted, extrapolated, usd, rows_n').order('month').order('category').order('counted').order('extrapolated')),
+    page(() => sb.from('income_months').select('month, category, usd, rows_n').order('month').order('category')),
   ]);
   // where one was, with whom (migration 128); none yet or no table: no bands
   const { data: periods } = await sb.from('life_periods').select('start_day, end_day, place, company, note').order('start_day');
@@ -10441,7 +10444,8 @@ async function mpExpLoad(range) {
     if (at) { r.at = at; r.ts = `${r.day} ${at}`; }
   }
   return { spent, skipped, usdPer, placeList, receiptOf, periods: periods || [], incomeDays: mpExpIncomeDays(inc || []), incomeRows: inc || [],
-    pairs, unpairedIn, incomeExpect: incomeExpect || [], clockOf, chainOf: new Map((chains || []).map(c => [`${c.external_source}|${c.external_id}`, c.chain])) };
+    pairs, unpairedIn, incomeExpect: incomeExpect || [], clockOf, chainOf: new Map((chains || []).map(c => [`${c.external_source}|${c.external_id}`, c.chain])),
+    months: { expense: expMonths, income: incMonths } };
 }
 // Income over the days it was earned in: each payment over the days since the
 // one before it from the same source (account and kind) -- a salary paid on
