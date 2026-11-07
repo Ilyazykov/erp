@@ -1067,6 +1067,8 @@ let mpIsSignedIn = false;
 let rendered = {};
 
 function showTab(id) {
+  // counted in the database for the user (tab_opens, migration ...184); a failed count doesn't matter
+  if (mpIsSignedIn) sb.rpc('record_tab_open', { p_tab: id }).then(() => {}, () => {});
   document.querySelectorAll('.tab').forEach(t => {
     t.classList.toggle('active', t.dataset.tab === id);
   });
@@ -10051,10 +10053,16 @@ async function mpEarnReminders() {
   return out;
 }
 
+let mpStartTabCounted = false;
 function mpUpdateAuthUi(session) {
   const btn = document.getElementById('btn_login');
   mpIsSignedIn = !!session;
   if (session) {
+    // the tab shown first counts as opened, once per page load (tab_opens, migration ...184)
+    if (!mpStartTabCounted) {
+      mpStartTabCounted = true;
+      sb.rpc('record_tab_open', { p_tab: document.querySelector('.tab.active')?.dataset.tab || 'myportfolio' }).then(() => {}, () => {});
+    }
     btn.textContent = `Sign out (${session.user.email})`;
     document.getElementById('mp_signed_out').style.display = 'none';
     document.getElementById('mp_signed_in').style.display = '';
