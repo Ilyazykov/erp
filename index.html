@@ -11034,7 +11034,21 @@ async function mpEditItems(src, xid) {
     try {
       syncDraft();
       const lines = draft.filter(d => d.name && d.total > 0);
-      if (!lines.length) { form.closest('dialog').close(); done = true; return; }
+      if (!lines.length) {
+        // every row taken out: a manual receipt goes (its lines with it); nothing was saved to remove
+        // otherwise, and the rows came back on the next open
+        if (receipt?.source === 'manual') {
+          const { error: dErr } = await sb.from('receipts').delete().eq('id', receipt.id);
+          if (dErr) { alert(dErr.message); return; }
+          if (mpExpCache) mpExpCache.receiptOf.delete(`${src}|${xid}`);
+          document.querySelectorAll('#expenses .exp-items').forEach(c => {
+            if (c.dataset.src === src && c.dataset.xid === xid) c.innerHTML = mpItemsHtml(undefined);
+          });
+        }
+        done = true;
+        form.closest('dialog').close();
+        return;
+      }
       const total = Math.abs(r.amt);
       let receiptId = receipt?.id;
       if (receiptId) {
