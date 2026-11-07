@@ -42,7 +42,7 @@ vm.runInContext(`${script}
 ;globalThis.__t = {
   build: (...a) => { a[3] = mpChartsRun; return mpBuildCharts(...a); }, plan: mpSalaryPlan, deltas: mpSalaryDeltas,
   setData: d => { DATA = d; }, setPie: f => { mpTargetPie = f; },
-  RU_ACCOUNTS: MP_RU_ACCOUNTS,
+  RU_ACCOUNTS: MP_RU_ACCOUNTS, incomeDays: mpExpIncomeDays,
 };`, ctx);
 const T = ctx.__t;
 
@@ -195,5 +195,40 @@ const small = { ...base,
 };
 await scenario('Russia under 5%, cash under $10,000', small, 20000);
 await scenario('Russia above 5%, no salary money left for Russia', base, 300);
+
+// ---- the income by month: the server's (month_totals, edge function month_totals) is the page's ----
+{
+  const shared = await import('../supabase/functions/_shared/income_days.js');
+  const fnText = src => src.match(/function mpExpIncomeDays\(rows\) \{[\s\S]*?\n\}\n/)[0];
+  check(fnText(readFileSync(new URL('../supabase/functions/_shared/income_days.js', import.meta.url), 'utf8')) === fnText(html),
+    'income_days.js: mpExpIncomeDays is index.html\'s, word for word');
+  // a salary paid on the 5th and the 28th, a cash salary, a flat's rent with two in a month, interest a day
+  const rows = [];
+  const add = (day, account, category, usd) => rows.push({ day, account, category, usd, eur: usd / 1.1, rub: usd * 90 });
+  for (const [m, d] of [['2025-01', '05'], ['2025-02', '28'], ['2025-04', '07'], ['2025-05', '30']]) add(`${m}-${d}`, 'BoC', 'Salary', 5000);
+  for (const d of ['2025-01-08', '2025-01-25', '2025-02-08', '2025-02-27']) add(d, 'cash', 'Salary', 900);
+  for (const d of ['2025-01-10', '2025-03-07', '2025-03-20', '2025-04-11']) add(d, 'Sber', 'Flat rent', 200);
+  for (let k = 0; k < 70; k++) add(new Date(Date.UTC(2025, 0, 1 + k * 2)).toISOString().slice(0, 10), 'TBC', 'Interest', 1.37);
+  add('2025-03-03', 'TBC', 'Interest', null);
+  // the chart before: every day's share by its month, at the rate of the day it was paid
+  const rate = { usd: () => 1, eur: () => 1.1, rub: () => 1 / 90 };
+  const want = new Map();
+  for (const ccy of ['usd', 'eur', 'rub']) {
+    for (const r of T.incomeDays(rows.map(x => ({ day: x.day, account: x.account, category: x.category, usd: x.usd })))) {
+      const k = `${ccy}|${r.day.slice(0, 7)}|${r.cat}`;
+      want.set(k, (want.get(k) || 0) + r.usd / rate[ccy](r.paid));
+    }
+  }
+  const got = new Map();
+  for (const r of shared.incomeMonthTotals(rows)) {
+    for (const ccy of ['usd', 'eur', 'rub']) {
+      const k = `${ccy}|${r.month.slice(0, 7)}|${r.category}`;
+      if (r[ccy] != null) got.set(k, (got.get(k) || 0) + r[ccy]);
+    }
+  }
+  const keys = [...new Set([...want.keys(), ...got.keys()])];
+  const off = keys.filter(k => !near(want.get(k) ?? NaN, got.get(k) ?? NaN, 0.005));
+  check(!off.length && keys.length > 30, `income by month: ${keys.length} month sums the same to the cent${off.length ? `, off: ${off.join(', ')}` : ''}`);
+}
 console.log(failures ? `\n${failures} failed` : '\nall passed');
 process.exit(failures ? 1 : 0);

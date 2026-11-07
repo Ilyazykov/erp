@@ -499,7 +499,6 @@
       <label>last <select id="exp_span">
         <option value="12">12 months</option><option value="24">2 years</option><option value="36">3 years</option>
         <option value="60">5 years</option><option value="all">all</option></select></label>
-      <label title="Bands behind the bars for the periods spent with someone (life_periods)"><input type="checkbox" id="exp_bands"> who I was with</label>
       <label title="One's own money coming in: a salary, a flat's rent (bank_transactions.income_category, by the rules in income_rules) -- a line over the bars, or a bar of its own next to each one">income <select id="exp_income">
         <option value="off">off</option><option value="line">line</option><option value="bars">bars</option></select></label>
       <label title="The shades of one colour as one: food, transport, travel, shopping"><input type="checkbox" id="exp_grouped"> by group</label>
@@ -10325,15 +10324,12 @@ async function mpExpLoad(range) {
       if (last) return out;
     }
   };
-  const [rows, eur, rub, expMonths, incMonths] = await Promise.all([
+  const [rows, eur, rub] = await Promise.all([
     page(() => within(sb.from('expenses')
-      .select('day, paid_day, paid_at, account, description, amount, currency, usd, category, counted, extrapolated, note, external_source, external_id'), 'day')
+      .select('id, day, paid_day, paid_at, account, description, amount, currency, usd, category, counted, extrapolated, note, external_source, external_id'), 'day')
       .order('day').order('id')),
     // for showing in euros or roubles
     ...['EUR', 'RUB'].map(c => page(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', c).order('day'))),
-    // monthly totals (migration 189), the whole history: the views are small
-    page(() => sb.from('expense_months').select('month, category, counted, extrapolated, usd, rows_n').order('month').order('category').order('counted').order('extrapolated')),
-    page(() => sb.from('income_months').select('month, category, usd, rows_n').order('month').order('category')),
   ]);
   // where one was, with whom (migration 128); none yet or no table: no bands
   const { data: periods } = await sb.from('life_periods').select('start_day, end_day, place, company, note').order('start_day');
@@ -10351,7 +10347,7 @@ async function mpExpLoad(range) {
     // the time as the statement gives it (stored as UTC, shown as is); none for
     // 00:00 -- a statement with no time
     const at = r.paid_at ? r.paid_at.slice(11, 16) : '';
-    const row = { day: r.day, paid_day: r.paid_day, tx_date: r.day, at: at === '00:00' ? '' : at, ts: r.paid_at || r.day, account: r.account, description: r.description,
+    const row = { id: r.id, day: r.day, paid_day: r.paid_day, tx_date: r.day, at: at === '00:00' ? '' : at, ts: r.paid_at || r.day, account: r.account, description: r.description,
       amt: Number(r.amount), ccy: r.currency, usd: r.usd == null ? NaN : Number(r.usd), cat: r.category,
       extrapolated: r.extrapolated, note: r.note, src: r.external_source, xid: r.external_id };
     (r.counted ? spent : skipped).push(row);
@@ -10445,7 +10441,7 @@ async function mpExpLoad(range) {
   }
   return { spent, skipped, usdPer, placeList, receiptOf, periods: periods || [], incomeDays: mpExpIncomeDays(inc || []), incomeRows: inc || [],
     pairs, unpairedIn, incomeExpect: incomeExpect || [], clockOf, chainOf: new Map((chains || []).map(c => [`${c.external_source}|${c.external_id}`, c.chain])),
-    months: { expense: expMonths, income: incMonths } };
+    range };
 }
 // Income over the days it was earned in: each payment over the days since the
 // one before it from the same source (account and kind) -- a salary paid on
@@ -10604,10 +10600,6 @@ function mpExpShift(dir) {
   }
   mpRenderExpenses();
 }
-// The life periods on the chart over time: a band behind the bars for each period
-// spent with someone (one colour per person, named in the legend), and in the
-// bar's hover where one was -- the names of the short trips wouldn't fit on it.
-const MP_EXP_LIFE_COLORS = ['#a371f7', '#f778ba', '#3dd68c', '#ffb020', '#58a6ff', '#ff7a45'];
 // The bars by month / year to today: "this year", "-1 year", ... -> their days
 const mpExpRollingDays = new Map();
 function mpExpBucketDays(b) {
@@ -10616,32 +10608,6 @@ function mpExpBucketDays(b) {
   const [y, m0, n] = q ? [Number(q[1]), (q[2] - 1) * 3, 3] : /^\d{4}$/.test(b) ? [Number(b), 0, 12] : [Number(b.slice(0, 4)), b.slice(5, 7) - 1, 1];
   const iso = (mm, dd) => new Date(Date.UTC(y, mm, dd)).toISOString().slice(0, 10);
   return [iso(m0, 1), iso(m0 + n, 0)];
-}
-function mpExpLifeBands(periods, buckets, lifeName) {
-  const shapes = [], legend = [], colors = new Map();
-  const where = buckets.map(b => {
-    const [from, to] = mpExpBucketDays(b);
-    const here = periods.filter(p => p.start_day <= to && p.end_day >= from).map(lifeName);
-    const names = [...new Set(here)];
-    return names.length ? 'Where: ' + (names.length > 6 ? names.slice(0, 6).join(', ') + ', …' : names.join(', ')) : '';
-  });
-  for (const p of periods) {
-    if (!p.company) continue;
-    const span = buckets.map(mpExpBucketDays);
-    const i0 = span.findIndex(([, to]) => to >= p.start_day);
-    let i1 = -1;
-    span.forEach(([from], k) => { if (from <= p.end_day) i1 = k; });
-    if (i0 < 0 || i1 < i0) continue;
-    if (!colors.has(p.company)) {
-      const color = MP_EXP_LIFE_COLORS[colors.size % MP_EXP_LIFE_COLORS.length];
-      colors.set(p.company, color);
-      legend.push({ type: 'scatter', x: [null], y: [null], mode: 'markers', name: `with ${p.company}`,
-        marker: { symbol: 'square', size: 12, color, opacity: 0.4 }, hoverinfo: 'skip' });
-    }
-    shapes.push({ type: 'rect', xref: 'x', yref: 'paper', x0: i0 - 0.45, x1: i1 + 0.45, y0: 0, y1: 1,
-      fillcolor: colors.get(p.company), opacity: 0.15, line: { width: 0 }, layer: 'below' });
-  }
-  return { shapes, legend, where };
 }
 // A Google Maps link's place (migration 163): its name, point, Google's id.
 // A link to a bare point on the map ("/maps/@41.70,44.78,21z" -- a place
@@ -11467,15 +11433,75 @@ document.getElementById('exp_life').addEventListener('change', e => {
   mpRenderExpenses();
 });
 let mpExpFull = false;
-// the whole history, after the period on screen is shown: the charts over the years take it
+// the rest of the history, in a few spans of years, after the period on screen is
+// shown: each span is merged into the cache and the page drawn again, so the charts
+// fill in as the rows come (the figures are the same as one whole load gives)
+// The latest years first: this month's forecast on the chart over time reads its
+// rows by day. The last span runs on past this year -- rent paid ahead is booked
+// in the months it's for (day), next year's too.
 async function mpExpLoadRest() {
+  const cache = mpExpCache;
   try {
-    mpExpCache = await mpExpLoad(null);
+    const current = new Date().getFullYear();
+    const spans = [['2024-01-01', '9999-12-31'], ['2021-01-01', '2023-12-31'], ['2018-01-01', '2020-12-31'], ['1900-01-01', '2017-12-31']];
+    if (current >= 2026) spans.splice(0, 1, ['2026-01-01', '9999-12-31'], ['2024-01-01', '2025-12-31']);
+    for (const [from, to] of spans) {
+      const part = await mpExpLoad({ from, to });
+      // the tab re-loaded meanwhile (an upload, a category set): this load is over
+      if (mpExpCache !== cache) return;
+      mpMergeExpCache(part);
+      await mpRenderExpenses();
+    }
     mpExpFull = true;
     await mpRenderExpenses();
   } catch (error) {
     document.getElementById('exp_status').textContent = error.message;
   }
+}
+// The chart over time's monthly sums (month_totals, migration ...190: kept by the
+// edge function month_totals every 5 minutes), the whole history -- a few
+// thousand rows. Expenses by month of day ('day') and of paid_day ('paid'), the
+// income by month as mpExpIncomeDays spreads it, in dollars, euros and roubles
+// (each row at its own day's rate), each group's first day.
+async function mpExpLoadTotals() {
+  const out = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await sb.from('month_totals')
+      .select('kind, basis, month, category, account, counted, extrapolated, usd, eur, rub, first_day')
+      .order('kind').order('basis').order('month').order('category').order('account').order('counted').order('extrapolated')
+      .range(from, from + 999);
+    if (error) throw new Error(error.message);
+    out.push(...data);
+    if (data.length < 1000) return out;
+  }
+}
+// adds one span's rows to the cache: rows already there (the period on screen) are kept once
+function mpMergeExpCache(part) {
+  const cur = mpExpCache;
+  const union = (a, b, key) => {
+    const m = new Map();
+    for (const r of [...a, ...b]) m.set(key(r), r);
+    return [...m.values()];
+  };
+  const byDay = (x, y) => (x.day < y.day ? -1 : x.day > y.day ? 1 : 0);
+  const rowKey = r => `${r.src}|${r.xid}`;
+  // expenses by their id: a payment and its fee, the shares of a rent paid ahead
+  // have one src|xid (268 payments) -- by it one of them was lost
+  cur.spent = union(cur.spent, part.spent, r => r.id).sort(byDay);
+  cur.skipped = union(cur.skipped, part.skipped, r => r.id).sort(byDay);
+  cur.incomeRows = union(cur.incomeRows, part.incomeRows, rowKey).sort(byDay);
+  cur.incomeDays = mpExpIncomeDays(cur.incomeRows);
+  cur.pairs = union(cur.pairs, part.pairs, p => `${p.pair_id}`);
+  cur.unpairedIn = union(cur.unpairedIn || [], part.unpairedIn || [], r => `${r.external_source}|${r.external_id}`);
+  cur.clockOf = new Map([...(cur.clockOf || []), ...(part.clockOf || [])]);
+  cur.usdPer = part.usdPer;
+  cur.periods = part.periods;
+  cur.placeList = part.placeList;
+  cur.receiptOf = part.receiptOf;
+  cur.incomeExpect = part.incomeExpect;
+  cur.chainOf = part.chainOf;
+  // the spans of rows loaded: this month's forecast reads its days' rows only once they're all there
+  cur.loaded = [...(cur.loaded || [cur.range]), part.range];
 }
 async function mpRenderExpenses() {
   const status = document.getElementById('exp_status');
@@ -11484,7 +11510,13 @@ async function mpRenderExpenses() {
     // the period on screen first, then the whole history in the background
     status.textContent = 'Loading transactions…';
     const range = { from: document.getElementById('exp_from').value, to: document.getElementById('exp_to').value };
-    try { mpExpCache = await mpExpLoad(range); } catch (error) { status.textContent = error.message; return; }
+    // the monthly sums alongside: the chart over time, the whole history at once
+    try {
+      // (no table yet -- the migration not in: the chart empty, the rest of the tab as it is)
+      const [cache, totals] = await Promise.all([mpExpLoad(range), mpExpLoadTotals().catch(() => [])]);
+      mpExpCache = cache;
+      mpExpCache.totals = totals;
+    } catch (error) { status.textContent = error.message; return; }
     mpExpFull = false;
     mpExpLoadRest();
   }
@@ -11703,14 +11735,27 @@ async function mpRenderExpenses() {
   const span = document.getElementById('exp_span').value;
   const step = document.getElementById('exp_step').value;
   const bars = document.getElementById('plot_exp_months');
-  const barsKey = [new Date().toISOString().slice(0, 10), span, step, ccy, spent.length, periods.length, spreadOn, withExtrapolated, document.getElementById('exp_bands').checked,
+  const totalsRows = mpExpCache.totals || [];
+  const barsKey = [today, span, step, ccy, spent.length, totalsRows.length, mpExpCache.incomeDays.length,
+    (mpExpCache.loaded || []).length, mpExpFull, periods.length, spreadOn, withExtrapolated,
     document.getElementById('exp_income').value, document.getElementById('exp_grouped').checked].join('|');
   if (bars.mpExpKey !== barsKey) {
   bars.mpExpKey = barsKey;
-  const first = spent.reduce((m, r) => (r.day < m ? r.day : m), today);
+  // the spending and the income by calendar month / quarter / year: the monthly
+  // sums (month_totals, migration ...190 -- the whole history at once), each row
+  // at its own day's rate in each currency, as the rows were; "spread prepaid
+  // rent" picks the months by day or by paid_day. To today (a rolling month /
+  // quarter / year) needs the days: from the rows, as they come in
+  const rolling = /_td$/.test(step);
+  const ccyCol = ccy.toLowerCase();
+  const expMonths = totalsRows.filter(r => r.kind === 'expense' && r.basis === (spreadOn ? 'day' : 'paid') && r.counted
+    && (withExtrapolated || !r.extrapolated));
+  const incMonths = totalsRows.filter(r => r.kind === 'income');
+  // the records' first day (the rows with no dollar sum too): a bar the records start in, "only from ..."
+  const first = expMonths.reduce((m, r) => (r.first_day && r.first_day < m ? r.first_day : m), today);
   const buckets = [];
   let bucket, startDay;
-  if (/_td$/.test(step)) {
+  if (rolling) {
     // months / quarters / years ending today: 29.09 - 28.10, 29.08 - 28.09, ... (the same day
     // of the month, the last one for a month too short)
     const unit = step.replace(/_td$/, ''), n = { month: 1, quarter: 3, year: 12 }[unit];
@@ -11750,32 +11795,48 @@ async function mpRenderExpenses() {
   }
   // by group: the shades of one colour (MP_EXP_GROUPS) as one bar part
   const catOf = document.getElementById('exp_grouped').checked ? c => MP_EXP_GROUPS[c] ?? c : c => c;
-  const byBucket = new Map();
-  for (const r of spent) {
-    // to today, or to this month's end (a month of rent paid ahead is in it)
-    if (r.day < startDay || (/_td$/.test(step) ? r.day > today : r.day.slice(0, 7) > today.slice(0, 7)) || !Number.isFinite(r.usd)) continue;
-    const k = catOf(r.cat) + '\u0000' + bucket(r.day);
-    byBucket.set(k, (byBucket.get(k) || 0) + conv(r));
+  // to today, or to this month's end (a month of rent paid ahead is in it)
+  const inSpan = day => day >= startDay && (rolling ? day <= today : day.slice(0, 7) <= today.slice(0, 7));
+  // category \0 bucket -> spent, each category on its own (the forecast below reads them so)
+  const catBy = new Map();
+  const addTo = (m, k, v) => m.set(k, (m.get(k) || 0) + v);
+  if (rolling) {
+    for (const r of spent) if (inSpan(r.day) && Number.isFinite(r.usd)) addTo(catBy, r.cat + '\u0000' + bucket(r.day), conv(r));
+  } else {
+    for (const r of expMonths) if (r[ccyCol] != null && inSpan(r.month)) addTo(catBy, r.category + '\u0000' + bucket(r.month), Number(r[ccyCol]));
   }
+  const byBucket = new Map();
+  for (const [k, v] of catBy) { const [c, b] = k.split('\u0000'); addTo(byBucket, catOf(c) + '\u0000' + b, v); }
   // a category the page doesn't know yet: before transfers to people, cash and the unsorted
   const tail = ['Transfers to people', 'Cash', 'Other'];
   const names = [...new Set([...MP_EXP_CATS.filter(c => !tail.includes(c[0])).map(c => catOf(c[0])),
-    ...spent.map(r => r.cat).filter(c => !(c in known)), ...tail])];
+    ...[...expMonths].sort((x, y) => (x.first_day < y.first_day ? -1 : x.first_day > y.first_day ? 1 : 0)).map(r => r.category)
+      .filter(c => !(c in known)), ...tail])];
   const order = names.filter(n => buckets.some(b => byBucket.has(n + '\u0000' + b)));
-  const life = mpExpLifeBands(periods, buckets, lifeName);
+  // where one was, in the bar's hover only -- the names of the short trips wouldn't fit on it
+  const where = buckets.map(b => {
+    const [f, t] = mpExpBucketDays(b);
+    const names = [...new Set(periods.filter(p => p.start_day <= t && p.end_day >= f).map(lifeName))];
+    return names.length ? 'Where: ' + (names.length > 6 ? names.slice(0, 6).join(', ') + ', …' : names.join(', ')) : '';
+  });
   // income: a line over the stacks (a bar above it is a period spent more than
   // came in), or a bar of its own to the right of each spending bar
   const incomeMode = document.getElementById('exp_income').value;
   const sideBySide = incomeMode === 'bars';
   const incomeBy = new Map();
   const incomeByCat = new Map();   // kind \0 bucket -> came in: the bars split by kind (a salary, a flat's rent, ...)
-  if (incomeMode !== 'off') {
+  const addIncome = (b, cat, v) => {
+    incomeBy.set(b, (incomeBy.get(b) || 0) + v);
+    const k = (cat || 'Other income') + '\u0000' + b;
+    incomeByCat.set(k, (incomeByCat.get(k) || 0) + v);
+  };
+  // each payment over the days it was earned in (mpExpIncomeDays): by month the server's sums, to today the rows'
+  if (incomeMode !== 'off' && !rolling) {
+    for (const r of incMonths) if (r[ccyCol] != null && inSpan(r.month)) addIncome(bucket(r.month), r.category, Number(r[ccyCol]));
+  } else if (incomeMode !== 'off') {
     for (const r of mpExpCache.incomeDays) {
       if (r.day < startDay || (/_td$/.test(step) ? r.day > today : r.day.slice(0, 7) > today.slice(0, 7))) continue;
-      const b = bucket(r.day), v = r.usd / mpExpCache.usdPer(ccy, r.paid);
-      incomeBy.set(b, (incomeBy.get(b) || 0) + v);
-      const k = (r.cat || 'Other income') + '\u0000' + b;
-      incomeByCat.set(k, (incomeByCat.get(k) || 0) + v);
+      addIncome(bucket(r.day), r.cat, r.usd / mpExpCache.usdPer(ccy, r.paid));
     }
   }
   // a bar of a part only (the records start in it, or it isn't over yet): a
@@ -11785,7 +11846,6 @@ async function mpRenderExpenses() {
     const start = first > startDay ? first : startDay;
     return f < start ? `only from ${dmy(start)}` : t > today ? `only to ${dmy(today)}` : '';
   });
-  if (!document.getElementById('exp_bands').checked) { life.shapes = []; life.legend = []; }
   const totals = buckets.map(b => order.reduce((t, n) => t + (byBucket.get(n + '\u0000' + b) || 0), 0));
   // a part-only bar's frame: the whole period as it would likely be. The
   // one-offs (a laptop, a trip) as they are; the regular spending per category
@@ -11797,13 +11857,6 @@ async function mpRenderExpenses() {
   //    whole period, if not paid yet -- none then, none now (one's own flat);
   //  never less than what's there.
   const nDays = (a, z) => (Date.parse(z) - Date.parse(a)) / 86400000 + 1;
-  const regularBy = new Map();   // category \0 bucket -> spent
-  for (const r of spent) {
-    if (!(MP_EXP_REGULAR.has(r.cat) || MP_EXP_MONTHLY.has(r.cat)) || r.day < startDay
-      || (/_td$/.test(step) ? r.day > today : r.day.slice(0, 7) > today.slice(0, 7)) || !Number.isFinite(r.usd)) continue;
-    const k = r.cat + '\u0000' + bucket(r.day);
-    regularBy.set(k, (regularBy.get(k) || 0) + conv(r));
-  }
   // the day-by-day pace now: spent a day where one lives now, since the place's
   // first day or the last whole period's first, whichever is later (Tbilisi from
   // 19.10.2026: October's days there, not November's first two alone), up to
@@ -11821,12 +11874,41 @@ async function mpRenderExpenses() {
   const settled = here ? dayShift(here.start_day, MP_EXP_SETTLE_DAYS) : null;
   const transportFrom = settled && settled > paceFrom && dayShift(today, -2) >= dayShift(settled, 6) ? settled : paceFrom;
   const paceTo = dayShift(today, -2) >= paceFrom ? dayShift(today, -2) : today;
-  const sumCat = (cat, from, to, after) => spent.reduce((x, r) => (r.cat === cat && r.day >= from && r.day <= to && (!after || r.day > after)
-    && Number.isFinite(r.usd) ? x + conv(r) : x), 0);
+  // a category's spending over some days: its whole months from the monthly
+  // sums, the days of a month in part from the rows -- once all of them are
+  // loaded (else no forecast yet: rowsMissing). By paid_day a row is loaded by
+  // its day, on or after paid_day (rent paid ahead): all the days from there on
+  const loaded = mpExpCache.loaded || [mpExpCache.range];
+  const covered = (a, z) => {
+    if (loaded.some(r => !r)) return true;
+    let at = a;
+    for (const r of [...loaded].sort((x, y) => (x.from < y.from ? -1 : x.from > y.from ? 1 : 0))) {
+      if (r.from <= at && r.to >= at) { if (r.to >= z) return true; at = dayShift(r.to, 1); }
+    }
+    return false;
+  };
+  const catMonth = new Map();   // category \0 YYYY-MM -> spent
+  for (const r of expMonths) if (r[ccyCol] != null) addTo(catMonth, r.category + '\u0000' + r.month.slice(0, 7), Number(r[ccyCol]));
+  let rowsMissing = false;
+  const sumCat = (cat, from, to, after) => {
+    if (after && after >= from) from = dayShift(after, 1);
+    let x = 0;
+    for (let mo = from.slice(0, 7); from <= to && mo <= to.slice(0, 7);
+      mo = new Date(Date.UTC(+mo.slice(0, 4), +mo.slice(5, 7), 1)).toISOString().slice(0, 7)) {
+      const a = mo + '-01', z = new Date(Date.UTC(+mo.slice(0, 4), +mo.slice(5, 7), 0)).toISOString().slice(0, 10);
+      if (from <= a && z <= to) { x += catMonth.get(cat + '\u0000' + mo) || 0; continue; }
+      const f = from > a ? from : a, t = to < z ? to : z;
+      if (!covered(f, spreadOn ? t : '9999-12-31')) rowsMissing = true;
+      for (const r of spent) if (r.cat === cat && r.day >= f && r.day <= t && Number.isFinite(r.usd)) x += conv(r);
+    }
+    return x;
+  };
   const paceStart = cat => (MP_EXP_TRANSPORT.has(cat) && transportFrom <= paceTo ? transportFrom : paceFrom);
   const dailyRate = cat => sumCat(cat, paceStart(cat), paceTo) / nDays(paceStart(cat), paceTo);
+  // null: the rows it needs aren't all in yet -- no frame
   const projected = buckets.map((b, i) => {
     if (!partial[i]) return totals[i];
+    rowsMissing = false;
     const [f, t] = mpExpBucketDays(b);
     const start = first > startDay ? first : startDay;
     const startsIn = f < start;
@@ -11837,7 +11919,7 @@ async function mpRenderExpenses() {
     let extra = 0;
     const parts = [];
     for (const cat of [...MP_EXP_REGULAR, ...MP_EXP_MONTHLY]) {
-      const a = regularBy.get(cat + '\u0000' + b) || 0;
+      const a = catBy.get(cat + '\u0000' + b) || 0;
       let est, how;
       if (startsIn) {
         est = ref >= 0 ? sumCat(cat, rf, rt) / nDays(rf, rt) * nDays(f, t) : a;
@@ -11856,6 +11938,7 @@ async function mpRenderExpenses() {
       extra += Math.max(0, est - a);
       if (a || est) parts.push({ cat, actual: +a.toFixed(2), estimate: +Math.max(a, est).toFixed(2), how });
     }
+    if (rowsMissing) return null;
     // kept day by day, to set against what the period comes to (migration ...154)
     if (!startsIn) mpExpKeepForecast({ step, period: b, from: f, to: t, ccy, actual: totals[i], projected: totals[i] + extra, parts });
     return totals[i] + extra;
@@ -11926,6 +12009,8 @@ async function mpRenderExpenses() {
     for (const e of expect) {
       for (const [pay, share] of expectedPays(e, t)) {
         if (pay <= today || pay > t || pay < f) continue;
+        // (the month's income rows not all loaded yet: no frame yet)
+        if (!covered(pay.slice(0, 7) + '-01', today)) return null;
         // none of it in the pay day's month yet (not the old job's last salary
         // before from_day: Wheely's of 29.10.2026)
         const came = (mpExpCache.incomeRows || []).some(r => r.category === e.category && r.day.slice(0, 7) === pay.slice(0, 7) && r.day >= e.from_day);
@@ -11941,7 +12026,7 @@ async function mpRenderExpenses() {
     }
     return now + extra;
   });
-  const incomeFramed = i => sideBySide && incomeProjected[i] - (incomeBy.get(buckets[i]) || 0) > 0.5;
+  const incomeFramed = i => sideBySide && incomeProjected[i] != null && incomeProjected[i] - (incomeBy.get(buckets[i]) || 0) > 0.5;
   const incomeBase = buckets.map(() => 0);
   // in the hover a rule over the income (its first kind that bucket) and over the totals
   const hoverRule = '<span style="color:#484f58">────────────────</span><br>';
@@ -11961,7 +12046,6 @@ async function mpRenderExpenses() {
   // a part-only bar's frame around the spending bar alone
   const frameX = i => (sideBySide ? [i + half.spent.offset, i + half.spent.offset + half.spent.width] : [i - 0.46, i + 0.46]);
   await Plotly.react(bars, [...spentTraces,
-  ...life.legend,
   ...incomeTraces,
   // the bar's total and where one was, in the hover only: first there -- the stack's
   // hover lists the traces last to first
@@ -11970,8 +12054,8 @@ async function mpRenderExpenses() {
   { type: 'scatter', mode: 'markers', marker: { opacity: 0 }, name: 'Total', showlegend: false,
     x: buckets, y: totals,
     customdata: buckets.map((b, i) => mpExpRollingDays.has(b) && /_td$/.test(step)
-      ? mpExpBucketDays(b).map(x => x.split('-').reverse().join('.')).join(' – ') + (life.where[i] ? '<br>' + life.where[i] : '')
-      : life.where[i]).map((w, i) => {
+      ? mpExpBucketDays(b).map(x => x.split('-').reverse().join('.')).join(' – ') + (where[i] ? '<br>' + where[i] : '')
+      : where[i]).map((w, i) => {
       const amt = v => `${v < 0 ? '−' : ''}${Math.round(Math.abs(v)).toLocaleString('en-US')} ${sym}`;
       const sums = incomeMode === 'off' ? [`<b>Total spent: ${amt(totals[i])}</b>`]
         : [`<b>Total income: ${amt(incomeY[i])}</b>`, `<b>Total spent: ${amt(totals[i])}</b>`,
@@ -11987,13 +12071,13 @@ async function mpRenderExpenses() {
     yaxis: { gridcolor: '#1e2830', ticksuffix: ccy === 'RUB' ? ' ₽' : '', tickprefix: ccy === 'RUB' ? '' : sym },
     legend: { orientation: 'h', x: 0, y: 1.02, yanchor: 'bottom' },
     // a line between the years (by month / quarter), the year above it
-    shapes: [...life.shapes, ...yearLines, ...buckets.flatMap((b, i) => partial[i] && totals[i] ? [{
+    shapes: [...yearLines, ...buckets.flatMap((b, i) => partial[i] && totals[i] && projected[i] != null ? [{
       type: 'rect', xref: 'x', yref: 'y', x0: frameX(i)[0], x1: frameX(i)[1], y0: 0, y1: projected[i],
       line: { color: '#8b949e', width: 1.5, dash: 'dot' }, fillcolor: 'rgba(0,0,0,0)', layer: 'above' }] : []),
     ...buckets.flatMap((b, i) => incomeFramed(i) ? [{
       type: 'rect', xref: 'x', yref: 'y', x0: i + half.income.offset, x1: i + half.income.offset + half.income.width, y0: 0, y1: incomeProjected[i],
       line: { color: '#8b949e', width: 1.5, dash: 'dot' }, fillcolor: 'rgba(0,0,0,0)', layer: 'above' }] : [])],
-    annotations: [...yearLabels, ...buckets.flatMap((b, i) => partial[i] && totals[i] ? [{
+    annotations: [...yearLabels, ...buckets.flatMap((b, i) => partial[i] && totals[i] && projected[i] != null ? [{
       // x as the index: "2017" would be read as position 2017
       x: sideBySide ? i + half.spent.mid : i, xref: 'x', y: projected[i], yref: 'y', text: `${partial[i]}<br>≈ ${money(projected[i])} for all of it`,
       showarrow: false, yanchor: 'bottom', yshift: 2,
@@ -12151,11 +12235,6 @@ document.getElementById('exp_period').addEventListener('change', e => {
   try { localStorage.setItem('mp_exp_period', e.target.value); } catch { /* no storage */ }
   const today = new Date().toISOString().slice(0, 10);
   if (e.target.value !== 'custom') mpExpSetPeriod(e.target.value, ['year', 'month', 'cmonth'].includes(e.target.value) ? today : document.getElementById('exp_to').value || today);
-  if (mpIsSignedIn) mpRenderExpenses();
-});
-try { document.getElementById('exp_bands').checked = localStorage.getItem('mp_exp_bands') === '1'; } catch { /* no storage */ }
-document.getElementById('exp_bands').addEventListener('change', e => {
-  try { localStorage.setItem('mp_exp_bands', e.target.checked ? '1' : '0'); } catch { /* no storage */ }
   if (mpIsSignedIn) mpRenderExpenses();
 });
 try {
