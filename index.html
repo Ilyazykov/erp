@@ -10922,14 +10922,20 @@ async function mpEditItems(src, xid) {
   // No per-line notes here (those are only shown/edited on an already-saved
   // receipt's read-only view above) -- a manual re-save is a direct edit by
   // the user, not an import, so there's nothing that could silently clobber one.
+  // the shared catalog offers its names as the item's suggestions (datalist);
+  // a name typed exactly as a product's links the line to it
+  const { data: catalogRows } = await sb.from('products').select('id, name_en').is('merged_into', null).order('name_en');
+  const catalog = catalogRows || [];
+  const productOf = name => catalog.find(c => c.name_en.toLowerCase() === name.trim().toLowerCase())?.id ?? null;
   const draft = (receipt?.lines || []).map(l => ({ name: l.name_printed, qty: l.qty, unit: l.unit, total: l.line_total }));
   const renderDraft = () => draft.map((d, i) => `<tr data-i="${i}">
-      <td><input name="n" value="${mpEscapeHtml(d.name)}" style="${MP_FIELD}" required></td>
+      <td><input name="n" value="${mpEscapeHtml(d.name)}" list="mp_items_catalog" placeholder="start typing a product…" autocomplete="off" style="${MP_FIELD}" required></td>
       <td style="white-space:nowrap"><input name="q" type="number" step="any" min="0.001" value="${d.qty}" style="${MP_FIELD};width:60px">${unit(d.unit)}</td>
       <td><input name="t" type="number" step="0.01" min="0" value="${d.total}" style="${MP_FIELD};width:80px"></td>
       <td><button type="button" class="item-del" data-i="${i}">✕</button></td></tr>`).join('');
   const form = mpDialog(`Items · ${r.day} · ${mpShortDesc(r.description)}`, `
     <p class="note" style="margin:0">No items yet -- add them by hand, or upload a receipt CSV (My Portfolio tab) made from the receipt's photo.</p>
+    <datalist id="mp_items_catalog">${catalog.map(c => `<option value="${mpEscapeHtml(c.name_en)}">`).join('')}</datalist>
     <table class="data-table"><thead><tr><th style="text-align:left">Item</th><th>Qty</th><th>Line total</th><th></th></tr></thead>
       <tbody id="mp_items_draft">${renderDraft()}</tbody></table>
     <button type="button" data-act="add-line">+ line</button>
@@ -10938,10 +10944,13 @@ async function mpEditItems(src, xid) {
   const sumEl = form.querySelector('#mp_items_sum');
   const syncDraft = () => {
     draft.length = 0;
-    body.querySelectorAll('tr').forEach(tr => draft.push({
-      name: tr.querySelector('[name=n]').value.trim(), qty: Number(tr.querySelector('[name=q]').value) || 1,
-      unit: tr.querySelector('[name=u]').value, total: Number(tr.querySelector('[name=t]').value) || 0,
-    }));
+    body.querySelectorAll('tr').forEach(tr => {
+      const name = tr.querySelector('[name=n]').value.trim();
+      draft.push({
+        name, productId: productOf(name), qty: Number(tr.querySelector('[name=q]').value) || 1,
+        unit: tr.querySelector('[name=u]').value, total: Number(tr.querySelector('[name=t]').value) || 0,
+      });
+    });
     const sum = draft.reduce((a, d) => a + d.total, 0);
     const gap = r.amt - sum;
     sumEl.textContent = `Lines: ${sum.toFixed(2)} ${r.ccy} · transaction: ${Math.abs(r.amt).toFixed(2)} ${r.ccy}`
@@ -10988,7 +10997,7 @@ async function mpEditItems(src, xid) {
         receiptId = data.id;
       }
       const { error: itemsErr } = await sb.from('receipt_items').insert(lines.map((d, i) => ({
-        receipt_id: receiptId, line_no: i + 1, name_printed: d.name, name_en: d.name, qty: d.qty, unit: d.unit, line_total: d.total,
+        receipt_id: receiptId, line_no: i + 1, name_printed: d.name, name_en: d.name, product_id: d.productId, qty: d.qty, unit: d.unit, line_total: d.total,
       })));
       if (itemsErr) { alert(itemsErr.message); return; }
       done = true;
