@@ -10411,8 +10411,24 @@ async function mpExpLoad() {
     // the income one expects (migration 161): none yet or no table -- the income bars unframed
     page(() => sb.from('income_expectations').select('category, amount, currency, from_day, to_day')).catch(() => []),
   ]);
+  // the statement's time of the income rows and of the transfer legs (their
+  // tables have none): from the bank row, by its day; 00:00 is no time
+  const legDays = [...(inc || []).map(r => r.day), ...(pairs || []).flatMap(p => [p.out_day, p.in_day]), ...(unpairedIn || []).map(r => r.day)]
+    .filter(Boolean).sort();
+  const clockRows = legDays.length ? await page(() => sb.from('bank_transactions').select('external_source, external_id, tx_date')
+    .gte('tx_date', `${legDays[0]}T00:00:00Z`).lte('tx_date', `${legDays[legDays.length - 1]}T23:59:59Z`).order('id')).catch(() => []) : [];
+  const clockOf = new Map(clockRows.map(t => [`${t.external_source}|${t.external_id}`, t.tx_date.slice(11, 16)]).filter(([, at]) => at !== '00:00'));
+  for (const r of inc || []) {
+    const at = clockOf.get(`${r.src}|${r.xid}`);
+    if (at) { r.at = at; r.ts = `${r.day} ${at}`; }
+  }
+  for (const r of unpairedIn || []) {
+    r.src = r.external_source; r.xid = r.external_id;
+    const at = clockOf.get(`${r.src}|${r.xid}`);
+    if (at) { r.at = at; r.ts = `${r.day} ${at}`; }
+  }
   return { spent, skipped, usdPer, placeList, receiptOf, periods: periods || [], incomeDays: mpExpIncomeDays(inc || []), incomeRows: inc || [],
-    pairs, unpairedIn, incomeExpect: incomeExpect || [], chainOf: new Map((chains || []).map(c => [`${c.external_source}|${c.external_id}`, c.chain])) };
+    pairs, unpairedIn, incomeExpect: incomeExpect || [], clockOf, chainOf: new Map((chains || []).map(c => [`${c.external_source}|${c.external_id}`, c.chain])) };
 }
 // Income over the days it was earned in: each payment over the days since the
 // one before it from the same source (account and kind) -- a salary paid on
@@ -11877,14 +11893,19 @@ async function mpRenderExpenses() {
     <td style="text-align:left"${mpShortDesc(description) !== description ? ` title="${esc(description)}"` : ''}>${leg ? '↳ ' : ''}${esc(mpShortDesc(description))}</td>
     ${noteCell}<td style="text-align:left">${esc(account)}</td>
     <td>${amt < 0 ? '−' : '+'}${Math.abs(amt).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${rowCcy}</td><td>${signed(value)}</td></tr>`;
-  const inRow = p => legRow(p.in_day, p.in_description, p.in_account, Number(p.in_amount), p.in_currency, inConv(p), '<td></td><td></td>', true);
+  // a transfer leg's time, when its bank row has one (a savings trade has none)
+  const legClock = (src, xid) => {
+    const at = mpExpCache.clockOf?.get(`${src}|${xid}`);
+    return at ? mpTimeHtml({ src, xid, at }) : '';
+  };
+  const inRow = p => legRow(p.in_day + legClock(p.in_source, p.in_id), p.in_description, p.in_account, Number(p.in_amount), p.in_currency, inConv(p), '<td></td><td></td>', true);
   const pairsTable = (list, extra = []) => `<div class="exp-rows"><table class="data-table pair-rows"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th style="width:1%;text-align:left">Place</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
     list.slice().sort((a, b) => b.day.localeCompare(a.day) || String(b.ts).localeCompare(String(a.ts))).map(r => {
       const p = pairOf.get(`${r.src}|${r.xid}`);
       return legRow(r.day + mpTimeHtml(r), r.description, r.account, -r.amt, r.ccy, -conv(r),
         `<td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to set the place" style="text-align:left;max-width:180px;cursor:pointer">${mpPlaceHtml(r.place, r.deliveredTo)}</td>`)
         + (p ? inRow(p) : '');
-    }).join('')}${extra.map(p => legRow(p.out_day, p.out_description, p.out_account, Number(p.out_amount), p.out_currency,
+    }).join('')}${extra.map(p => legRow(p.out_day + legClock(p.out_source, p.out_id), p.out_description, p.out_account, Number(p.out_amount), p.out_currency,
       Number(p.out_usd) / usdPer(ccy, p.out_day), '<td></td><td></td>') + inRow(p)).join('')}</tbody></table></div>`;
   // chains (migration 160): a move in several steps, its rows out of the pairs
   // and the categories below into one block each
@@ -11936,7 +11957,7 @@ async function mpRenderExpenses() {
       <span>${list.length} transaction${list.length === 1 ? '' : 's'}${sub}</span></div>
       <div class="exp-amt"><b>${signed(sum)}</b></div></summary>
       <div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
-        list.slice().sort((a, b) => b.day.localeCompare(a.day)).map(r => `<tr><td style="white-space:nowrap">${r.day}</td>
+        list.slice().sort((a, b) => b.day.localeCompare(a.day)).map(r => `<tr><td style="white-space:nowrap">${r.day}${mpTimeHtml(r)}</td>
           <td style="text-align:left"${mpShortDesc(r.description) !== r.description ? ` title="${esc(r.description)}"` : ''}>${esc(mpShortDesc(r.description))}</td>
           <td style="text-align:left">${esc(r.account)}</td><td>+${Number(r.amount).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${r.currency}</td>
           <td>${signed(Number(r.usd) / usdPer(ccy, r.day))}</td></tr>`).join('')}</tbody></table></div></details>`;
