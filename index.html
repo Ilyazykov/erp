@@ -10940,15 +10940,15 @@ async function mpEditItems(src, xid) {
   // the computed "Other" line is not an item: it's the difference, not a row to save
   const draft = (receipt?.lines || []).filter(l => !l.is_other).map(l => ({ name: l.name_printed, productId: l.product_id ?? null, qty: l.qty, unit: l.unit, total: l.line_total }));
   const renderDraft = () => draft.map((d, i) => `<tr data-i="${i}">
-      <td><input name="n" value="${mpEscapeHtml(d.name)}" list="mp_items_catalog" placeholder="start typing a product…" autocomplete="off" style="${MP_FIELD}" required></td>
+      <td><input name="n" value="${mpEscapeHtml(d.name)}" placeholder="start typing a product…" autocomplete="off" style="${MP_FIELD}" required></td>
       <td style="white-space:nowrap"><input name="q" type="number" step="any" min="0.001" value="${d.qty}" style="${MP_FIELD};width:60px">${unit(d.unit)}</td>
       <td><input name="t" type="number" step="0.01" min="0" value="${d.total}" style="${MP_FIELD};width:80px"></td>
       <td><button type="button" class="item-del" data-i="${i}">✕</button></td></tr>`).join('');
   const form = mpDialog(`Items · ${r.day} · ${mpShortDesc(r.description)}`, `
     <p class="note" style="margin:0">No items yet -- add them by hand, or upload a receipt CSV (My Portfolio tab) made from the receipt's photo.</p>
-    <datalist id="mp_items_catalog">${catalog.map(c => `<option value="${mpEscapeHtml(c.name_en)}">`).join('')}</datalist>
     <table class="data-table"><thead><tr><th style="text-align:left">Item</th><th>Qty</th><th>Line total, ${r.ccy}</th><th></th></tr></thead>
       <tbody id="mp_items_draft">${renderDraft()}</tbody></table>
+    <div id="mp_items_suggest" style="display:flex;flex-wrap:wrap;gap:6px"></div>
     <button type="button" data-act="add-line">+ line</button>
     <p class="note" style="margin:0" id="mp_items_hint"></p>
     <p class="note" style="margin:0" id="mp_items_sum"></p>`);
@@ -10991,17 +10991,36 @@ async function mpEditItems(src, xid) {
   };
   body.addEventListener('input', e => { if (e.target.name === 'n') suggest(e.target.closest('tr')); });
   body.addEventListener('input', e => { if (e.target.name === 'q') suggest(e.target.closest('tr')); });
+  // the catalog's names for the row being typed in, as buttons under the table (not a browser popup,
+  // which covered the rows below and swallowed the clicks on their ✕)
+  const suggestEl = form.querySelector('#mp_items_suggest');
+  let activeTr = null;
+  const showSuggestions = () => {
+    if (!activeTr) { suggestEl.innerHTML = ''; return; }
+    const typed = activeTr.querySelector('[name=n]').value.trim().toLowerCase();
+    const found = catalog.filter(c => !typed || c.name_en.toLowerCase().includes(typed)).slice(0, 8);
+    suggestEl.innerHTML = found.map(c => `<button type="button" class="item-suggest" data-name="${mpEscapeHtml(c.name_en)}" style="background:#13191f;color:#c9d1d9;border:1px solid #30363d;border-radius:4px;padding:3px 8px;cursor:pointer">${mpEscapeHtml(c.name_en)}</button>`).join('');
+  };
+  body.addEventListener('focusin', e => { if (e.target.name === 'n') { activeTr = e.target.closest('tr'); showSuggestions(); } });
+  body.addEventListener('input', e => { if (e.target.name === 'n') { activeTr = e.target.closest('tr'); showSuggestions(); } });
+  suggestEl.addEventListener('click', e => {
+    const pick = e.target.closest('.item-suggest');
+    if (!pick || !activeTr) return;
+    activeTr.querySelector('[name=n]').value = pick.dataset.name;
+    suggest(activeTr);
+    activeTr = null;
+    suggestEl.innerHTML = '';
+  });
   form.querySelector('[data-act=add-line]').addEventListener('click', () => {
     draft.push({ name: '', qty: 1, unit: 'pcs', total: 0, note: null });
     body.innerHTML = renderDraft();
     syncDraft();
   });
+  // ✕ takes the row out of the table itself; the sums are then counted from the rows left on screen
   body.addEventListener('click', e => {
     const del = e.target.closest('.item-del');
     if (!del) return;
-    draft.splice(Number(del.dataset.i), 1);
-    body.innerHTML = renderDraft();
-    body.querySelectorAll('tr').forEach((tr, i) => { tr.dataset.i = i; });
+    del.closest('tr').remove();
     syncDraft();
   });
   const saveBtn = form.querySelector('[data-act=save]');
