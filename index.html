@@ -11320,7 +11320,8 @@ async function mpLinkTransfer(src, xid) {
   const seen = new Map();
   for (const [r, sign] of all) {
     const key = `${r.src}|${r.xid}`;
-    if (!seen.has(key)) seen.set(key, { src: r.src, xid: r.xid, day: r.day, desc: r.description || '', amt: sign * Math.abs(Number(r.amt ?? r.amount)), ccy: r.ccy ?? r.currency, at: r.at || '' });
+    if (!seen.has(key)) seen.set(key, { ref: r, src: r.src, xid: r.xid, day: r.day, desc: r.description || '', amt: sign * Math.abs(Number(r.amt ?? r.amount)),
+      usd: sign * Math.abs(Number(r.usd)), ccy: r.ccy ?? r.currency, at: r.at || '' });
   }
   const me = seen.get(`${src}|${xid}`);
   if (!me) return;
@@ -11328,28 +11329,44 @@ async function mpLinkTransfer(src, xid) {
   const takenIn = new Set((mpExpCache?.pairs || []).map(p => `${p.in_source}|${p.in_id}`));
   const dayNum = d => Date.parse(`${d}T00:00:00Z`);
   const cands = [...seen.values()].filter(c => c.src !== me.src || c.xid !== me.xid)
-    .filter(c => (me.amt < 0 ? c.amt > 0 && !takenIn.has(`${c.src}|${c.xid}`) : c.amt < 0)
+    .filter(c => (c.amt < 0 || !takenIn.has(`${c.src}|${c.xid}`))
       && Math.abs(dayNum(c.day) - dayNum(me.day)) <= 7 * 86400000)
     .sort((a, b) => Math.abs(dayNum(a.day) - dayNum(me.day)) - Math.abs(dayNum(b.day) - dayNum(me.day)));
   const list = cands.map((c, i) => `<label style="display:flex;gap:8px;align-items:center">
     <input type="checkbox" name="pick" value="${i}"><span>${c.day} ${mpEscapeHtml(mpShortDesc(c.desc))} · ${c.amt.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${mpEscapeHtml(c.ccy || '')}</span></label>`).join('')
-    || '<p class="empty-note">No opposite rows within 7 days.</p>';
+    || '<p class="empty-note">No rows within 7 days.</p>';
   const form = mpDialog(`Link · ${me.day} · ${mpShortDesc(me.desc)} · ${me.amt.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${mpEscapeHtml(me.ccy || '')}`,
     `<div style="max-height:320px;overflow:auto;display:flex;flex-direction:column;gap:6px">${list}</div>`);
   form.addEventListener('submit', async e => {
     e.preventDefault();
-    const picked = [...form.querySelectorAll('input[name=pick]:checked')].map(box => cands[Number(box.value)]);
-    if (!picked.length) return;
+    // the group: this row and the picked ones -- every money out with every money in
+    // (a pair per combination; each pair is one out row and one in row)
+    const group = [me, ...[...form.querySelectorAll('input[name=pick]:checked')].map(box => cands[Number(box.value)])];
+    const outs = group.filter(r => r.amt < 0), ins = group.filter(r => r.amt > 0);
+    if (!outs.length || !ins.length) { alert('Pick at least one row out and one row in.'); return; }
     const { data: { session: s } } = await sb.auth.getSession();
     const when = r => (r.at ? `${r.day}T${r.at}:00Z` : `${r.day}T00:00:00Z`);
-    const payload = picked.map(c => {
-      const o = me.amt < 0 ? me : c, i = me.amt < 0 ? c : me;
-      return { user_id: s.user.id, out_source: o.src, out_id: o.xid, in_source: i.src, in_id: i.xid,
-        amount: Math.abs(o.amt), currency: o.ccy, out_at: when(o), in_at: when(i), matched_by: 'manual', kind: 'transfer' };
-    });
+    const payload = outs.flatMap(o => ins.map(i => ({ user_id: s.user.id, out_source: o.src, out_id: o.xid, in_source: i.src, in_id: i.xid,
+        amount: Math.abs(o.amt), currency: o.ccy, out_at: when(o), in_at: when(i), matched_by: 'manual', kind: 'transfer' })));
     const { error } = await sb.from('internal_transfers').insert(payload);
     if (error) { alert(error.message); return; }
     form.closest('dialog').close();
+    // on screen at once: the group's rows leave the expenses and the income and
+    // show as pairs under "Not counted" (the cache; the rebuild brings the same from the database)
+    const gone = new Set(group.map(g => `${g.src}|${g.xid}`));
+    const keep = list => list.filter(r => !gone.has(`${r.src}|${r.xid}`));
+    if (mpExpCache) {
+      mpExpCache.spent = keep(mpExpCache.spent || []);
+      mpExpCache.skipped = keep(mpExpCache.skipped || []);
+      mpExpCache.incomeRows = keep(mpExpCache.incomeRows || []);
+      mpExpCache.pairs = [...(mpExpCache.pairs || []), ...outs.flatMap(o => ins.map((i, k) => ({
+        pair_id: -(Date.now() + k), kind: 'transfer', category: o.ref?.cat || 'Own accounts',
+        out_source: o.src, out_id: o.xid, out_day: o.day, out_account: o.ref?.account || '', out_description: o.desc,
+        out_amount: o.amt, out_currency: o.ccy, out_usd: o.usd,
+        in_source: i.src, in_id: i.xid, in_day: i.day, in_account: i.ref?.account || '', in_description: i.desc,
+        in_amount: i.amt, in_currency: i.ccy, in_usd: i.usd,
+      })))];
+    }
     await sb.rpc('request_my_capital_refresh');
     await mpRenderExpenses();
   });
