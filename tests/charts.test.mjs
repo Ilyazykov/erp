@@ -145,8 +145,9 @@ function targetChecks(pies, tag) {
   // 24. Chart 5's Russia target = chart 8's Russian stock target.
   const ru5 = usdTarget(c5, 'Russia 🇷🇺'), ru8 = usdTarget(ruInfra, 'stock 📈 🇷🇺');
   checkT(tag, near(ru5, ru8, 0.5), `Stocks by country: Russia target $${ru5.toFixed(2)} = Russian infrastructure stock target $${ru8.toFixed(2)}`);
-  // 22. Chart 9's target total = chart 3's total less its cash, gold and crypto targets.
-  const rest3 = types3 ? types3.whole - ['cash 💵', 'gold 🥇', 'crypto ₿'].reduce((a, l) => a + usdTarget(types3, l), 0) : NaN;
+  // 22. Chart 9's target total = chart 3's total less its emergency fund and its cash, gold and crypto targets.
+  const cushion = vm.runInContext('MP_CUSHION_USD', ctx);
+  const rest3 = types3 ? types3.whole - cushion - ['cash 💵', 'gold 🥇', 'crypto ₿'].reduce((a, l) => a + usdTarget(types3, l), 0) : NaN;
   checkT(tag, c9 && near(c9.whole, rest3, 0.5), `Stocks, bonds, deposits, liquid: target total $${c9 && c9.whole.toFixed(2)} = Asset types total less cash / gold / crypto targets $${rest3.toFixed(2)}`);
 
 }
@@ -166,7 +167,10 @@ async function scenario(name, base, SALARY) {
   // 3: with a salary
 
   const ctxM = await T.build(base, [], false, 2, 0, null, null);
-  const plan = T.plan(ctxM, SALARY);
+  // The page's defaults: every salary option off. In this sandbox the checkboxes
+  // read as checked, so the plan would otherwise sell with all of them on.
+  const OPTIONS_OFF = { liquid: false, ruLiquid: false, ruCash: false, sellYuan: false, sellStocks: false };
+  const plan = T.plan(ctxM, SALARY, OPTIONS_OFF);
   const deltas = T.deltas(ctxM, plan);
   const spent = SALARY + plan.parts.cashFree;
   const bought = deltas.reduce((a, r) => a + r.value_usd, 0);
