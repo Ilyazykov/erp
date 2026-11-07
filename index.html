@@ -11301,10 +11301,34 @@ function mpEditCategory(src, xid) {
     await mpRenderExpenses();
   });
 }
+// The type of one's own money coming in (bank_transactions.income_category): set by
+// hand it is kept through the rules' rebuilds (income_manual), like an expense's category.
+function mpEditIncomeType(src, xid) {
+  const rows = (mpExpCache?.incomeRows || []).filter(r => r.src === src && r.xid === xid);
+  const r = rows[0];
+  if (!r) return;
+  const opts = Object.keys(MP_INCOME_COLORS).map(name => `<option${name === r.category ? ' selected' : ''}>${mpEscapeHtml(name)}</option>`).join('');
+  const form = mpDialog(`Type · ${r.day} · ${mpShortDesc(r.description)}`, `
+    <select name="type" size="6" style="${MP_FIELD}">${opts}</select>`);
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const type = form.type.value;
+    const { error } = await sb.from('bank_transactions').update({ income_category: type, income_manual: true })
+      .eq('external_source', src).eq('external_id', xid);
+    if (error) { alert(error.message); return; }
+    rows.forEach(x => { x.category = type; });
+    form.closest('dialog').close();
+    // the income table is rebuilt by the next capital refresh (the rules' step)
+    sb.rpc('request_my_capital_refresh').catch(() => {});
+    await mpRenderExpenses();
+  });
+}
 document.getElementById('expenses').addEventListener('click', e => {
   if (!mpIsSignedIn || e.target.closest('a')) return;
   const catCell = e.target.closest('.exp-cat-set');
   if (catCell?.dataset.src) { e.stopPropagation(); mpEditCategory(catCell.dataset.src, catCell.dataset.xid); return; }
+  const incCell = e.target.closest('.inc-cat-set');
+  if (incCell?.dataset.src) { e.stopPropagation(); mpEditIncomeType(incCell.dataset.src, incCell.dataset.xid); return; }
   const time = e.target.closest('.exp-time');
   if (time) { e.stopPropagation(); mpEditTime(time.dataset.src, time.dataset.xid); return; }
   const place = e.target.closest('.exp-place');
@@ -11541,9 +11565,10 @@ async function mpRenderExpenses() {
     ],
   }, { ...CONFIG, displayModeBar: false });
   const incList = document.getElementById('inc_categories');
-  const incTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th style="width:1%;text-align:left">Place</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
+  const incTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th style="text-align:left">Type</th><th>Note</th><th style="width:1%;text-align:left">Place</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
     list.slice().sort((x, y) => y.day.localeCompare(x.day)).map(r => `<tr><td style="white-space:nowrap">${r.day}${mpTimeHtml(r)}</td>
       <td style="text-align:left">${esc(r.description || '')}</td>
+      <td class="inc-cat-set" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to change the type" style="text-align:left;cursor:pointer;color:#c9d1d9">${esc(r.category || '—')}</td>
       <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to set the place" style="text-align:left;max-width:180px;cursor:pointer">${mpPlaceHtml(r.place, r.deliveredTo)}</td>
       <td style="text-align:left">${esc(r.account)}</td>
       <td>${Number(r.amount).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${esc(r.currency || '')}</td><td>${rowMoney(incConv(r))}</td></tr>`).join('')}</tbody></table></div>`;
