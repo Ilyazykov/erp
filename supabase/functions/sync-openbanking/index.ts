@@ -741,6 +741,12 @@ Deno.serve(async (req) => {
       if ((sessions ?? []).some(s => s.broker === 'eb:boc')) {
         try { await bocTopUpStandIns(db, app.user_id); } catch (err) { results.push({ bank: 'boc', standin_error: String(err) }); }
       }
+      // a waiting receipt (migration ...179) may now match a row this sync
+      // just wrote; db is the service role here, so p_user is required
+      // (there's no signed-in session's auth.uid() to fall back on)
+      if (sessions?.length) {
+        try { await db.rpc('match_receipts', { p_user: app.user_id }); } catch (err) { results.push({ bank: 'receipts', match_error: String(err) }); }
+      }
     }
     if (userId) return json({ sessions: results });
     return json({ users: apps.length, sessions: results.length, errors: results.filter(r => r.error).length });

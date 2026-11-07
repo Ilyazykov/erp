@@ -286,14 +286,16 @@
       (Data Export → Transaction Log → Account Change Details: upload each Funding and Unified Trading file), or a
       Crypto.com App export (Accounts → History → Export → Crypto Wallet), a Binance transaction export (Orders → Assets
       History → Export → Export Transaction Records; keep the file name, its "(UTC+3)" is the time zone), or this project's own Telegram wallet CSV
-      (built from the history in Walt, ex. Wallet in Telegram) — the file type is detected automatically from its header
-      row or extension.</p>
+      (built from the history in Walt, ex. Wallet in Telegram), or this project's own receipt-items CSV (a receipt's photo
+      turned into one by an LLM outside this app -- items within a purchase, see the Expenses tab's Items column) —
+      the file type is detected automatically from its header row or extension.</p>
     <div class="form-row">
       <input type="file" id="mp_any_csv_file" accept=".csv,.xlsx,.json,.html,.htm,.xml" multiple>
       <button class="btn primary" id="mp_any_csv_upload">Upload</button>
     </div>
     <div id="mp_any_csv_drop" class="drop-zone">…or drop any number of files here — they're queued and imported one by one</div>
     <div class="empty-note" id="mp_any_csv_status"></div>
+    <div id="mp_receipts_panel"></div>
 
     <p class="note">Automatic syncs and checks (IBKR, Bybit, Freedom24, T-Bank, Binance, Revolut X, Open Banking) —
       their keys and status — are on the <a href="#" onclick="showTab('automation');return false">Automation</a> tab.</p>
@@ -2199,6 +2201,10 @@ function mpDetectCsvKind(headerLine, fullText) {
   if (/^Date,Description,Transaction type,/im.test(fullText)) return 'boc_account';
   if (/^account_number,currency,date_executed,/i.test(h)) return 'raiffeisen_account';
   if (/^bank,account_number,product,/i.test(h)) return 'bank_csv';
+  // items within a purchase (migration ...179, design: docs/items-design.md,
+  // not tracked in git) -- a receipt photo turned into this CSV by an LLM
+  // outside this app; see the upload instructions next to the file picker
+  if (/^﻿?receipt,date,/i.test(h)) return 'receipt_csv';
   if (/^\uFEFF?თარიღი,დანიშნულება,/.test(h) && /^Date,Description,Additional Information,Paid Out,Paid In,Balance,/m.test(fullText)) return 'tbc_account';
   if (/^\uFEFF?broker,account_number,date,operation,/i.test(h)) return 'broker_csv';
   if (/^UID:\s*\d+,Company Name:/i.test(h)
@@ -2364,6 +2370,52 @@ const mpOpenAccounts = new Set();
 // the part it would be, or '' for the whole account.
 const MP_TODO_AUTO = { 'T-Bank': 'Broker', Revolut: 'Cards & current accounts', 'Bank of Cyprus': '', Wise: '', Binance: '' };
 const todoAuto = '<span style="color:#8b949e">TODO auto</span>';
+// Receipts needing attention (migration ...179, design: docs/items-design.
+// md, not tracked in git): none yet or no table -- the panel stays empty.
+// Waiting ones need nothing from the user (checked again after every
+// import); ambiguous ones -- the total matched more than one transaction --
+// need a pick.
+async function mpRenderReceiptsPanel() {
+  const wrap = document.getElementById('mp_receipts_panel');
+  if (!wrap || !mpIsSignedIn) return;
+  const { data: open } = await sb.from('receipts')
+    .select('id, purchased_on, store_printed, chain, currency, total, match_state')
+    .in('match_state', ['waiting', 'ambiguous']).order('purchased_on', { ascending: false })
+    .catch(() => ({ data: [] }));
+  const waiting = (open || []).filter(r => r.match_state === 'waiting');
+  const ambiguous = (open || []).filter(r => r.match_state === 'ambiguous');
+  if (!waiting.length && !ambiguous.length) { wrap.innerHTML = ''; return; }
+  wrap.innerHTML = `<div class="section-title" style="margin-top:14px">Receipts needing attention</div>
+    ${waiting.length ? `<p class="note">${waiting.length} receipt${waiting.length === 1 ? '' : 's'} waiting for a matching transaction -- checked again after every import, nothing to do here yet.</p>` : ''}
+    ${ambiguous.length ? `<table class="data-table"><thead><tr><th>Date</th><th style="text-align:left">Store</th><th>Total</th><th style="text-align:left">​</th></tr></thead><tbody>${
+      ambiguous.map(r => `<tr data-id="${r.id}"><td>${r.purchased_on}</td><td style="text-align:left">${mpEscapeHtml(r.chain || r.store_printed || '')}</td>
+        <td>${mpFormatCurrency(r.total, r.currency, true)}</td><td class="receipt-pick" style="text-align:left;color:#58a6ff;cursor:pointer">matches more than one — choose…</td></tr>`).join('')}</tbody></table>` : ''}`;
+  wrap.querySelectorAll('.receipt-pick').forEach(cell => cell.addEventListener('click', () => mpPickReceiptMatch(Number(cell.closest('tr').dataset.id))));
+}
+// The user's pick for an ambiguous receipt (match_receipts' own tie-break
+// couldn't narrow it to one): match_state goes straight to 'manual_link',
+// same as any other hand-resolved pick -- the matcher never revisits it.
+async function mpPickReceiptMatch(receiptId) {
+  const { data: cands, error } = await sb.rpc('receipt_match_candidates', { p_receipt_id: receiptId });
+  if (error) { alert(error.message); return; }
+  if (!cands?.length) { alert('No candidates left for this receipt (they may already be taken by another one) -- reload the page.'); return; }
+  const form = mpDialog('Pick the transaction', `
+    <select name="pick" size="${Math.min(cands.length, 8)}" style="${MP_FIELD}">
+      ${cands.map((c, i) => `<option value="${i}">${mpEscapeHtml(c.account)} · ${c.date_dist} day${c.date_dist === 1 ? '' : 's'} away${c.chain_hit ? ' · chain match' : ''}</option>`).join('')}
+    </select>`);
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const c = cands[Number(form.pick.value)];
+    const { error: upErr } = await sb.from('receipts')
+      .update({ match_state: 'manual_link', tx_source: c.external_source, tx_external_id: c.external_id, updated_at: new Date().toISOString() })
+      .eq('id', receiptId);
+    if (upErr) { alert(upErr.message); return; }
+    await sb.rpc('receipt_resolve_place', { p_receipt_id: receiptId, p_account: c.account }).catch(() => { /* best effort */ });
+    form.closest('dialog').close();
+    mpExpCache = null;
+    mpRenderReceiptsPanel();
+  });
+}
 async function mpRenderLatestSources() {
   const wrap = document.getElementById('mp_latest_sources');
   try {
@@ -2678,9 +2730,22 @@ async function mpLogUpload(kind, fileName, csvText, result) {
   let accounts = MP_UPLOAD_ACCOUNT[kind] ? [MP_UPLOAD_ACCOUNT[kind]] : [];
   const period = mpUploadPeriod(fileName, csvText, result);
   const rows = [];
-  // this project's own CSVs name the account in their first column (bank /
-  // broker) and can hold several -- each gets its own rows' period
-  if ((kind === 'bank_csv' || kind === 'broker_csv') && csvText) {
+  // items within a purchase (migration ...179): the account isn't in the
+  // CSV's own columns (a store isn't a bank account) -- it's the linked
+  // transaction's, decided server-side; a receipt still waiting for one
+  // logs under 'receipts' rather than not at all
+  if (kind === 'receipt_csv') {
+    const by = new Map();
+    for (const r of result.receipts || []) {
+      const a = r.account || 'receipts';
+      if (!by.has(a)) by.set(a, []);
+      by.get(a).push(r.date);
+    }
+    for (const [a, dates] of by) {
+      dates.sort();
+      rows.push({ account: a, kind, file_name: fileName, period_from: dates[0], period_to: dates[dates.length - 1] });
+    }
+  } else if ((kind === 'bank_csv' || kind === 'broker_csv') && csvText) {
     const lines = csvText.split(/\r?\n/).slice(1).filter(Boolean);
     const by = new Map();
     for (const l of lines) {
@@ -2996,6 +3061,7 @@ async function mpImportOneFile(file, statusEl, session) {
       tbank_broker_xlsx: { fn: 'import-tbank-broker', label: 'T-Bank broker report' },
       atomyze_xlsx: { fn: 'import-atomyze', label: 'Atomyze (ЦФА) platform report' },
       xlsx: { fn: 'import-xlsx', label: 'spreadsheet (.xlsx)' },
+      receipt_csv: { fn: 'import-receipts', label: 'receipt items (CSV)' },
     };
     const { fn } = endpoints[kind];
     let { label } = endpoints[kind];
@@ -3227,6 +3293,13 @@ async function mpImportOneFile(file, statusEl, session) {
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
       mpRenderBondByType();
+    } else if (kind === 'receipt_csv') {
+      const skipped = result.skipped?.length ? ` ${result.skipped.length} receipt(s) skipped (their own rows disagreed): ${result.skipped.map(s => s.reason).join('; ')}.` : '';
+      const unmatched = result.unmatched_products ? ` ${result.unmatched_products} line(s) with no product yet -- resolve them from the Expenses tab's Items column.` : '';
+      statusEl.textContent = `Detected: ${label}. ${result.accepted} receipt(s), ${result.total_lines} line(s): `
+        + `${result.linked} linked to a transaction, ${result.waiting} waiting for one, ${result.ambiguous} matching more than one (resolve by hand).${skipped}${unmatched}`;
+      mpExpCache = null;   // the Expenses tab's items re-load with the new receipts
+      mpRenderReceiptsPanel();
     } else {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} deposit trades `
         + `(${result.total_rows} parsed).`;
@@ -9918,6 +9991,7 @@ function mpUpdateAuthUi(session) {
     mpRenderCardReminders();
     mpRenderPortfolioPies();
     mpRenderLatestSources();
+    mpRenderReceiptsPanel();
     mpRenderBrokerCurrency();
     mpRenderBrokerAssetClass();
     mpRenderBondByType();
@@ -10206,6 +10280,20 @@ async function mpExpLoad() {
   // the places one's rows can be set to (the Place column's picker)
   const placeList = await page(() => sb.from('places').select('id, name, lat, lng, url, google_id, city, street, house').order('name'))
     .catch(() => page(() => sb.from('places').select('id, name, lat, lng, url, google_id').order('name')).catch(() => []));
+  // the receipt in force for a row out, with its lines (migration ...179,
+  // design: docs/items-design.md, not tracked in git): none yet or no table
+  // -- the items cell just offers "add items"
+  const [receiptsList, receiptLineRows] = await Promise.all([
+    page(() => sb.from('receipts_active').select('id, tx_source, tx_external_id, source, chain, store_printed, currency, note')).catch(() => []),
+    page(() => sb.from('receipt_lines').select('receipt_id, line_no, name_printed, name_en, product_id, qty, unit, unit_price_list, unit_price_paid, line_total, note, is_other').order('line_no')).catch(() => []),
+  ]);
+  const linesByReceipt = new Map();
+  for (const l of receiptLineRows || []) {
+    if (!linesByReceipt.has(l.receipt_id)) linesByReceipt.set(l.receipt_id, []);
+    linesByReceipt.get(l.receipt_id).push(l);
+  }
+  const receiptOf = new Map((receiptsList || []).map(r => [`${r.tx_source}|${r.tx_external_id}`,
+    { id: r.id, source: r.source, chain: r.chain, store: r.store_printed, currency: r.currency, note: r.note, lines: linesByReceipt.get(r.id) || [] }]));
   // a place shown by its name, with as much of its address as tells it from another of that name
   for (const r of [...spent, ...skipped, ...(inc || [])]) {
     const from = placeList.find(p => p.id === r.placeId), to = placeList.find(p => p.id === r.deliveredToId);
@@ -10222,7 +10310,7 @@ async function mpExpLoad() {
     // the income one expects (migration 161): none yet or no table -- the income bars unframed
     page(() => sb.from('income_expectations').select('category, amount, currency, from_day, to_day')).catch(() => []),
   ]);
-  return { spent, skipped, usdPer, placeList, periods: periods || [], incomeDays: mpExpIncomeDays(inc || []), incomeRows: inc || [],
+  return { spent, skipped, usdPer, placeList, receiptOf, periods: periods || [], incomeDays: mpExpIncomeDays(inc || []), incomeRows: inc || [],
     pairs, unpairedIn, incomeExpect: incomeExpect || [], chainOf: new Map((chains || []).map(c => [`${c.external_source}|${c.external_id}`, c.chain])) };
 }
 // Income over the days it was earned in: each payment over the days since the
@@ -10485,6 +10573,17 @@ function mpNoteHtml(note) {
     return `<a href="${mpEscapeHtml(part)}" target="_blank" rel="noopener" style="color:#58a6ff">${mpEscapeHtml(label)}</a>`;
   }).join('');
 }
+// A row's items (migration ...179, design: docs/items-design.md, not
+// tracked in git): a receipt in force shows its line count, the "Other"
+// gap flagged if there is one and any unresolved product dimmed; a row
+// with none offers to add them by hand.
+function mpItemsHtml(receipt) {
+  if (!receipt) return '<span style="color:#6a7381">+ items</span>';
+  const n = receipt.lines.filter(l => !l.is_other).length;
+  const other = receipt.lines.some(l => l.is_other);
+  const unresolved = receipt.lines.some(l => !l.is_other && l.product_id == null);
+  return `<span${unresolved ? ' style="color:#d29922" title="a line has no product yet"' : ''}>🧾 ${n} item${n === 1 ? '' : 's'}${other ? ' +' : ''}</span>`;
+}
 // A row's time next to its date: the statement's, or one set by hand
 // (authorized_at, migration 166) -- "~" before a guess (...167). A row
 // without a time of its own, or with one set by hand, can get one: a click.
@@ -10616,6 +10715,14 @@ function mpEditPlace(src, xid) {
     const from = pick('from'), to = delivery ? pick('to') : null;
     const { error } = await sb.from('bank_transactions').update({ place_id: from, delivery_place_id: to }).eq('external_source', src).eq('external_id', xid);
     if (error) { alert(error.message); return; }
+    // the row's receipt (migration ...179), if it has one: remember this
+    // place for its store, so the next receipt from there picks it by
+    // itself (receipt_resolve_place does the same on the database side)
+    const receiptHere = mpExpCache?.receiptOf?.get(`${src}|${xid}`);
+    if (from && receiptHere) {
+      const key = mpStoreKey(receiptHere.chain, receiptHere.store);
+      if (key) await sb.from('store_places').upsert({ store_key: key, place_id: from }, { onConflict: 'user_id,store_key' }).catch(() => { /* best effort */ });
+    }
     const byId = id => { const p = list.find(x => x.id === id); return p ? { name: mpPlaceLabel(p, list), url: p.url } : null; };
     rows.forEach(x => { x.placeId = from; x.deliveredToId = to; x.place = byId(from); x.deliveredTo = byId(to); });
     form.closest('dialog').close();
@@ -10624,12 +10731,244 @@ function mpEditPlace(src, xid) {
     });
   });
 }
+
+// ---- Items within a purchase (migration ...179, design: docs/items-design.md, not tracked in git) ----
+// JS mirrors of the SQL receipt_norm / the store-key it's built from
+// (receipt_resolve_place) -- punctuation collapsed to a space, digits kept.
+function mpReceiptNorm(s) {
+  return String(s || '').toLowerCase().replace(/[^\p{L}\p{N}\s]+/gu, ' ').replace(/\s+/g, ' ').trim();
+}
+function mpStoreKey(chain, storePrinted) {
+  return mpReceiptNorm(chain || '') || mpReceiptNorm(String(storePrinted || '').replace(/[0-9]+/g, ''));
+}
+// A row's items: a receipt in force (receipt_csv > statement > manual, same
+// rank as receipts_active) shows its lines read-only, its own note, and a
+// "resolve" control on any line with no product yet; a row with none offers
+// a small editable table to add items by hand (source 'manual',
+// match_state 'manual_link' -- tied to this row directly, never touched by
+// match_receipts). Editing a manual receipt again replaces all its lines.
+async function mpEditItems(src, xid) {
+  const rows = mpExpRowsOf(src, xid);
+  const r = rows[0];
+  if (!r) return;
+  const receipt = mpExpCache?.receiptOf?.get(`${src}|${xid}`);
+  const unit = v => ` <select name="u" style="width:auto;display:inline">${['pcs', 'kg', 'l', 'other'].map(u => `<option${u === v ? ' selected' : ''}>${u}</option>`).join('')}</select>`;
+
+  if (receipt && receipt.source !== 'manual') {
+    const real = receipt.lines.filter(l => !l.is_other);
+    const other = receipt.lines.find(l => l.is_other);
+    const lineRow = l => `<tr data-item="${l.line_no}">
+        <td style="text-align:left">${l.product_id != null
+          ? `<a href="#" class="item-product" data-pid="${l.product_id}" style="color:#58a6ff">${mpEscapeHtml(l.name_en || l.name_printed)}</a>`
+          : `${mpEscapeHtml(l.name_en || l.name_printed)} <a href="#" class="item-resolve" data-item="${l.line_no}" style="color:#d29922">resolve</a>`}
+          <div style="font-size:0.85em;color:#6a7381">${mpEscapeHtml(l.name_printed)}</div></td>
+        <td>${l.qty} ${l.unit}</td>
+        <td>${l.unit_price_paid != null ? mpFormatCurrency(l.unit_price_paid, receipt.currency || r.ccy, true) : '—'}</td>
+        <td>${mpFormatCurrency(l.line_total, receipt.currency || r.ccy, true)}</td>
+        <td class="item-note" data-item="${l.line_no}" style="cursor:pointer;color:#8b949e">${mpNoteHtml(l.note)}</td></tr>`;
+    const form = mpDialog(`Items · ${r.day} · ${mpShortDesc(r.description)}`, `
+      <p class="note" style="margin:0">${mpEscapeHtml(receipt.source === 'receipt_csv' ? 'From a receipt' : 'From the statement')}${receipt.chain ? ` · ${mpEscapeHtml(receipt.chain)}` : ''}${receipt.store ? ` · ${mpEscapeHtml(receipt.store)}` : ''}</p>
+      <table class="data-table"><thead><tr><th style="text-align:left">Item</th><th>Qty</th><th>Price</th><th>Line</th><th style="text-align:left">Note</th></tr></thead>
+        <tbody>${real.map(lineRow).join('')}${other ? lineRow(other) : ''}</tbody></table>
+      <label>Receipt note <input name="rnote" value="${mpEscapeHtml(receipt.note || '')}" style="${MP_FIELD}"></label>`);
+    form.querySelector('[data-act=save]').textContent = 'Close';
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      if (form.rnote.value.trim() !== (receipt.note || '')) {
+        await sb.from('receipts').update({ note: form.rnote.value.trim() || null }).eq('id', receipt.id);
+        receipt.note = form.rnote.value.trim() || null;
+      }
+      form.closest('dialog').close();
+    });
+    form.querySelectorAll('.item-note').forEach(cell => cell.addEventListener('click', async () => {
+      const lineNo = Number(cell.dataset.item);
+      const line = receipt.lines.find(l => l.line_no === lineNo);
+      const text = prompt('Note', line?.note || '');
+      if (text === null) return;
+      const { error } = await sb.from('receipt_items').update({ note: text.trim() || null }).eq('receipt_id', receipt.id).eq('line_no', lineNo);
+      if (error) { alert(error.message); return; }
+      line.note = text.trim() || null;
+      cell.innerHTML = mpNoteHtml(line.note);
+    }));
+    form.querySelectorAll('.item-resolve').forEach(a => a.addEventListener('click', e => {
+      e.preventDefault();
+      const lineNo = Number(a.dataset.item);
+      const line = receipt.lines.find(l => l.line_no === lineNo);
+      mpResolveProduct(receipt.id, lineNo, line.name_printed, line.name_en, receipt.chain, () => {
+        form.closest('dialog').close();
+        mpEditItems(src, xid);
+      });
+    }));
+    form.querySelectorAll('.item-product').forEach(a => a.addEventListener('click', e => { e.preventDefault(); mpOpenProductView(Number(a.dataset.pid)); }));
+    return;
+  }
+
+  // manual: an editable table, one row per line, kept in `draft` until Save.
+  // No per-line notes here (those are only shown/edited on an already-saved
+  // receipt's read-only view above) -- a manual re-save is a direct edit by
+  // the user, not an import, so there's nothing that could silently clobber one.
+  const draft = (receipt?.lines || []).map(l => ({ name: l.name_printed, qty: l.qty, unit: l.unit, total: l.line_total }));
+  const renderDraft = () => draft.map((d, i) => `<tr data-i="${i}">
+      <td><input name="n" value="${mpEscapeHtml(d.name)}" style="${MP_FIELD}" required></td>
+      <td style="white-space:nowrap"><input name="q" type="number" step="any" min="0.001" value="${d.qty}" style="${MP_FIELD};width:60px">${unit(d.unit)}</td>
+      <td><input name="t" type="number" step="0.01" min="0" value="${d.total}" style="${MP_FIELD};width:80px"></td>
+      <td><button type="button" class="item-del" data-i="${i}">✕</button></td></tr>`).join('');
+  const form = mpDialog(`Items · ${r.day} · ${mpShortDesc(r.description)}`, `
+    <p class="note" style="margin:0">No items yet -- add them by hand, or upload a receipt CSV (My Portfolio tab) made from the receipt's photo.</p>
+    <table class="data-table"><thead><tr><th style="text-align:left">Item</th><th>Qty</th><th>Line total</th><th></th></tr></thead>
+      <tbody id="mp_items_draft">${renderDraft()}</tbody></table>
+    <button type="button" data-act="add-line">+ line</button>
+    <p class="note" style="margin:0" id="mp_items_sum"></p>`);
+  const body = form.querySelector('#mp_items_draft');
+  const sumEl = form.querySelector('#mp_items_sum');
+  const syncDraft = () => {
+    draft.length = 0;
+    body.querySelectorAll('tr').forEach(tr => draft.push({
+      name: tr.querySelector('[name=n]').value.trim(), qty: Number(tr.querySelector('[name=q]').value) || 1,
+      unit: tr.querySelector('[name=u]').value, total: Number(tr.querySelector('[name=t]').value) || 0,
+    }));
+    const sum = draft.reduce((a, d) => a + d.total, 0);
+    const gap = r.amt - sum;
+    sumEl.textContent = `Lines: ${sum.toFixed(2)} ${r.ccy} · transaction: ${Math.abs(r.amt).toFixed(2)} ${r.ccy}`
+      + `${Math.abs(gap) >= 0.005 ? ` · left as "Other": ${(-gap).toFixed(2)}` : ''}`;
+  };
+  body.addEventListener('input', syncDraft);
+  syncDraft();
+  form.querySelector('[data-act=add-line]').addEventListener('click', () => {
+    draft.push({ name: '', qty: 1, unit: 'pcs', total: 0, note: null });
+    body.innerHTML = renderDraft();
+    syncDraft();
+  });
+  body.addEventListener('click', e => {
+    const del = e.target.closest('.item-del');
+    if (!del) return;
+    draft.splice(Number(del.dataset.i), 1);
+    body.innerHTML = renderDraft();
+    body.querySelectorAll('tr').forEach((tr, i) => { tr.dataset.i = i; });
+    syncDraft();
+  });
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    syncDraft();
+    const lines = draft.filter(d => d.name && d.total > 0);
+    if (!lines.length) { form.closest('dialog').close(); return; }
+    const total = Math.abs(r.amt);
+    let receiptId = receipt?.id;
+    if (receiptId) {
+      await sb.from('receipts').update({ purchased_on: r.day, currency: r.ccy, total, updated_at: new Date().toISOString() }).eq('id', receiptId);
+      await sb.from('receipt_items').delete().eq('receipt_id', receiptId);
+    } else {
+      const { data, error } = await sb.from('receipts').insert({
+        source: 'manual', receipt_key: crypto.randomUUID(), tx_source: src, tx_external_id: xid,
+        match_state: 'manual_link', purchased_on: r.day, currency: r.ccy, total,
+      }).select('id').single();
+      if (error) { alert(error.message); return; }
+      receiptId = data.id;
+    }
+    const { error: itemsErr } = await sb.from('receipt_items').insert(lines.map((d, i) => ({
+      receipt_id: receiptId, line_no: i + 1, name_printed: d.name, name_en: d.name, qty: d.qty, unit: d.unit, line_total: d.total,
+    })));
+    if (itemsErr) { alert(itemsErr.message); return; }
+    mpExpCache = null;   // re-load: the new/changed receipt belongs in receiptOf
+    form.closest('dialog').close();
+    await mpRenderExpenses();
+  });
+}
+// Candidates for a line with no product yet (suggest_products: aliases and
+// product names close to what's printed, never linking by itself). Picking
+// one, or typing a new product's name, writes a confirmed alias (so the
+// same printed name links by itself next time) and the line's product_id.
+async function mpResolveProduct(receiptId, lineNo, namePrinted, nameEn, chain, onDone) {
+  const { data: suggestions, error } = await sb.rpc('suggest_products', { p_name: namePrinted, p_name_en: nameEn, p_chain: chain || null });
+  if (error) { alert(error.message); return; }
+  const seen = new Set();
+  const uniq = (suggestions || []).filter(s => (seen.has(s.product_id) ? false : (seen.add(s.product_id), true)));
+  const form = mpDialog(`Resolve · ${nameEn || namePrinted}`, `
+    <p class="note" style="margin:0">${mpEscapeHtml(namePrinted)}</p>
+    <select name="pick" style="${MP_FIELD}">
+      <option value="new">+ new product…</option>
+      ${uniq.map(s => `<option value="${s.product_id}">${mpEscapeHtml(s.name_en)} (${Math.round(s.score * 100)}% match, ${s.via})</option>`).join('')}
+    </select>
+    <input name="newname" placeholder="new product's English name" value="${mpEscapeHtml(nameEn || namePrinted)}" style="${MP_FIELD}">`);
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    let productId = form.pick.value === 'new' ? null : Number(form.pick.value);
+    if (!productId) {
+      const name = form.newname.value.trim();
+      if (!name) return;
+      const { data, error: pErr } = await sb.from('products').insert({ name_en: name }).select('id').single();
+      if (pErr) { alert(pErr.message); return; }
+      productId = data.id;
+    }
+    const { error: aErr } = await sb.from('product_aliases')
+      .upsert({ product_id: productId, name_printed: namePrinted, name_norm: mpReceiptNorm(namePrinted), chain: chain || '' }, { onConflict: 'user_id,name_norm,chain' });
+    if (aErr) { alert(aErr.message); return; }
+    const { error: iErr } = await sb.from('receipt_items').update({ product_id: productId }).eq('receipt_id', receiptId).eq('line_no', lineNo);
+    if (iErr) { alert(iErr.message); return; }
+    form.closest('dialog').close();
+    onDone();
+  });
+}
+// A product's price history (product_prices, migration ...179): a line per
+// shop, in its own currency with a USD toggle; merge/undo at the bottom --
+// two products found to be the same point one at the other (merged_into),
+// never rewriting their lines, so undoing it (merged_into back to null)
+// restores the history exactly as it was.
+async function mpOpenProductView(productId) {
+  const [{ data: product }, { data: rows }] = await Promise.all([
+    sb.from('products').select('id, name_en, brand, merged_into').eq('id', productId).single(),
+    sb.from('product_prices').select('day, place_id, chain, currency, qty, unit, unit_price_paid, unit_price_usd').eq('product_id', productId).order('day'),
+  ]);
+  const dlg = document.createElement('dialog');
+  dlg.style.cssText = 'background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:16px 18px;min-width:320px;max-width:min(92vw,720px)';
+  const usdToggle = `<label><input type="checkbox" id="mp_prod_usd"> show in USD</label>`;
+  const currencies = [...new Set((rows || []).map(r => r.currency))];
+  dlg.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px">
+    <div style="display:flex;justify-content:space-between;align-items:center"><b>${mpEscapeHtml(product?.name_en || '?')}</b><button type="button" data-act="close">✕</button></div>
+    ${usdToggle}
+    <div id="mp_prod_chart" style="height:280px"></div>
+    <table class="data-table"><thead><tr><th>Date</th><th style="text-align:left">Shop</th><th>Qty</th><th>Price</th></tr></thead>
+      <tbody>${(rows || []).slice().reverse().map(r => `<tr><td>${r.day}</td><td style="text-align:left">${mpEscapeHtml(r.chain || '')}</td><td>${r.qty} ${r.unit}</td>
+        <td>${mpFormatCurrency(r.unit_price_paid, r.currency, true)}</td></tr>`).join('') || '<tr><td colspan="4" class="empty-note">No purchases yet.</td></tr>'}</tbody></table>
+    <label>Merge into product id <input name="mergeInto" type="number" style="${MP_FIELD};width:120px" value="${product?.merged_into ?? ''}"></label>
+    <div style="display:flex;gap:8px;justify-content:flex-end"><button type="button" data-act="merge">Save</button></div>
+  </div>`;
+  document.body.appendChild(dlg);
+  dlg.querySelector('[data-act=close]').onclick = () => { dlg.close(); dlg.remove(); };
+  const draw = () => {
+    const usd = dlg.querySelector('#mp_prod_usd').checked;
+    const traces = (currencies.length > 1 || usd ? currencies : [currencies[0]]).filter(Boolean).map(c => {
+      const pts = (rows || []).filter(r => usd || r.currency === c);
+      return { x: pts.map(r => r.day), y: pts.map(r => usd ? r.unit_price_usd : r.unit_price_paid),
+        name: usd ? 'USD' : c, mode: 'lines+markers', type: 'scatter' };
+    });
+    Plotly.react(dlg.querySelector('#mp_prod_chart'), usd ? [traces[0] || { x: [], y: [] }] : traces, {
+      paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', font: { color: '#c9d1d9' },
+      margin: { l: 45, r: 10, t: 10, b: 30 }, showlegend: traces.length > 1,
+    }, { ...CONFIG, displayModeBar: false });
+  };
+  dlg.querySelector('#mp_prod_usd').addEventListener('change', draw);
+  draw();
+  dlg.querySelector('[data-act=merge]').addEventListener('click', async () => {
+    const v = dlg.querySelector('[name=mergeInto]').value.trim();
+    const mergedInto = v ? Number(v) : null;
+    if (mergedInto === productId) { alert("A product can't merge into itself."); return; }
+    const { error } = await sb.from('products').update({ merged_into: mergedInto }).eq('id', productId);
+    if (error) { alert(error.message); return; }
+    mpExpCache = null;
+    dlg.close();
+    dlg.remove();
+  });
+  dlg.showModal();
+}
 document.getElementById('expenses').addEventListener('click', e => {
   if (!mpIsSignedIn || e.target.closest('a')) return;
   const time = e.target.closest('.exp-time');
   if (time) { e.stopPropagation(); mpEditTime(time.dataset.src, time.dataset.xid); return; }
   const place = e.target.closest('.exp-place');
   if (place?.dataset.src) { e.stopPropagation(); mpEditPlace(place.dataset.src, place.dataset.xid); }
+  const items = e.target.closest('.exp-items');
+  if (items?.dataset.src) { e.stopPropagation(); mpEditItems(items.dataset.src, items.dataset.xid); }
 });
 // A note on a row out or in, written in the expenses tab's tables: saved to the row
 // itself (bank_transactions.expense_note) and kept in the tab's cache.
@@ -10775,11 +11114,12 @@ async function mpRenderExpenses() {
   }, { ...CONFIG, displayModeBar: false });
 
   // the note is one's own (bank_transactions.expense_note): click to write it
-  const rowsTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th style="width:1%;text-align:left">Place</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
+  const rowsTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th style="width:1%;text-align:left">Place</th><th style="width:1%;text-align:left">Items</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
     // newest first, to the second -- rows with no time in their statement too,
     // by the importer's 00:00:SS (their order within the day)
     list.slice().sort((a, b) => b.day.localeCompare(a.day) || String(b.ts).localeCompare(String(a.ts))).map(r => `<tr><td style="white-space:nowrap">${r.day}${mpTimeHtml(r)}</td><td style="text-align:left"${mpShortDesc(r.description) !== r.description ? ` title="${esc(r.description)}"` : ''}>${esc(mpShortDesc(r.description))}${groupedTop && MP_EXP_GROUPS[r.cat] ? ` <span style="color:#6a7381">· ${esc(r.cat)}</span>` : ''}</td>
       <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to set the place" style="text-align:left;max-width:180px;cursor:pointer">${mpPlaceHtml(r.place, r.deliveredTo)}</td>
+      <td class="exp-items" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to see / add items" style="text-align:left;cursor:pointer">${mpItemsHtml(mpExpCache?.receiptOf?.get(`${r.src}|${r.xid}`))}</td>
       <td style="text-align:left">${esc(r.account)}</td>
       <td>${r.amt.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${r.ccy}</td><td>${rowMoney(conv(r))}</td></tr>`).join('')}</tbody></table></div>`;
   const catList = document.getElementById('exp_categories');

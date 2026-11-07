@@ -223,17 +223,21 @@ function madeOn(bank: string, description: string, date: string): string | null 
 // brings the payment -- same amount and currency, made the day the hold is
 // dated -- the statement's row takes the hold's note, places, time and hand-set category
 // and the hold goes (05.11.2026). What's left is re-totalled.
+// A receipt (migration ...179) that matched the hold follows it onto the
+// statement's own row -- its key (tx_source/tx_external_id), not a uuid, is
+// what receipts are keyed by, so it's re-pointed here rather than left
+// stale (docs/items-design.md section 3, point 8).
 // deno-lint-ignore no-explicit-any
 async function settlePending(db: any, userId: string, bank: string, bankSlug: string): Promise<number> {
   const pendingSource = `${bankSlug}_csv:pending`;
   const { data: holds, error: hErr } = await db.from('bank_transactions')
-    .select('id, tx_date, amount, currency, expense_note, expense_category, expense_manual, place_id, delivery_place_id, authorized_at, authorized_approx')
+    .select('id, external_id, tx_date, amount, currency, expense_note, expense_category, expense_manual, place_id, delivery_place_id, authorized_at, authorized_approx')
     .eq('user_id', userId).eq('external_source', pendingSource).order('tx_date');
   if (hErr) throw new Error(hErr.message);
   if (!holds?.length) return 0;
   const from = holds[0].tx_date.slice(0, 10);
   const { data: real, error: rErr } = await db.from('bank_transactions')
-    .select('id, tx_date, authorized_on, amount, currency, expense_note, expense_manual, place_id, delivery_place_id, authorized_at')
+    .select('id, external_source, external_id, tx_date, authorized_on, amount, currency, expense_note, expense_manual, place_id, delivery_place_id, authorized_at')
     .eq('user_id', userId).eq('account', bank).neq('external_source', pendingSource).lt('amount', 0)
     .gte('tx_date', `${from}T00:00:00Z`).order('tx_date');
   if (rErr) throw new Error(rErr.message);
@@ -256,6 +260,10 @@ async function settlePending(db: any, userId: string, bank: string, bankSlug: st
       const { error } = await db.from('bank_transactions').update(patch).eq('id', m.id);
       if (error) throw new Error(error.message);
     }
+    const { error: rcErr } = await db.from('receipts')
+      .update({ tx_source: m.external_source, tx_external_id: m.external_id })
+      .eq('user_id', userId).eq('tx_source', pendingSource).eq('tx_external_id', h.external_id);
+    if (rcErr) throw new Error(rcErr.message);
     settled.push(h.id);
   }
   if (!settled.length) return 0;
@@ -630,6 +638,15 @@ Deno.serve(async (req) => {
       removedSnowball = count ?? 0;
     }
 
+    // a waiting receipt (migration ...179) may now match one of the rows
+    // just written -- re-run after every import, not only when a hold settles
+    let matchedReceipts = 0;
+    if (rows.length) {
+      const { data: m, error: mErr } = await supabase.rpc('match_receipts');
+      if (mErr) throw new Error(mErr.message);
+      matchedReceipts = m ?? 0;
+    }
+
     return new Response(JSON.stringify({
       imported,
       imported_deposit: importedDeposit,
@@ -637,6 +654,7 @@ Deno.serve(async (req) => {
       covered_by_report: coveredByReport,
       dropped_stale: droppedStale + droppedStaleDeposit,
       cash_deposits: cashOut.length,
+      matched_receipts: matchedReceipts,
       sber_pending: sberPending,
       settled_pending: settledPending,
       total_rows: csvRows.length,
