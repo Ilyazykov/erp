@@ -11542,7 +11542,7 @@ async function mpRenderExpenses() {
   }, { ...CONFIG, displayModeBar: false });
   const incList = document.getElementById('inc_categories');
   const incTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th style="width:1%;text-align:left">Place</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
-    list.slice().sort((x, y) => y.day.localeCompare(x.day)).map(r => `<tr><td style="white-space:nowrap">${r.day}</td>
+    list.slice().sort((x, y) => y.day.localeCompare(x.day)).map(r => `<tr><td style="white-space:nowrap">${r.day}${mpTimeHtml(r)}</td>
       <td style="text-align:left">${esc(r.description || '')}</td>
       <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to set the place" style="text-align:left;max-width:180px;cursor:pointer">${mpPlaceHtml(r.place, r.deliveredTo)}</td>
       <td style="text-align:left">${esc(r.account)}</td>
