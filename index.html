@@ -296,6 +296,7 @@
     <div id="mp_any_csv_drop" class="drop-zone">…or drop any number of files here — they're queued and imported one by one</div>
     <div class="empty-note" id="mp_any_csv_status"></div>
     <div id="mp_receipts_panel"></div>
+    <div id="mp_products_panel"></div>
 
     <p class="note">Automatic syncs and checks (IBKR, Bybit, Freedom24, T-Bank, Binance, Revolut X, Open Banking) —
       their keys and status — are on the <a href="#" onclick="showTab('automation');return false">Automation</a> tab.</p>
@@ -2416,6 +2417,82 @@ async function mpPickReceiptMatch(receiptId) {
     mpRenderReceiptsPanel();
   });
 }
+// The shared product catalog with what this user paid (migrations ...179,
+// ...180; design: docs/items-design.md, not tracked in git): every product
+// not merged into another, its brand, size and description, and from this
+// user's own receipts the purchases, shops and the last / lowest / highest
+// price in dollars at each day's rate (other users' purchases aren't visible
+// to this user, so a product only they bought shows no prices here). A click
+// on a row opens the product's dialog. Sorted by name; the "Last price"
+// header sorts by price, a second click on a header reverses it.
+let mpProductSort = { key: 'name', dir: 1 };
+async function mpRenderProductList() {
+  const wrap = document.getElementById('mp_products_panel');
+  if (!wrap || !mpIsSignedIn) return;
+  const page = async q => {
+    const out = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await q().range(from, from + 999);
+      if (error) throw new Error(error.message);
+      out.push(...data);
+      if (data.length < 1000) break;
+    }
+    return out;
+  };
+  let products, prices;
+  try {
+    products = await page(() => sb.from('products').select('id, name_en, brand, size_value, size_unit, note').is('merged_into', null).order('name_en').order('id'));
+    // product_prices comes by day then item, so the last row of a product is its latest purchase;
+    // migration ...180's `store` column not there yet: the older `chain`
+    prices = await page(() => sb.from('product_prices').select('product_id, day, item_id, store, unit_price_usd').order('day').order('item_id'))
+      .catch(() => page(() => sb.from('product_prices').select('product_id, day, item_id, chain, unit_price_usd').order('day').order('item_id')));
+  } catch { wrap.innerHTML = ''; return; }   // none yet or no table: nothing to show
+  if (!products.length) { wrap.innerHTML = ''; return; }
+  const by = new Map();
+  for (const p of prices) {
+    const a = by.get(p.product_id) || { n: 0, shops: new Set(), min: null, max: null, last: null, lastDay: '' };
+    const usd = p.unit_price_usd == null ? null : Number(p.unit_price_usd);
+    a.n++;
+    const shop = p.store ?? p.chain;
+    if (shop) a.shops.add(shop);
+    if (usd != null && Number.isFinite(usd)) {
+      a.min = a.min == null ? usd : Math.min(a.min, usd);
+      a.max = a.max == null ? usd : Math.max(a.max, usd);
+    }
+    a.last = usd != null && Number.isFinite(usd) ? usd : null;   // the latest purchase's, none if it had no rate
+    a.lastDay = p.day;
+    by.set(p.product_id, a);
+  }
+  const list = products.map(p => ({ ...p, ...(by.get(p.id) || { n: 0, shops: new Set(), min: null, max: null, last: null, lastDay: '' }) }));
+  const { key, dir } = mpProductSort;
+  list.sort((x, y) => {
+    if (key === 'last') {   // no price last, whichever way it's sorted
+      if (x.last == null || y.last == null) return (x.last == null) - (y.last == null) || x.name_en.localeCompare(y.name_en);
+      return (x.last - y.last) * dir || x.name_en.localeCompare(y.name_en);
+    }
+    return x.name_en.localeCompare(y.name_en) * dir;
+  });
+  const usd = v => (v == null ? '—' : `$${v.toFixed(2)}`);
+  const arrow = k => (key === k ? (dir === 1 ? ' ▲' : ' ▼') : '');
+  const head = (k, label, left) => `<th data-sort="${k}" style="cursor:pointer${left ? ';text-align:left' : ''}">${label}${arrow(k)}</th>`;
+  wrap.innerHTML = `<div class="section-title" style="margin-top:14px">Products</div>
+    <p class="note">${list.length} product${list.length === 1 ? '' : 's'}. Prices are in dollars at each day's rate, from your own receipts. Click a row for its history, brand, size and description.</p>
+    <div style="max-height:420px;overflow:auto"><table class="data-table"><thead><tr>
+      ${head('name', 'Product', true)}<th style="text-align:left">Brand</th><th>Size</th><th style="text-align:left">Description</th>
+      <th>Purchases</th><th style="text-align:left">Shops</th>${head('last', 'Last price')}<th>Lowest</th><th>Highest</th><th>Last purchase</th></tr></thead>
+      <tbody>${list.map(p => `<tr data-id="${p.id}" style="cursor:pointer">
+        <td style="text-align:left">${mpEscapeHtml(p.name_en)}</td><td style="text-align:left">${mpEscapeHtml(p.brand || '')}</td>
+        <td>${p.size_value != null ? `${Number(p.size_value)} ${mpEscapeHtml(p.size_unit || '')}` : ''}</td>
+        <td style="text-align:left;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${mpEscapeHtml(p.note || '')}">${mpEscapeHtml(p.note || '')}</td>
+        <td>${p.n}</td><td style="text-align:left">${mpEscapeHtml([...p.shops].join(', '))}</td>
+        <td>${usd(p.last)}</td><td>${usd(p.min)}</td><td>${usd(p.max)}</td><td>${p.lastDay}</td></tr>`).join('')}</tbody></table></div>`;
+  wrap.querySelectorAll('th[data-sort]').forEach(th => th.addEventListener('click', () => {
+    const k = th.dataset.sort;
+    mpProductSort = { key: k, dir: mpProductSort.key === k ? -mpProductSort.dir : 1 };
+    mpRenderProductList();
+  }));
+  wrap.querySelectorAll('tbody tr').forEach(tr => tr.addEventListener('click', () => mpOpenProductView(Number(tr.dataset.id))));
+}
 async function mpRenderLatestSources() {
   const wrap = document.getElementById('mp_latest_sources');
   try {
@@ -3300,6 +3377,7 @@ async function mpImportOneFile(file, statusEl, session) {
         + `${result.linked} linked to a transaction, ${result.waiting} waiting for one, ${result.ambiguous} matching more than one (resolve by hand).${skipped}${unmatched}`;
       mpExpCache = null;   // the Expenses tab's items re-load with the new receipts
       mpRenderReceiptsPanel();
+      mpRenderProductList();
     } else {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} deposit trades `
         + `(${result.total_rows} parsed).`;
@@ -9992,6 +10070,7 @@ function mpUpdateAuthUi(session) {
     mpRenderPortfolioPies();
     mpRenderLatestSources();
     mpRenderReceiptsPanel();
+    mpRenderProductList();
     mpRenderBrokerCurrency();
     mpRenderBrokerAssetClass();
     mpRenderBondByType();
@@ -10203,6 +10282,8 @@ const MP_EXP_GROUP_META = Object.fromEntries(Object.entries({
   Travel: ['✈️', 'Visas'], Fun: ['🎟', 'Entertainment'], Shopping: ['🛍', 'Clothes'], Health: ['💊', 'Health & sport'],
 }).map(([g, [icon, main]]) => [g, { icon, color: MP_EXP_CATS.find(c => c[0] === main)[2] }]));
 let mpExpCache = null;
+// receipt_lines' columns (migration ...179): the tab's bulk load and the Items dialog's fresh read
+const MP_RECEIPT_LINE_COLS = 'receipt_id, line_no, name_printed, name_en, product_id, qty, unit, unit_price_list, unit_price_paid, line_total, note, is_other';
 const mpExpFolded = new Set();  // groups folded in the list of the expenses tab
 const mpExpOpen = new Set();    // categories open onto their rows -- kept across re-renders
 async function mpExpLoad() {
@@ -10285,7 +10366,7 @@ async function mpExpLoad() {
   // -- the items cell just offers "add items"
   const [receiptsList, receiptLineRows] = await Promise.all([
     page(() => sb.from('receipts_active').select('id, tx_source, tx_external_id, source, chain, store_printed, currency, note')).catch(() => []),
-    page(() => sb.from('receipt_lines').select('receipt_id, line_no, name_printed, name_en, product_id, qty, unit, unit_price_list, unit_price_paid, line_total, note, is_other').order('line_no')).catch(() => []),
+    page(() => sb.from('receipt_lines').select(MP_RECEIPT_LINE_COLS).order('line_no')).catch(() => []),
   ]);
   const linesByReceipt = new Map();
   for (const l of receiptLineRows || []) {
@@ -10543,7 +10624,7 @@ async function mpAddressAt(lat, lng) {
   const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&accept-language=en`);
   if (!res.ok) return null;
   const a = (await res.json()).address || {};
-  return { city: a.city || a.town || a.village || '', street: a.road || a.pedestrian || '', house: a.house_number || '' };
+  return { city: a.city || a.town || a.village || '', street: a.road || a.pedestrian || '', house: a.house_number || '', country: (a.country_code || '').toUpperCase() };
 }
 // A row's place, its own column: the name, a click opens the map (when
 // there's a link), under it what tells it from another of its name; a
@@ -10664,7 +10745,7 @@ function mpEditPlace(src, xid) {
       <input name="link" placeholder="Google Maps link -- fills the fields" style="${MP_FIELD}">
       <input name="pname" placeholder="name" style="${MP_FIELD}">
       <div style="display:flex;gap:6px"><input name="lat" placeholder="lat" style="${MP_FIELD}"><input name="lng" placeholder="lng" style="${MP_FIELD}"></div>
-      <input name="city" placeholder="city" style="${MP_FIELD}">
+      <div style="display:flex;gap:6px"><input name="city" placeholder="city" style="${MP_FIELD}"><input name="country" placeholder="country (GE)" style="${MP_FIELD};width:30%"></div>
       <div style="display:flex;gap:6px"><input name="street" placeholder="street" style="${MP_FIELD}"><input name="house" placeholder="house" style="${MP_FIELD};width:30%"></div>
       <input name="url" placeholder="map link" style="${MP_FIELD}">
       <input name="gid" placeholder="Google id (0x…:0x…)" style="${MP_FIELD}">
@@ -10693,7 +10774,7 @@ function mpEditPlace(src, xid) {
     // the address at that point (to check): what tells two Spars apart
     if (p.lat == null) return;
     const a = await mpAddressAt(p.lat, p.lng).catch(() => null);
-    if (a) { form.city.value = a.city; form.street.value = a.street; form.house.value = a.house; }
+    if (a) { form.city.value = a.city; form.street.value = a.street; form.house.value = a.house; form.country.value = a.country; }
   });
   form.addEventListener('submit', async e => {
     e.preventDefault();
@@ -10702,8 +10783,8 @@ function mpEditPlace(src, xid) {
       const num = v => (v.trim() === '' ? null : Number(v));
       const txt = v => v.trim() || null;
       const place = { name: form.pname.value.trim(), lat: num(form.lat.value), lng: num(form.lng.value), url: txt(form.url.value), google_id: txt(form.gid.value),
-        city: txt(form.city.value), street: txt(form.street.value), house: txt(form.house.value) };
-      const cols = 'id, name, lat, lng, url, google_id, city, street, house';
+        city: txt(form.city.value), street: txt(form.street.value), house: txt(form.house.value), country: txt(form.country.value) };
+      const cols = 'id, name, lat, lng, url, google_id, city, street, house, country';
       const { data, error } = place.google_id
         ? await sb.from('places').upsert(place, { onConflict: 'user_id,google_id' }).select(cols).single()
         : await sb.from('places').insert(place).select(cols).single();
@@ -10752,6 +10833,19 @@ async function mpEditItems(src, xid) {
   const r = rows[0];
   if (!r) return;
   const receipt = mpExpCache?.receiptOf?.get(`${src}|${xid}`);
+  // The lines come fresh from the database every time the dialog opens: the
+  // tab's cache is behind a product just resolved (or merged), and a stale line
+  // showed "resolve" again -- a second click made a second product. The row's
+  // Items cell is brought up to date with them.
+  if (receipt) {
+    const { data: fresh, error: freshErr } = await sb.from('receipt_lines').select(MP_RECEIPT_LINE_COLS).eq('receipt_id', receipt.id).order('line_no');
+    if (!freshErr && fresh) {
+      receipt.lines = fresh;
+      document.querySelectorAll('#expenses .exp-items').forEach(c => {
+        if (c.dataset.src === src && c.dataset.xid === xid) c.innerHTML = mpItemsHtml(receipt);
+      });
+    }
+  }
   const unit = v => ` <select name="u" style="width:auto;display:inline">${['pcs', 'kg', 'l', 'other'].map(u => `<option${u === v ? ' selected' : ''}>${u}</option>`).join('')}</select>`;
 
   if (receipt && receipt.source !== 'manual') {
@@ -10794,8 +10888,14 @@ async function mpEditItems(src, xid) {
       e.preventDefault();
       const lineNo = Number(a.dataset.item);
       const line = receipt.lines.find(l => l.line_no === lineNo);
-      mpResolveProduct(receipt.id, lineNo, line.name_printed, line.name_en, receipt.chain, () => {
-        form.closest('dialog').close();
+      mpResolveProduct(receipt.id, lineNo, line.name_printed, line.name_en, receipt.chain, async () => {
+        // the Resolve dialog has closed itself; the tab's data is re-read before the Items dialog
+        // opens again, so the line shows its product and not "resolve"
+        mpExpCache = null;
+        const y = window.scrollY;
+        await mpRenderExpenses();
+        window.scrollTo(0, y);
+        mpRenderProductList();
         mpEditItems(src, xid);
       });
     }));
@@ -10847,40 +10947,78 @@ async function mpEditItems(src, xid) {
     body.querySelectorAll('tr').forEach((tr, i) => { tr.dataset.i = i; });
     syncDraft();
   });
+  const saveBtn = form.querySelector('[data-act=save]');
+  let busy = false;
   form.addEventListener('submit', async e => {
     e.preventDefault();
-    syncDraft();
-    const lines = draft.filter(d => d.name && d.total > 0);
-    if (!lines.length) { form.closest('dialog').close(); return; }
-    const total = Math.abs(r.amt);
-    let receiptId = receipt?.id;
-    if (receiptId) {
-      await sb.from('receipts').update({ purchased_on: r.day, currency: r.ccy, total, updated_at: new Date().toISOString() }).eq('id', receiptId);
-      await sb.from('receipt_items').delete().eq('receipt_id', receiptId);
-    } else {
-      const { data, error } = await sb.from('receipts').insert({
-        source: 'manual', receipt_key: crypto.randomUUID(), tx_source: src, tx_external_id: xid,
-        match_state: 'manual_link', purchased_on: r.day, currency: r.ccy, total,
-      }).select('id').single();
-      if (error) { alert(error.message); return; }
-      receiptId = data.id;
+    if (busy) return;   // a second click while the first is still writing would make a second receipt
+    busy = true;
+    saveBtn.disabled = true;
+    let done = false;
+    try {
+      syncDraft();
+      const lines = draft.filter(d => d.name && d.total > 0);
+      if (!lines.length) { form.closest('dialog').close(); done = true; return; }
+      const total = Math.abs(r.amt);
+      let receiptId = receipt?.id;
+      if (receiptId) {
+        await sb.from('receipts').update({ purchased_on: r.day, currency: r.ccy, total, updated_at: new Date().toISOString() }).eq('id', receiptId);
+        await sb.from('receipt_items').delete().eq('receipt_id', receiptId);
+      } else {
+        const { data, error } = await sb.from('receipts').insert({
+          source: 'manual', receipt_key: crypto.randomUUID(), tx_source: src, tx_external_id: xid,
+          match_state: 'manual_link', purchased_on: r.day, currency: r.ccy, total,
+        }).select('id').single();
+        if (error) { alert(error.message); return; }
+        receiptId = data.id;
+      }
+      const { error: itemsErr } = await sb.from('receipt_items').insert(lines.map((d, i) => ({
+        receipt_id: receiptId, line_no: i + 1, name_printed: d.name, name_en: d.name, qty: d.qty, unit: d.unit, line_total: d.total,
+      })));
+      if (itemsErr) { alert(itemsErr.message); return; }
+      done = true;
+      mpExpCache = null;   // re-load: the new/changed receipt belongs in receiptOf
+      form.closest('dialog').close();
+      await mpRenderExpenses();
+    } finally {
+      if (!done) { busy = false; saveBtn.disabled = false; }
     }
-    const { error: itemsErr } = await sb.from('receipt_items').insert(lines.map((d, i) => ({
-      receipt_id: receiptId, line_no: i + 1, name_printed: d.name, name_en: d.name, qty: d.qty, unit: d.unit, line_total: d.total,
-    })));
-    if (itemsErr) { alert(itemsErr.message); return; }
-    mpExpCache = null;   // re-load: the new/changed receipt belongs in receiptOf
-    form.closest('dialog').close();
-    await mpRenderExpenses();
   });
+}
+// A product of this English name: an existing one (any case, not merged) is
+// reused rather than made twice; a new one gets the barcode only if no product
+// has it yet -- one barcode, one product (migration ...180's unique index).
+async function mpFindOrCreateProduct(name, barcode) {
+  // ilike's wildcards escaped; the exact lower-case comparison below drops anything a stray "*" widened
+  const like = name.replace(/[\\%_]/g, '\\$&');
+  const { data: same, error: fErr } = await sb.from('products').select('id, name_en').ilike('name_en', like).is('merged_into', null).order('id').limit(20);
+  if (fErr) throw new Error(fErr.message);
+  const found = (same || []).find(p => p.name_en.toLowerCase() === name.toLowerCase());
+  if (found) return found.id;
+  let code = barcode || null;
+  if (code) {
+    const { data: used, error: bErr } = await sb.from('products').select('id').eq('barcode', code).is('merged_into', null).limit(1);
+    if (bErr) throw new Error(bErr.message);
+    if (used?.length) code = null;
+  }
+  let { data, error } = await sb.from('products').insert(code ? { name_en: name, barcode: code } : { name_en: name }).select('id').single();
+  // someone took the barcode between the check and the insert: the product is made without it
+  if (error && code && error.code === '23505') ({ data, error } = await sb.from('products').insert({ name_en: name }).select('id').single());
+  if (error) throw new Error(error.message);
+  return data.id;
 }
 // Candidates for a line with no product yet (suggest_products: aliases and
 // product names close to what's printed, never linking by itself). Picking
 // one, or typing a new product's name, writes a confirmed alias (so the
 // same printed name links by itself next time) and the line's product_id.
+// Save is locked while it writes and a second submit is ignored (two quick
+// clicks made two products); onDone runs after the dialog has closed.
 async function mpResolveProduct(receiptId, lineNo, namePrinted, nameEn, chain, onDone) {
   const { data: suggestions, error } = await sb.rpc('suggest_products', { p_name: namePrinted, p_name_en: nameEn, p_chain: chain || null });
   if (error) { alert(error.message); return; }
+  // the line's own barcode (receipt_lines has none): kept on a product made here
+  const { data: lineRow } = await sb.from('receipt_items').select('barcode').eq('receipt_id', receiptId).eq('line_no', lineNo).maybeSingle();
+  const barcode = (lineRow?.barcode || '').trim() || null;
   const seen = new Set();
   const uniq = (suggestions || []).filter(s => (seen.has(s.product_id) ? false : (seen.add(s.product_id), true)));
   const form = mpDialog(`Resolve · ${nameEn || namePrinted}`, `
@@ -10890,55 +11028,90 @@ async function mpResolveProduct(receiptId, lineNo, namePrinted, nameEn, chain, o
       ${uniq.map(s => `<option value="${s.product_id}">${mpEscapeHtml(s.name_en)} (${Math.round(s.score * 100)}% match, ${s.via})</option>`).join('')}
     </select>
     <input name="newname" placeholder="new product's English name" value="${mpEscapeHtml(nameEn || namePrinted)}" style="${MP_FIELD}">`);
+  const saveBtn = form.querySelector('[data-act=save]');
+  let busy = false;
   form.addEventListener('submit', async e => {
     e.preventDefault();
-    let productId = form.pick.value === 'new' ? null : Number(form.pick.value);
-    if (!productId) {
-      const name = form.newname.value.trim();
-      if (!name) return;
-      const { data, error: pErr } = await sb.from('products').insert({ name_en: name }).select('id').single();
-      if (pErr) { alert(pErr.message); return; }
-      productId = data.id;
+    if (busy) return;
+    busy = true;
+    saveBtn.disabled = true;
+    let done = false;
+    try {
+      let productId = form.pick.value === 'new' ? null : Number(form.pick.value);
+      if (!productId) {
+        const name = form.newname.value.trim();
+        if (!name) return;
+        productId = await mpFindOrCreateProduct(name, barcode);
+      }
+      const { error: aErr } = await sb.from('product_aliases')
+        .upsert({ product_id: productId, name_printed: namePrinted, name_norm: mpReceiptNorm(namePrinted), chain: chain || '' }, { onConflict: 'name_norm,chain' });
+      if (aErr) throw new Error(aErr.message);
+      const { error: iErr } = await sb.from('receipt_items').update({ product_id: productId }).eq('receipt_id', receiptId).eq('line_no', lineNo);
+      if (iErr) throw new Error(iErr.message);
+      done = true;
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      if (!done) { busy = false; saveBtn.disabled = false; }
     }
-    const { error: aErr } = await sb.from('product_aliases')
-      .upsert({ product_id: productId, name_printed: namePrinted, name_norm: mpReceiptNorm(namePrinted), chain: chain || '' }, { onConflict: 'user_id,name_norm,chain' });
-    if (aErr) { alert(aErr.message); return; }
-    const { error: iErr } = await sb.from('receipt_items').update({ product_id: productId }).eq('receipt_id', receiptId).eq('line_no', lineNo);
-    if (iErr) { alert(iErr.message); return; }
+    if (!done) return;
     form.closest('dialog').close();
-    onDone();
+    await onDone();
   });
 }
-// A product's price history (product_prices, migration ...179): a line per
-// shop, in its own currency with a USD toggle; merge/undo at the bottom --
-// two products found to be the same point one at the other (merged_into),
-// never rewriting their lines, so undoing it (merged_into back to null)
-// restores the history exactly as it was.
+// A product's own dialog (migration ...179, ...180): its brand, size and
+// description to edit; the price history -- the comparison by country, city
+// and shop in dollars at each day's rate, a line per shop on the chart, in
+// its own currency with a USD toggle; and merge/undo at the bottom -- two
+// products found to be the same point one at the other (merged_into), never
+// rewriting their lines, so undoing it (merged_into back to null) restores
+// the history exactly as it was.
 async function mpOpenProductView(productId) {
-  const [{ data: product }, { data: rows }] = await Promise.all([
-    sb.from('products').select('id, name_en, brand, merged_into').eq('id', productId).single(),
-    sb.from('product_prices').select('day, place_id, chain, currency, qty, unit, unit_price_paid, unit_price_usd').eq('product_id', productId).order('day'),
+  const baseCols = 'day, place_id, chain, currency, qty, unit, unit_price_paid, unit_price_usd';
+  const priceQ = cols => sb.from('product_prices').select(cols).eq('product_id', productId).order('day');
+  const [{ data: product }, priced, cmp] = await Promise.all([
+    sb.from('products').select('id, name_en, brand, size_value, size_unit, note, merged_into').eq('id', productId).single(),
+    priceQ(`${baseCols}, country, city, store`),
+    sb.from('product_price_compare').select('country, city, store, purchases, min_usd, max_usd, last_usd, last_day').eq('product_id', productId).order('last_usd'),
   ]);
+  // migration ...180 (country, city, store, the comparison view) not applied yet: the older columns alone
+  const rows = priced.error ? ((await priceQ(baseCols)).data || []) : (priced.data || []);
+  const compare = cmp.error ? [] : (cmp.data || []);
   const dlg = document.createElement('dialog');
   dlg.style.cssText = 'background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:16px 18px;min-width:320px;max-width:min(92vw,720px)';
   const usdToggle = `<label><input type="checkbox" id="mp_prod_usd"> show in USD</label>`;
-  const currencies = [...new Set((rows || []).map(r => r.currency))];
+  const currencies = [...new Set(rows.map(r => r.currency))];
+  const sizeUnits = ['g', 'kg', 'ml', 'l', 'pcs'];
   dlg.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px">
     <div style="display:flex;justify-content:space-between;align-items:center"><b>${mpEscapeHtml(product?.name_en || '?')}</b><button type="button" data-act="close">✕</button></div>
+    <div style="display:flex;gap:8px">
+      <label style="flex:1">Brand <input name="brand" value="${mpEscapeHtml(product?.brand || '')}" style="${MP_FIELD}"></label>
+      <label style="flex:1">Size <span style="display:flex;gap:6px"><input name="size" type="number" step="any" min="0" value="${product?.size_value != null ? Number(product.size_value) : ''}" style="${MP_FIELD}">
+        <select name="sunit" style="${MP_FIELD};width:auto"><option value="">—</option>${sizeUnits.map(u => `<option${u === product?.size_unit ? ' selected' : ''}>${u}</option>`).join('')}</select></span></label>
+    </div>
+    <label>Description <textarea name="note" rows="2" style="${MP_FIELD}">${mpEscapeHtml(product?.note || '')}</textarea></label>
+    <div style="display:flex;gap:8px;justify-content:flex-end"><button type="button" data-act="details">Save details</button></div>
     ${usdToggle}
     <div id="mp_prod_chart" style="height:280px"></div>
-    <table class="data-table"><thead><tr><th>Date</th><th style="text-align:left">Shop</th><th>Qty</th><th>Price</th></tr></thead>
-      <tbody>${(rows || []).slice().reverse().map(r => `<tr><td>${r.day}</td><td style="text-align:left">${mpEscapeHtml(r.chain || '')}</td><td>${r.qty} ${r.unit}</td>
-        <td>${mpFormatCurrency(r.unit_price_paid, r.currency, true)}</td></tr>`).join('') || '<tr><td colspan="4" class="empty-note">No purchases yet.</td></tr>'}</tbody></table>
+    <p class="note" style="margin:0">Compared in dollars at each day's rate: the last price paid in each shop, by country and city.</p>
+    <table class="data-table"><thead><tr><th style="text-align:left">Country</th><th style="text-align:left">City</th><th style="text-align:left">Shop</th><th>Last</th><th>Lowest</th><th>Highest</th><th>Purchases</th></tr></thead>
+      <tbody>${compare.map(c => `<tr><td style="text-align:left">${mpEscapeHtml(c.country || '—')}</td><td style="text-align:left">${mpEscapeHtml(c.city || '—')}</td><td style="text-align:left">${mpEscapeHtml(c.store || '—')}</td>
+        <td>$${Number(c.last_usd).toFixed(2)}</td><td>$${Number(c.min_usd).toFixed(2)}</td><td>$${Number(c.max_usd).toFixed(2)}</td><td>${c.purchases}</td></tr>`).join('') || '<tr><td colspan="7" class="empty-note">No purchases yet.</td></tr>'}</tbody></table>
+    <table class="data-table"><thead><tr><th>Date</th><th style="text-align:left">Shop</th><th style="text-align:left">Where</th><th>Qty</th><th>Price</th><th>USD</th></tr></thead>
+      <tbody>${rows.slice().reverse().map(r => `<tr><td>${r.day}</td><td style="text-align:left">${mpEscapeHtml(r.store || r.chain || '')}</td><td style="text-align:left">${mpEscapeHtml([r.city, r.country].filter(Boolean).join(', '))}</td><td>${r.qty} ${r.unit}</td>
+        <td>${mpFormatCurrency(r.unit_price_paid, r.currency, true)}</td><td>$${Number(r.unit_price_usd).toFixed(2)}</td></tr>`).join('') || '<tr><td colspan="6" class="empty-note">No purchases yet.</td></tr>'}</tbody></table>
     <label>Merge into product id <input name="mergeInto" type="number" style="${MP_FIELD};width:120px" value="${product?.merged_into ?? ''}"></label>
-    <div style="display:flex;gap:8px;justify-content:flex-end"><button type="button" data-act="merge">Save</button></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end"><button type="button" data-act="merge">Save merge</button></div>
   </div>`;
   document.body.appendChild(dlg);
-  dlg.querySelector('[data-act=close]').onclick = () => { dlg.close(); dlg.remove(); };
+  // opened before the chart is drawn (Plotly measures a closed dialog as empty); removed however it's closed (Esc too)
+  dlg.addEventListener('close', () => dlg.remove());
+  dlg.showModal();
+  dlg.querySelector('[data-act=close]').onclick = () => dlg.close();
   const draw = () => {
     const usd = dlg.querySelector('#mp_prod_usd').checked;
     const traces = (currencies.length > 1 || usd ? currencies : [currencies[0]]).filter(Boolean).map(c => {
-      const pts = (rows || []).filter(r => usd || r.currency === c);
+      const pts = rows.filter(r => usd || r.currency === c);
       return { x: pts.map(r => r.day), y: pts.map(r => usd ? r.unit_price_usd : r.unit_price_paid),
         name: usd ? 'USD' : c, mode: 'lines+markers', type: 'scatter' };
     });
@@ -10949,17 +11122,38 @@ async function mpOpenProductView(productId) {
   };
   dlg.querySelector('#mp_prod_usd').addEventListener('change', draw);
   draw();
+  // brand, size (value + unit, both or neither) and description: any signed-in
+  // user may edit the shared catalog (migration ...180's update policy)
+  const detailsBtn = dlg.querySelector('[data-act=details]');
+  detailsBtn.addEventListener('click', async () => {
+    const sizeRaw = dlg.querySelector('[name=size]').value.trim();
+    const unit = dlg.querySelector('[name=sunit]').value || null;
+    const size = sizeRaw === '' ? null : Number(sizeRaw);
+    if (size !== null && (!Number.isFinite(size) || size <= 0)) { alert('The size must be a number above zero.'); return; }
+    if (size !== null && !unit) { alert('Pick the size\'s unit.'); return; }
+    detailsBtn.disabled = true;
+    const { error } = await sb.from('products').update({
+      brand: dlg.querySelector('[name=brand]').value.trim() || null,
+      size_value: size, size_unit: size === null ? null : unit,
+      note: dlg.querySelector('[name=note]').value.trim() || null,
+    }).eq('id', productId);
+    detailsBtn.disabled = false;
+    if (error) { alert(error.message); return; }
+    detailsBtn.textContent = 'Saved ✓';
+    setTimeout(() => { detailsBtn.textContent = 'Save details'; }, 1500);
+    mpRenderProductList();
+  });
   dlg.querySelector('[data-act=merge]').addEventListener('click', async () => {
     const v = dlg.querySelector('[name=mergeInto]').value.trim();
     const mergedInto = v ? Number(v) : null;
     if (mergedInto === productId) { alert("A product can't merge into itself."); return; }
+    // the database refuses a chain or a loop (migration ...180's trigger): its message is shown as it is
     const { error } = await sb.from('products').update({ merged_into: mergedInto }).eq('id', productId);
     if (error) { alert(error.message); return; }
     mpExpCache = null;
+    mpRenderProductList();
     dlg.close();
-    dlg.remove();
   });
-  dlg.showModal();
 }
 document.getElementById('expenses').addEventListener('click', e => {
   if (!mpIsSignedIn || e.target.closest('a')) return;

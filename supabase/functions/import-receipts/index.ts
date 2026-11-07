@@ -119,13 +119,13 @@ Deno.serve(async (req) => {
         let productId: number | null = null;
         if (l.barcode) {
           const { data: byBarcode } = await supabase.from('products')
-            .select('id').eq('user_id', user.id).eq('barcode', l.barcode).is('merged_into', null).maybeSingle();
+            .select('id').eq('barcode', l.barcode).is('merged_into', null).maybeSingle();
           productId = byBarcode?.id ?? null;
         }
         if (!productId) {
           const norm = receiptNorm(l.namePrinted);
           const { data: aliases } = await supabase.from('product_aliases')
-            .select('product_id, chain').eq('user_id', user.id).eq('name_norm', norm)
+            .select('product_id, chain').eq('name_norm', norm)
             .in('chain', [r.chain || '', '']);
           const best = (aliases ?? []).sort((a, b) => (b.chain === (r.chain || '') ? 1 : 0) - (a.chain === (r.chain || '') ? 1 : 0))[0];
           productId = best?.product_id ?? null;
