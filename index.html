@@ -10348,7 +10348,9 @@ async function mpExpLoad() {
   }
   // income (migration 141): none yet or no table -- no line
   // page by page: the interest a day (savings, money market funds) runs past 1000 rows
-  const inc = await page(() => sb.from('income').select('day, account, usd, category, description, amount, currency, external_source, external_id').order('day').order('id')).catch(() => []);
+  // (the timed view of migration ...188; the plain table until it's applied)
+  const inc = await page(() => sb.from('income_timed').select('day, account, usd, category, description, amount, currency, external_source, external_id, clock').order('day').order('id'))
+    .catch(() => page(() => sb.from('income').select('day, account, usd, category, description, amount, currency, external_source, external_id').order('day').order('id')).catch(() => []));
   // the notes, out and in, from the rows themselves (bank_transactions.expense_note):
   // expenses.note is refresh_expenses' copy, behind a note just written until the next run
   const notes = await page(() => sb.from('bank_transactions').select('external_source, external_id, expense_note').not('expense_note', 'is', null).order('id')).catch(() => null);
@@ -10405,8 +10407,10 @@ async function mpExpLoad() {
   // the pairs that net out, and the money in that's no income, no refund, no
   // pair's leg (kept by refresh_expenses, migration 156): none yet -- the rows out alone
   const [pairs, unpairedIn, chains, incomeExpect] = await Promise.all([
-    page(() => sb.from('transfer_pair_rows').select('*').order('pair_id')).catch(() => []),
-    page(() => sb.from('unpaired_in_rows').select('*').order('external_source').order('external_id')).catch(() => []),
+    page(() => sb.from('transfer_pair_timed').select('*').order('pair_id'))
+      .catch(() => page(() => sb.from('transfer_pair_rows').select('*').order('pair_id')).catch(() => [])),
+    page(() => sb.from('unpaired_in_timed').select('*').order('external_source').order('external_id'))
+      .catch(() => page(() => sb.from('unpaired_in_rows').select('*').order('external_source').order('external_id')).catch(() => [])),
     // rows that are one move in several steps (migration 160): none yet or no table -- no chains
     page(() => sb.from('expense_chains').select('external_source, external_id, chain')).catch(() => []),
     // the income one expects (migration 161): none yet or no table -- the income bars unframed
@@ -10414,17 +10418,12 @@ async function mpExpLoad() {
   ]);
   // the statement's time of the income rows and of the transfer legs (their
   // tables have none): from the bank row, by its day; 00:00 is no time
-  // looked up by the rows' own keys, in small batches: a range over the days would
-  // read the whole bank history
-  const clockKeys = [...new Set([...(inc || []).map(r => r.external_id), ...(pairs || []).flatMap(p => [p.out_id, p.in_id]),
-    ...(unpairedIn || []).map(r => r.external_id)].filter(Boolean))];
-  const clockBatches = [];
-  for (let i = 0; i < clockKeys.length; i += 100) clockBatches.push(clockKeys.slice(i, i + 100));
-  const clockRows = (await Promise.all(clockBatches.map(async ids => {
-    const { data, error } = await sb.from('bank_transactions').select('external_source, external_id, tx_date').in('external_id', ids);
-    return error ? [] : data ?? [];
-  }))).flat();
-  const clockOf = new Map(clockRows.map(t => [`${t.external_source}|${t.external_id}`, t.tx_date.slice(11, 16)]).filter(([, at]) => at !== '00:00'));
+  // the time of each bank row, from the timed views (migration ...188): none for 00:00
+  const clockOf = new Map();
+  const putClock = (src, id, clock) => { if (src && id && clock && clock !== '00:00') clockOf.set(`${src}|${id}`, clock); };
+  for (const r of inc || []) putClock(r.external_source, r.external_id, r.clock);
+  for (const p of pairs || []) { putClock(p.out_source, p.out_id, p.out_clock); putClock(p.in_source, p.in_id, p.in_clock); }
+  for (const r of unpairedIn || []) putClock(r.external_source, r.external_id, r.clock);
   for (const r of inc || []) {
     const at = clockOf.get(`${r.src}|${r.xid}`);
     if (at) { r.at = at; r.ts = `${r.day} ${at}`; }
