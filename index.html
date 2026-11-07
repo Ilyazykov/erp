@@ -467,6 +467,7 @@
     <div class="form-row" style="gap:12px">
       <button class="btn" id="exp_prev" type="button" title="Previous period">‹</button>
       <select id="exp_period">
+        <option value="cmonth">this month</option>
         <option value="month">month to today</option>
         <option value="3m">3 months</option>
         <option value="year">year to today</option>
@@ -10307,7 +10308,9 @@ let mpExpCache = null;
 const MP_RECEIPT_LINE_COLS = 'receipt_id, line_no, name_printed, name_en, product_id, qty, unit, unit_price_list, unit_price_paid, line_total, note, is_other';
 const mpExpFolded = new Set();  // groups folded in the list of the expenses tab
 const mpExpOpen = new Set();    // categories open onto their rows -- kept across re-renders
-async function mpExpLoad() {
+// range {from, to} (YYYY-MM-DD): only the rows of that period; null: the whole history
+async function mpExpLoad(range) {
+  const within = (b, col) => (range ? b.gte(col, range.from).lte(col, range.to) : b);
   // four pages at a time: a long history (17 000 expense rows) was read one page after another
   const page = async (q) => {
     const out = [];
@@ -10323,8 +10326,8 @@ async function mpExpLoad() {
     }
   };
   const [rows, eur, rub] = await Promise.all([
-    page(() => sb.from('expenses')
-      .select('day, paid_day, paid_at, account, description, amount, currency, usd, category, counted, extrapolated, note, external_source, external_id')
+    page(() => within(sb.from('expenses')
+      .select('day, paid_day, paid_at, account, description, amount, currency, usd, category, counted, extrapolated, note, external_source, external_id'), 'day')
       .order('day').order('id')),
     // for showing in euros or roubles
     ...['EUR', 'RUB'].map(c => page(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', c).order('day'))),
@@ -10353,7 +10356,7 @@ async function mpExpLoad() {
   // income (migration 141): none yet or no table -- no line
   // page by page: the interest a day (savings, money market funds) runs past 1000 rows
   // (the timed view of migration ...188; the plain table until it's applied)
-  const inc = await page(() => sb.from('income_timed').select('day, account, usd, category, description, amount, currency, external_source, external_id, clock').order('day').order('id'))
+  const inc = await page(() => within(sb.from('income_timed').select('day, account, usd, category, description, amount, currency, external_source, external_id, clock'), 'day').order('day').order('id'))
     .catch(() => page(() => sb.from('income').select('day, account, usd, category, description, amount, currency, external_source, external_id').order('day').order('id')).catch(() => []));
   // the notes, out and in, from the rows themselves (bank_transactions.expense_note):
   // expenses.note is refresh_expenses' copy, behind a note just written until the next run
@@ -10411,9 +10414,9 @@ async function mpExpLoad() {
   // the pairs that net out, and the money in that's no income, no refund, no
   // pair's leg (kept by refresh_expenses, migration 156): none yet -- the rows out alone
   const [pairs, unpairedIn, chains, incomeExpect] = await Promise.all([
-    page(() => sb.from('transfer_pair_timed').select('*').order('pair_id'))
-      .catch(() => page(() => sb.from('transfer_pair_rows').select('*').order('pair_id')).catch(() => [])),
-    page(() => sb.from('unpaired_in_timed').select('*').order('external_source').order('external_id'))
+    page(() => within(sb.from('transfer_pair_timed').select('*'), 'out_day').order('pair_id'))
+      .catch(() => page(() => within(sb.from('transfer_pair_rows').select('*'), 'out_day').order('pair_id')).catch(() => [])),
+    page(() => within(sb.from('unpaired_in_timed').select('*'), 'day').order('external_source').order('external_id'))
       .catch(() => page(() => sb.from('unpaired_in_rows').select('*').order('external_source').order('external_id')).catch(() => [])),
     // rows that are one move in several steps (migration 160): none yet or no table -- no chains
     page(() => sb.from('expense_chains').select('external_source, external_id, chain')).catch(() => []),
@@ -10549,6 +10552,7 @@ function mpExpSetPeriod(mode, anchor) {
   const iso = (yy, mm, dd) => new Date(Date.UTC(yy, mm - 1, dd)).toISOString().slice(0, 10);
   let from, to;
   if (mode === 'year') { from = iso(y - 1, m, d + 1); to = anchor; }
+  else if (mode === 'cmonth') { from = iso(y, m, 1); to = iso(y, m + 1, 0); }
   else if (mode === 'month') { from = iso(y, m - 1, d + 1); to = anchor; }
   else if (mode === 'cyear') {
     // the calendar year of `anchor`, to today at most
@@ -11458,14 +11462,29 @@ document.getElementById('exp_life').addEventListener('change', e => {
   document.getElementById('exp_to').value = end;
   mpRenderExpenses();
 });
+let mpExpFull = false;
+// the whole history, after the period on screen is shown: the charts over the years take it
+async function mpExpLoadRest() {
+  try {
+    mpExpCache = await mpExpLoad(null);
+    mpExpFull = true;
+    await mpRenderExpenses();
+  } catch (error) {
+    document.getElementById('exp_status').textContent = error.message;
+  }
+}
 async function mpRenderExpenses() {
   const status = document.getElementById('exp_status');
   if (!document.getElementById('exp_from').value) mpExpSetPeriod(document.getElementById('exp_period').value, new Date().toISOString().slice(0, 10));
   if (!mpExpCache) {
+    // the period on screen first, then the whole history in the background
     status.textContent = 'Loading transactions…';
-    try { mpExpCache = await mpExpLoad(); } catch (error) { status.textContent = error.message; return; }
+    const range = { from: document.getElementById('exp_from').value, to: document.getElementById('exp_to').value };
+    try { mpExpCache = await mpExpLoad(range); } catch (error) { status.textContent = error.message; return; }
+    mpExpFull = false;
+    mpExpLoadRest();
   }
-  status.textContent = '';
+  status.textContent = mpExpFull ? '' : 'Loading the rest of the history…';
   mpExpUpdateNav();
   const { skipped, usdPer } = mpExpCache;
   const spreadOn = document.getElementById('exp_spread').checked;
@@ -12120,13 +12139,14 @@ for (const id of ['exp_from', 'exp_to']) {
 }
 try {
   const saved = localStorage.getItem('mp_exp_period'), sel = document.getElementById('exp_period');
-  if (saved && [...sel.options].some(o => o.value === saved)) sel.value = saved;
+  // by default the calendar month on screen (the first paint loads only it)
+  sel.value = saved && [...sel.options].some(o => o.value === saved) ? saved : 'cmonth';
 } catch { /* no storage */ }
 try { const saved = localStorage.getItem('mp_exp_ccy'); if (saved) document.getElementById('exp_ccy').value = saved; } catch { /* no storage */ }
 document.getElementById('exp_period').addEventListener('change', e => {
   try { localStorage.setItem('mp_exp_period', e.target.value); } catch { /* no storage */ }
   const today = new Date().toISOString().slice(0, 10);
-  if (e.target.value !== 'custom') mpExpSetPeriod(e.target.value, ['year', 'month'].includes(e.target.value) ? today : document.getElementById('exp_to').value || today);
+  if (e.target.value !== 'custom') mpExpSetPeriod(e.target.value, ['year', 'month', 'cmonth'].includes(e.target.value) ? today : document.getElementById('exp_to').value || today);
   if (mpIsSignedIn) mpRenderExpenses();
 });
 try { document.getElementById('exp_bands').checked = localStorage.getItem('mp_exp_bands') === '1'; } catch { /* no storage */ }
