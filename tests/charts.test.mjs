@@ -27,6 +27,7 @@ const query = table => {
 const ctx = {
   console, Math, JSON, Date, Intl, Object, Array, Number, String, Map, Set, Promise, setTimeout, clearTimeout,
   requestAnimationFrame: () => 0,
+  ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
   localStorage: { getItem: () => null, setItem: () => {} },
   fetch: () => new Promise(() => {}),
   document: stub(),
