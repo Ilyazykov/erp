@@ -10937,7 +10937,8 @@ async function mpEditItems(src, xid) {
       .sort((a, b) => Math.abs(Date.parse(a.day) - dayOf) - Math.abs(Date.parse(b.day) - dayOf));
     return rows.find(p => shopHere && (p.store || '').toLowerCase() === shopHere) || rows[0] || null;
   };
-  const draft = (receipt?.lines || []).map(l => ({ name: l.name_printed, qty: l.qty, unit: l.unit, total: l.line_total }));
+  // the computed "Other" line is not an item: it's the difference, not a row to save
+  const draft = (receipt?.lines || []).filter(l => !l.is_other).map(l => ({ name: l.name_printed, productId: l.product_id ?? null, qty: l.qty, unit: l.unit, total: l.line_total }));
   const renderDraft = () => draft.map((d, i) => `<tr data-i="${i}">
       <td><input name="n" value="${mpEscapeHtml(d.name)}" list="mp_items_catalog" placeholder="start typing a product…" autocomplete="off" style="${MP_FIELD}" required></td>
       <td style="white-space:nowrap"><input name="q" type="number" step="any" min="0.001" value="${d.qty}" style="${MP_FIELD};width:60px">${unit(d.unit)}</td>
@@ -10946,7 +10947,7 @@ async function mpEditItems(src, xid) {
   const form = mpDialog(`Items · ${r.day} · ${mpShortDesc(r.description)}`, `
     <p class="note" style="margin:0">No items yet -- add them by hand, or upload a receipt CSV (My Portfolio tab) made from the receipt's photo.</p>
     <datalist id="mp_items_catalog">${catalog.map(c => `<option value="${mpEscapeHtml(c.name_en)}">`).join('')}</datalist>
-    <table class="data-table"><thead><tr><th style="text-align:left">Item</th><th>Qty</th><th>Line total</th><th></th></tr></thead>
+    <table class="data-table"><thead><tr><th style="text-align:left">Item</th><th>Qty</th><th>Line total, ${r.ccy}</th><th></th></tr></thead>
       <tbody id="mp_items_draft">${renderDraft()}</tbody></table>
     <button type="button" data-act="add-line">+ line</button>
     <p class="note" style="margin:0" id="mp_items_hint"></p>
@@ -10979,12 +10980,17 @@ async function mpEditItems(src, xid) {
     const qty = Number(tr.querySelector('[name=q]').value) || 1;
     const price = Number(near.unit_price_paid);
     hintEl.textContent = `Paid nearest to this day: ${price.toFixed(2)} ${near.currency} per unit at ${near.store} (${near.day}).`;
+    // the total is ours while it's empty, 0, or still the suggestion we last wrote (so a new qty recounts it);
+    // a total the user typed is never touched
     const total = tr.querySelector('[name=t]');
-    if (!total.value || Number(total.value) === 0) total.value = (qty * price).toFixed(2);
+    if (!total.value || Number(total.value) === 0 || total.value === total.dataset.suggested) {
+      total.value = (qty * price).toFixed(2);
+      total.dataset.suggested = total.value;
+    }
     syncDraft();
   };
   body.addEventListener('input', e => { if (e.target.name === 'n') suggest(e.target.closest('tr')); });
-  body.addEventListener('change', e => { if (e.target.name === 'q') suggest(e.target.closest('tr')); });
+  body.addEventListener('input', e => { if (e.target.name === 'q') suggest(e.target.closest('tr')); });
   form.querySelector('[data-act=add-line]').addEventListener('click', () => {
     draft.push({ name: '', qty: 1, unit: 'pcs', total: 0, note: null });
     body.innerHTML = renderDraft();
@@ -11028,9 +11034,21 @@ async function mpEditItems(src, xid) {
       })));
       if (itemsErr) { alert(itemsErr.message); return; }
       done = true;
-      mpExpCache = null;   // re-load: the new/changed receipt belongs in receiptOf
+      // the row shows the saved items at once; the tab's data re-loads in the background (the full
+      // load is slow, and the dialog and the row must not wait for it)
+      if (mpExpCache) {
+        mpExpCache.receiptOf.set(`${src}|${xid}`, {
+          id: receiptId, source: 'manual', chain: null, store: null, currency: r.ccy, note: receipt?.note ?? null,
+          lines: lines.map((d, i) => ({ line_no: i + 1, name_printed: d.name, name_en: d.name, product_id: d.productId ?? null,
+            qty: d.qty, unit: d.unit, unit_price_paid: null, line_total: d.total, note: null, is_other: false })),
+        });
+      }
+      document.querySelectorAll('#expenses .exp-items').forEach(c => {
+        if (c.dataset.src === src && c.dataset.xid === xid) c.innerHTML = mpItemsHtml(mpExpCache?.receiptOf?.get(`${src}|${xid}`));
+      });
       form.closest('dialog').close();
-      await mpRenderExpenses();
+      mpExpCache = null;   // the next render re-loads the tab; the row above is already right
+      mpRenderExpenses().catch(() => { /* the tab shows its own error */ });
     } finally {
       if (!done) { busy = false; saveBtn.disabled = false; }
     }
