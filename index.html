@@ -11350,6 +11350,12 @@ async function mpLinkTransfer(src, xid) {
         amount: Math.abs(o.amt), currency: o.ccy, out_at: when(o), in_at: when(i), matched_by: 'manual', kind: 'transfer' })));
     const { error } = await sb.from('internal_transfers').insert(payload);
     if (error) { alert(error.message); return; }
+    // a linked money out is not spending: its category becomes "Own accounts" (as the pairs' own), so it leaves the expenses
+    for (const o of outs) {
+      const { error: cErr } = await sb.from('bank_transactions').update({ expense_category: 'Own accounts', expense_manual: true })
+        .eq('external_source', o.src).eq('external_id', o.xid);
+      if (cErr) { alert(cErr.message); return; }
+    }
     form.closest('dialog').close();
     // on screen at once: the group's rows leave the expenses and the income and
     // show as pairs under "Not counted" (the cache; the rebuild brings the same from the database)
