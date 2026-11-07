@@ -10308,15 +10308,19 @@ const MP_RECEIPT_LINE_COLS = 'receipt_id, line_no, name_printed, name_en, produc
 const mpExpFolded = new Set();  // groups folded in the list of the expenses tab
 const mpExpOpen = new Set();    // categories open onto their rows -- kept across re-renders
 async function mpExpLoad() {
+  // four pages at a time: a long history (17 000 expense rows) was read one page after another
   const page = async (q) => {
     const out = [];
-    for (let from = 0; ; from += 1000) {
-      const { data, error } = await q().range(from, from + 999);
-      if (error) throw new Error(error.message);
-      out.push(...data);
-      if (data.length < 1000) break;
+    for (let from = 0; ; from += 4000) {
+      const parts = await Promise.all([0, 1, 2, 3].map(i => q().range(from + i * 1000, from + i * 1000 + 999)));
+      let last = false;
+      for (const { data, error } of parts) {
+        if (error) throw new Error(error.message);
+        out.push(...data);
+        if (data.length < 1000) { last = true; break; }
+      }
+      if (last) return out;
     }
-    return out;
   };
   const [rows, eur, rub] = await Promise.all([
     page(() => sb.from('expenses')
