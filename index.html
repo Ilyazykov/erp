@@ -11477,12 +11477,14 @@ async function mpExpLoadRest() {
       // the tab re-loaded meanwhile (an upload, a category set): this load is over
       if (mpExpCache !== cache) return;
       mpMergeExpCache(part);
-      // the calendar modes read the monthly totals, which are complete already: the page
-      // is drawn again per span only for the "to today" modes, which need the rows
-      if (/_td$/.test(document.getElementById('exp_step').value)) await mpRenderExpenses();
+      // drawn again only while the period on screen still has parts not loaded
+      const want = { from: document.getElementById('exp_from').value, to: document.getElementById('exp_to').value };
+      if (!mpExpCovers(want)) await mpRenderExpenses();
     }
     mpExpFull = true;
-    await mpRenderExpenses();
+    // the calendar modes are drawn already and do not change with the history: only the note goes
+    if (/_td$/.test(document.getElementById('exp_step').value)) await mpRenderExpenses();
+    else document.getElementById('exp_status').textContent = '';
   } catch (error) {
     document.getElementById('exp_status').textContent = error.message;
   }
