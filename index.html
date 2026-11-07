@@ -10570,8 +10570,22 @@ function mpExpSetPeriod(mode, anchor) {
 // outside them is empty, ‹ › don't go there
 function mpExpBounds() {
   const today = new Date().toISOString().slice(0, 10);
-  const first = (mpExpCache?.spent || []).reduce((m, r) => (r.day < m ? r.day : m), today);
+  // the first record of the whole history, known at once (mpExpEarliest), not only of the rows loaded
+  const first = mpExpFirstDay || (mpExpCache?.spent || []).reduce((m, r) => (r.day < m ? r.day : m), today);
   return { first, today };
+}
+// the day of the earliest expense row, asked at once when the tab opens (first priority,
+// not behind the period's load); the back button and the date pickers wait for it only
+let mpExpFirstDay = null, mpExpFirstDayAsked = false;
+function mpExpAskFirstDay() {
+  if (mpExpFirstDayAsked) return;
+  mpExpFirstDayAsked = true;
+  mpExpEarliest().then(d => { mpExpFirstDay = d; mpExpUpdateNav(); }).catch(() => {});
+}
+async function mpExpEarliest() {
+  const { data, error } = await sb.from('expenses').select('day').order('day').limit(1);
+  if (error) throw new Error(error.message);
+  return data?.[0]?.day || null;
 }
 function mpExpUpdateNav() {
   const { from, to } = mpExpRange();
@@ -11442,9 +11456,14 @@ let mpExpFull = false;
 async function mpExpLoadRest() {
   const cache = mpExpCache;
   try {
-    const current = new Date().getFullYear();
-    const spans = [['2024-01-01', '9999-12-31'], ['2021-01-01', '2023-12-31'], ['2018-01-01', '2020-12-31'], ['1900-01-01', '2017-12-31']];
-    if (current >= 2026) spans.splice(0, 1, ['2026-01-01', '9999-12-31'], ['2024-01-01', '2025-12-31']);
+    // the months back from the current one, one by one (the previous month first: it is
+    // the one a person looks at next), then the older history in one span
+    const now = new Date();
+    const monthStart = k => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - k, 1));
+    const iso = d => d.toISOString().slice(0, 10);
+    const spans = [];
+    for (let k = 1; k <= 11; k++) spans.push([iso(monthStart(k)), iso(new Date(monthStart(k - 1) - 86400000))]);
+    spans.push(['1900-01-01', iso(new Date(monthStart(11) - 86400000))]);
     for (const [from, to] of spans) {
       const part = await mpExpLoad({ from, to });
       // the tab re-loaded meanwhile (an upload, a category set): this load is over
@@ -11508,6 +11527,7 @@ function mpExpCovers(w) {
   return [mpExpCache.range, ...(mpExpCache.loaded || [])].some(s => s && s.from <= w.from && s.to >= w.to);
 }
 async function mpRenderExpenses() {
+  mpExpAskFirstDay();
   const status = document.getElementById('exp_status');
   if (!document.getElementById('exp_from').value) mpExpSetPeriod(document.getElementById('exp_period').value, new Date().toISOString().slice(0, 10));
   if (!mpExpCache) {
