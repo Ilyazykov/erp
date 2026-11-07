@@ -10927,6 +10927,16 @@ async function mpEditItems(src, xid) {
   const { data: catalogRows } = await sb.from('products').select('id, name_en').is('merged_into', null).order('name_en');
   const catalog = catalogRows || [];
   const productOf = name => catalog.find(c => c.name_en.toLowerCase() === name.trim().toLowerCase())?.id ?? null;
+  // what this user paid for each product (product_prices), newest first
+  const { data: priceRows } = await sb.from('product_prices').select('product_id, day, store, currency, unit_price_paid').order('day', { ascending: false });
+  // the price paid nearest in time to this row's day, in its own currency: the same shop first, else any shop
+  const shopHere = (r.place?.name || '').split(' · ')[0].split(' ')[0].toLowerCase();
+  const dayOf = Date.parse(r.day);
+  const nearestPaid = pid => {
+    const rows = (priceRows || []).filter(p => p.product_id === pid && p.currency === r.ccy)
+      .sort((a, b) => Math.abs(Date.parse(a.day) - dayOf) - Math.abs(Date.parse(b.day) - dayOf));
+    return rows.find(p => shopHere && (p.store || '').toLowerCase() === shopHere) || rows[0] || null;
+  };
   const draft = (receipt?.lines || []).map(l => ({ name: l.name_printed, qty: l.qty, unit: l.unit, total: l.line_total }));
   const renderDraft = () => draft.map((d, i) => `<tr data-i="${i}">
       <td><input name="n" value="${mpEscapeHtml(d.name)}" list="mp_items_catalog" placeholder="start typing a product…" autocomplete="off" style="${MP_FIELD}" required></td>
@@ -10939,6 +10949,7 @@ async function mpEditItems(src, xid) {
     <table class="data-table"><thead><tr><th style="text-align:left">Item</th><th>Qty</th><th>Line total</th><th></th></tr></thead>
       <tbody id="mp_items_draft">${renderDraft()}</tbody></table>
     <button type="button" data-act="add-line">+ line</button>
+    <p class="note" style="margin:0" id="mp_items_hint"></p>
     <p class="note" style="margin:0" id="mp_items_sum"></p>`);
   const body = form.querySelector('#mp_items_draft');
   const sumEl = form.querySelector('#mp_items_sum');
@@ -10958,6 +10969,22 @@ async function mpEditItems(src, xid) {
   };
   body.addEventListener('input', syncDraft);
   syncDraft();
+  // a product picked from the suggestions: the nearest-in-time price in the hint, and the line
+  // total as qty x that price -- only while the total is still empty or 0 (never over a typed one)
+  const hintEl = form.querySelector('#mp_items_hint');
+  const suggest = tr => {
+    const pid = productOf(tr.querySelector('[name=n]').value);
+    const near = pid ? nearestPaid(pid) : null;
+    if (!near) { hintEl.textContent = ''; return; }
+    const qty = Number(tr.querySelector('[name=q]').value) || 1;
+    const price = Number(near.unit_price_paid);
+    hintEl.textContent = `Paid nearest to this day: ${price.toFixed(2)} ${near.currency} per unit at ${near.store} (${near.day}).`;
+    const total = tr.querySelector('[name=t]');
+    if (!total.value || Number(total.value) === 0) total.value = (qty * price).toFixed(2);
+    syncDraft();
+  };
+  body.addEventListener('input', e => { if (e.target.name === 'n') suggest(e.target.closest('tr')); });
+  body.addEventListener('change', e => { if (e.target.name === 'q') suggest(e.target.closest('tr')); });
   form.querySelector('[data-act=add-line]').addEventListener('click', () => {
     draft.push({ name: '', qty: 1, unit: 'pcs', total: 0, note: null });
     body.innerHTML = renderDraft();
