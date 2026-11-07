@@ -11319,7 +11319,7 @@ function mpEditIncomeType(src, xid) {
     rows.forEach(x => { x.category = type; });
     form.closest('dialog').close();
     // the income table is rebuilt by the next capital refresh (the rules' step)
-    sb.rpc('request_my_capital_refresh').catch(() => {});
+    await sb.rpc('request_my_capital_refresh');
     await mpRenderExpenses();
   });
 }
