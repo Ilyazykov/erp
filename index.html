@@ -11503,6 +11503,10 @@ function mpMergeExpCache(part) {
   // the spans of rows loaded: this month's forecast reads its days' rows only once they're all there
   cur.loaded = [...(cur.loaded || [cur.range]), part.range];
 }
+// whether the rows of a period are in the cache: the period of the first load or a loaded span
+function mpExpCovers(w) {
+  return [mpExpCache.range, ...(mpExpCache.loaded || [])].some(s => s && s.from <= w.from && s.to >= w.to);
+}
 async function mpRenderExpenses() {
   const status = document.getElementById('exp_status');
   if (!document.getElementById('exp_from').value) mpExpSetPeriod(document.getElementById('exp_period').value, new Date().toISOString().slice(0, 10));
@@ -11519,6 +11523,13 @@ async function mpRenderExpenses() {
     } catch (error) { status.textContent = error.message; return; }
     mpExpFull = false;
     mpExpLoadRest();
+  }
+  // a period whose rows are not in the cache yet is loaded before its figures are drawn:
+  // the page shows none of them as zeros or as a part
+  const want = { from: document.getElementById('exp_from').value, to: document.getElementById('exp_to').value };
+  if (!mpExpFull && !mpExpCovers(want)) {
+    status.textContent = 'Loading…';
+    try { mpMergeExpCache(await mpExpLoad(want)); } catch (error) { status.textContent = error.message; return; }
   }
   status.textContent = mpExpFull ? '' : 'Loading the rest of the history…';
   mpExpUpdateNav();
