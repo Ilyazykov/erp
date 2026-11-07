@@ -11302,6 +11302,51 @@ function mpEditCategory(src, xid) {
     await mpRenderExpenses();
   });
 }
+// A transfer linked by hand: one row out with the rows in it was given back in
+// (several in rows for one out, as the manual pairs of migration ...187 allow).
+// The link icon on a row opens the rows opposite to it within 7 days.
+function mpLinkHtml(r) {
+  return r.src ? `<span class="exp-link" data-src="${esc(r.src)}" data-xid="${esc(r.xid || '')}" title="Link a transfer" style="cursor:pointer;color:#8b949e">🔗</span>` : '';
+}
+async function mpLinkTransfer(src, xid) {
+  const all = [...(mpExpCache?.spent || []), ...(mpExpCache?.skipped || []), ...(mpExpCache?.incomeRows || [])];
+  const seen = new Map();
+  for (const r of all) {
+    const key = `${r.src}|${r.xid}`;
+    if (!seen.has(key)) seen.set(key, { src: r.src, xid: r.xid, day: r.day, desc: r.description || '', amt: Number(r.amt ?? r.amount), ccy: r.ccy ?? r.currency, at: r.at || '' });
+  }
+  const me = seen.get(`${src}|${xid}`);
+  if (!me) return;
+  // linked in rows are taken; out rows may take several in rows
+  const takenIn = new Set((mpExpCache?.pairs || []).map(p => `${p.in_source}|${p.in_id}`));
+  const dayNum = d => Date.parse(`${d}T00:00:00Z`);
+  const cands = [...seen.values()].filter(c => c.src !== me.src || c.xid !== me.xid)
+    .filter(c => (me.amt < 0 ? c.amt > 0 && !takenIn.has(`${c.src}|${c.xid}`) : c.amt < 0)
+      && Math.abs(dayNum(c.day) - dayNum(me.day)) <= 7 * 86400000)
+    .sort((a, b) => Math.abs(dayNum(a.day) - dayNum(me.day)) - Math.abs(dayNum(b.day) - dayNum(me.day)));
+  const list = cands.map((c, i) => `<label style="display:flex;gap:8px;align-items:center">
+    <input type="checkbox" name="pick" value="${i}"><span>${c.day} ${esc(mpShortDesc(c.desc))} · ${c.amt.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${esc(c.ccy || '')}</span></label>`).join('')
+    || '<p class="empty-note">No opposite rows within 7 days.</p>';
+  const form = mpDialog(`Link · ${me.day} · ${mpShortDesc(me.desc)} · ${me.amt.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${esc(me.ccy || '')}`,
+    `<div style="max-height:320px;overflow:auto;display:flex;flex-direction:column;gap:6px">${list}</div>`);
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const picked = [...form.querySelectorAll('input[name=pick]:checked')].map(box => cands[Number(box.value)]);
+    if (!picked.length) return;
+    const { data: { session: s } } = await sb.auth.getSession();
+    const when = r => (r.at ? `${r.day}T${r.at}:00Z` : `${r.day}T00:00:00Z`);
+    const payload = picked.map(c => {
+      const o = me.amt < 0 ? me : c, i = me.amt < 0 ? c : me;
+      return { user_id: s.user.id, out_source: o.src, out_id: o.xid, in_source: i.src, in_id: i.xid,
+        amount: Math.abs(o.amt), currency: o.ccy, out_at: when(o), in_at: when(i), matched_by: 'manual', kind: 'transfer' };
+    });
+    const { error } = await sb.from('internal_transfers').insert(payload);
+    if (error) { alert(error.message); return; }
+    form.closest('dialog').close();
+    await sb.rpc('request_my_capital_refresh');
+    await mpRenderExpenses();
+  });
+}
 // The type of one's own money coming in (bank_transactions.income_category): set by
 // hand it is kept through the rules' rebuilds (income_manual), like an expense's category.
 function mpEditIncomeType(src, xid) {
@@ -11328,6 +11373,8 @@ document.getElementById('expenses').addEventListener('click', e => {
   if (!mpIsSignedIn || e.target.closest('a')) return;
   const catCell = e.target.closest('.exp-cat-set');
   if (catCell?.dataset.src) { e.stopPropagation(); mpEditCategory(catCell.dataset.src, catCell.dataset.xid); return; }
+  const link = e.target.closest('.exp-link');
+  if (link?.dataset.src) { e.stopPropagation(); mpLinkTransfer(link.dataset.src, link.dataset.xid); return; }
   const incCell = e.target.closest('.inc-cat-set');
   if (incCell?.dataset.src) { e.stopPropagation(); mpEditIncomeType(incCell.dataset.src, incCell.dataset.xid); return; }
   const time = e.target.closest('.exp-time');
@@ -11484,7 +11531,7 @@ async function mpRenderExpenses() {
   const rowsTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th style="text-align:left">Category</th><th>Note</th><th style="width:1%;text-align:left">Place</th><th style="width:1%;text-align:left">Items</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
     // newest first, to the second -- rows with no time in their statement too,
     // by the importer's 00:00:SS (their order within the day)
-    list.slice().sort((a, b) => b.day.localeCompare(a.day) || String(b.ts).localeCompare(String(a.ts))).map(r => `<tr><td style="white-space:nowrap">${r.day}${mpTimeHtml(r)}</td><td style="text-align:left"${mpShortDesc(r.description) !== r.description ? ` title="${esc(r.description)}"` : ''}>${esc(mpShortDesc(r.description))}</td>
+    list.slice().sort((a, b) => b.day.localeCompare(a.day) || String(b.ts).localeCompare(String(a.ts))).map(r => `<tr><td style="white-space:nowrap">${r.day}${mpTimeHtml(r)}</td><td style="text-align:left"${mpShortDesc(r.description) !== r.description ? ` title="${esc(r.description)}"` : ''}>${esc(mpShortDesc(r.description))} ${mpLinkHtml(r)}</td>
       <td class="exp-cat-set" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to change the category" style="text-align:left;cursor:pointer;color:#c9d1d9">${esc(r.cat || '—')}</td>
       <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to set the place" style="text-align:left;max-width:180px;cursor:pointer">${mpPlaceHtml(r.place, r.deliveredTo)}</td>
       <td class="exp-items" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to see / add items" style="text-align:left;cursor:pointer">${mpItemsHtml(mpExpCache?.receiptOf?.get(`${r.src}|${r.xid}`))}</td>
@@ -11570,7 +11617,7 @@ async function mpRenderExpenses() {
   const incOpen = mpIncOpen;
   const incTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th style="text-align:left">Type</th><th>Note</th><th style="width:1%;text-align:left">Place</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
     list.slice().sort((x, y) => y.day.localeCompare(x.day)).map(r => `<tr><td style="white-space:nowrap">${r.day}${mpTimeHtml(r)}</td>
-      <td style="text-align:left">${esc(r.description || '')}</td>
+      <td style="text-align:left">${esc(r.description || '')} ${mpLinkHtml(r)}</td>
       <td class="inc-cat-set" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to change the type" style="text-align:left;cursor:pointer;color:#c9d1d9">${esc(r.category || '—')}</td>
       <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to set the place" style="text-align:left;max-width:180px;cursor:pointer">${mpPlaceHtml(r.place, r.deliveredTo)}</td>
       <td style="text-align:left">${esc(r.account)}</td>
