@@ -11314,11 +11314,13 @@ function mpLinkHtml(r) {
   return r.src ? `<span class="exp-link" data-src="${mpEscapeHtml(r.src)}" data-xid="${mpEscapeHtml(r.xid || '')}" title="Link a transfer" style="cursor:pointer;color:#8b949e">🔗</span>` : '';
 }
 async function mpLinkTransfer(src, xid) {
-  const all = [...(mpExpCache?.spent || []), ...(mpExpCache?.skipped || []), ...(mpExpCache?.incomeRows || [])];
+  // the expenses' amounts are money out, positive (legRow shows them with a minus); the income's are in
+  const all = [...(mpExpCache?.spent || []).map(r => [r, -1]), ...(mpExpCache?.skipped || []).map(r => [r, -1]),
+    ...(mpExpCache?.incomeRows || []).map(r => [r, 1])];
   const seen = new Map();
-  for (const r of all) {
+  for (const [r, sign] of all) {
     const key = `${r.src}|${r.xid}`;
-    if (!seen.has(key)) seen.set(key, { src: r.src, xid: r.xid, day: r.day, desc: r.description || '', amt: Number(r.amt ?? r.amount), ccy: r.ccy ?? r.currency, at: r.at || '' });
+    if (!seen.has(key)) seen.set(key, { src: r.src, xid: r.xid, day: r.day, desc: r.description || '', amt: sign * Math.abs(Number(r.amt ?? r.amount)), ccy: r.ccy ?? r.currency, at: r.at || '' });
   }
   const me = seen.get(`${src}|${xid}`);
   if (!me) return;
