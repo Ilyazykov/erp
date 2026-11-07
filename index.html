@@ -10814,7 +10814,10 @@ function mpEditPlace(src, xid) {
     const receiptHere = mpExpCache?.receiptOf?.get(`${src}|${xid}`);
     if (from && receiptHere) {
       const key = mpStoreKey(receiptHere.chain, receiptHere.store);
-      if (key) await sb.from('store_places').upsert({ store_key: key, place_id: from }, { onConflict: 'user_id,store_key' }).catch(() => { /* best effort */ });
+      // best effort: the pick is saved either way; a failure here must not stop the dialog closing
+      if (key) {
+        try { await sb.from('store_places').upsert({ store_key: key, place_id: from }, { onConflict: 'user_id,store_key' }); } catch { /* the row's place is set already */ }
+      }
     }
     const byId = id => { const p = list.find(x => x.id === id); return p ? { name: mpPlaceLabel(p, list), url: p.url } : null; };
     rows.forEach(x => { x.placeId = from; x.deliveredToId = to; x.place = byId(from); x.deliveredTo = byId(to); });
