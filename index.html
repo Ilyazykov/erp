@@ -2393,7 +2393,7 @@ async function mpRenderReceiptsPanel() {
   const { data: open } = await sb.from('receipts')
     .select('id, purchased_on, store_printed, chain, currency, total, match_state')
     .in('match_state', ['waiting', 'ambiguous']).order('purchased_on', { ascending: false })
-    .catch(() => ({ data: [] }));
+    .then(r => r, () => ({ data: [] }));
   const waiting = (open || []).filter(r => r.match_state === 'waiting');
   const ambiguous = (open || []).filter(r => r.match_state === 'ambiguous');
   if (!waiting.length && !ambiguous.length) { wrap.innerHTML = ''; return; }
@@ -10414,10 +10414,16 @@ async function mpExpLoad() {
   ]);
   // the statement's time of the income rows and of the transfer legs (their
   // tables have none): from the bank row, by its day; 00:00 is no time
-  const legDays = [...(inc || []).map(r => r.day), ...(pairs || []).flatMap(p => [p.out_day, p.in_day]), ...(unpairedIn || []).map(r => r.day)]
-    .filter(Boolean).sort();
-  const clockRows = legDays.length ? await page(() => sb.from('bank_transactions').select('external_source, external_id, tx_date')
-    .gte('tx_date', `${legDays[0]}T00:00:00Z`).lte('tx_date', `${legDays[legDays.length - 1]}T23:59:59Z`).order('id')).catch(() => []) : [];
+  // looked up by the rows' own keys, in small batches: a range over the days would
+  // read the whole bank history
+  const clockKeys = [...new Set([...(inc || []).map(r => r.external_id), ...(pairs || []).flatMap(p => [p.out_id, p.in_id]),
+    ...(unpairedIn || []).map(r => r.external_id)].filter(Boolean))];
+  const clockBatches = [];
+  for (let i = 0; i < clockKeys.length; i += 100) clockBatches.push(clockKeys.slice(i, i + 100));
+  const clockRows = (await Promise.all(clockBatches.map(async ids => {
+    const { data, error } = await sb.from('bank_transactions').select('external_source, external_id, tx_date').in('external_id', ids);
+    return error ? [] : data ?? [];
+  }))).flat();
   const clockOf = new Map(clockRows.map(t => [`${t.external_source}|${t.external_id}`, t.tx_date.slice(11, 16)]).filter(([, at]) => at !== '00:00'));
   for (const r of inc || []) {
     const at = clockOf.get(`${r.src}|${r.xid}`);
@@ -11306,7 +11312,7 @@ function mpEditCategory(src, xid) {
 // (several in rows for one out, as the manual pairs of migration ...187 allow).
 // The link icon on a row opens the rows opposite to it within 7 days.
 function mpLinkHtml(r) {
-  return r.src ? `<span class="exp-link" data-src="${esc(r.src)}" data-xid="${esc(r.xid || '')}" title="Link a transfer" style="cursor:pointer;color:#8b949e">🔗</span>` : '';
+  return r.src ? `<span class="exp-link" data-src="${mpEscapeHtml(r.src)}" data-xid="${mpEscapeHtml(r.xid || '')}" title="Link a transfer" style="cursor:pointer;color:#8b949e">🔗</span>` : '';
 }
 async function mpLinkTransfer(src, xid) {
   const all = [...(mpExpCache?.spent || []), ...(mpExpCache?.skipped || []), ...(mpExpCache?.incomeRows || [])];
@@ -11325,9 +11331,9 @@ async function mpLinkTransfer(src, xid) {
       && Math.abs(dayNum(c.day) - dayNum(me.day)) <= 7 * 86400000)
     .sort((a, b) => Math.abs(dayNum(a.day) - dayNum(me.day)) - Math.abs(dayNum(b.day) - dayNum(me.day)));
   const list = cands.map((c, i) => `<label style="display:flex;gap:8px;align-items:center">
-    <input type="checkbox" name="pick" value="${i}"><span>${c.day} ${esc(mpShortDesc(c.desc))} · ${c.amt.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${esc(c.ccy || '')}</span></label>`).join('')
+    <input type="checkbox" name="pick" value="${i}"><span>${c.day} ${mpEscapeHtml(mpShortDesc(c.desc))} · ${c.amt.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${mpEscapeHtml(c.ccy || '')}</span></label>`).join('')
     || '<p class="empty-note">No opposite rows within 7 days.</p>';
-  const form = mpDialog(`Link · ${me.day} · ${mpShortDesc(me.desc)} · ${me.amt.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${esc(me.ccy || '')}`,
+  const form = mpDialog(`Link · ${me.day} · ${mpShortDesc(me.desc)} · ${me.amt.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${mpEscapeHtml(me.ccy || '')}`,
     `<div style="max-height:320px;overflow:auto;display:flex;flex-direction:column;gap:6px">${list}</div>`);
   form.addEventListener('submit', async e => {
     e.preventDefault();
