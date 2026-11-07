@@ -12235,6 +12235,7 @@ async function mpRenderExpenses() {
   const skipTotal = skip.reduce((s, c) => s + c.total, 0)
     + chains.reduce((s, c) => s + c.steps.reduce((t, x) => t + (x.ts.slice(0, 10) >= from && x.ts.slice(0, 10) <= to ? x.out : 0), 0), 0);
   const exWrap = document.getElementById('exp_excluded');
+  const openNow = new Set([...exWrap.querySelectorAll('details[open] > summary b')].map(b => b.textContent));
   exWrap.innerHTML = skip.length || backPairs.length || inPeriodIn.length || chains.length ? `<div class="section-title" style="margin-top:24px">Not counted: ${signed(-skipTotal)}</div>
     <p class="note">Money that only moved between your own money: each row out (−), and under it the row in (+) it became when
       the two are paired -- they net out, the difference is what an exchange cost. Click a line to see its rows -- something
@@ -12253,6 +12254,8 @@ async function mpRenderExpenses() {
       ${pairsTable([], backPairs)}</details>` : ''}
     ${inGroup('Dividends', ' -- not income: the share is worth as much less', inPeriodIn.filter(isDividend))}
     ${inGroup('Money in, no pair and no income', ' -- a leg the matcher missed, or income no rule knows yet', inPeriodIn.filter(r => !isDividend(r)))}` : '';
+  // the sections the user opened stay open: the background load draws this section again
+  for (const b of openNow) exWrap.querySelectorAll('details > summary b').forEach(t => { if (t.textContent === b) t.closest('details').open = true; });
 }
 for (const id of ['exp_from', 'exp_to']) {
   document.getElementById(id).addEventListener('change', e => {
