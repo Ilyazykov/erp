@@ -430,6 +430,76 @@ async function dropStale(db: any, userId: string, table: 'bank_transactions' | '
   return dropped;
 }
 
+// A label (note, hand-set category, place, time set by hand) sits on its row,
+// and a row whose key changed -- the description or the time differs in the
+// new report -- is one dropStale deletes, label and all. So before that, each
+// labelled row the file replaces hands its labels to the file's row for the
+// same account, day, amount and currency (the same description first). The
+// report's own time wins: a time set by hand goes over only to a row the
+// report gave no time.
+// deno-lint-ignore no-explicit-any
+async function carryLabels(db: any, userId: string, rows: { external_source: string; external_id: string; tx_date: string;
+  amount: number; currency: string; description: string }[], timed: Set<string>): Promise<number> {
+  const SELECT = 'id, external_source, external_id, tx_date, amount, currency, description, expense_note, expense_manual, ' +
+    'expense_category, expense_spread_months, expense_spread_from, place_id, delivery_place_id, fx_rate, authorized_at, authorized_approx';
+  // deno-lint-ignore no-explicit-any
+  const hasLabel = (t: any) => t.expense_note || t.expense_manual || t.place_id || t.delivery_place_id || t.fx_rate != null
+    || t.expense_spread_months != null || t.authorized_at;
+  const bySource = new Map<string, { from: string; to: string }>();
+  for (const r of rows) {
+    const day = r.tx_date.slice(0, 10);
+    const g = bySource.get(r.external_source) ?? { from: day, to: day };
+    if (day < g.from) g.from = day;
+    if (day > g.to) g.to = day;
+    bySource.set(r.external_source, g);
+  }
+  let carried = 0;
+  for (const [src, g] of bySource) {
+    // deno-lint-ignore no-explicit-any
+    const all: any[] = [];
+    for (let off = 0; ; off += 1000) {
+      const { data, error } = await db.from('bank_transactions').select(SELECT)
+        .eq('user_id', userId).eq('external_source', src)
+        .gte('tx_date', `${g.from}T00:00:00Z`).lte('tx_date', `${g.to}T23:59:59.999Z`)
+        .order('id').range(off, off + 999);
+      if (error) throw new Error(error.message);
+      all.push(...(data ?? []));
+      if (!data || data.length < 1000) break;
+    }
+    const fileIds = new Set(rows.filter(r => r.external_source === src).map(r => r.external_id));
+    const target = new Map(all.filter(t => fileIds.has(t.external_id)).map(t => [t.external_id, t]));
+    const stale = all.filter(t => !fileIds.has(t.external_id) && hasLabel(t))
+      .sort((a, b) => (a.tx_date < b.tx_date ? -1 : a.tx_date > b.tx_date ? 1 : 0));
+    const taken = new Set<string>();
+    for (const s of stale) {
+      const day = s.tx_date.slice(0, 10);
+      const candidates = rows.filter(r => r.external_source === src && !taken.has(r.external_id)
+        && r.tx_date.slice(0, 10) === day && Number(r.amount) === Number(s.amount) && r.currency === s.currency);
+      const pick = candidates.find(r => r.description === s.description) ?? candidates[0];
+      const t = pick && target.get(pick.external_id);
+      if (!t) continue;
+      taken.add(pick.external_id);
+      const patch: Record<string, unknown> = {};
+      if (s.expense_note && !t.expense_note) patch.expense_note = s.expense_note;
+      if (s.expense_manual && !t.expense_manual) { patch.expense_category = s.expense_category; patch.expense_manual = true; }
+      if (s.expense_spread_months != null && t.expense_spread_months == null) {
+        patch.expense_spread_months = s.expense_spread_months; patch.expense_spread_from = s.expense_spread_from;
+      }
+      if (s.place_id && !t.place_id) patch.place_id = s.place_id;
+      if (s.delivery_place_id && !t.delivery_place_id) patch.delivery_place_id = s.delivery_place_id;
+      if (s.fx_rate != null && t.fx_rate == null) patch.fx_rate = s.fx_rate;
+      if (s.authorized_at && !t.authorized_at && !timed.has(pick.external_id)) {
+        Object.assign(patch, { authorized_at: s.authorized_at, authorized_approx: s.authorized_approx });
+      }
+      if (!Object.keys(patch).length) continue;
+      const { error } = await db.from('bank_transactions').update(patch).eq('user_id', userId).eq('id', t.id);
+      if (error) throw new Error(error.message);
+      carried++;
+    }
+  }
+  return carried;
+}
+
 function categorize(description: string): string | null {
   for (const [re, cat] of CATEGORY_RULES) {
     if (re.test(description)) return cat;
@@ -497,6 +567,7 @@ Deno.serve(async (req) => {
     const rows = [];
     const depositRows = [];
     const dupSeen = new Map<string, number>();
+    const timedIds = new Set<string>();
     for (const r of csvRows) {
       let clock: string;
       if (r.time) {
@@ -513,6 +584,7 @@ Deno.serve(async (req) => {
       const occurrence = dupSeen.get(signature) ?? 0;
       dupSeen.set(signature, occurrence + 1);
       const externalId = occurrence === 0 ? signature : `${signature}:dup${occurrence}`;
+      if (r.time) timedIds.add(externalId);
 
       if (DEPOSIT_PRODUCTS.has(r.product)) {
         if (r.amount === 0) continue;
@@ -569,6 +641,7 @@ Deno.serve(async (req) => {
       imported = count ?? rows.length;
     }
 
+    const carriedLabels = await carryLabels(supabase, user.id, rows, timedIds);
     const droppedStale = await dropStale(supabase, user.id, 'bank_transactions', 'tx_date',
       rows.map(r => ({ external_source: r.external_source, external_id: r.external_id, day: r.tx_date.slice(0, 10) })));
 
