@@ -11257,8 +11257,30 @@ async function mpOpenProductView(productId) {
     dlg.close();
   });
 }
+// The category of a row, set by hand (expense_manual): it stays on re-uploads (manual_categories).
+function mpEditCategory(src, xid) {
+  const rows = mpExpRowsOf(src, xid);
+  const r = rows[0];
+  if (!r) return;
+  const opts = MP_EXP_CATS.map(([name]) => `<option${name === r.cat ? ' selected' : ''}>${mpEscapeHtml(name)}</option>`).join('');
+  const form = mpDialog(`Category · ${r.day} · ${mpShortDesc(r.description)}`, `
+    <select name="cat" size="10" style="${MP_FIELD}">${opts}</select>`);
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const cat = form.cat.value;
+    const { error } = await sb.from('bank_transactions').update({ expense_category: cat, expense_manual: true })
+      .eq('external_source', src).eq('external_id', xid);
+    if (error) { alert(error.message); return; }
+    rows.forEach(x => { x.cat = cat; });
+    form.closest('dialog').close();
+    // the rows already on screen take the new category; the tab's totals re-count from the cache
+    await mpRenderExpenses();
+  });
+}
 document.getElementById('expenses').addEventListener('click', e => {
   if (!mpIsSignedIn || e.target.closest('a')) return;
+  const catCell = e.target.closest('.exp-cat-set');
+  if (catCell?.dataset.src) { e.stopPropagation(); mpEditCategory(catCell.dataset.src, catCell.dataset.xid); return; }
   const time = e.target.closest('.exp-time');
   if (time) { e.stopPropagation(); mpEditTime(time.dataset.src, time.dataset.xid); return; }
   const place = e.target.closest('.exp-place');
@@ -11410,10 +11432,11 @@ async function mpRenderExpenses() {
   }, { ...CONFIG, displayModeBar: false });
 
   // the note is one's own (bank_transactions.expense_note): click to write it
-  const rowsTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th style="width:1%;text-align:left">Place</th><th style="width:1%;text-align:left">Items</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
+  const rowsTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th style="text-align:left">Category</th><th>Note</th><th style="width:1%;text-align:left">Place</th><th style="width:1%;text-align:left">Items</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
     // newest first, to the second -- rows with no time in their statement too,
     // by the importer's 00:00:SS (their order within the day)
-    list.slice().sort((a, b) => b.day.localeCompare(a.day) || String(b.ts).localeCompare(String(a.ts))).map(r => `<tr><td style="white-space:nowrap">${r.day}${mpTimeHtml(r)}</td><td style="text-align:left"${mpShortDesc(r.description) !== r.description ? ` title="${esc(r.description)}"` : ''}>${esc(mpShortDesc(r.description))}${groupedTop && MP_EXP_GROUPS[r.cat] ? ` <span style="color:#6a7381">· ${esc(r.cat)}</span>` : ''}</td>
+    list.slice().sort((a, b) => b.day.localeCompare(a.day) || String(b.ts).localeCompare(String(a.ts))).map(r => `<tr><td style="white-space:nowrap">${r.day}${mpTimeHtml(r)}</td><td style="text-align:left"${mpShortDesc(r.description) !== r.description ? ` title="${esc(r.description)}"` : ''}>${esc(mpShortDesc(r.description))}</td>
+      <td class="exp-cat-set" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to change the category" style="text-align:left;cursor:pointer;color:#c9d1d9">${esc(r.cat || '—')}</td>
       <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to set the place" style="text-align:left;max-width:180px;cursor:pointer">${mpPlaceHtml(r.place, r.deliveredTo)}</td>
       <td class="exp-items" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to see / add items" style="text-align:left;cursor:pointer">${mpItemsHtml(mpExpCache?.receiptOf?.get(`${r.src}|${r.xid}`))}</td>
       <td style="text-align:left">${esc(r.account)}</td>
