@@ -11453,17 +11453,25 @@ let mpExpFull = false;
 // The latest years first: this month's forecast on the chart over time reads its
 // rows by day. The last span runs on past this year -- rent paid ahead is booked
 // in the months it's for (day), next year's too.
+// how many months back are loaded one by one after the current one
+const MP_EXP_MONTH_SPANS = 3;
 async function mpExpLoadRest() {
   const cache = mpExpCache;
   try {
     // the months back from the current one, one by one (the previous month first: it is
-    // the one a person looks at next), then the older history in one span
+    // the one a person looks at next), then the older history by spans of three years
     const now = new Date();
     const monthStart = k => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - k, 1));
     const iso = d => d.toISOString().slice(0, 10);
     const spans = [];
-    for (let k = 1; k <= 11; k++) spans.push([iso(monthStart(k)), iso(new Date(monthStart(k - 1) - 86400000))]);
-    spans.push(['1900-01-01', iso(new Date(monthStart(11) - 86400000))]);
+    for (let k = 1; k <= MP_EXP_MONTH_SPANS; k++) spans.push([iso(monthStart(k)), iso(new Date(monthStart(k - 1) - 86400000))]);
+    // the older history, up to the day before the last month span, by spans of three years, the newer first
+    let end = new Date(monthStart(MP_EXP_MONTH_SPANS) - 86400000);
+    while (end.getUTCFullYear() >= 1900) {
+      const y = end.getUTCFullYear();
+      spans.push([`${Math.max(1900, y - 2)}-01-01`, iso(end)]);
+      end = new Date(Date.UTC(y - 3, 11, 31));
+    }
     for (const [from, to] of spans) {
       const part = await mpExpLoad({ from, to });
       // the tab re-loaded meanwhile (an upload, a category set): this load is over
