@@ -11998,7 +11998,13 @@ async function mpRenderExpenses() {
   // Not counted: each row out with the row in it went to (a pair, migration
   // 155) under it, -out and +in -- the two net out
   const signed = (v, s = v < 0 ? '−' : '+') => s + money(Math.abs(v));
-  const pairOf = new Map((mpExpCache.pairs || []).map(p => [`${p.out_source}|${p.out_id}`, p]));
+  // every pair of a row out: one row out can be given back in several rows (manual links)
+  const pairsOf = new Map();
+  for (const p of mpExpCache.pairs || []) {
+    const k = `${p.out_source}|${p.out_id}`;
+    pairsOf.set(k, [...(pairsOf.get(k) || []), p]);
+  }
+  const pairOf = { get: k => (pairsOf.get(k) || [])[0] };
   const inConv = p => Number(p.in_usd) / usdPer(ccy, p.in_day);
   const legRow = (day, description, account, amt, rowCcy, value, noteCell, leg) => `<tr class="${leg ? 'pair-in' : 'pair-out'}"${leg ? ' style="color:#8b949e"' : ''}>
     <td style="white-space:nowrap">${day}</td>
@@ -12013,10 +12019,10 @@ async function mpRenderExpenses() {
   const inRow = p => legRow(p.in_day + legClock(p.in_source, p.in_id), p.in_description, p.in_account, Number(p.in_amount), p.in_currency, inConv(p), '<td></td><td></td>', true);
   const pairsTable = (list, extra = []) => `<div class="exp-rows"><table class="data-table pair-rows"><thead><tr><th>Date</th><th>Description</th><th>Note</th><th style="width:1%;text-align:left">Place</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
     list.slice().sort((a, b) => b.day.localeCompare(a.day) || String(b.ts).localeCompare(String(a.ts))).map(r => {
-      const p = pairOf.get(`${r.src}|${r.xid}`);
+      const ps = pairsOf.get(`${r.src}|${r.xid}`) || [];
       return legRow(r.day + mpTimeHtml(r), r.description, r.account, -r.amt, r.ccy, -conv(r),
         `<td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to set the place" style="text-align:left;max-width:180px;cursor:pointer">${mpPlaceHtml(r.place, r.deliveredTo)}</td>`)
-        + (p ? inRow(p) : '');
+        + ps.map(inRow).join('');
     }).join('')}${extra.map(p => legRow(p.out_day + legClock(p.out_source, p.out_id), p.out_description, p.out_account, Number(p.out_amount), p.out_currency,
       Number(p.out_usd) / usdPer(ccy, p.out_day), '<td></td><td></td>') + inRow(p)).join('')}</tbody></table></div>`;
   // chains (migration 160): a move in several steps, its rows out of the pairs
@@ -12032,9 +12038,10 @@ async function mpRenderExpenses() {
   for (const r of skipped) {
     const name = chainKey(r.src, r.xid);
     if (!name || !Number.isFinite(r.usd)) continue;
-    const p = pairOf.get(`${r.src}|${r.xid}`);
+    const ps = pairsOf.get(`${r.src}|${r.xid}`) || [];
     chainAdd(name, r.ts, legRow(r.day + mpTimeHtml(r), r.description, r.account, -r.amt, r.ccy, -conv(r),
-      `<td style="text-align:left;color:#8b949e">${r.note ? esc(r.note) : ''}</td>`) + (p ? inRow(p) : ''), -conv(r) + (p ? inConv(p) : 0), conv(r));
+      `<td style="text-align:left;color:#8b949e">${r.note ? esc(r.note) : ''}</td>`) + ps.map(inRow).join(''),
+      -conv(r) + ps.reduce((s, p) => s + inConv(p), 0), conv(r));
   }
   for (const p of mpExpCache.pairs || []) {
     const name = chainKey(p.out_source, p.out_id);
@@ -12057,7 +12064,7 @@ async function mpRenderExpenses() {
   // a broker's trade): the money back to a card, its own line
   const backPairs = (mpExpCache.pairs || []).filter(p => p.out_day >= from && p.out_day <= to
     && !outKeys.has(`${p.out_source}|${p.out_id}`) && Number.isFinite(Number(p.in_usd)) && !chainKey(p.out_source, p.out_id));
-  const inOf = rows => rows.reduce((s, r) => { const p = pairOf.get(`${r.src}|${r.xid}`); return p ? s + inConv(p) : s; }, 0);
+  const inOf = rows => rows.reduce((s, r) => s + (pairsOf.get(`${r.src}|${r.xid}`) || []).reduce((t, p) => t + inConv(p), 0), 0);
   const sumLine = (out, back) => `<b>${signed(-out)}</b>${back ? ` <span style="color:#8b949e">${signed(back)} in · net ${signed(back - out)}</span>` : ''}`;
   const inPeriodIn = unchained(mpExpCache.unpairedIn || []).filter(r => r.day >= from && r.day <= to && Number.isFinite(Number(r.usd)));
   // dividends: no income -- the share is worth as much less; their own line
