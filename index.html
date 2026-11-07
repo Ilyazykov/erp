@@ -117,6 +117,7 @@
   <div class="tab" data-tab="capitalbrokers">Capital by broker</div>
   <div class="tab" data-tab="invested">Invested vs earned</div>
   <div class="tab" data-tab="expenses">Expenses</div>
+  <div class="tab" data-tab="products">Products</div>
   <div class="tab" data-tab="sigmoid">USD/RUB → CNY Weight (current + 5Y)</div>
   <div class="tab" data-tab="layer2a">ERP &amp; Stocks/Bonds Allocation</div>
   <div class="tab" data-tab="layer2r">Yield per Stock &amp; Rebalancing</div>
@@ -296,7 +297,6 @@
     <div id="mp_any_csv_drop" class="drop-zone">…or drop any number of files here — they're queued and imported one by one</div>
     <div class="empty-note" id="mp_any_csv_status"></div>
     <div id="mp_receipts_panel"></div>
-    <div id="mp_products_panel"></div>
 
     <p class="note">Automatic syncs and checks (IBKR, Bybit, Freedom24, T-Bank, Binance, Revolut X, Open Banking) —
       their keys and status — are on the <a href="#" onclick="showTab('automation');return false">Automation</a> tab.</p>
@@ -689,6 +689,13 @@
 
 <!-- The accounts that sync or are checked by themselves: their keys, tokens
      and last runs (moved here from My Portfolio, where only the uploads stay). -->
+<div id="products" class="chart-wrap">
+  <div id="products_signed_out" class="empty-note">Sign in with Google (top of page) to see your products.</div>
+  <div id="products_signed_in" style="display:none">
+    <div id="mp_products_panel"></div>
+  </div>
+</div>
+
 <div id="automation" class="chart-wrap">
   <div id="auto_signed_out" class="empty-note">Sign in with Google (top of page) to set up the automatic syncs.</div>
   <div id="auto_signed_in" style="display:none">
@@ -1077,6 +1084,7 @@ function showTab(id) {
   if (id === 'maturities' && mpIsSignedIn) mpRenderMaturities();
   if (id === 'invested' && mpIsSignedIn) mpRenderInvested();
   if (id === 'expenses' && mpIsSignedIn) mpRenderExpenses();
+  if (id === 'products' && mpIsSignedIn) mpRenderProductList();
   if (DATA && !rendered[id]) {
     rendered[id] = true;
     renderChart(id);
@@ -10066,6 +10074,8 @@ function mpUpdateAuthUi(session) {
     document.getElementById('invested_signed_in').style.display = '';
     document.getElementById('expenses_signed_out').style.display = 'none';
     document.getElementById('expenses_signed_in').style.display = '';
+    document.getElementById('products_signed_out').style.display = 'none';
+    document.getElementById('products_signed_in').style.display = '';
     mpRenderCardReminders();
     mpRenderPortfolioPies();
     mpRenderLatestSources();
@@ -10109,6 +10119,8 @@ function mpUpdateAuthUi(session) {
     document.getElementById('invested_signed_out').style.display = '';
     document.getElementById('invested_signed_in').style.display = 'none';
     document.getElementById('expenses_signed_out').style.display = '';
+    document.getElementById('products_signed_out').style.display = '';
+    document.getElementById('products_signed_in').style.display = 'none';
     document.getElementById('expenses_signed_in').style.display = 'none';
     mpExpCache = null;
     mpCapitalBrokerRows = null;
