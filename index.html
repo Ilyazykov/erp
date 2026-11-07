@@ -11477,7 +11477,9 @@ async function mpExpLoadRest() {
       // the tab re-loaded meanwhile (an upload, a category set): this load is over
       if (mpExpCache !== cache) return;
       mpMergeExpCache(part);
-      await mpRenderExpenses();
+      // the calendar modes read the monthly totals, which are complete already: the page
+      // is drawn again per span only for the "to today" modes, which need the rows
+      if (/_td$/.test(document.getElementById('exp_step').value)) await mpRenderExpenses();
     }
     mpExpFull = true;
     await mpRenderExpenses();
@@ -12236,7 +12238,7 @@ async function mpRenderExpenses() {
     + chains.reduce((s, c) => s + c.steps.reduce((t, x) => t + (x.ts.slice(0, 10) >= from && x.ts.slice(0, 10) <= to ? x.out : 0), 0), 0);
   const exWrap = document.getElementById('exp_excluded');
   const openNow = new Set([...exWrap.querySelectorAll('details[open] > summary b')].map(b => b.textContent));
-  exWrap.innerHTML = skip.length || backPairs.length || inPeriodIn.length || chains.length ? `<div class="section-title" style="margin-top:24px">Not counted: ${signed(-skipTotal)}</div>
+  const exHtml = skip.length || backPairs.length || inPeriodIn.length || chains.length ? `<div class="section-title" style="margin-top:24px">Not counted: ${signed(-skipTotal)}</div>
     <p class="note">Money that only moved between your own money: each row out (−), and under it the row in (+) it became when
       the two are paired -- they net out, the difference is what an exchange cost. Click a line to see its rows -- something
       that is spending after all means a rule in expense_rules is too wide, or the row's expense_category is to be set by hand.</p>
@@ -12254,6 +12256,9 @@ async function mpRenderExpenses() {
       ${pairsTable([], backPairs)}</details>` : ''}
     ${inGroup('Dividends', ' -- not income: the share is worth as much less', inPeriodIn.filter(isDividend))}
     ${inGroup('Money in, no pair and no income', ' -- a leg the matcher missed, or income no rule knows yet', inPeriodIn.filter(r => !isDividend(r)))}` : '';
+  // drawn again only when its content changed: the background load adds older months,
+  // which this section does not show, so its open sections stay as they are
+  if (exWrap.dataset.html !== exHtml) { exWrap.innerHTML = exHtml; exWrap.dataset.html = exHtml; }
   // the sections the user opened stay open: the background load draws this section again
   for (const b of openNow) exWrap.querySelectorAll('details > summary b').forEach(t => { if (t.textContent === b) t.closest('details').open = true; });
 }
