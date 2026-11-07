@@ -1064,6 +1064,7 @@ const CONFIG = { responsive: true, displayModeBar: true,
 
 let DATA = null;
 let mpIsSignedIn = false;
+let mpIncOpen = new Set();
 let rendered = {};
 
 function showTab(id) {
@@ -11565,6 +11566,8 @@ async function mpRenderExpenses() {
     ],
   }, { ...CONFIG, displayModeBar: false });
   const incList = document.getElementById('inc_categories');
+  // the income groups opened by the user stay open across the tab's re-renders (as mpExpOpen does for expenses)
+  const incOpen = mpIncOpen;
   const incTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th style="text-align:left">Type</th><th>Note</th><th style="width:1%;text-align:left">Place</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
     list.slice().sort((x, y) => y.day.localeCompare(x.day)).map(r => `<tr><td style="white-space:nowrap">${r.day}${mpTimeHtml(r)}</td>
       <td style="text-align:left">${esc(r.description || '')}</td>
@@ -11582,7 +11585,14 @@ async function mpRenderExpenses() {
     const box = incList.querySelector(`.exp-open[data-i="${el.dataset.i}"]`);
     if (!box.innerHTML) box.innerHTML = incTable(incCats[el.dataset.i].rows);
     box.style.display = box.style.display === 'none' ? '' : 'none';
+    box.style.display === 'none' ? incOpen.delete(incCats[el.dataset.i].cat) : incOpen.add(incCats[el.dataset.i].cat);
   }));
+  incCats.forEach((c, i) => {
+    if (!incOpen.has(c.cat)) return;
+    const box = incList.querySelector(`.exp-open[data-i="${i}"]`);
+    box.innerHTML = incTable(c.rows);
+    box.style.display = '';
+  });
 
   // the chosen span to this month, by month / quarter / year, stacked by category --
   // not tied to the period above, so stepping through periods leaves it as it is
