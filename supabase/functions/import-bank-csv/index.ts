@@ -500,6 +500,41 @@ async function carryLabels(db: any, userId: string, rows: { external_source: str
   return carried;
 }
 
+// A statement PDF gives a payment only its bank's own words ("SBOL. Operation on
+// account ****3373"). The name the same payment has under the same account, day,
+// amount and currency -- from the app or an earlier export -- is kept, not lost.
+const GENERIC_DESCRIPTION_RE = /^(SBOL|T-Bank|Yandex|Alfa-Bank|Other payments|to the account|SBERBANK ONL@IN )/i;
+
+// deno-lint-ignore no-explicit-any
+async function namesOf(db: any, userId: string,
+  csvRows: { bank: string; accountNumber: string; date: string; amount: number; currency: string }[]): Promise<Map<string, string[]>> {
+  const bySource = new Map<string, { from: string; to: string }>();
+  for (const r of csvRows) {
+    const src = `${r.bank.toLowerCase().replace(/[^a-z0-9]+/g, '_')}_csv:${r.accountNumber}`;
+    const g = bySource.get(src) ?? { from: r.date, to: r.date };
+    if (r.date < g.from) g.from = r.date;
+    if (r.date > g.to) g.to = r.date;
+    bySource.set(src, g);
+  }
+  const names = new Map<string, string[]>();
+  for (const [src, g] of bySource) {
+    for (let off = 0; ; off += 1000) {
+      const { data, error } = await db.from('bank_transactions').select('tx_date, amount, currency, description')
+        .eq('user_id', userId).eq('external_source', src)
+        .gte('tx_date', `${g.from}T00:00:00Z`).lte('tx_date', `${g.to}T23:59:59.999Z`)
+        .order('id').range(off, off + 999);
+      if (error) throw new Error(error.message);
+      for (const t of data ?? []) {
+        if (GENERIC_DESCRIPTION_RE.test(t.description)) continue;
+        const key = `${src}|${String(t.tx_date).slice(0, 10)}|${Number(t.amount)}|${t.currency}`;
+        names.set(key, [...(names.get(key) ?? []), t.description]);
+      }
+      if (!data || data.length < 1000) break;
+    }
+  }
+  return names;
+}
+
 function categorize(description: string): string | null {
   for (const [re, cat] of CATEGORY_RULES) {
     if (re.test(description)) return cat;
@@ -562,6 +597,8 @@ Deno.serve(async (req) => {
       }
     }
 
+    const namedBy = await namesOf(supabase, user.id, csvRows);
+
     // Untimed rows (Yandex Save) -> 00:00:SS by in-day order.
     const untimedSeq = new Map<string, number>();
     const rows = [];
@@ -580,7 +617,10 @@ Deno.serve(async (req) => {
       }
 
       const bankSlug = r.bank.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-      const signature = `${r.accountNumber}:${r.date}:${r.time}:${r.description}:${r.amount}`;
+      // a generic description takes the name the same payment has (namesOf), before the key is made
+      const named = namedBy.get(`${bankSlug}_csv:${r.accountNumber}|${r.date}|${r.amount}|${r.currency}`);
+      const description = named?.length && GENERIC_DESCRIPTION_RE.test(r.description) ? named.shift()! : r.description;
+      const signature = `${r.accountNumber}:${r.date}:${r.time}:${description}:${r.amount}`;
       const occurrence = dupSeen.get(signature) ?? 0;
       dupSeen.set(signature, occurrence + 1);
       const externalId = occurrence === 0 ? signature : `${signature}:dup${occurrence}`;
@@ -610,13 +650,13 @@ Deno.serve(async (req) => {
         user_id: user.id,
         account: r.bank,
         tx_date: `${r.date}T${clock}Z`,
-        authorized_on: madeOn(r.bank, r.description, r.date),
-        description: r.description,
+        authorized_on: madeOn(r.bank, description, r.date),
+        description,
         counterparty: null,
         amount: r.amount,
         currency: r.currency,
         category: r.syntheticKind ? null
-          : categorize(r.categoryBank ? `${r.description} ${r.categoryBank}` : r.description),
+          : categorize(r.categoryBank ? `${description} ${r.categoryBank}` : description),
         balance_after: r.balance,
         product: r.product || null,
         synthetic: r.syntheticKind !== null,
