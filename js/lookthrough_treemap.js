@@ -275,11 +275,27 @@ export function tileChange(tile, period, prices, today) {
 // base and keeps the profit in earned. base <= 0 (sold out, nothing put in):
 // 'nodata', note 'no invested base'.
 const INCOME_STAYS_IN = new Set(['liquid', 'deposit', 'crypto', 'cushion']);
+// The rpc's pct is over the capital at work averaged over the days it was held, each put-in /
+// taken-out weighted by the time left after it (a dividend or coupon stays in the capital as idle
+// cash, and a buy paid from it is no new money; put_in / taken_out still show them as cash moves): the
+// colour takes it, so the map and the "Earned by asset" table agree. A row without pct (or with
+// none: no capital) is judged by the static base below.
+const pctOf = r => (r.pct === null || r.pct === undefined || r.pct === '' || !Number.isFinite(Number(r.pct)) ? null : Number(r.pct));
+// the capital behind a row's pct: earned / pct (the rpc's own fallback, value at start + put in, when pct is 0)
+const capitalOf = r => {
+  const p = pctOf(r), e = Number(r.earned);
+  return p && e ? Math.abs(e / p * 100) : (Number(r.value_start) || 0) + (Number(r.put_in) || 0);
+};
 export function earnedRatio(r) {
   if (!r) return { state: 'nodata', change: null, note: 'no value' };
   const n = k => Number(r[k]) || 0;
   const v0 = n('value_start'), v1 = n('value_end'), putIn = n('put_in'), takenOut = n('taken_out');
   if (!v0 && !v1 && !putIn && !takenOut) return { state: 'nodata', change: null, note: 'no value' };
+  const pct = pctOf(r);
+  if (pct !== null) {
+    const earned = v1 - v0 - putIn + takenOut;
+    return pct === 0 ? { state: 'zero', change: 0, earned, base: capitalOf(r) } : { state: 'known', change: pct / 100, earned, base: capitalOf(r) };
+  }
   const paidOut = INCOME_STAYS_IN.has(r.kind) ? 0 : n('income');
   const earned = v1 - v0 - putIn + takenOut;
   const base = v0 + putIn - (takenOut - paidOut);
@@ -315,6 +331,13 @@ export function tileEarned(tile, earnedRows, { assetOf = assetKey, realEstate = 
     const got = tile.members.map(m => rowOf(m.ticker)).filter(Boolean);
     if (!got.length) return earnedRatio(null);
     const sum = k => got.reduce((s, r) => s + (Number(r[k]) || 0), 0);
+    // the members follow one another with the same money (the sell in one is the buy in the next),
+    // so the capital at work is the biggest member's, not their sum
+    if (got.every(r => pctOf(r) !== null)) {
+      const earned = got.reduce((s, r) => s + (Number(r.value_end) || 0) - (Number(r.value_start) || 0) - (Number(r.put_in) || 0) + (Number(r.taken_out) || 0), 0);
+      const cap = Math.max(...got.map(capitalOf));
+      if (cap > 0) return earned === 0 ? { state: 'zero', change: 0, earned, base: cap } : { state: 'known', change: earned / cap, earned, base: cap };
+    }
     // income stays in a savings product; a paid-out one is taken off per member
     const paidOut = got.reduce((s, r) => s + (INCOME_STAYS_IN.has(r.kind) ? 0 : Number(r.income) || 0), 0);
     return earnedRatio({ value_start: sum('value_start'), value_end: sum('value_end'), put_in: sum('put_in'),

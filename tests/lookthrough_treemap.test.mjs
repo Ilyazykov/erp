@@ -223,6 +223,12 @@ near(earnedRatio({ value_start: 1000, value_end: 1010, put_in: 0, taken_out: 0, 
 assert.deepEqual(earnedRatio({ value_start: 0, value_end: 0, put_in: 1000, taken_out: 1200, income: 0, kind: 'stock' }),
   { state: 'nodata', change: null, note: 'no invested base', earned: 200, base: -200 });
 assert.equal(earnedRatio(null).state, 'nodata');
+// a row with the rpc's pct (the capital at work averaged over time): the colour is that pct
+r = earnedRatio({ value_start: 1000, value_end: 1000, put_in: 0, taken_out: 80, income: 80, earned: 80, pct: 8.3, kind: 'bond' });
+near(r.change, 0.083, 'the rpc pct is the colour'); near(r.earned, 80, 'earned stays');
+assert.equal(earnedRatio({ value_start: 1000, value_end: 1000, put_in: 0, taken_out: 0, income: 0, earned: 0, pct: 0, kind: 'bond' }).state, 'zero');
+// no capital (pct null): the static base as before
+near(earnedRatio({ value_start: 1000, value_end: 1100, put_in: 0, taken_out: 0, income: 0, earned: 100, pct: null, kind: 'stock' }).change, 0.1, 'no pct: static base');
 assert.equal(earnedRatio({ value_start: 0, value_end: 0, put_in: 0, taken_out: 0, income: 0 }).note, 'no value');
 const earnedRows = [
   { asset: 'SBER', value_start: 1000, value_end: 1100, put_in: 0, taken_out: 0, income: 0, kind: 'stock' },
