@@ -368,8 +368,11 @@ Deno.serve(async (req) => {
     }
     for (const r of exchRows) held.add(r.symbol);
     const dead = (t: string) => !held.has(t) && sources.get(t)?.source === 'none';
+    // held first, then the ones whose prices are oldest (the last day we have a close for):
+    // ordering by the last try let a ticker tried yesterday wait behind all the others for days
+    // (a MOEX bond stopped at 03.11.2026 while the run got through only part of the list)
     const queue = [...since.keys()].filter(t => !dead(t))
-      .sort((a, b) => Number(!held.has(a)) - Number(!held.has(b)) || tried(a).localeCompare(tried(b)));
+      .sort((a, b) => Number(!held.has(a)) - Number(!held.has(b)) || (lastDay.get(a) ?? '').localeCompare(lastDay.get(b) ?? '') || tried(a).localeCompare(tried(b)));
     // Six tickers at a time (05.11.2026): one by one, a run got through some
     // 40 of ~250 in its budget. More would have Yahoo throttle.
     let next = 0;
