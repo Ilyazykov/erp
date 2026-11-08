@@ -457,7 +457,8 @@ function tooltipLines(tile, e) {
 
 // Draws the tiles into `container`: tiles from aggregate(), earned(tile) -> the
 // colour state { state, change } of tileEarned. Flat; no children.
-export function drawTreemap(container, tiles, earned, { tip, group = false } = {}) {
+export function drawTreemap(container, tiles, earned, opts = {}) {
+  const { tip, group = false, depth = 0 } = opts;
   container.textContent = '';
   const W = container.clientWidth, H = container.clientHeight;
   if (!(W > 0) || !(H > 0)) return;
@@ -520,6 +521,13 @@ export function drawTreemap(container, tiles, earned, { tip, group = false } = {
     frag.append(el);
   }
   container.append(frag);
+  // the page can change the box after the layout was measured (a scrollbar appearing): if the
+  // box is not the size the tiles were laid out for, lay them out again for the real size
+  if (depth < 3) {
+    requestAnimationFrame(() => {
+      if (container.clientWidth !== W || container.clientHeight !== H) drawTreemap(container, tiles, earned, { ...opts, depth: depth + 1 });
+    });
+  }
 }
 
 export function drawLegend(el) {
