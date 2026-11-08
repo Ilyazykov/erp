@@ -1,6 +1,7 @@
 -- A receipt with no bank transaction to link to makes one itself, so the
 -- purchase shows up at once instead of waiting for a statement that may not
--- have the day yet. Such a row has account '<unknown>' (the receipt doesn't
+-- have the day yet, and its expenses row is written right then too (category
+-- 'Other' until the background rebuild sets it). Such a row has account '<unknown>' (the receipt doesn't
 -- say which account paid; the user changes it by hand, like any account),
 -- external_source 'receipt_csv', and external_id = the receipt's key.
 --
@@ -33,6 +34,22 @@ begin
   where id = p_receipt_id;
 
   perform public.receipt_resolve_place(p_receipt_id, '<unknown>', p_user);
+
+  -- the expenses tab shows the purchase at once; the background rebuild
+  -- (refresh_expenses) then sets its real category by the usual rules
+  begin
+    update public.bank_transactions set expense_category = 'Other'
+    where user_id = p_user and external_source = 'receipt_csv' and external_id = r.receipt_key
+      and expense_category is null;
+
+    delete from public.expenses where user_id = p_user and external_source = 'receipt_csv' and external_id = r.receipt_key;
+    insert into public.expenses (user_id, day, paid_day, account, external_source, external_id, description, amount, currency, usd, category, counted)
+    values (p_user, r.purchased_on, r.purchased_on, '<unknown>', 'receipt_csv', r.receipt_key,
+            coalesce(nullif(r.chain, ''), r.store_printed, 'receipt'), r.total, upper(r.currency),
+            r.total * public.usd_per_unit_on(r.currency, r.purchased_on), 'Other', not public.expense_not_spending('Other'));
+  exception when others then
+    raise warning 'receipt_make_transaction: receipt % not shown in expenses yet: %', p_receipt_id, sqlerrm;
+  end;
 end $$;
 
 -- Folds settled statement rows into the receipt-made rows of the same
