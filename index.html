@@ -658,7 +658,7 @@
     </div>
     <div id="lt_status" class="empty-note"></div>
     <div style="position:relative">
-      <div id="lt_treemap" style="position:relative;width:100%;aspect-ratio:2.6;max-height:62vh;background:#0d1117"></div>
+      <div id="lt_treemap" style="position:relative;width:100%;height:calc(100vh - 400px);min-height:380px;background:#0d1117"></div>
       <div id="lt_tip" style="display:none;position:absolute;pointer-events:none;z-index:5;background:#13191f;border:1px solid #4da8c8;border-radius:6px;padding:6px 10px;font-size:0.78rem;color:#c9d1d9;max-width:320px"></div>
     </div>
     <div class="section-title">What the funds hold</div>
@@ -13269,11 +13269,11 @@ sb.auth.getSession().then(({ data: { session } }) => mpOnAuth(session));
 sb.auth.onAuthStateChange((_event, session) => mpOnAuth(session));
 </script>
 <script type="module">
-import { RU_ACCOUNTS, isRuInfra, netCreditIntoLiquid } from './js/lookthrough_treemap.js?v=20261109c';
+import { RU_ACCOUNTS, isRuInfra, netCreditIntoLiquid } from './js/lookthrough_treemap.js?v=20261109e';
 window.MP_RU_ACCOUNTS = RU_ACCOUNTS;
 window.mpIsRuInfra = isRuInfra;
 window.mpNetCreditIntoLiquid = netCreditIntoLiquid;
 </script>
-<script type="module" src="./js/lookthrough_treemap.js?v=20261109c"></script>
+<script type="module" src="./js/lookthrough_treemap.js?v=20261109e"></script>
 </body>
 </html>
