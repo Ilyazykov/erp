@@ -395,10 +395,11 @@ export const SATURATE_AT = 0.12;
 const NEUTRAL = 'hsl(215, 8%, 34%)';        // exactly zero
 const NODATA = 'repeating-linear-gradient(135deg, #1b1f24 0 6px, #14181c 6px 12px)';   // no data: darker, striped
 // growth green / fall red, brighter the bigger the change, saturating at +/-12%
-export function tileColor(state, change) {
+// scale: the change that is fully saturated (the largest change on the map now, see wireTreemap)
+export function tileColor(state, change, scale = SATURATE_AT) {
   if (state === 'nodata' || change == null) return NODATA;
   if (state === 'zero' || change === 0) return NEUTRAL;
-  const t = Math.min(Math.abs(change) / SATURATE_AT, 1);
+  const t = Math.min(Math.abs(change) / scale, 1);
   return `hsl(${change > 0 ? 135 : 4}, ${40 + 40 * t}%, ${24 + 20 * t}%)`;
 }
 export const LEGEND_STOPS = [-0.12, -0.08, -0.04, 0, 0.04, 0.08, 0.12];
@@ -470,7 +471,7 @@ function tooltipLines(tile, e) {
 // Draws the tiles into `container`: tiles from aggregate(), earned(tile) -> the
 // colour state { state, change } of tileEarned. Flat; no children.
 export function drawTreemap(container, tiles, earned, opts = {}) {
-  const { tip, group = false, depth = 0 } = opts;
+  const { tip, group = false, depth = 0, scale = SATURATE_AT } = opts;
   // values are cents: a tile under one cent is dust (e.g. a stablecoin fraction), not drawn
   tiles = tiles.map(t => ({ ...t, value_usd: Math.round(t.value_usd * 100) / 100 })).filter(t => t.value_usd >= 0.01);
   container.textContent = '';
@@ -503,7 +504,7 @@ export function drawTreemap(container, tiles, earned, opts = {}) {
     Object.assign(el.style, { position: 'absolute', boxSizing: 'border-box', overflow: 'hidden', boxShadow: 'inset 0 0 0 1px #0d1117',
       // positions in percent of the box, so the tiles fill it whatever its size is when drawn
       left: `${(r.x / W) * 100}%`, top: `${(r.y / H) * 100}%`, width: `${(r.w / W) * 100}%`, height: `${(r.h / H) * 100}%`,
-      background: tile.isGroup ? '#2a2f36' : tileColor(e.state, e.change),
+      background: tile.isGroup ? '#2a2f36' : tileColor(e.state, e.change, scale),
       color: '#fff', padding: '0px', lineHeight: `${LINE}px`, fontSize: '12px', cursor: 'default' });
     if (tile.isGroup) {
       if (r.w >= textWidth(tile.ticker, true) + 2 * MIN_PAD + 2 && r.h >= LINE + 2 * MIN_PAD) {
@@ -557,16 +558,18 @@ export function drawTreemap(container, tiles, earned, opts = {}) {
   }
 }
 
-export function drawLegend(el) {
+export function drawLegend(el, scale = SATURATE_AT) {
   el.textContent = '';
-  const stops = LEGEND_STOPS.map((s, i) => `${tileColor(s === 0 ? 'zero' : 'known', s)} ${(i / (LEGEND_STOPS.length - 1) * 100).toFixed(1)}%`);
+  // the scale's ticks: the same fractions of the saturation point as LEGEND_STOPS of 12%
+  const ticks = LEGEND_STOPS.map(s => s * scale / SATURATE_AT);
+  const stops = ticks.map((s, i) => `${tileColor(s === 0 ? 'zero' : 'known', s, scale)} ${(i / (ticks.length - 1) * 100).toFixed(1)}%`);
   const bar = document.createElement('div');
   bar.style.cssText = `height:10px;border-radius:3px;background:linear-gradient(90deg, ${stops.join(', ')})`;
   const labels = document.createElement('div');
   labels.style.cssText = 'display:flex;justify-content:space-between;font-size:0.72rem;color:#6a7381;margin-top:2px';
-  for (const s of LEGEND_STOPS) {
+  for (const s of ticks) {
     const sp = document.createElement('span');
-    sp.textContent = s === 0 ? '0%' : `${s > 0 ? '+' : '−'}${Math.abs(s * 100)}%`;
+    sp.textContent = s === 0 ? '0%' : formatChange(s);
     labels.append(sp);
   }
   const swatch = (bg, text) => {
@@ -700,9 +703,12 @@ function wireTreemap() {
         }
         return tileEarned(tile, earnedRows, { assetOf, realEstate });
       };
-      last = [tiles, colour, { tip, group: $('lt_small').checked }];
+      // the colour scale is this period's largest change on the map (so a one-day map is not all pale)
+      const changes = tiles.filter(t => !t.isGroup).map(colour).filter(e => e.state === 'known' && e.change != null).map(e => Math.abs(e.change));
+      const scale = Math.max(...changes, 0.001);
+      last = [tiles, colour, { tip, group: $('lt_small').checked, scale }];
       drawTreemap(box, ...last);
-      drawLegend($('lt_legend'));
+      drawLegend($('lt_legend'), scale);
       status.textContent = `${tiles.length} tiles, total ${usd(tiles.reduce((s, t) => s + t.value_usd, 0))}`;
     } catch (e) {
       if (my === run) status.textContent = e.message || String(e);
