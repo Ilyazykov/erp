@@ -177,7 +177,9 @@ near(sum(tiles, t => t.share), (nettedTotal - 400) / nettedTotal, 'shares of the
 tiles = aggregate({ rows: capRows, fundHoldings: {}, mergeGold: false, includeCushion: true });
 near(sum(tiles, t => t.value_usd), nettedTotal, 'tiles = netted rows with the cushion');
 near(sum(tiles, t => t.share), 1, 'shares sum to 1 with the cushion');
-assert.equal(tiles.find(t => t.ticker === 'SAVINGS:Sber RUB').value_usd, 700, 'the cushion part joins its ticker');
+// the cushion part is its own tile, the row's ticker keeps the rest (the cushion takes its share from the fund)
+assert.equal(tiles.find(t => t.ticker === 'SAVINGS:Sber RUB').value_usd, 300, 'the cushion part leaves its ticker');
+near(tiles.find(t => t.ticker.startsWith('CUSHION')).value_usd, 400, 'the cushion part is a tile of its own');
 // a row whose ticker fundHoldings has is a fund
 tiles = aggregate({ rows: [L('IBKR', 'VT', 1000, 'stock'), L('IBKR', 'NVDA', 100, 'stock')],
   fundHoldings: { VT: [{ ticker: 'NVDA', weight: 0.1 }, { ticker: 'AAPL', weight: 0.9 }] } });

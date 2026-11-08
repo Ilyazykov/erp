@@ -139,8 +139,11 @@ export function aggregate({ rows, holdings, fundHoldings, expandFunds = false, i
     const netted = netCreditIntoLiquid(rows.filter(r => Number.isFinite(Number(r.value_usd)))
       .filter(r => !r.excluded && (includeRealEstate || (r.account !== 'real estate' && r.instrument_type !== 'real_estate')))
       .map(r => ({ ...r, value_usd: Number(r.value_usd) })));
+    // a cushion row is one tile per currency even when it's a part of a fund's row (the Revolut
+    // euro fund's share the cushion takes keeps the fund's ticker): merged into the fund's tile it
+    // would leave the fund whole and the cushion invisible
     entries = netted.filter(r => r.value_usd > 0)
-      .map(r => ({ ticker: r.ticker || unlistedTicker(r), value_usd: r.value_usd, kind: isFundTicker(r.ticker) ? 'fund' : 'direct',
+      .map(r => ({ ticker: (r.instrument_type === 'cushion' ? null : r.ticker) || unlistedTicker(r), value_usd: r.value_usd, kind: isFundTicker(r.ticker) ? 'fund' : 'direct',
         cushion: r.instrument_type === 'cushion', instrument_type: r.instrument_type }));
     // a ticker's type: of its biggest non-cushion row
     for (const e of [...entries].sort((x, y) => x.value_usd - y.value_usd)) {
@@ -770,7 +773,14 @@ function wireTreemap() {
     // eslint-disable-next-line no-undef
     const base = await mpLoadPortfolioBase();
     // eslint-disable-next-line no-undef
-    const rows = [...await mpSplitFundsCash(base.data), ...base.cashRows, ...base.realEstateRows].filter(r => r.value_usd !== null);
+    // blocked securities (price_freezes) are left out: nothing can be done with them, and their
+    // loss from the freeze would swamp every period that covers it
+    // eslint-disable-next-line no-undef
+    const { data: frz, error: frzErr } = await sb.from('price_freezes').select('ticker');
+    if (frzErr) throw new Error(frzErr.message);
+    const frozen = new Set((frz || []).map(r => String(r.ticker).toUpperCase()));
+    const rows = [...await mpSplitFundsCash(base.data), ...base.cashRows, ...base.realEstateRows]
+      .filter(r => r.value_usd !== null && !frozen.has(String(r.ticker || '').toUpperCase()));
     // fund constituents: weight as a fraction, the market_prices ticker where the security has one
     // eslint-disable-next-line no-undef
     const fh = await snowballFetchAll(() => sb.from('fund_holdings').select('fund, security_id, weight').order('fund').order('security_id'));
@@ -808,7 +818,7 @@ function wireTreemap() {
         fx.get(r.currency).push([r.day, Number(r.usd_per_unit)]);
       }
     }
-    return { rows, fundHoldings, savingsLinks: links, savingsPeriods: periods, firstDay: first?.[0]?.trade_date || '2000-01-01', reIndex: reIndex || [], fx };
+    return { rows, frozen, fundHoldings, savingsLinks: links, savingsPeriods: periods, firstDay: first?.[0]?.trade_date || '2000-01-01', reIndex: reIndex || [], fx };
   }
 
   async function earnedFor(p) {
@@ -817,7 +827,7 @@ function wireTreemap() {
       // eslint-disable-next-line no-undef
       const { data: rows, error } = await sb.rpc('investment_by_asset', { p_from: from, p_to: today(), p_ccy: 'USD' });
       if (error) throw new Error(error.message);
-      earnedCache.set(p, rows);
+      earnedCache.set(p, rows.filter(r => !data.frozen.has(String(r.asset).toUpperCase())));
     }
     return earnedCache.get(p);
   }
