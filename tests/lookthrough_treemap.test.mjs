@@ -9,7 +9,7 @@
 //   7. mergeGold and goldChange;
 //   8. earnedRatio / tileEarned: earned over invested, the colour;
 //   9. savingsChains and mergeSavings;
-//  10. the colour's methods: contribution, XIRR over the time held, TWR from twr_by_asset.
+//  10. the colour's methods: contribution, XIRR over the time held.
 // Run: node tests/lookthrough_treemap.test.mjs
 import assert from 'node:assert/strict';
 import { periodStart, priceChange, aggregate, tileChange, isRuInfra, netCreditIntoLiquid,
@@ -294,12 +294,7 @@ near(tileMetric('contrib', { ticker: 'GOOGL' }, { earnedRows: ex1, cap: 187.5, f
 near(periodIrr(ex1[1], F, T), 1, 'GOOGL +100%');
 const g = periodIrr(ex1[0], F, T);
 near(-100 + 50 / Math.pow(1 + g, 0.75) + 150 / (1 + g), 0, 'SBER: the NPV at its rate is 0');
-assert.ok(g > 1 && g < 1.25, `SBER between 100% and TWR's 125%: ${g}`);
-// TWR: the rpc's %, chained over a savings chain, weighted for gold
-const twr = new Map([['SBER', 125], ['GOOGL', 100]]);
-near(tileMetric('twr', { ticker: 'SBER' }, { twr }).change, 1.25, 'TWR');
-assert.equal(tileMetric('twr', { ticker: 'NONE' }, { twr }).state, 'nodata');
-near(tileMetric('twr', { ticker: 'X', isChain: true, members: [{ ticker: 'SBER' }, { ticker: 'GOOGL' }] }, { twr }).change, 2.25 * 2 - 1, 'chain chained');
+assert.ok(g > 1 && g < 1.25, `SBER between 100% and 125%: ${g}`);
 // Example 2: the dividend bought SBER again the next day -- the flows cancel, both +100%
 const ex2 = [{ asset: 'SBER', value_start: 100, value_end: 200, put_in: 50, taken_out: 50, income: 50, kind: 'stock',
   cash: [['2026-01-04', -50], ['2026-01-05', 50]] }];

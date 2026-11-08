@@ -441,16 +441,15 @@
     <p class="note">Over the same period as the chart above (from the day counted from, or the zoom's start, to its end): each
       asset's value at the end less its value at the start and the money put in between -- dividends, coupons and interest count as
       earned. <b>Contribution</b>: that over the whole portfolio's capital at work on average, in percentage points -- the bars add
-      up to the portfolio's return; a dividend is the payer's, what it earns after is the paper it bought. <b>TWR</b>: the asset's
-      own return, its daily changes chained, whatever was bought or sold when. <b>XIRR</b>: the return of the money put in and
-      taken out (a dividend is money back) over the time held; <b>XIRR (a year)</b> the same made yearly.
+      up to the portfolio's return; a dividend is the payer's, what it earns after is the paper it bought. <b>MWR</b> (money-weighted return): the return of the money put in and
+      taken out (a dividend is money back) over the time held -- XIRR over the period; <b>XIRR (a year)</b> the same made yearly.
       <b>Dividends kept</b>: that over the capital that worked on average (Modified Dietz), a dividend staying in it as idle cash: the value at the start plus each
       put-in and taken-out weighted by how much of the asset's own time was left after it (from the period start, or its first
       buy, to the period end, or its last sale) -- money back early (amortisation, a sale) counts for less. An asset is its ticker across accounts; crypto goes
       coin by coin (a trade on an exchange moves money from one coin to another), stablecoins (USDT, USDC, DAI...) are dollars: one row, USD, with an exchange's USD Earn.</p>
     <div class="form-row" style="gap:16px">
       <label>by <select id="invested_by_group"><option value="asset">asset</option><option value="type">type</option></select></label>
-      <label>show <select id="invested_by_mode"><option value="contrib">contribution (pp)</option><option value="twr">TWR</option><option value="xirrp">XIRR</option><option value="pct">dividends kept (%)</option><option value="xirr">XIRR (a year)</option><option value="money">money</option></select></label>
+      <label>show <select id="invested_by_mode"><option value="contrib">contribution (pp)</option><option value="xirrp">MWR</option><option value="pct">dividends kept (%)</option><option value="xirr">XIRR (a year)</option><option value="money">money</option></select></label>
       <label title="The period's last day (empty: the zoom's end); moves the zoom of the charts above too">to <input type="date" id="invested_to"></label>
       <span id="invested_by_period" class="note" style="margin:0"></span>
     </div>
@@ -650,15 +649,15 @@
     <p class="note">Tile area is the share of the portfolio; colour is what the position earned over the period (price change, dividends,
       coupons and interest), not the bare price change, by the method chosen. <b>Contribution</b>: what it earned over the whole
       portfolio's capital at work, in percentage points -- the tiles add up to the portfolio's return; a dividend is the payer's, what it
-      earns after is the paper it bought. <b>TWR</b>: the paper's own return, day by day, whatever was bought or sold when.
-      <b>XIRR</b>: the return of the money put in and taken out (a dividend is money back) over the time held, not made yearly.
-      <b>Dividends kept</b>: a dividend stays in the paper's capital as idle cash. The tooltip shows all four. Striped tiles have nothing to judge by.</p>
+      earns after is the paper it bought.
+      <b>MWR</b> (money-weighted return): the return of the money put in and taken out (a dividend is money back) over the time held, not made yearly -- XIRR over the period.
+      <b>Dividends kept</b>: a dividend stays in the paper's capital as idle cash. The tooltip shows all three. Striped tiles have nothing to judge by.</p>
     <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
     <div class="form-row" id="lt_periods" style="gap:6px"><button class="btn primary" type="button" data-period="1d">1d</button><button class="btn" type="button" data-period="2d">2d</button><button class="btn" type="button" data-period="3d">3d</button><button class="btn" type="button" data-period="7d">7d</button><button class="btn" type="button" data-period="1m">1m</button><button class="btn" type="button" data-period="3m">3m</button><button class="btn" type="button" data-period="6m">6m</button><button class="btn" type="button" data-period="ytd">YTD</button><button class="btn" type="button" data-period="1y">1y</button><button class="btn" type="button" data-period="5y">5y</button><button class="btn" type="button" data-period="all">all</button></div>
     <div id="lt_legend" style="flex:1 1 260px;max-width:480px"></div>
     </div>
     <div class="form-row" style="gap:16px;flex-wrap:wrap">
-      <label>method <select id="lt_method"><option value="contrib">contribution (pp)</option><option value="twr">TWR</option><option value="xirr">XIRR</option><option value="kept">dividends kept</option></select></label>
+      <label>method <select id="lt_method"><option value="contrib">contribution (pp)</option><option value="xirr">MWR</option><option value="kept">dividends kept</option></select></label>
       <label><input type="checkbox" id="lt_expand"> expand funds</label>
       <label title="The cash at Bank of Cyprus, Ziraat, Raiffeisen and Wise, TBC's savings account and Revolut's euro liquid assets up to $10,000, as a tile of its own"><input type="checkbox" id="lt_cushion"> show safety cushion</label>
       <label title="Real estate (the flat at the price per m2 of the Nizhny Novgorod index): its colour is the index change, not earned/invested"><input type="checkbox" id="lt_re"> show real estate</label>
@@ -12682,7 +12681,6 @@ function mpGroupAssetsByKind(rows, from, to) {
 }
 // What each asset earned over the chart's period (investment_by_asset, migration 062).
 let mpInvestedAssetsTimer = null, mpInvestedAssetsKey = '', mpInvestedAssetsRows = null;
-const mpInvestedTwr = new Map();   // group -> { map: asset -> TWR %, error }, for mpInvestedAssetsKey
 function mpInvestedAssetsSoon() {
   clearTimeout(mpInvestedAssetsTimer);
   mpInvestedAssetsTimer = setTimeout(() => mpRenderInvestedAssets(), 300);
@@ -12698,7 +12696,7 @@ async function mpRenderInvestedAssets() {
   const from = clamp(document.getElementById('invested_from').value || (range ? String(range[0]).slice(0, 10) : days[0]));
   const to = clamp(range ? String(range[1]).slice(0, 10) : days[days.length - 1]);
   const ccy = document.getElementById('invested_ccy').value === 'RUB' ? 'RUB' : 'USD';
-  const mode = ['money', 'xirr', 'contrib', 'twr', 'xirrp'].includes(document.getElementById('invested_by_mode').value) ? document.getElementById('invested_by_mode').value : 'pct';
+  const mode = ['money', 'xirr', 'contrib', 'xirrp'].includes(document.getElementById('invested_by_mode').value) ? document.getElementById('invested_by_mode').value : 'pct';
   document.getElementById('invested_by_period').textContent = `${from} → ${to}`;
   const key = `${from}|${to}|${ccy}`;
   if (key !== mpInvestedAssetsKey) {
@@ -12707,21 +12705,9 @@ async function mpRenderInvestedAssets() {
     if (error) { status.textContent = error.message; return; }
     mpInvestedAssetsKey = key;
     mpInvestedAssetsRows = data;
-    mpInvestedTwr.clear();
   }
   status.textContent = '';
   const group = document.getElementById('invested_by_group').value === 'type' ? 'type' : 'asset';
-  // TWR (twr_by_asset): the daily values on the server, the money the rows' own; by type, each
-  // asset sent with its group's name. A failure (not deployed yet) leaves TWR empty, said in the status.
-  if (!mpInvestedTwr.has(group)) {
-    const labelOf = r => { const k = mpKindKey(r); return MP_KIND_REGION_LABELS[k] || MP_ASSET_CLASS_LABELS[k] || k; };
-    const { data: tw, error: twErr } = await sb.rpc('twr_by_asset', { p_from: from, p_to: to, p_ccy: ccy,
-      p_flows: mpInvestedAssetsRows.map(r => ({ asset: r.asset, cash: r.cash || [], ...(group === 'type' ? { group: labelOf(r) } : {}) })) });
-    if (key !== mpInvestedAssetsKey) return;
-    mpInvestedTwr.set(group, twErr ? { map: new Map(), error: twErr.message } : { map: new Map(tw.map(r => [r.asset, Number(r.twr)])), error: null });
-  }
-  const twr = mpInvestedTwr.get(group);
-  if (twr.error) status.textContent = `TWR: ${twr.error}`;
   // contribution: over the capital at work of all the assets together (dividends out of it, the buys they paid back in)
   const cap = window.mpPortfolioCapital ? window.mpPortfolioCapital(mpInvestedAssetsRows, from, to) : 0;
   // amounts come in the currency shown, each at its own day's rate (migration 070)
@@ -12731,7 +12717,7 @@ async function mpRenderInvestedAssets() {
   const irr = r => { const g = window.mpPeriodIrr ? window.mpPeriodIrr(r, from, to) : null; return g == null ? null : g * 100; };
   const rows = (group === 'type' ? mpGroupAssetsByKind(mpInvestedAssetsRows, from, to) : mpInvestedAssetsRows)
     .map(r => ({ ...r, money: conv(to, Number(r.earned)), pctv: r.pct == null ? null : Number(r.pct), xirr: mpAssetXirr(r, from, to),
-      contrib: cap > 0 ? Number(r.earned) / cap * 100 : null, twr: twr.map.has(r.asset) ? twr.map.get(r.asset) : null, xirrp: irr(r) }))
+      contrib: cap > 0 ? Number(r.earned) / cap * 100 : null, xirrp: irr(r) }))
     .map(r => ({ ...r, v: mode === 'money' ? r.money : mode === 'pct' ? r.pctv : r[mode] }))
     .filter(r => r.v != null)
     .sort((a, b) => a.v - b.v);   // biggest on top
@@ -12754,9 +12740,9 @@ async function mpRenderInvestedAssets() {
       fmtMoney(conv(from, Number(r.value_start))), fmtMoney(conv(to, Number(r.value_end))),
       fmtMoney(conv(to, Number(r.put_in))), fmtMoney(conv(to, Number(r.taken_out))), fmtMoney(conv(to, Number(r.income))),
       names[r.asset] ? ` · ${r.asset}` : '', r.xirr == null ? '—' : `${pctText(r.xirr)} a year`,
-      r.pctv ? fmtMoney(r.money / (r.pctv / 100)) : '—', orDash(r.contrib, ' pp'), orDash(r.twr), orDash(r.xirrp)]),
+      r.pctv ? fmtMoney(r.money / (r.pctv / 100)) : '—', orDash(r.contrib, ' pp'), orDash(r.xirrp)]),
     hovertemplate: '<b>%{y}</b>%{customdata[8]} (%{customdata[0]})<br>earned %{customdata[1]}<br>'
-      + 'contribution %{customdata[11]} · TWR %{customdata[12]} · XIRR %{customdata[13]} (%{customdata[9]})<br>dividends kept %{customdata[2]}<br>'
+      + 'contribution %{customdata[11]} · MWR %{customdata[12]} · XIRR %{customdata[9]}<br>dividends kept %{customdata[2]}<br>'
       + 'value %{customdata[3]} → %{customdata[4]}<br>put in %{customdata[5]}, taken out %{customdata[6]}<br>'
       + 'of which dividends / coupons / interest %{customdata[7]}<br>dividends kept is over the capital at work on average: %{customdata[10]}<extra></extra>',
   };
@@ -12772,6 +12758,8 @@ async function mpRenderInvestedAssets() {
   }), CONFIG);
 }
 try { const v = localStorage.getItem('mp_invested_by_mode'); if (v) document.getElementById('invested_by_mode').value = v; } catch { /* no storage */ }
+// a mode no longer offered (TWR, taken out): the first one
+if (document.getElementById('invested_by_mode').selectedIndex < 0) document.getElementById('invested_by_mode').selectedIndex = 0;
 try { const v = localStorage.getItem('mp_invested_by_group'); if (v) document.getElementById('invested_by_group').value = v; } catch { /* no storage */ }
 document.getElementById('invested_by_group').addEventListener('change', e => {
   try { localStorage.setItem('mp_invested_by_group', e.target.value); } catch { /* no storage */ }
@@ -13299,13 +13287,13 @@ sb.auth.getSession().then(({ data: { session } }) => mpOnAuth(session));
 sb.auth.onAuthStateChange((_event, session) => mpOnAuth(session));
 </script>
 <script type="module">
-import { RU_ACCOUNTS, isRuInfra, netCreditIntoLiquid, periodIrr, portfolioCapital } from './js/lookthrough_treemap.js?v=20261109h';
+import { RU_ACCOUNTS, isRuInfra, netCreditIntoLiquid, periodIrr, portfolioCapital } from './js/lookthrough_treemap.js?v=20261109i';
 window.MP_RU_ACCOUNTS = RU_ACCOUNTS;
 window.mpPeriodIrr = periodIrr;
 window.mpPortfolioCapital = portfolioCapital;
 window.mpIsRuInfra = isRuInfra;
 window.mpNetCreditIntoLiquid = netCreditIntoLiquid;
 </script>
-<script type="module" src="./js/lookthrough_treemap.js?v=20261109h"></script>
+<script type="module" src="./js/lookthrough_treemap.js?v=20261109i"></script>
 </body>
 </html>
