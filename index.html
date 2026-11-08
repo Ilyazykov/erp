@@ -12703,8 +12703,10 @@ async function mpRenderInvestedAssets() {
     status.textContent = 'Loading…';
     const { data, error } = await sb.rpc('investment_by_asset', { p_from: from, p_to: to, p_ccy: ccy });
     if (error) { status.textContent = error.message; return; }
+    // blocked securities are left out, as on the portfolio map: their loss from the freeze isn't a choice
+    const frozenNow = await mpLoadFrozen();
     mpInvestedAssetsKey = key;
-    mpInvestedAssetsRows = data;
+    mpInvestedAssetsRows = data.filter(r => !frozenNow.has(String(r.asset).toUpperCase()));
   }
   status.textContent = '';
   const group = document.getElementById('invested_by_group').value === 'type' ? 'type' : 'asset';
