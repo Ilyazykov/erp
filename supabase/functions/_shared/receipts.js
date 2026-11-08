@@ -51,6 +51,17 @@ function parseNum(s) {
   return Number.isFinite(n) ? n : null;
 }
 
+// A blank printed receipt number is common on restaurant bills. Generate a
+// stable substitute from the receipt-level fields available on every row so
+// that re-uploading the same CSV resolves to the same idempotency key.
+function generatedReceiptNumber(date, time, store, currency, total) {
+  const identity = [date, time, receiptNorm(store), currency.toUpperCase(), total.toFixed(2)].join('|');
+  let hash = 2166136261;
+  for (let i = 0; i < identity.length; i++) hash = Math.imul(hash ^ identity.charCodeAt(i), 16777619);
+  const timePart = /^\d{2}:\d{2}$/.test(time) ? time.replace(':', '') : 'NO-TIME';
+  return `AUTO-${date.replaceAll('-', '')}-${timePart}-${(hash >>> 0).toString(36).toUpperCase()}`;
+}
+
 // Parses the receipt CSV (design section 4). Returns { error } for a
 // whole-file problem (a required column missing, or a required value that
 // doesn't parse -- the row is named), or { receipts, skipped } where
@@ -73,7 +84,7 @@ export function parseReceiptCsv(text) {
   for (let i = 1; i < lines.length; i++) {
     const rowNo = i + 1;   // 1-based, header is row 1
     const cells = parseCsvLine(lines[i]);
-    const printedReceipt = cell(cells, 'receipt');
+    let printedReceipt = cell(cells, 'receipt');
     const date = cell(cells, 'date');
     const store = cell(cells, 'store');
     const currency = cell(cells, 'currency');
@@ -84,18 +95,18 @@ export function parseReceiptCsv(text) {
     const qty = parseNum(cell(cells, 'qty'));
     const lineTotal = parseNum(cell(cells, 'line_total'));
 
-    if (!printedReceipt) return { error: `Row ${rowNo}: empty "receipt"` };
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { error: `Row ${rowNo}: "date" is not YYYY-MM-DD ("${date}")` };
     if (!store) return { error: `Row ${rowNo}: empty "store"` };
     if (!currency) return { error: `Row ${rowNo}: empty "currency"` };
     if (total === null || total <= 0) return { error: `Row ${rowNo}: "total" doesn't parse as a positive number ("${cell(cells, 'total')}")` };
+    const time = cell(cells, 'time');
+    if (!printedReceipt) printedReceipt = generatedReceiptNumber(date, time, store, currency, total);
     if (lineNo === null || lineNo <= 0 || !Number.isInteger(lineNo)) return { error: `Row ${rowNo}: "line" is not a positive integer ("${cell(cells, 'line')}")` };
     if (!item) return { error: `Row ${rowNo}: empty "item"` };
     if (!itemEn) return { error: `Row ${rowNo}: empty "item_en"` };
     if (qty === null || qty <= 0) return { error: `Row ${rowNo}: "qty" doesn't parse as a positive number ("${cell(cells, 'qty')}")` };
     if (lineTotal === null) return { error: `Row ${rowNo}: "line_total" doesn't parse as a number ("${cell(cells, 'line_total')}")` };
 
-    const time = cell(cells, 'time');
     const row = {
       rowNo, printedReceipt, date, time: /^\d{2}:\d{2}$/.test(time) ? time : '',
       store, chain: cell(cells, 'chain'), city: cell(cells, 'city') || null, country: cell(cells, 'country') || null,
