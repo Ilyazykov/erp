@@ -214,6 +214,8 @@ r = earnedRatio({ value_start: 0, value_end: 1100, put_in: 1000, taken_out: 0, i
 near(r.change, 0.1, 'bought inside the period'); assert.equal(r.state, 'known');
 // held 1000 at the start, 500 more bought, worth 1800: earned 300 on 1500
 near(earnedRatio({ value_start: 1000, value_end: 1800, put_in: 500, taken_out: 0, income: 0, kind: 'stock' }).change, 300 / 1500, 'buy then a rise');
+// a share given as a dividend: nothing paid, all of its value is earned
+assert.equal(earnedRatio({ value_start: 0, value_end: 126, put_in: 0, taken_out: 0, income: 0, kind: 'stock' }).change, 1);
 // bought 1000, doubled, a quarter sold for 500: worth 1500, earned 1000 (500 of it realised) on 1000 - 500
 r = earnedRatio({ value_start: 0, value_end: 1500, put_in: 1000, taken_out: 500, income: 0, kind: 'stock' });
 near(r.earned, 1000, 'realised profit stays in earned'); near(r.change, 1000 / 500, 'partial sale');

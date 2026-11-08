@@ -3,7 +3,7 @@
 // and each area is proportional to its value. Also: the savings links.
 // Run: node tests/lookthrough_treemap_layout.test.mjs
 import assert from 'node:assert/strict';
-import { squarify, buildSavingsLinks, aggregate } from '../js/lookthrough_treemap.js';
+import { squarify, buildSavingsLinks, aggregate, cornerLayout } from '../js/lookthrough_treemap.js';
 
 const EPS = 1e-6;
 let seed = 7;
@@ -55,5 +55,20 @@ const rows = [
 ];
 const tiles = aggregate({ rows, fundHoldings: {} });
 assert.ok(Math.abs(tiles.reduce((s, t) => s + t.value_usd, 0) - 1150) < 1e-9);
+
+// the small tiles' group: in the bottom-right corner, its area its share, the rest tile the box
+{
+  const W = 400, H = 300;
+  const big = [{ value: 0.5, tile: { ticker: 'A' } }, { value: 0.3, tile: { ticker: 'B' } }, { value: 0.15, tile: { ticker: 'C' } }];
+  const group = { value: 0.05, tile: { ticker: '3 small', isGroup: true } };
+  const rects = cornerLayout(big, group, W, H);
+  const g = rects.find(r => r.item === group);
+  assert.ok(Math.abs(g.x + g.w - W) < 1e-9 && Math.abs(g.y + g.h - H) < 1e-9, 'the group ends at the bottom-right corner');
+  assert.ok(Math.abs(g.w * g.h - 0.05 * W * H) < 1e-6, 'the group is its share of the box');
+  assert.ok(Math.abs(rects.reduce((s, r) => s + r.w * r.h, 0) - W * H) < 1e-6, 'the tiles fill the box');
+  const overlap = rects.some(a => rects.some(b => a !== b && a.x < b.x + b.w - 1e-9 && b.x < a.x + a.w - 1e-9 && a.y < b.y + b.h - 1e-9 && b.y < a.y + a.h - 1e-9));
+  assert.equal(overlap, false, 'no two tiles overlap');
+  assert.equal(cornerLayout(big, undefined, W, H).length, 3, 'no group: the plain layout');
+}
 
 console.log('all passed');

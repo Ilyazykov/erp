@@ -305,6 +305,8 @@ export function earnedRatio(r) {
   const paidOut = INCOME_STAYS_IN.has(r.kind) ? 0 : n('income');
   const earned = v1 - v0 - putIn + takenOut;
   const base = v0 + putIn - (takenOut - paidOut);
+  // nothing paid for it (a share given as a dividend): all of what it is worth is earned, 100%
+  if (!(base > 0) && !v0 && !putIn && v1 > 0) return { state: 'known', change: 1, earned, base: v1 };
   if (!(base > 0)) return { state: 'nodata', change: null, note: 'no invested base', earned, base };
   const change = earned / base;
   return change === 0 ? { state: 'zero', change: 0, earned, base } : { state: 'known', change, earned, base };
@@ -622,6 +624,28 @@ function pushSources(tile, lines) {
 
 // Draws the tiles into `container`: tiles from aggregate(), earned(tile) -> the
 // colour state { state, change } of tileEarned. Flat; no children.
+// The grey group of small tiles in the bottom-right corner, its area its share of the box: a square
+// of the box's proportions (side sqrt(share)), the big tiles fill what is left -- the band above it
+// and the strip to its left -- each share of them going to a part by its area. Without a group, the
+// plain squarify over the box.
+export function cornerLayout(items, group, W, H) {
+  if (!group) return squarify(items, 0, 0, W, H);
+  const f = Math.sqrt(group.value), gw = W * f, gh = H * f, top = H - gh;
+  const total = items.reduce((s, i) => s + i.value, 0);
+  const topArea = W * top, leftArea = (W - gw) * gh;
+  // the big ones fill the band above the corner first, in order of size, then the strip beside it
+  const topItems = [], leftItems = [];
+  let acc = 0;
+  for (const i of [...items].sort((a, b) => b.value - a.value)) {
+    if (acc < total * topArea / (topArea + leftArea)) { topItems.push(i); acc += i.value; } else leftItems.push(i);
+  }
+  return [
+    ...squarify(topItems, 0, 0, W, top),
+    ...squarify(leftItems, 0, top, W - gw, gh),
+    { item: group, x: W - gw, y: top, w: gw, h: gh },
+  ];
+}
+
 export function drawTreemap(container, tiles, earned, opts = {}) {
   const { tip, group = false, depth = 0, scale = SATURATE_AT, names = {} } = opts;
   // values are cents: a tile under one cent is dust (e.g. a stablecoin fraction), not drawn
@@ -629,8 +653,8 @@ export function drawTreemap(container, tiles, earned, opts = {}) {
   container.textContent = '';
   const W = container.clientWidth, H = container.clientHeight;
   if (!(W > 0) || !(H > 0)) return;
-  // tiles under 0.2% of the portfolio are too thin to read: they go into one grey tile
-  const SMALL = 0.002;
+  // tiles under 0.1% of the portfolio are too thin to read: they go into one grey tile in the corner
+  const SMALL = 0.001;
   const small = group ? tiles.filter(t => t.share < SMALL) : [], big = tiles.filter(t => !group || t.share >= SMALL);
   // every tile gets at least MIN_AREA px² in the layout, so a one-cent tile is visible; the floor
   // takes a fraction of a percent of the box, so the big tiles keep their size
@@ -641,7 +665,8 @@ export function drawTreemap(container, tiles, earned, opts = {}) {
     items.push({ value: groupShare, tile: { ticker: `${small.length} small`, share: groupShare, value_usd: small.reduce((s, t) => s + t.value_usd, 0), isGroup: true, members: small } });
   }
   // the thin end of a layout can run a hair past the box: every tile is clipped to the box
-  const rects = squarify(items, 0, 0, W, H).map(r => {
+  const groupItem = items.find(i => i.tile.isGroup);
+  const rects = cornerLayout(items.filter(i => i !== groupItem), groupItem, W, H).map(r => {
     const x0 = Math.max(0, Math.min(W, r.x)), y0 = Math.max(0, Math.min(H, r.y));
     const x1 = Math.max(0, Math.min(W, r.x + r.w)), y1 = Math.max(0, Math.min(H, r.y + r.h));
     return { ...r, x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
