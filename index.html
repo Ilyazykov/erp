@@ -11201,7 +11201,7 @@ async function mpOpenProductView(productId) {
   const baseCols = 'day, place_id, chain, currency, qty, unit, unit_price_paid, unit_price_usd';
   const priceQ = cols => sb.from('product_prices').select(cols).eq('product_id', productId).order('day');
   const [{ data: product }, priced, cmp] = await Promise.all([
-    sb.from('products').select('id, name_en, brand, size_value, size_unit, note, merged_into').eq('id', productId).single(),
+    sb.from('products').select('id, name_en, brand, size_value, size_unit, note, category, merged_into').eq('id', productId).single(),
     priceQ(`${baseCols}, country, city, store`),
     sb.from('product_price_compare').select('country, city, store, purchases, min_usd, max_usd, last_usd, last_day').eq('product_id', productId).order('last_usd'),
   ]);
@@ -11220,6 +11220,7 @@ async function mpOpenProductView(productId) {
       <label style="flex:1">Size <span style="display:flex;gap:6px"><input name="size" type="number" step="any" min="0" value="${product?.size_value != null ? Number(product.size_value) : ''}" style="${MP_FIELD}">
         <select name="sunit" style="${MP_FIELD};width:auto"><option value="">—</option>${sizeUnits.map(u => `<option${u === product?.size_unit ? ' selected' : ''}>${u}</option>`).join('')}</select></span></label>
     </div>
+    <label>Category <select name="category" style="${MP_FIELD}"><option value="">—</option>${MP_EXP_CATS.map(([name]) => `<option${name === product?.category ? ' selected' : ''}>${mpEscapeHtml(name)}</option>`).join('')}</select></label>
     <label>Description <textarea name="note" rows="2" style="${MP_FIELD}">${mpEscapeHtml(product?.note || '')}</textarea></label>
     <div style="display:flex;gap:8px;justify-content:flex-end"><button type="button" data-act="details">Save details</button></div>
     ${usdToggle}
@@ -11266,6 +11267,7 @@ async function mpOpenProductView(productId) {
     const { error } = await sb.from('products').update({
       brand: dlg.querySelector('[name=brand]').value.trim() || null,
       size_value: size, size_unit: size === null ? null : unit,
+      category: dlg.querySelector('[name=category]').value || null,
       note: dlg.querySelector('[name=note]').value.trim() || null,
     }).eq('id', productId);
     detailsBtn.disabled = false;
