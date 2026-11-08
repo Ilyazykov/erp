@@ -644,7 +644,10 @@
     <div class="section-title">Portfolio map</div>
     <p class="note">Tile area is the share of the portfolio; colour is what the position earned over the period relative to the money put in
       (price change, dividends, coupons and interest), not the bare price change. Striped tiles have nothing to judge by.</p>
-    <div class="form-row" id="lt_periods" style="gap:6px"><button class="btn primary" type="button" data-period="1d">1d</button><button class="btn" type="button" data-period="7d">7d</button><button class="btn" type="button" data-period="1m">1m</button><button class="btn" type="button" data-period="3m">3m</button><button class="btn" type="button" data-period="6m">6m</button><button class="btn" type="button" data-period="ytd">YTD</button><button class="btn" type="button" data-period="1y">1y</button><button class="btn" type="button" data-period="5y">5y</button><button class="btn" type="button" data-period="all">all</button></div>
+    <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+    <div class="form-row" id="lt_periods" style="gap:6px"><button class="btn primary" type="button" data-period="1d">1d</button><button class="btn" type="button" data-period="2d">2d</button><button class="btn" type="button" data-period="3d">3d</button><button class="btn" type="button" data-period="7d">7d</button><button class="btn" type="button" data-period="1m">1m</button><button class="btn" type="button" data-period="3m">3m</button><button class="btn" type="button" data-period="6m">6m</button><button class="btn" type="button" data-period="ytd">YTD</button><button class="btn" type="button" data-period="1y">1y</button><button class="btn" type="button" data-period="5y">5y</button><button class="btn" type="button" data-period="all">all</button></div>
+    <div id="lt_legend" style="flex:1 1 260px;max-width:480px"></div>
+    </div>
     <div class="form-row" style="gap:16px;flex-wrap:wrap">
       <label><input type="checkbox" id="lt_expand"> expand funds</label>
       <label title="The cash at Bank of Cyprus, Ziraat, Raiffeisen and Wise, TBC's savings account and Revolut's euro liquid assets up to $10,000, as a tile of its own"><input type="checkbox" id="lt_cushion"> show safety cushion</label>
@@ -653,10 +656,9 @@
       <label><input type="checkbox" id="lt_gold" checked> merge gold (XAU + XAUT)</label>
       <label title="Savings products linked by transfers between them (Finuslugi, Ozon, Alfa...) as one tile"><input type="checkbox" id="lt_savings" checked> merge savings history</label>
     </div>
-    <div id="lt_legend" style="max-width:480px;margin:4px 0 10px"></div>
     <div id="lt_status" class="empty-note"></div>
     <div style="position:relative">
-      <div id="lt_treemap" style="position:relative;width:100%;aspect-ratio:1.8;background:#0d1117"></div>
+      <div id="lt_treemap" style="position:relative;width:100%;aspect-ratio:2.6;max-height:62vh;background:#0d1117"></div>
       <div id="lt_tip" style="display:none;position:absolute;pointer-events:none;z-index:5;background:#13191f;border:1px solid #4da8c8;border-radius:6px;padding:6px 10px;font-size:0.78rem;color:#c9d1d9;max-width:320px"></div>
     </div>
     <div class="section-title">What the funds hold</div>
@@ -13235,11 +13237,11 @@ sb.auth.getSession().then(({ data: { session } }) => mpOnAuth(session));
 sb.auth.onAuthStateChange((_event, session) => mpOnAuth(session));
 </script>
 <script type="module">
-import { RU_ACCOUNTS, isRuInfra, netCreditIntoLiquid } from './js/lookthrough_treemap.js?v=20261108c';
+import { RU_ACCOUNTS, isRuInfra, netCreditIntoLiquid } from './js/lookthrough_treemap.js?v=20261108e';
 window.MP_RU_ACCOUNTS = RU_ACCOUNTS;
 window.mpIsRuInfra = isRuInfra;
 window.mpNetCreditIntoLiquid = netCreditIntoLiquid;
 </script>
-<script type="module" src="./js/lookthrough_treemap.js?v=20261108c"></script>
+<script type="module" src="./js/lookthrough_treemap.js?v=20261108e"></script>
 </body>
 </html>

@@ -12,7 +12,7 @@
 // a fund inside a fund is not opened further.
 // Test: node tests/lookthrough_treemap.test.mjs
 
-export const PERIODS = ['1d', '7d', '1m', '3m', '6m', 'ytd', '1y', '5y', 'all'];
+export const PERIODS = ['1d', '2d', '3d', '7d', '1m', '3m', '6m', 'ytd', '1y', '5y', 'all'];
 
 const parseDay = s => {
   const [y, m, d] = s.split('-').map(Number);
@@ -39,6 +39,8 @@ export function periodStart(period, today) {
   };
   switch (period) {
     case '1d': return daysBack(1);
+    case '2d': return daysBack(2);
+    case '3d': return daysBack(3);
     case '7d': return daysBack(7);
     case '1m': return monthsBack(today, 1);
     case '3m': return monthsBack(today, 3);
@@ -417,8 +419,10 @@ export function buildSavingsLinks(trades) {
   const isInterest = t => /interest|капитализац|процент/i.test(t.note || '');
   const dayNo = d => Date.parse(d) / 86400000;
   const sorted = [...trades].sort((a, b) => (a.trade_date < b.trade_date ? -1 : a.trade_date > b.trade_date ? 1 : 0));
-  const sells = sorted.filter(t => t.side === 'sell');
-  const buys = sorted.filter(t => t.side === 'buy' && !isInterest(t));
+  // a T-Bank deposit is never merged: it stays a tile of its own
+  const alone = t => /^DEPOSIT:T-Bank/i.test(t.ticker || '');
+  const sells = sorted.filter(t => t.side === 'sell' && !alone(t));
+  const buys = sorted.filter(t => t.side === 'buy' && !isInterest(t) && !alone(t));
   const used = new Set(), links = [];
   for (const s of sells) {
     const b = buys.find(x => !used.has(x) && x.ticker !== s.ticker && (x.currency || 'RUB') === (s.currency || 'RUB')
@@ -456,9 +460,8 @@ function tooltipLines(tile, e) {
   const lines = [tile.ticker, `value ${usd(tile.value_usd)}`, `share ${(tile.share * 100).toFixed(2)}%`,
     `change ${e.state === 'zero' ? '0.0%' : formatChange(e.change)}`];
   if (tile.isGold && tile.parts) lines.push(tile.parts.map(p => `${p.ticker} ${usd(p.value_usd)}`).join(', '));
-  else if (tile.isChain && tile.members) {
-    for (const m of tile.members) lines.push(`${m.ticker}${m.first || m.last ? ` (${m.first || '?'} – ${m.last || '?'})` : ''} ${usd(m.value_usd)}`);
-  } else if (tile.sources.length > 1 || tile.sources.some(s => s.from !== 'direct')) {
+  else if (tile.isChain && tile.members) lines.push('merged savings');
+  else if (tile.sources.length > 1 || tile.sources.some(s => s.from !== 'direct')) {
     lines.push(tile.sources.map(s => `${s.from === 'direct' ? 'direct' : s.from} ${usd(s.value_usd)}`).join(', '));
   }
   return lines;
