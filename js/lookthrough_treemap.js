@@ -181,9 +181,17 @@ export function aggregate({ rows, holdings, fundHoldings, expandFunds = false, i
   const expanded = new Set(expandFunds ? [...funds.keys()].filter(f => (fundHoldings?.[f] || []).length) : []);
   for (const [ticker, v] of funds) {
     if (expanded.has(ticker)) {
-      for (const c of fundHoldings[ticker]) {
-        const cv = v * (Number(c.weight) || 0);
-        if (cv > 0) addTo(instrument(c.ticker), ticker, cv);
+      const parts = fundHoldings[ticker].map(c => ({ ticker: c.ticker, value_usd: v * (Number(c.weight) || 0) })).filter(p => p.value_usd > 0);
+      // the listed weights need not add up to 1 (the cash / other line is not an instrument,
+      // a list can run a little over): scale an overshoot down, and what the list does not
+      // cover stays a tile of the fund itself, so expanding never changes the total
+      const listed = parts.reduce((s, p) => s + p.value_usd, 0);
+      const k = listed > v ? v / listed : 1;
+      for (const p of parts) addTo(instrument(p.ticker), ticker, p.value_usd * k);
+      const rest = v - listed * k;
+      if (rest > v * 1e-6) {
+        if (!tiles.has(fundKey(ticker))) tiles.set(fundKey(ticker), newTile(ticker, true));
+        addTo(tiles.get(fundKey(ticker)), ticker, rest);
       }
     } else {
       tiles.set(fundKey(ticker), newTile(ticker, true));

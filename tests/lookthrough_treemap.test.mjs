@@ -103,6 +103,14 @@ tiles = aggregate({
   expandFunds: true,
 });
 assert.deepEqual(tiles.map(t => t.ticker), ['X', 'Z'].filter(t => t !== 'Z'));
+near(sum(tiles, t => t.value_usd), 100, 'an overshooting weight list is scaled to the fund value');
+
+// Weights that add up to less than 1: the uncovered part stays a tile of the fund, so the total holds.
+tiles = aggregate({ holdings: [{ ticker: 'F', value_usd: 1000, kind: 'fund' }, { ticker: 'D', value_usd: 500, kind: 'direct' }],
+  fundHoldings: { F: [{ ticker: 'X', weight: 0.6 }, { ticker: 'Y', weight: 0.39 }] }, expandFunds: true });
+near(sum(tiles, t => t.value_usd), 1500, 'expanding funds keeps the total');
+near(tiles.find(t => t.isFund).value_usd, 10, 'the uncovered 1% stays the fund');
+near(sum(tiles, t => t.share), 1, 'shares sum to 1');
 
 // ---- 4. tileChange ----
 assert.equal(tileChange({ ticker: 'FUND', isFund: true }, 'all', prices, today).state, 'known');
