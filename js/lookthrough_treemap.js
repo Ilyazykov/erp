@@ -472,7 +472,12 @@ export function drawTreemap(container, tiles, earned, opts = {}) {
     const groupShare = small.reduce((s, t) => s + t.share, 0);
     items.push({ value: groupShare, tile: { ticker: `${small.length} small`, share: groupShare, value_usd: small.reduce((s, t) => s + t.value_usd, 0), isGroup: true, members: small } });
   }
-  const rects = squarify(items, 0, 0, W, H);
+  // the thin end of a layout can run a hair past the box: every tile is clipped to the box
+  const rects = squarify(items, 0, 0, W, H).map(r => {
+    const x0 = Math.max(0, Math.min(W, r.x)), y0 = Math.max(0, Math.min(H, r.y));
+    const x1 = Math.max(0, Math.min(W, r.x + r.w)), y1 = Math.max(0, Math.min(H, r.y + r.h));
+    return { ...r, x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  }).filter(r => r.w > 0 && r.h > 0);
   const frag = document.createDocumentFragment();
   for (const r of rects) {
     const tile = r.item.tile, e = tile.isGroup ? { state: 'group' } : earned(tile);
