@@ -643,7 +643,7 @@ function wireTreemap() {
       const tiles = aggregate({ rows, fundHoldings: data.fundHoldings, expandFunds: $('lt_expand').checked, includeCushion: cushion,
         mergeGold: $('lt_gold').checked, mergeSavings: $('lt_savings').checked, savingsLinks: data.savingsLinks, savingsPeriods: data.savingsPeriods,
         includeRealEstate: $('lt_re').checked });
-      box.style.height = `${Math.max(320, Math.min(620, Math.round(box.clientWidth * 0.55)))}px`;
+      // the box keeps its proportions in CSS (aspect-ratio), so the layout is always for its real size
       const realEstate = reEstateChange(data.reIndex, period, today());
       last = [tiles, tile => tileEarned(tile, earnedRows, { assetOf, realEstate }), { tip, group: $('lt_small').checked }];
       drawTreemap(box, ...last);
