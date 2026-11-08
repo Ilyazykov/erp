@@ -11471,6 +11471,8 @@ async function mpExpLoadRest() {
     const monthStart = k => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - k, 1));
     const iso = d => d.toISOString().slice(0, 10);
     const spans = [];
+    // this month on, to the end: the forecast of this month reads its rows up to the end (rows paid ahead)
+    spans.push([iso(monthStart(0)), '9999-12-31']);
     for (let k = 1; k <= MP_EXP_MONTH_SPANS; k++) spans.push([iso(monthStart(k)), iso(new Date(monthStart(k - 1) - 86400000))]);
     // the older history, up to the day before the last month span, by spans of three years, the newer first
     let end = new Date(monthStart(MP_EXP_MONTH_SPANS) - 86400000);
