@@ -477,7 +477,9 @@ export function drawTreemap(container, tiles, earned, opts = {}) {
     const el = document.createElement('div');
     el.className = 'lt-tile';
     Object.assign(el.style, { position: 'absolute', boxSizing: 'border-box', overflow: 'hidden', border: '1px solid #0d1117',
-      left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px`, background: tile.isGroup ? '#2a2f36' : tileColor(e.state, e.change),
+      // positions in percent of the box, so the tiles fill it whatever its size is when drawn
+      left: `${(r.x / W) * 100}%`, top: `${(r.y / H) * 100}%`, width: `${(r.w / W) * 100}%`, height: `${(r.h / H) * 100}%`,
+      background: tile.isGroup ? '#2a2f36' : tileColor(e.state, e.change),
       color: '#fff', padding: `${MIN_PAD - 1}px`, lineHeight: `${LINE}px`, fontSize: '12px', cursor: 'default' });
     if (tile.isGroup) {
       if (r.w >= textWidth(tile.ticker, true) + 2 * MIN_PAD + 2 && r.h >= LINE + 2 * MIN_PAD) {
