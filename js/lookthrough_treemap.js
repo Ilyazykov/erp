@@ -459,6 +459,8 @@ function tooltipLines(tile, e) {
 // colour state { state, change } of tileEarned. Flat; no children.
 export function drawTreemap(container, tiles, earned, opts = {}) {
   const { tip, group = false, depth = 0 } = opts;
+  // dust (under a dollar, e.g. a stablecoin fraction) is not a holding: it is not drawn
+  tiles = tiles.filter(t => t.value_usd >= 1);
   container.textContent = '';
   const W = container.clientWidth, H = container.clientHeight;
   if (!(W > 0) || !(H > 0)) return;
