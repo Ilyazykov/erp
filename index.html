@@ -5084,7 +5084,7 @@ async function mpFetchRealEstateRows(fxByCurrency) {
   const missing = [...new Set(data.map(r => r.currency))].filter(c => !(c in fxByCurrency));
   if (missing.length) Object.assign(fxByCurrency, await mpFetchFxByCurrency(missing));
   return data.map(r => ({
-    account: 'real estate', currency: r.currency, underlying_currency: r.currency, instrument_type: 'real_estate',
+    account: 'real estate', ticker: `REAL_ESTATE:${r.id}`, currency: r.currency, underlying_currency: r.currency, instrument_type: 'real_estate',
     excluded: !mpRealEstateIncluded(r.id),
     value_usd: r.current_value !== null && r.currency in fxByCurrency ? Number(r.current_value) * fxByCurrency[r.currency] : null,
   }));

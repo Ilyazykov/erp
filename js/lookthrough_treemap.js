@@ -126,7 +126,7 @@ export function aggregate({ rows, holdings, fundHoldings, expandFunds = false, i
   if (rows) {
     // real estate is not on the map (it is not in the pies' totals either; it has no price history)
     const netted = netCreditIntoLiquid(rows.filter(r => Number.isFinite(Number(r.value_usd)))
-      .filter(r => includeRealEstate || (r.account !== 'real estate' && r.instrument_type !== 'real_estate'))
+      .filter(r => !r.excluded && (includeRealEstate || (r.account !== 'real estate' && r.instrument_type !== 'real_estate')))
       .map(r => ({ ...r, value_usd: Number(r.value_usd) })));
     entries = netted.filter(r => r.value_usd > 0)
       .map(r => ({ ticker: r.ticker, value_usd: r.value_usd, kind: isFundTicker(r.ticker) ? 'fund' : 'direct',
