@@ -21,6 +21,7 @@ const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-9, `${msg}: ${a} != $
 // ---- 1. periodStart ----
 assert.equal(periodStart('1d', '2026-03-01'), '2026-02-28');
 assert.equal(periodStart('7d', '2026-03-03'), '2026-02-24');
+assert.equal(periodStart('snowball', '2026-03-03'), '2025-08-28');
 assert.equal(periodStart('1m', '2026-03-31'), '2026-02-28');
 assert.equal(periodStart('1m', '2026-01-15'), '2025-12-15');
 assert.equal(periodStart('3m', '2026-05-31'), '2026-02-28');

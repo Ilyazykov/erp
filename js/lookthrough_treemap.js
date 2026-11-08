@@ -12,7 +12,9 @@
 // a fund inside a fund is not opened further.
 // Test: node tests/lookthrough_treemap.test.mjs
 
-export const PERIODS = ['1d', '2d', '3d', '7d', '1m', '3m', '6m', 'ytd', '1y', '5y', 'all'];
+// The Snowball portfolio's first deal (the page's MP_SNOWBALL_START): the 'snowball' period counts from here.
+export const SNOWBALL_START = '2025-08-28';
+export const PERIODS = ['1d', '2d', '3d', '7d', '1m', '3m', '6m', 'ytd', '1y', '5y', 'all', 'snowball'];
 
 const parseDay = s => {
   const [y, m, d] = s.split('-').map(Number);
@@ -49,6 +51,7 @@ export function periodStart(period, today) {
     case '5y': return monthsBack(today, 60);
     case 'ytd': return `${Number(today.slice(0, 4)) - 1}-12-31`;
     case 'all': return null;
+    case 'snowball': return SNOWBALL_START;
     default: throw new Error(`unknown period ${period}`);
   }
 }
