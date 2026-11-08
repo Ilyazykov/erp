@@ -11306,6 +11306,30 @@ function mpEditCategory(src, xid) {
     await mpRenderExpenses();
   });
 }
+// The account of a purchase that didn't come from a bank statement (a receipt's
+// own row, account '<unknown>' until set): the accounts the tab already has.
+// A statement's row keeps its bank's account.
+function mpEditAccount(src, xid) {
+  const rows = mpExpRowsOf(src, xid);
+  const r = rows[0];
+  if (!r) return;
+  const accounts = [...new Set([...(mpExpCache?.spent || []), ...(mpExpCache?.skipped || [])].map(x => x.account).filter(a => a && a !== '<unknown>'))].sort();
+  const opts = ['<unknown>', ...accounts].map(a => `<option${a === r.account ? ' selected' : ''}>${mpEscapeHtml(a)}</option>`).join('');
+  const form = mpDialog(`Account · ${r.day} · ${mpShortDesc(r.description)}`, `
+    <select name="account" size="10" style="${MP_FIELD}">${opts}</select>`);
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const account = form.account.value;
+    const { error } = await sb.from('bank_transactions').update({ account }).eq('external_source', src).eq('external_id', xid);
+    if (error) { alert(error.message); return; }
+    // the expenses tab's own copy of the account (refresh_expenses sets it the same way)
+    const { error: eErr } = await sb.from('expenses').update({ account }).eq('external_source', src).eq('external_id', xid);
+    if (eErr) { alert(eErr.message); return; }
+    rows.forEach(x => { x.account = account; });
+    form.closest('dialog').close();
+    await mpRenderExpenses();
+  });
+}
 // A transfer linked by hand: one row out with the rows in it was given back in
 // (several in rows for one out, as the manual pairs of migration ...187 allow).
 // The link icon on a row opens the rows opposite to it within 7 days.
@@ -11412,6 +11436,8 @@ document.getElementById('expenses').addEventListener('click', e => {
   if (place?.dataset.src) { e.stopPropagation(); mpEditPlace(place.dataset.src, place.dataset.xid); }
   const items = e.target.closest('.exp-items');
   if (items?.dataset.src) { e.stopPropagation(); mpEditItems(items.dataset.src, items.dataset.xid); }
+  const account = e.target.closest('.exp-account');
+  if (account?.dataset.src) { e.stopPropagation(); mpEditAccount(account.dataset.src, account.dataset.xid); }
 });
 // A note on a row out or in, written in the expenses tab's tables: saved to the row
 // itself (bank_transactions.expense_note) and kept in the tab's cache.
@@ -11676,7 +11702,9 @@ async function mpRenderExpenses() {
       <td class="exp-cat-set" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to change the category" style="text-align:left;cursor:pointer;color:#c9d1d9">${esc(r.cat || '—')}</td>
       <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to set the place" style="text-align:left;max-width:180px;cursor:pointer">${mpPlaceHtml(r.place, r.deliveredTo)}</td>
       <td class="exp-items" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to see / add items" style="text-align:left;cursor:pointer">${mpItemsHtml(mpExpCache?.receiptOf?.get(`${r.src}|${r.xid}`))}</td>
-      <td style="text-align:left">${esc(r.account)}</td>
+      ${r.src === 'receipt_csv'
+        ? `<td class="exp-account" data-src="${esc(r.src)}" data-xid="${esc(r.xid || '')}" title="Click to set the account" style="text-align:left;cursor:pointer">${esc(r.account)}</td>`
+        : `<td style="text-align:left">${esc(r.account)}</td>`}
       <td>${r.amt.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${r.ccy}</td><td>${rowMoney(conv(r))}</td></tr>`).join('')}</tbody></table></div>`;
   const catList = document.getElementById('exp_categories');
   // the list: the groups always (food, travel, housing, ...), and without "by
