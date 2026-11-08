@@ -442,6 +442,11 @@ export function buildSavingsLinks(trades) {
   return { links, periods };
 }
 
+// Revolut's Flexible Cash Funds are known by ISIN only: a short name for a tile
+export const FUND_NAMES = {
+  IE000H9J0QX4: 'Revolut USD', IE000AZVL3K0: 'Revolut EUR', IE0002RUHW32: 'Revolut GBP',
+};
+
 // ---- Drawing ----
 const MIN_PAD = 5, LINE = 15;
 let measureCtx;
@@ -456,9 +461,10 @@ const usd = v => `$${Math.round(v).toLocaleString('en-US')}`;
 
 // The tooltip's lines of a tile: ticker, value, share, change, and how it is
 // held. A tile with no data says only that.
-function tooltipLines(tile, e) {
-  if (e.state === 'nodata') return [tile.ticker, 'no price history'];
-  const lines = [tile.ticker, `value ${usd(tile.value_usd)}`, `share ${(tile.share * 100).toFixed(2)}%`,
+function tooltipLines(tile, e, name = tile.ticker) {
+  const head = name === tile.ticker ? [tile.ticker] : [name, tile.ticker];
+  if (e.state === 'nodata') return [...head, 'no price history'];
+  const lines = [...head, `value ${usd(tile.value_usd)}`, `share ${(tile.share * 100).toFixed(2)}%`,
     `change ${e.state === 'zero' ? '0.0%' : formatChange(e.change)}`];
   if (tile.isGold && tile.parts) lines.push(tile.parts.map(p => `${p.ticker} ${usd(p.value_usd)}`).join(', '));
   else if (tile.isChain && tile.members) lines.push('merged savings');
@@ -471,7 +477,7 @@ function tooltipLines(tile, e) {
 // Draws the tiles into `container`: tiles from aggregate(), earned(tile) -> the
 // colour state { state, change } of tileEarned. Flat; no children.
 export function drawTreemap(container, tiles, earned, opts = {}) {
-  const { tip, group = false, depth = 0, scale = SATURATE_AT } = opts;
+  const { tip, group = false, depth = 0, scale = SATURATE_AT, names = {} } = opts;
   // values are cents: a tile under one cent is dust (e.g. a stablecoin fraction), not drawn
   tiles = tiles.map(t => ({ ...t, value_usd: Math.round(t.value_usd * 100) / 100 })).filter(t => t.value_usd >= 0.01);
   container.textContent = '';
@@ -497,6 +503,7 @@ export function drawTreemap(container, tiles, earned, opts = {}) {
   const frag = document.createDocumentFragment();
   for (const r of rects) {
     const tile = r.item.tile, e = tile.isGroup ? { state: 'group' } : earned(tile);
+    const name = names[tile.ticker] || tile.ticker;
     const el = document.createElement('div');
     el.className = 'lt-tile';
     // the outline is an inset shadow and the padding comes only with a label: a border or padding
@@ -514,26 +521,26 @@ export function drawTreemap(container, tiles, earned, opts = {}) {
       }
     } else if (e.state === 'nodata') {
       // no price: no change to show, but a big tile still names its instrument
-      const fitW = textWidth(tile.ticker, true) + 2 * MIN_PAD + 2;
+      const fitW = textWidth(name, true) + 2 * MIN_PAD + 2;
       if (r.w >= fitW && r.h >= LINE + 2 * MIN_PAD) {
         const a = document.createElement('div');
         a.style.cssText = 'font-weight:bold;white-space:nowrap;overflow:hidden';
-        a.textContent = tile.ticker; el.append(a);
+        a.textContent = name; el.append(a);
       }
     } else {
       const change = e.state === 'zero' ? '0.0%' : formatChange(e.change);
-      const fitW = Math.max(textWidth(tile.ticker, true), textWidth(change, false)) + 2 * MIN_PAD + 2;
+      const fitW = Math.max(textWidth(name, true), textWidth(change, false)) + 2 * MIN_PAD + 2;
       if (r.w >= fitW && r.h >= 2 * LINE + 2 * MIN_PAD) {
         const a = document.createElement('div'), b = document.createElement('div');
         a.style.cssText = 'font-weight:bold;white-space:nowrap;overflow:hidden';
         b.style.cssText = 'white-space:nowrap;overflow:hidden';
-        a.textContent = tile.ticker; b.textContent = change;
+        a.textContent = name; b.textContent = change;
         el.append(a, b);
       }
     }
     if (el.childNodes.length) el.style.padding = `${MIN_PAD - 1}px`;
     if (tip) {
-      const lines = tile.isGroup ? [`${tile.members.length} small positions`, ...tile.members.map(m => `${m.ticker} ${(m.share * 100).toFixed(2)}%`)] : tooltipLines(tile, e);
+      const lines = tile.isGroup ? [`${tile.members.length} small positions`, ...tile.members.map(m => `${m.ticker} ${(m.share * 100).toFixed(2)}%`)] : tooltipLines(tile, e, name);
       el.addEventListener('mousemove', ev => {
         tip.textContent = '';
         lines.forEach((l, i) => { const d = document.createElement('div'); if (i === 0) d.style.fontWeight = 'bold'; d.textContent = l; tip.append(d); });
@@ -706,7 +713,11 @@ function wireTreemap() {
       // the colour scale is this period's largest change on the map (so a one-day map is not all pale)
       const changes = tiles.filter(t => !t.isGroup).map(colour).filter(e => e.state === 'known' && e.change != null).map(e => Math.abs(e.change));
       const scale = Math.max(...changes, 0.001);
-      last = [tiles, colour, { tip, group: $('lt_small').checked, scale }];
+      // human names: Revolut's funds, and the bonds by MOEX's name (cached in the browser) instead of the ISIN
+      let bondNames = {};
+      try { bondNames = g('mpBondNames') ? await window.mpBondNames(tiles.map(t => t.ticker)) : {}; } catch { /* ISINs then */ }
+      if (my !== run) return;
+      last = [tiles, colour, { tip, group: $('lt_small').checked, scale, names: { ...bondNames, ...FUND_NAMES } }];
       drawTreemap(box, ...last);
       drawLegend($('lt_legend'), scale);
       status.textContent = `${tiles.length} tiles, total ${usd(tiles.reduce((s, t) => s + t.value_usd, 0))}`;
