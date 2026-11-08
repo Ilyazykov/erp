@@ -8,11 +8,13 @@
 //   6. aggregate over the pies' rows: every asset type, cushion, netting across banks;
 //   7. mergeGold and goldChange;
 //   8. earnedRatio / tileEarned: earned over invested, the colour;
-//   9. savingsChains and mergeSavings.
+//   9. savingsChains and mergeSavings;
+//  10. the colour's methods: contribution, XIRR over the time held, TWR from twr_by_asset.
 // Run: node tests/lookthrough_treemap.test.mjs
 import assert from 'node:assert/strict';
 import { periodStart, priceChange, aggregate, tileChange, isRuInfra, netCreditIntoLiquid,
-  goldChange, earnedRatio, tileEarned, savingsChains, assetKey } from '../js/lookthrough_treemap.js';
+  goldChange, earnedRatio, tileEarned, savingsChains, assetKey, periodCapital, portfolioCapital, periodIrr, tileMetric,
+  mergeRows, changeAsContribution, formatChange } from '../js/lookthrough_treemap.js';
 
 const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-9, `${msg}: ${a} != ${b}`);
 
@@ -275,5 +277,49 @@ tiles = aggregate({ rows: threeRows, fundHoldings: {},
 assert.equal(tiles.length, 1);
 assert.equal(tiles[0].ticker, sv('Alfa')); assert.equal(tiles[0].value_usd, 600); assert.equal(tiles[0].members.length, 3);
 assert.deepEqual(tiles[0].sources, [{ from: sv('Fin'), value_usd: 100 }, { from: sv('Alfa'), value_usd: 500 }]);
+
+// ---- 10. the methods ----
+// Example 1: SBER 100 -> 150 -> 100 (ex-dividend) + 50 dividend -> 150; GOOGL 100 -> 200. Days 0..4.
+const ex1 = [
+  { asset: 'SBER', value_start: 100, value_end: 150, put_in: 0, taken_out: 50, income: 50, kind: 'stock', cash: [['2026-01-04', -50]] },
+  { asset: 'GOOGL', value_start: 100, value_end: 200, put_in: 0, taken_out: 0, income: 0, kind: 'stock', cash: [] },
+];
+const F = '2026-01-01', T = '2026-01-05';
+near(periodCapital(ex1[0], F, T), 100 - 50 * 0.25, 'dividend leaves the capital for the last quarter');
+near(portfolioCapital(ex1, F, T), 187.5, 'the portfolio capital');
+r = tileMetric('contrib', { ticker: 'SBER' }, { earnedRows: ex1, cap: 187.5, from: F, to: T });
+near(r.change, 100 / 187.5, 'SBER contributes its 100 earned'); assert.equal(r.unit, 'pp'); near(r.earned, 100, 'earned');
+near(tileMetric('contrib', { ticker: 'GOOGL' }, { earnedRows: ex1, cap: 187.5, from: F, to: T }).change, 100 / 187.5, 'GOOGL the same');
+// XIRR over the period: GOOGL simply doubled; SBER gave 50 back early, so more than 100%
+near(periodIrr(ex1[1], F, T), 1, 'GOOGL +100%');
+const g = periodIrr(ex1[0], F, T);
+near(-100 + 50 / Math.pow(1 + g, 0.75) + 150 / (1 + g), 0, 'SBER: the NPV at its rate is 0');
+assert.ok(g > 1 && g < 1.25, `SBER between 100% and TWR's 125%: ${g}`);
+// TWR: the rpc's %, chained over a savings chain, weighted for gold
+const twr = new Map([['SBER', 125], ['GOOGL', 100]]);
+near(tileMetric('twr', { ticker: 'SBER' }, { twr }).change, 1.25, 'TWR');
+assert.equal(tileMetric('twr', { ticker: 'NONE' }, { twr }).state, 'nodata');
+near(tileMetric('twr', { ticker: 'X', isChain: true, members: [{ ticker: 'SBER' }, { ticker: 'GOOGL' }] }, { twr }).change, 2.25 * 2 - 1, 'chain chained');
+// Example 2: the dividend bought SBER again the next day -- the flows cancel, both +100%
+const ex2 = [{ asset: 'SBER', value_start: 100, value_end: 200, put_in: 50, taken_out: 50, income: 50, kind: 'stock',
+  cash: [['2026-01-04', -50], ['2026-01-05', 50]] }];
+near(tileMetric('contrib', { ticker: 'SBER' }, { earnedRows: ex2, cap: 100, from: F, to: '2026-01-06' }).change, 1, 'reinvested: 100 on 100');
+// XIRR: about +100%, not exactly -- the 50 went out one day and came back in the next
+assert.ok(Math.abs(periodIrr(ex2[0], F, '2026-01-06') - 1) < 0.1, 'reinvested: XIRR about +100%');
+// a savings chain merged: the transfer cancels
+const m = mergeRows([{ value_start: 1000, value_end: 0, put_in: 0, taken_out: 1020, cash: [['2026-03-01', -1020]] },
+  { value_start: 0, value_end: 1050, put_in: 1020, taken_out: 0, cash: [['2026-03-01', 1020]] }]);
+assert.deepEqual(m.cash, []); near(periodIrr(m, F, '2027-01-01'), 0.05, 'chain +5%');
+// bought in the period: over its own time, not the whole period's
+near(periodIrr({ value_start: 0, value_end: 110, cash: [['2026-06-01', 100]] }, F, '2026-12-01'), 0.1, 'from its buy');
+assert.equal(periodIrr({ value_start: 0, value_end: 0, cash: [['2026-06-01', 100]] }, F, T), -1, 'nothing back');
+assert.equal(periodIrr({ value_start: 0, value_end: 0, cash: [] }, F, T), null, 'nothing at all');
+// gold: contribution summed over the parts
+const goldRows = [{ asset: 'XAU', value_start: 100, value_end: 110, cash: [] }, { asset: 'XAUT', value_start: 100, value_end: 130, cash: [] }];
+near(tileMetric('contrib', { ticker: 'GOLD', isGold: true, parts: [{ ticker: 'XAU', value_usd: 110 }, { ticker: 'XAUT', value_usd: 130 }] },
+  { earnedRows: goldRows, cap: 400, from: F, to: T }).change, 40 / 400, 'gold contribution');
+// a bare change as a contribution: 110 now after +10% gained 10
+near(changeAsContribution({ state: 'known', change: 0.1 }, 110, 200).change, 0.05, 'cash contribution');
+assert.equal(formatChange(0.0123, 'pp'), '+1.2 pp');
 
 console.log('all passed');

@@ -349,6 +349,112 @@ export function tileEarned(tile, earnedRows, { assetOf = assetKey, realEstate = 
   return earnedRatio(rowOf(tile.ticker));
 }
 
+// ---- The colour's four methods (the map's "method" switch) ----
+// contrib: contribution to return -- what the tile earned in dollars over the whole portfolio's
+//   capital (portfolioCapital): the tiles' contributions add up to the portfolio's return. A
+//   dividend is the payer's; what it earns after, in whatever it bought, is that paper's.
+// twr: time-weighted return -- the paper's own day-to-day changes chained, the money moved in and
+//   out not counting (twr_by_asset, migration 197).
+// xirr: money-weighted -- the IRR of the money in and out (a dividend is money back), over the
+//   time the asset was held, not made yearly (periodIrr).
+// kept: the dividends stay in the capital as idle cash (earnedRatio, the rpc's pct).
+export const METHODS = ['contrib', 'twr', 'xirr', 'kept'];
+export const METHOD_LABELS = { contrib: 'contribution', twr: 'TWR', xirr: 'XIRR', kept: 'dividends kept' };
+const dayDiff = (a, b) => (Date.parse(b) - Date.parse(a)) / 86400000;
+const cashOf = r => (r?.cash || []).map(([d, v]) => [String(d).slice(0, 10), Number(v)]);
+const known = (change, extra = {}) => (change === 0 ? { state: 'zero', change: 0, ...extra } : { state: 'known', change, ...extra });
+const NO = { state: 'nodata', change: null };
+const earnedOf = r => (Number(r.value_end) || 0) - (Number(r.value_start) || 0) - (Number(r.put_in) || 0) + (Number(r.taken_out) || 0);
+
+// rows of investment_by_asset as one (a savings chain): money summed, the flows merged by day --
+// the transfers between the members cancel
+export function mergeRows(rows) {
+  const flows = new Map();
+  const sum = k => rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
+  for (const r of rows) for (const [d, v] of cashOf(r)) flows.set(d, (flows.get(d) || 0) + v);
+  return { value_start: sum('value_start'), value_end: sum('value_end'), put_in: sum('put_in'), taken_out: sum('taken_out'),
+    income: sum('income'), cash: [...flows].filter(([, v]) => v !== 0).sort((a, b) => (a[0] < b[0] ? -1 : 1)) };
+}
+
+// The capital at work over the period (Modified Dietz): the value at the start plus each flow
+// weighted by the share of the period left after it; a dividend is money out of the capital.
+// Summed over all rows: the whole portfolio's -- the buy paid with a dividend cancels it.
+export function periodCapital(r, from, to) {
+  const T = Math.max(dayDiff(from, to), 1);
+  return (Number(r.value_start) || 0) + cashOf(r).reduce((s, [d, v]) => s + v * Math.min(Math.max(dayDiff(d, to) / T, 0), 1), 0);
+}
+export const portfolioCapital = (rows, from, to) => (rows || []).reduce((s, r) => s + periodCapital(r, from, to), 0);
+
+// The IRR of a row's money over the time it was held (from the period start if held then, else its
+// first flow; to the period end if still held, else its last flow) -- the return over that time,
+// not a year's: the value at the start put in, every flow (-cash: put in is money out of the
+// pocket), the value at the end got back.
+export function periodIrr(r, from, to) {
+  if (!r) return null;
+  const v0 = Number(r.value_start) || 0, v1 = Number(r.value_end) || 0, cash = cashOf(r).filter(([, v]) => v !== 0);
+  const s = v0 > 0 || !cash.length ? from : cash[0][0];
+  const e = v1 > 0 || !cash.length ? to : cash[cash.length - 1][0];
+  const T = Math.max(dayDiff(s, e), 1);
+  const at = d => Math.min(Math.max(dayDiff(s, d), 0), T) / T;
+  const flows = [];
+  if (v0 > 0) flows.push([0, -v0]);
+  for (const [d, v] of cash) flows.push([at(d), -v]);
+  if (v1 > 0) flows.push([1, v1]);
+  if (!flows.some(([, v]) => v < 0)) return null;   // nothing put in
+  if (!flows.some(([, v]) => v > 0)) return -1;     // nothing back: all lost
+  const npv = g => flows.reduce((t, [x, v]) => t + v / Math.pow(1 + g, x), 0);
+  let lo = -0.9999, hi = 1;
+  while (npv(hi) > 0 && hi < 1e6) hi *= 2;
+  let flo = npv(lo);
+  if (!Number.isFinite(flo) || flo * npv(hi) > 0) return null;
+  for (let k = 0; k < 200; k++) {
+    const mid = (lo + hi) / 2, fm = npv(mid);
+    if (fm * flo > 0) { lo = mid; flo = fm; } else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
+// A tile's value by `method` (not 'kept': that is tileEarned). earnedRows: investment_by_asset's;
+// twr: Map asset -> % (twr_by_asset); cap: portfolioCapital. A savings chain: contribution and
+// XIRR over its members merged, TWR their returns chained (they follow one another); the merged
+// gold tile: contribution summed, the % weighted by the parts' value now.
+export function tileMetric(method, tile, { earnedRows, twr = new Map(), cap = null, from, to, assetOf = assetKey } = {}) {
+  const byAsset = new Map((earnedRows || []).map(r => [String(r.asset).toUpperCase(), r]));
+  const rowOf = t => byAsset.get(String(assetOf(t)).toUpperCase());
+  const twrOf = t => {
+    const v = twr.get(String(assetOf(t)).toUpperCase());
+    return v === undefined || v === null || !Number.isFinite(Number(v)) ? null : Number(v) / 100;
+  };
+  const one = rows => {
+    if (!rows.length) return NO;
+    if (method === 'contrib') {
+      if (!(cap > 0)) return NO;
+      const earned = rows.reduce((s, r) => s + earnedOf(r), 0);
+      return known(earned / cap, { unit: 'pp', earned });
+    }
+    const g = periodIrr(rows.length === 1 ? rows[0] : mergeRows(rows), from, to);
+    return g === null ? NO : known(g);
+  };
+  const members = tile.isChain && tile.members ? tile.members.map(m => m.ticker) : tile.isGold && tile.parts ? null : [tile.ticker];
+  if (method === 'twr') {
+    if (tile.isGold && tile.parts) return weightedChange(tile.parts.map(p => ({ value_usd: p.value_usd, ...tileMetric('twr', { ticker: p.ticker }, { twr, assetOf }) })));
+    const got = members.map(twrOf).filter(v => v !== null);
+    return got.length ? known(got.reduce((k, v) => k * (1 + v), 1) - 1) : NO;
+  }
+  if (tile.isGold && tile.parts) {
+    if (method === 'contrib') return one(tile.parts.map(p => rowOf(p.ticker)).filter(Boolean));
+    return weightedChange(tile.parts.map(p => ({ value_usd: p.value_usd, ...one([rowOf(p.ticker)].filter(Boolean)) })));
+  }
+  return one(members.map(rowOf).filter(Boolean));
+}
+// A tile judged by a bare change (cash in a currency, real estate) as a contribution: what its value
+// now gained by that change, over the portfolio's capital.
+export function changeAsContribution(e, value, cap) {
+  if (e.state === 'nodata' || e.change == null || !(cap > 0)) return NO;
+  const earned = value * e.change / (1 + e.change);
+  return known(earned / cap, { unit: 'pp', earned });
+}
+
 // Real estate colour: the change of the price per m2 in the city's index between the
 // period's base month and the latest month. indexRows: [{ month: 'YYYY-MM-DD', price_per_m2 }].
 export function reEstateChange(indexRows, period, today) {
@@ -435,9 +541,10 @@ export function tileColor(state, change, scale = SATURATE_AT) {
 }
 export const LEGEND_STOPS = [-0.12, -0.08, -0.04, 0, 0.04, 0.08, 0.12];
 
-export function formatChange(change) {
+// unit 'pp': percentage points of the portfolio (a contribution)
+export function formatChange(change, unit = '%') {
   const p = change * 100;
-  return `${p > 0 ? '+' : p < 0 ? '−' : ''}${Math.abs(p).toFixed(Math.abs(p) < 0.1 && p !== 0 ? 2 : 1)}%`;
+  return `${p > 0 ? '+' : p < 0 ? '−' : ''}${Math.abs(p).toFixed(Math.abs(p) < 0.1 && p !== 0 ? 2 : 1)}${unit === 'pp' ? ' pp' : '%'}`;
 }
 
 // ---- Savings links and periods from the savings trades ----
@@ -494,9 +601,23 @@ const usd = v => `$${Math.round(v).toLocaleString('en-US')}`;
 // held. A tile with no data says only that.
 function tooltipLines(tile, e, name = tile.ticker) {
   const head = name === tile.ticker ? [tile.ticker] : [name, tile.ticker];
+  const fmt = x => (x.state === 'nodata' || x.change == null ? '—' : formatChange(x.change, x.unit));
+  // e.all: the tile by every method, the one shown marked
+  if (e.all) {
+    const lines = [...head, `value ${usd(tile.value_usd)}`, `share ${(tile.share * 100).toFixed(2)}%`];
+    const earned = e.all.contrib?.earned;
+    if (earned != null) lines.push(`earned ${earned < 0 ? '−' : '+'}${usd(Math.abs(earned))}`);
+    for (const m of METHODS) if (e.all[m]) lines.push(`${m === e.method ? '▸ ' : ''}${METHOD_LABELS[m]} ${fmt(e.all[m])}`);
+    pushSources(tile, lines);
+    return lines;
+  }
   if (e.state === 'nodata') return [...head, 'no price history'];
   const lines = [...head, `value ${usd(tile.value_usd)}`, `share ${(tile.share * 100).toFixed(2)}%`,
     `change ${e.state === 'zero' ? '0.0%' : formatChange(e.change)}`];
+  pushSources(tile, lines);
+  return lines;
+}
+function pushSources(tile, lines) {
   if (tile.isGold && tile.parts) lines.push(tile.parts.map(p => `${p.ticker} ${usd(p.value_usd)}`).join(', '));
   else if (tile.isChain && tile.members) lines.push('merged savings');
   else if (tile.sources.length > 1 || tile.sources.some(s => s.from !== 'direct')) {
@@ -559,7 +680,7 @@ export function drawTreemap(container, tiles, earned, opts = {}) {
         a.textContent = name; el.append(a);
       }
     } else {
-      const change = e.state === 'zero' ? '0.0%' : formatChange(e.change);
+      const change = e.state === 'zero' ? (e.unit === 'pp' ? '0.0 pp' : '0.0%') : formatChange(e.change, e.unit);
       const fitW = Math.max(textWidth(name, true), textWidth(change, false)) + 2 * MIN_PAD + 2;
       if (r.w >= fitW && r.h >= 2 * LINE + 2 * MIN_PAD) {
         const a = document.createElement('div'), b = document.createElement('div');
@@ -596,7 +717,7 @@ export function drawTreemap(container, tiles, earned, opts = {}) {
   }
 }
 
-export function drawLegend(el, scale = SATURATE_AT) {
+export function drawLegend(el, scale = SATURATE_AT, unit = '%') {
   el.textContent = '';
   // the scale's ticks: the same fractions of the saturation point as LEGEND_STOPS of 12%
   const ticks = LEGEND_STOPS.map(s => s * scale / SATURATE_AT);
@@ -607,7 +728,7 @@ export function drawLegend(el, scale = SATURATE_AT) {
   labels.style.cssText = 'display:flex;justify-content:space-between;font-size:0.72rem;color:#6a7381;margin-top:2px';
   for (const s of ticks) {
     const sp = document.createElement('span');
-    sp.textContent = s === 0 ? '0%' : formatChange(s);
+    sp.textContent = s === 0 ? (unit === 'pp' ? '0 pp' : '0%') : formatChange(s, unit);
     labels.append(sp);
   }
   const swatch = (bg, text) => {
@@ -647,8 +768,11 @@ function wireTreemap() {
   const tip = $('lt_tip'), status = $('lt_status');
   const g = name => (typeof window[name] === 'function' ? window[name] : null);
   let data = null, loading = null, run = 0;
-  const earnedCache = new Map();
+  const earnedCache = new Map(), twrCache = new Map();
   let period = '1d';
+  let method = 'contrib';
+  try { const v = localStorage.getItem('lt_method'); if (METHODS.includes(v)) method = v; } catch { /* no storage */ }
+  if ($('lt_method')) $('lt_method').value = method;
   const today = () => new Date().toISOString().slice(0, 10);
 
   async function loadData() {
@@ -706,6 +830,19 @@ function wireTreemap() {
     }
     return earnedCache.get(p);
   }
+  // TWR (twr_by_asset): the daily values are on the server, the money flows are the earned rows' --
+  // sent, not worked out again. A failure (not deployed yet) leaves TWR empty, said in the status.
+  async function twrFor(p, earnedRows) {
+    if (!twrCache.has(p)) {
+      const from = periodStart(p, today()) ?? data.firstDay;
+      // eslint-disable-next-line no-undef
+      const { data: rows, error } = await sb.rpc('twr_by_asset', { p_from: from, p_to: today(),
+        p_flows: earnedRows.map(r => ({ asset: r.asset, cash: r.cash || [] })) });
+      if (error) return { map: new Map(), error: error.message };
+      twrCache.set(p, { map: new Map(rows.map(r => [String(r.asset).toUpperCase(), r.twr])), error: null });
+    }
+    return twrCache.get(p);
+  }
 
   // stablecoins are dollars (the page's SNOWBALL_STABLECOINS); anything else by assetKey
   const stable = typeof SNOWBALL_STABLECOINS !== 'undefined' ? SNOWBALL_STABLECOINS : new Set();
@@ -723,6 +860,7 @@ function wireTreemap() {
     try {
       if (!data) data = await (loading = loading || loadData());
       const earnedRows = await earnedFor(period);
+      const twr = await twrFor(period, earnedRows);
       if (my !== run) return;
       const cushion = $('lt_cushion').checked;
       let rows = data.rows;
@@ -733,13 +871,28 @@ function wireTreemap() {
       // the box keeps its proportions in CSS (aspect-ratio), so the layout is always for its real size
       const realEstate = reEstateChange(data.reIndex, period, today());
       const from = periodStart(period, today()) ?? data.firstDay;
-      // a cash tile in a currency: the currency's change against the dollar over the period
-      const colour = tile => {
+      const cap = portfolioCapital(earnedRows, from, today());
+      const ctx = { earnedRows, twr: twr.map, cap, from, to: today(), assetOf };
+      // a cash tile in a currency: the currency's change against the dollar over the period; real
+      // estate: its index's. By every method that change, as a contribution what it gained.
+      const bare = tile => {
         if (/^CASH [A-Z]{3}$/.test(tile.ticker) && tile.ticker !== 'CASH USD') {
           const ch = fxChange(data.fx, tile.ticker.slice(5), from, today());
           return ch == null ? earnedRatio(null) : ch === 0 ? { state: 'zero', change: 0 } : { state: 'known', change: ch };
         }
-        return tileEarned(tile, earnedRows, { assetOf, realEstate });
+        if (String(tile.ticker).startsWith('REAL_ESTATE')) return realEstate;
+        if (tile.ticker === 'CASH USD') return { state: 'zero', change: 0 };
+        if (String(tile.ticker).startsWith('CASH ') || String(tile.ticker).startsWith('CUSHION ')) return earnedRatio(null);
+        return null;
+      };
+      const by = (m, tile) => {
+        const b = bare(tile);
+        if (b) return m === 'contrib' ? changeAsContribution(b, tile.value_usd, cap) : b;
+        return m === 'kept' ? tileEarned(tile, earnedRows, { assetOf, realEstate }) : tileMetric(m, tile, ctx);
+      };
+      const colour = tile => {
+        const all = Object.fromEntries(METHODS.map(m => [m, by(m, tile)]));
+        return { ...all[method], all, method };
       };
       // the colour scale is this period's largest change on the map (so a one-day map is not all pale)
       const changes = tiles.filter(t => !t.isGroup).map(colour).filter(e => e.state === 'known' && e.change != null).map(e => Math.abs(e.change));
@@ -750,8 +903,11 @@ function wireTreemap() {
       if (my !== run) return;
       last = [tiles, colour, { tip, group: $('lt_small').checked, scale, names: { ...bondNames, ...FUND_NAMES } }];
       drawTreemap(box, ...last);
-      drawLegend($('lt_legend'), scale);
-      status.textContent = `${tiles.length} tiles, total ${usd(tiles.reduce((s, t) => s + t.value_usd, 0))}`;
+      drawLegend($('lt_legend'), scale, method === 'contrib' ? 'pp' : '%');
+      const earnedAll = earnedRows.reduce((s, r) => s + earnedOf(r), 0);
+      status.textContent = `${tiles.length} tiles, total ${usd(tiles.reduce((s, t) => s + t.value_usd, 0))}`
+        + (cap > 0 ? ` · the portfolio earned ${earnedAll < 0 ? '−' : '+'}${usd(Math.abs(earnedAll))}, ${formatChange(earnedAll / cap)} on ${usd(cap)} at work on average` : '')
+        + (twr.error ? ` · TWR: ${twr.error}` : '');
     } catch (e) {
       if (my === run) status.textContent = e.message || String(e);
       loading = null;
@@ -766,6 +922,11 @@ function wireTreemap() {
     });
   }
   for (const id of ['lt_expand', 'lt_cushion', 'lt_gold', 'lt_savings', 'lt_re', 'lt_small']) $(id).addEventListener('change', redraw);
+  $('lt_method')?.addEventListener('change', e => {
+    method = METHODS.includes(e.target.value) ? e.target.value : 'contrib';
+    try { localStorage.setItem('lt_method', method); } catch { /* no storage */ }
+    redraw();
+  });
   let width = 0;
   new ResizeObserver(() => { if (box.clientWidth && box.clientWidth !== width && data) { width = box.clientWidth; redraw(); } }).observe(box);
 
@@ -774,7 +935,7 @@ function wireTreemap() {
   const show = () => { if ($('lookthrough').classList.contains('active') && signedIn.style.display !== 'none') redraw(); };
   document.querySelector('.tab[data-tab="lookthrough"]')?.addEventListener('click', () => setTimeout(show, 0));
   new MutationObserver(() => {
-    if (signedIn.style.display === 'none') { data = null; loading = null; earnedCache.clear(); box.textContent = ''; status.textContent = ''; }
+    if (signedIn.style.display === 'none') { data = null; loading = null; earnedCache.clear(); twrCache.clear(); box.textContent = ''; status.textContent = ''; }
     else show();
   }).observe(signedIn, { attributes: true, attributeFilter: ['style'] });
   show();

@@ -643,13 +643,18 @@
   <div id="lookthrough_signed_in" style="display:none">
     <div id="lt_screen" style="display:flex;flex-direction:column;height:calc(100vh - 32px);min-height:560px">
     <div class="section-title">Portfolio map</div>
-    <p class="note">Tile area is the share of the portfolio; colour is what the position earned over the period relative to the money put in
-      (price change, dividends, coupons and interest), not the bare price change. Striped tiles have nothing to judge by.</p>
+    <p class="note">Tile area is the share of the portfolio; colour is what the position earned over the period (price change, dividends,
+      coupons and interest), not the bare price change, by the method chosen. <b>Contribution</b>: what it earned over the whole
+      portfolio's capital at work, in percentage points -- the tiles add up to the portfolio's return; a dividend is the payer's, what it
+      earns after is the paper it bought. <b>TWR</b>: the paper's own return, day by day, whatever was bought or sold when.
+      <b>XIRR</b>: the return of the money put in and taken out (a dividend is money back) over the time held, not made yearly.
+      <b>Dividends kept</b>: a dividend stays in the paper's capital as idle cash. The tooltip shows all four. Striped tiles have nothing to judge by.</p>
     <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
     <div class="form-row" id="lt_periods" style="gap:6px"><button class="btn primary" type="button" data-period="1d">1d</button><button class="btn" type="button" data-period="2d">2d</button><button class="btn" type="button" data-period="3d">3d</button><button class="btn" type="button" data-period="7d">7d</button><button class="btn" type="button" data-period="1m">1m</button><button class="btn" type="button" data-period="3m">3m</button><button class="btn" type="button" data-period="6m">6m</button><button class="btn" type="button" data-period="ytd">YTD</button><button class="btn" type="button" data-period="1y">1y</button><button class="btn" type="button" data-period="5y">5y</button><button class="btn" type="button" data-period="all">all</button></div>
     <div id="lt_legend" style="flex:1 1 260px;max-width:480px"></div>
     </div>
     <div class="form-row" style="gap:16px;flex-wrap:wrap">
+      <label>method <select id="lt_method"><option value="contrib">contribution (pp)</option><option value="twr">TWR</option><option value="xirr">XIRR</option><option value="kept">dividends kept</option></select></label>
       <label><input type="checkbox" id="lt_expand"> expand funds</label>
       <label title="The cash at Bank of Cyprus, Ziraat, Raiffeisen and Wise, TBC's savings account and Revolut's euro liquid assets up to $10,000, as a tile of its own"><input type="checkbox" id="lt_cushion"> show safety cushion</label>
       <label title="Real estate (the flat at the price per m2 of the Nizhny Novgorod index): its colour is the index change, not earned/invested"><input type="checkbox" id="lt_re"> show real estate</label>
