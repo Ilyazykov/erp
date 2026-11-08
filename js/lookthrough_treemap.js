@@ -586,6 +586,16 @@ export function drawLegend(el) {
 // the Supabase client `sb`, and investment_by_asset for the colour. A period
 // switch fetches that period's earned rows once (cached); the checkboxes only
 // redraw from what is loaded.
+// A currency's change against the dollar from one day to another: fx is a Map of currency ->
+// [[day, usd_per_unit]] ascending (fx_history). Each day takes the last rate on or before it.
+export function fxChange(fx, currency, from, to) {
+  const series = fx?.get(currency);
+  if (!series) return null;
+  const on = d => { let v = null; for (const [day, k] of series) { if (day > d) break; v = k; } return v; };
+  const a = on(from), b = on(to);
+  return a && b ? b / a - 1 : null;
+}
+
 function wireTreemap() {
   const $ = id => document.getElementById(id);
   const box = $('lt_treemap');
@@ -628,7 +638,18 @@ function wireTreemap() {
     const { data: first } = await sb.from('trades').select('trade_date').eq('side', 'buy').order('trade_date').limit(1);
     // eslint-disable-next-line no-undef
     const { data: reIndex } = await sb.from('real_estate_index').select('month, price_per_m2').eq('city', 'nizhny_novgorod').order('month');
-    return { rows, fundHoldings, savingsLinks: links, savingsPeriods: periods, firstDay: first?.[0]?.trade_date || '2000-01-01', reIndex: reIndex || [] };
+    // the rates of the currencies held in cash (fx_history, the page's rates): their change is the cash tile's colour
+    const ccys = [...new Set(rows.map(r => r.currency).filter(c => c && c !== 'USD'))];
+    const fx = new Map();
+    if (ccys.length) {
+      // eslint-disable-next-line no-undef
+      const fxRows = await snowballFetchAll(() => sb.from('fx_history').select('currency, day, usd_per_unit').in('currency', ccys).order('day'));
+      for (const r of fxRows) {
+        if (!fx.has(r.currency)) fx.set(r.currency, []);
+        fx.get(r.currency).push([r.day, Number(r.usd_per_unit)]);
+      }
+    }
+    return { rows, fundHoldings, savingsLinks: links, savingsPeriods: periods, firstDay: first?.[0]?.trade_date || '2000-01-01', reIndex: reIndex || [], fx };
   }
 
   async function earnedFor(p) {
@@ -667,7 +688,16 @@ function wireTreemap() {
         includeRealEstate: $('lt_re').checked });
       // the box keeps its proportions in CSS (aspect-ratio), so the layout is always for its real size
       const realEstate = reEstateChange(data.reIndex, period, today());
-      last = [tiles, tile => tileEarned(tile, earnedRows, { assetOf, realEstate }), { tip, group: $('lt_small').checked }];
+      const from = periodStart(period, today()) ?? data.firstDay;
+      // a cash tile in a currency: the currency's change against the dollar over the period
+      const colour = tile => {
+        if (/^CASH [A-Z]{3}$/.test(tile.ticker) && tile.ticker !== 'CASH USD') {
+          const ch = fxChange(data.fx, tile.ticker.slice(5), from, today());
+          return ch == null ? earnedRatio(null) : ch === 0 ? { state: 'zero', change: 0 } : { state: 'known', change: ch };
+        }
+        return tileEarned(tile, earnedRows, { assetOf, realEstate });
+      };
+      last = [tiles, colour, { tip, group: $('lt_small').checked }];
       drawTreemap(box, ...last);
       drawLegend($('lt_legend'));
       status.textContent = `${tiles.length} tiles, total ${usd(tiles.reduce((s, t) => s + t.value_usd, 0))}`;
