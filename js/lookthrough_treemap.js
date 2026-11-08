@@ -119,12 +119,14 @@ export function savingsChains(links) {
 // product money last moved into. Closed members are listed too: their
 // earnings belong to the chain.
 // Tiles of zero or negative value are dropped.
-export function aggregate({ rows, holdings, fundHoldings, expandFunds = false, includeCushion = false,
+export function aggregate({ rows, holdings, fundHoldings, expandFunds = false, includeCushion = false, includeRealEstate = false,
   mergeGold = true, mergeSavings = true, savingsLinks = [], savingsPeriods = {} }) {
   const isFundTicker = t => Object.prototype.hasOwnProperty.call(fundHoldings || {}, t);
   let entries, typeOf = new Map();
   if (rows) {
+    // real estate is not on the map (it is not in the pies' totals either; it has no price history)
     const netted = netCreditIntoLiquid(rows.filter(r => Number.isFinite(Number(r.value_usd)))
+      .filter(r => includeRealEstate || (r.account !== 'real estate' && r.instrument_type !== 'real_estate'))
       .map(r => ({ ...r, value_usd: Number(r.value_usd) })));
     entries = netted.filter(r => r.value_usd > 0)
       .map(r => ({ ticker: r.ticker, value_usd: r.value_usd, kind: isFundTicker(r.ticker) ? 'fund' : 'direct',
@@ -285,7 +287,9 @@ export function assetKey(ticker) {
 // merged gold tile: its parts' ratios weighted by their value now (as
 // goldChange). assetOf maps a ticker to the rpc's asset where assetKey isn't
 // enough (an exchange's stablecoins and Earn are 'USD' there).
-export function tileEarned(tile, earnedRows, { assetOf = assetKey } = {}) {
+export function tileEarned(tile, earnedRows, { assetOf = assetKey, realEstate = null } = {}) {
+  // real estate has no purchase/sale history on this tab: its colour is the index change (see reEstateChange)
+  if (String(tile.ticker).startsWith('REAL_ESTATE')) return realEstate || earnedRatio(null);
   const byAsset = new Map((earnedRows || []).map(r => [String(r.asset).toUpperCase(), r]));
   const rowOf = t => byAsset.get(String(assetOf(t)).toUpperCase());
   if (tile.isChain && tile.members) {
@@ -301,6 +305,19 @@ export function tileEarned(tile, earnedRows, { assetOf = assetKey } = {}) {
     return weightedChange(tile.parts.map(p => ({ value_usd: p.value_usd, ...earnedRatio(rowOf(p.ticker)) })));
   }
   return earnedRatio(rowOf(tile.ticker));
+}
+
+// Real estate colour: the change of the price per m2 in the city's index between the
+// period's base month and the latest month. indexRows: [{ month: 'YYYY-MM-DD', price_per_m2 }].
+export function reEstateChange(indexRows, period, today) {
+  const rows = (indexRows || []).filter(r => Number(r.price_per_m2) > 0).sort((a, b) => (a.month < b.month ? -1 : 1));
+  if (!rows.length) return { state: 'nodata', change: null };
+  const cur = rows[rows.length - 1].price_per_m2;
+  const start = periodStart(period, today);
+  const base = start === null ? rows[0] : [...rows].reverse().find(r => r.month <= start);
+  if (!base) return { state: 'nodata', change: null };
+  const change = cur / base.price_per_m2 - 1;
+  return change === 0 ? { state: 'zero', change: 0 } : { state: 'known', change };
 }
 
 // ---- Credit-card debt netting: ONE copy, used by the pies (index.html) and the treemap.
@@ -440,20 +457,42 @@ function tooltipLines(tile, e) {
 
 // Draws the tiles into `container`: tiles from aggregate(), earned(tile) -> the
 // colour state { state, change } of tileEarned. Flat; no children.
-export function drawTreemap(container, tiles, earned, { tip } = {}) {
+export function drawTreemap(container, tiles, earned, { tip, group = false } = {}) {
   container.textContent = '';
   const W = container.clientWidth, H = container.clientHeight;
   if (!(W > 0) || !(H > 0)) return;
-  const rects = squarify(tiles.map(t => ({ value: t.share, tile: t })), 0, 0, W, H);
+  // tiles under 0.2% of the portfolio are too thin to read: they go into one grey tile
+  const SMALL = 0.002;
+  const small = group ? tiles.filter(t => t.share < SMALL) : [], big = tiles.filter(t => !group || t.share >= SMALL);
+  const items = big.map(t => ({ value: t.share, tile: t }));
+  if (small.length) {
+    const groupShare = small.reduce((s, t) => s + t.share, 0);
+    items.push({ value: groupShare, tile: { ticker: `${small.length} small`, share: groupShare, value_usd: small.reduce((s, t) => s + t.value_usd, 0), isGroup: true, members: small } });
+  }
+  const rects = squarify(items, 0, 0, W, H);
   const frag = document.createDocumentFragment();
   for (const r of rects) {
-    const tile = r.item.tile, e = earned(tile);
+    const tile = r.item.tile, e = tile.isGroup ? { state: 'group' } : earned(tile);
     const el = document.createElement('div');
     el.className = 'lt-tile';
     Object.assign(el.style, { position: 'absolute', boxSizing: 'border-box', overflow: 'hidden', border: '1px solid #0d1117',
-      left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px`, background: tileColor(e.state, e.change),
+      left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px`, background: tile.isGroup ? '#2a2f36' : tileColor(e.state, e.change),
       color: '#fff', padding: `${MIN_PAD - 1}px`, lineHeight: `${LINE}px`, fontSize: '12px', cursor: 'default' });
-    if (e.state !== 'nodata') {
+    if (tile.isGroup) {
+      if (r.w >= textWidth(tile.ticker, true) + 2 * MIN_PAD + 2 && r.h >= LINE + 2 * MIN_PAD) {
+        const a = document.createElement('div');
+        a.style.cssText = 'font-weight:bold;white-space:nowrap;overflow:hidden';
+        a.textContent = tile.ticker; el.append(a);
+      }
+    } else if (e.state === 'nodata') {
+      // no price: no change to show, but a big tile still names its instrument
+      const fitW = textWidth(tile.ticker, true) + 2 * MIN_PAD + 2;
+      if (r.w >= fitW && r.h >= LINE + 2 * MIN_PAD) {
+        const a = document.createElement('div');
+        a.style.cssText = 'font-weight:bold;white-space:nowrap;overflow:hidden';
+        a.textContent = tile.ticker; el.append(a);
+      }
+    } else {
       const change = e.state === 'zero' ? '0.0%' : formatChange(e.change);
       const fitW = Math.max(textWidth(tile.ticker, true), textWidth(change, false)) + 2 * MIN_PAD + 2;
       if (r.w >= fitW && r.h >= 2 * LINE + 2 * MIN_PAD) {
@@ -465,7 +504,7 @@ export function drawTreemap(container, tiles, earned, { tip } = {}) {
       }
     }
     if (tip) {
-      const lines = tooltipLines(tile, e);
+      const lines = tile.isGroup ? [`${tile.members.length} small positions`, ...tile.members.map(m => `${m.ticker} ${(m.share * 100).toFixed(2)}%`)] : tooltipLines(tile, e);
       el.addEventListener('mousemove', ev => {
         tip.textContent = '';
         lines.forEach((l, i) => { const d = document.createElement('div'); if (i === 0) d.style.fontWeight = 'bold'; d.textContent = l; tip.append(d); });
@@ -555,7 +594,9 @@ function wireTreemap() {
     // 'all': counted from the first purchase in the trades table
     // eslint-disable-next-line no-undef
     const { data: first } = await sb.from('trades').select('trade_date').eq('side', 'buy').order('trade_date').limit(1);
-    return { rows, fundHoldings, savingsLinks: links, savingsPeriods: periods, firstDay: first?.[0]?.trade_date || '2000-01-01' };
+    // eslint-disable-next-line no-undef
+    const { data: reIndex } = await sb.from('real_estate_index').select('month, price_per_m2').eq('city', 'nizhny_novgorod').order('month');
+    return { rows, fundHoldings, savingsLinks: links, savingsPeriods: periods, firstDay: first?.[0]?.trade_date || '2000-01-01', reIndex: reIndex || [] };
   }
 
   async function earnedFor(p) {
@@ -584,9 +625,11 @@ function wireTreemap() {
       let rows = data.rows;
       if (cushion && g('mpWithCushion')) rows = [...window.mpWithCushion(rows.filter(r => r.account !== 'real estate')), ...rows.filter(r => r.account === 'real estate')];
       const tiles = aggregate({ rows, fundHoldings: data.fundHoldings, expandFunds: $('lt_expand').checked, includeCushion: cushion,
-        mergeGold: $('lt_gold').checked, mergeSavings: $('lt_savings').checked, savingsLinks: data.savingsLinks, savingsPeriods: data.savingsPeriods });
+        mergeGold: $('lt_gold').checked, mergeSavings: $('lt_savings').checked, savingsLinks: data.savingsLinks, savingsPeriods: data.savingsPeriods,
+        includeRealEstate: $('lt_re').checked });
       box.style.height = `${Math.max(320, Math.min(620, Math.round(box.clientWidth * 0.55)))}px`;
-      drawTreemap(box, tiles, tile => tileEarned(tile, earnedRows, { assetOf }), { tip });
+      const realEstate = reEstateChange(data.reIndex, period, today());
+      drawTreemap(box, tiles, tile => tileEarned(tile, earnedRows, { assetOf, realEstate }), { tip, group: $('lt_small').checked });
       drawLegend($('lt_legend'));
       status.textContent = `${tiles.length} tiles, total ${usd(tiles.reduce((s, t) => s + t.value_usd, 0))}`;
     } catch (e) {
@@ -602,7 +645,7 @@ function wireTreemap() {
       redraw();
     });
   }
-  for (const id of ['lt_expand', 'lt_cushion', 'lt_gold', 'lt_savings']) $(id).addEventListener('change', redraw);
+  for (const id of ['lt_expand', 'lt_cushion', 'lt_gold', 'lt_savings', 'lt_re', 'lt_small']) $(id).addEventListener('change', redraw);
   let width = 0;
   new ResizeObserver(() => { if (box.clientWidth && box.clientWidth !== width && data) { width = box.clientWidth; redraw(); } }).observe(box);
 

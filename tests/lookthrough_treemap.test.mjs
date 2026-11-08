@@ -146,12 +146,13 @@ const capRows = [
   L('(unspecified)', 'REAL_ESTATE:Flat', 5000, 'real_estate'),
   L('Sber', 'SAVINGS:Sber RUB', 400, 'cushion'),
 ];
-const nettedTotal = sum(netCreditIntoLiquid(capRows).filter(r => r.value_usd > 0), r => r.value_usd);
+const nettedTotal = sum(netCreditIntoLiquid(capRows.filter(r => r.instrument_type !== 'real_estate')).filter(r => r.value_usd > 0), r => r.value_usd);
 tiles = aggregate({ rows: capRows, fundHoldings: {}, mergeGold: false });
 const tileOf = t => tiles.find(x => x.ticker === t);
-for (const t of ['SU26238RMFS4', 'DEPOSIT:Alfa RUB 18% 10.05.2026', 'XAU', 'XAUT', 'BTC', 'REAL_ESTATE:Flat', 'CASH:USD'])
+for (const t of ['SU26238RMFS4', 'DEPOSIT:Alfa RUB 18% 10.05.2026', 'XAU', 'XAUT', 'BTC', 'CASH:USD'])
   assert.ok(tileOf(t), `${t} is a tile`);
 assert.equal(tileOf('SU26238RMFS4').instrument_type, 'bond');
+assert.equal(tileOf('REAL_ESTATE:Flat'), undefined, 'real estate is not on the map (as in the pies)');
 assert.equal(tiles.some(t => t.ticker.startsWith('CARD:')), false, 'credit is no tile');
 // T-Bank's -400 over Sber 600 + Alfa 200 liquid: factor 0.5, both halve; T-Bank has no liquid tile
 near(tileOf('SAVINGS:Sber RUB').value_usd, 300, 'Sber liquid netted'); near(tileOf('SAVINGS:Alfa RUB').value_usd, 100, 'Alfa liquid netted');
