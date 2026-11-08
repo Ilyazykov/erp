@@ -23,11 +23,11 @@ language sql stable as $$
           / nullif(cardinality(q.ws), 0)
       ) as score
     from public.products p, q
-    where p.user_id = auth.uid() and p.merged_into is null
+    where p.merged_into is null   -- the catalog is shared (...180): no per-user filter
   )
   select a.product_id, p.name_en, extensions.similarity(a.name_norm, public.receipt_norm(p_name)) as score, 'alias'::text as via
   from public.product_aliases a join public.products p on p.id = a.product_id
-  where a.user_id = auth.uid() and p.merged_into is null
+  where p.merged_into is null
     and (a.chain = '' or a.chain = coalesce(p_chain, ''))
     and extensions.similarity(a.name_norm, public.receipt_norm(p_name)) > 0.3
   union all
