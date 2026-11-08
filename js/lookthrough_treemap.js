@@ -139,11 +139,11 @@ export function aggregate({ rows, holdings, fundHoldings, expandFunds = false, i
     const netted = netCreditIntoLiquid(rows.filter(r => Number.isFinite(Number(r.value_usd)))
       .filter(r => !r.excluded && (includeRealEstate || (r.account !== 'real estate' && r.instrument_type !== 'real_estate')))
       .map(r => ({ ...r, value_usd: Number(r.value_usd) })));
-    // a cushion row is one tile per currency even when it's a part of a fund's row (the Revolut
-    // euro fund's share the cushion takes keeps the fund's ticker): merged into the fund's tile it
-    // would leave the fund whole and the cushion invisible
+    // a cushion row is a tile of its own: named by the caller ('CUSHION ...') when it says how the
+    // cushion is shown, else one per currency. Its part of a fund's row keeps the fund's ticker, so
+    // without this it would merge into the fund's tile and leave the fund whole
     entries = netted.filter(r => r.value_usd > 0)
-      .map(r => ({ ticker: (r.instrument_type === 'cushion' ? null : r.ticker) || unlistedTicker(r), value_usd: r.value_usd, kind: isFundTicker(r.ticker) ? 'fund' : 'direct',
+      .map(r => ({ ticker: (r.instrument_type === 'cushion' && !/^CUSHION( |$)/.test(String(r.ticker)) ? unlistedTicker(r) : r.ticker) || unlistedTicker(r), value_usd: r.value_usd, kind: isFundTicker(r.ticker) ? 'fund' : 'direct',
         cushion: r.instrument_type === 'cushion', instrument_type: r.instrument_type }));
     // a ticker's type: of its biggest non-cushion row
     for (const e of [...entries].sort((x, y) => x.value_usd - y.value_usd)) {
@@ -330,7 +330,7 @@ export function tileEarned(tile, earnedRows, { assetOf = assetKey, realEstate = 
   if (String(tile.ticker).startsWith('REAL_ESTATE')) return realEstate || earnedRatio(null);
   // cash has no price: dollars are exactly zero; other currencies have no rate history here
   if (tile.ticker === 'CASH USD') return { state: 'zero', change: 0 };
-  if (String(tile.ticker).startsWith('CASH ') || String(tile.ticker).startsWith('CUSHION ')) return earnedRatio(null);
+  if (String(tile.ticker).startsWith('CASH ') || /^CUSHION( |$)/.test(String(tile.ticker))) return earnedRatio(null);
   const byAsset = new Map((earnedRows || []).map(r => [String(r.asset).toUpperCase(), r]));
   const rowOf = t => byAsset.get(String(assetOf(t)).toUpperCase());
   if (tile.isChain && tile.members) {
@@ -849,9 +849,15 @@ function wireTreemap() {
       if (!data) data = await (loading = loading || loadData());
       const earnedRows = await earnedFor(period);
       if (my !== run) return;
-      const cushion = $('lt_cushion').checked;
+      // the cushion: 'merged' -- one tile; 'split' -- a tile per account it came from; 'hidden' -- out of
+      // the calculations altogether (the rows as they are, nothing moved to the cushion)
+      const cushionMode = $('lt_cushion').value;
+      const cushion = cushionMode !== 'hidden';
       let rows = data.rows;
-      if (cushion && g('mpWithCushion')) rows = [...window.mpWithCushion(rows.filter(r => r.account !== 'real estate')), ...rows.filter(r => r.account === 'real estate')];
+      if (cushion && g('mpWithCushion')) {
+        rows = [...window.mpWithCushion(rows.filter(r => r.account !== 'real estate')), ...rows.filter(r => r.account === 'real estate')]
+          .map(r => (r.instrument_type !== 'cushion' ? r : { ...r, ticker: cushionMode === 'merged' ? 'CUSHION' : `CUSHION ${r.account}` }));
+      }
       const tiles = aggregate({ rows, fundHoldings: data.fundHoldings, expandFunds: $('lt_expand').checked, includeCushion: cushion,
         mergeGold: $('lt_gold').checked, mergeSavings: $('lt_savings').checked, savingsLinks: data.savingsLinks, savingsPeriods: data.savingsPeriods,
         includeRealEstate: $('lt_re').checked });
@@ -869,7 +875,7 @@ function wireTreemap() {
         }
         if (String(tile.ticker).startsWith('REAL_ESTATE')) return realEstate;
         if (tile.ticker === 'CASH USD') return { state: 'zero', change: 0 };
-        if (String(tile.ticker).startsWith('CASH ') || String(tile.ticker).startsWith('CUSHION ')) return earnedRatio(null);
+        if (String(tile.ticker).startsWith('CASH ') || /^CUSHION( |$)/.test(String(tile.ticker))) return earnedRatio(null);
         return null;
       };
       const by = (m, tile) => {
