@@ -3,10 +3,16 @@
 //   2. priceChange: known / zero / nodata, 'all' from the first price;
 //   3. aggregate: one tile per instrument with every source, funds as tiles
 //      with or without their constituents, shares, sorting, zero values;
-//   4. tileChange: a fund only by its own price.
+//   4. tileChange: a fund only by its own price;
+//   5. isRuInfra / netCreditIntoLiquid: card debt netted into liquid rows by infrastructure;
+//   6. aggregate over the pies' rows: every asset type, cushion, netting across banks;
+//   7. mergeGold and goldChange;
+//   8. earnedRatio / tileEarned: earned over invested, the colour;
+//   9. savingsChains and mergeSavings.
 // Run: node tests/lookthrough_treemap.test.mjs
 import assert from 'node:assert/strict';
-import { periodStart, priceChange, aggregate, tileChange } from '../js/lookthrough_treemap.js';
+import { periodStart, priceChange, aggregate, tileChange, isRuInfra, netCreditIntoLiquid,
+  goldChange, earnedRatio, tileEarned, savingsChains, assetKey } from '../js/lookthrough_treemap.js';
 
 const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-9, `${msg}: ${a} != ${b}`);
 
@@ -102,5 +108,157 @@ assert.deepEqual(tiles.map(t => t.ticker), ['X', 'Z'].filter(t => t !== 'Z'));
 assert.equal(tileChange({ ticker: 'FUND', isFund: true }, 'all', prices, today).state, 'known');
 assert.deepEqual(tileChange({ ticker: 'A', isFund: true }, '1d', prices, today), { state: 'nodata', change: null });
 near(tileChange({ ticker: 'AAA', isFund: false }, '1d', prices, today).change, 110 / 105 - 1, 'instrument tile');
+
+// ---- 5. isRuInfra / netCreditIntoLiquid ----
+assert.equal(isRuInfra({ account: 'Sber' }), true);
+assert.equal(isRuInfra({ account: 'IBKR' }), false);
+assert.equal(isRuInfra({ account: '(unspecified)', infra_region: 'ru' }), true);
+assert.equal(isRuInfra({ account: '(unspecified)', infra_region: 'foreign' }), false);
+const L = (account, ticker, value_usd, instrument_type = 'liquid') => ({ account, ticker, value_usd, instrument_type });
+// a Russian card against Russian liquid rows only: 300 + 100 liquid, -200 debt -> factor 0.5
+let net = netCreditIntoLiquid([L('T-Bank', 'CARD', -200, 'credit'), L('Sber', 'S1', 300), L('Alfa', 'A1', 100),
+  L('IBKR', 'MMF', 1000), L('Sber', 'SBER', 50, 'stock')]);
+assert.deepEqual(net.map(r => [r.ticker, r.value_usd]), [['S1', 150], ['A1', 50], ['MMF', 1000], ['SBER', 50]]);
+// a foreign card against foreign liquid rows only
+net = netCreditIntoLiquid([L('Revolut', 'CARD', -250, 'credit'), L('Revolut', 'RF', 1000), L('Sber', 'S1', 300)]);
+assert.deepEqual(net.map(r => [r.ticker, r.value_usd]), [['RF', 750], ['S1', 300]]);
+// credit bigger than liquid -> factor 0; no liquid -> factor 1 (nothing to scale); a negative non-credit row as is
+net = netCreditIntoLiquid([L('T-Bank', 'CARD', -500, 'credit'), L('Sber', 'S1', 300), L('IBKR', 'CASH', -5, 'cash')]);
+assert.deepEqual(net.map(r => [r.ticker, r.value_usd]), [['S1', 0], ['CASH', -5]]);
+net = netCreditIntoLiquid([L('T-Bank', 'CARD', -500, 'credit'), L('Sber', 'SBER', 300, 'stock')]);
+assert.deepEqual(net.map(r => [r.ticker, r.value_usd]), [['SBER', 300]]);
+
+// ---- 6. aggregate over the pies' rows ----
+const capRows = [
+  L('Sber', 'SBER', 1000, 'stock'),
+  L('Alfa', 'SU26238RMFS4', 800, 'bond'),
+  L('Alfa', 'DEPOSIT:Alfa RUB 18% 10.05.2026', 700, 'deposit'),
+  L('Sber', 'SAVINGS:Sber RUB', 600),
+  L('Alfa', 'SAVINGS:Alfa RUB', 200),
+  L('T-Bank', 'CARD:T-Bank', -400, 'credit'),       // netted against Sber's and Alfa's liquid rows, not drawn
+  L('Revolut', 'CARD:Revolut', -100, 'credit'),     // only the foreign liquid row
+  L('Revolut', 'MMF', 500),
+  L('IBKR', 'MMF', 300),                            // the same fund in two accounts: one tile
+  L('IBKR', 'CASH:USD', 250, 'cash'),
+  L('Alfa', 'XAU', 500, 'gold'),
+  L('Bybit', 'XAUT', 300, 'crypto'),
+  L('Bybit', 'BTC', 900, 'crypto'),
+  L('(unspecified)', 'REAL_ESTATE:Flat', 5000, 'real_estate'),
+  L('Sber', 'SAVINGS:Sber RUB', 400, 'cushion'),
+];
+const nettedTotal = sum(netCreditIntoLiquid(capRows).filter(r => r.value_usd > 0), r => r.value_usd);
+tiles = aggregate({ rows: capRows, fundHoldings: {}, mergeGold: false });
+const tileOf = t => tiles.find(x => x.ticker === t);
+for (const t of ['SU26238RMFS4', 'DEPOSIT:Alfa RUB 18% 10.05.2026', 'XAU', 'XAUT', 'BTC', 'REAL_ESTATE:Flat', 'CASH:USD'])
+  assert.ok(tileOf(t), `${t} is a tile`);
+assert.equal(tileOf('SU26238RMFS4').instrument_type, 'bond');
+assert.equal(tiles.some(t => t.ticker.startsWith('CARD:')), false, 'credit is no tile');
+// T-Bank's -400 over Sber 600 + Alfa 200 liquid: factor 0.5, both halve; T-Bank has no liquid tile
+near(tileOf('SAVINGS:Sber RUB').value_usd, 300, 'Sber liquid netted'); near(tileOf('SAVINGS:Alfa RUB').value_usd, 100, 'Alfa liquid netted');
+// Revolut's -100 over the foreign liquid 800: factor 7/8, the fund's two accounts one tile
+near(tileOf('MMF').value_usd, 700, 'foreign liquid netted, one tile');
+assert.equal(tileOf('MMF').sources.length, 1);
+assert.ok(tiles.every(t => t.value_usd > 0), 'no negative tile');
+// cushion off: not drawn, still in the total of the shares
+near(sum(tiles, t => t.value_usd), nettedTotal - 400, 'tiles = netted rows less the cushion');
+near(sum(tiles, t => t.share), (nettedTotal - 400) / nettedTotal, 'shares of the netted total');
+tiles = aggregate({ rows: capRows, fundHoldings: {}, mergeGold: false, includeCushion: true });
+near(sum(tiles, t => t.value_usd), nettedTotal, 'tiles = netted rows with the cushion');
+near(sum(tiles, t => t.share), 1, 'shares sum to 1 with the cushion');
+assert.equal(tiles.find(t => t.ticker === 'SAVINGS:Sber RUB').value_usd, 700, 'the cushion part joins its ticker');
+// a row whose ticker fundHoldings has is a fund
+tiles = aggregate({ rows: [L('IBKR', 'VT', 1000, 'stock'), L('IBKR', 'NVDA', 100, 'stock')],
+  fundHoldings: { VT: [{ ticker: 'NVDA', weight: 0.1 }, { ticker: 'AAPL', weight: 0.9 }] } });
+assert.equal(tiles[0].isFund, true);
+tiles = aggregate({ rows: [L('IBKR', 'VT', 1000, 'stock'), L('IBKR', 'NVDA', 100, 'stock')],
+  fundHoldings: { VT: [{ ticker: 'NVDA', weight: 0.1 }, { ticker: 'AAPL', weight: 0.9 }] }, expandFunds: true });
+assert.deepEqual(tiles.map(t => [t.ticker, t.value_usd]), [['AAPL', 900], ['NVDA', 200]]);
+
+// ---- 7. mergeGold / goldChange ----
+tiles = aggregate({ rows: capRows, fundHoldings: {} });
+const gold = tiles.find(t => t.ticker === 'GOLD');
+assert.equal(gold.isGold, true); assert.equal(gold.value_usd, 800);
+assert.deepEqual(gold.sources, [{ from: 'XAU', value_usd: 500 }, { from: 'XAUT', value_usd: 300 }]);
+assert.ok(!tiles.some(t => t.ticker === 'XAU' || t.ticker === 'XAUT'));
+near(sum(tiles, t => t.value_usd), sum(aggregate({ rows: capRows, fundHoldings: {}, mergeGold: false }), t => t.value_usd), 'merge keeps the sum');
+const goldPrices = {
+  XAU: { current: 110, byDate: [{ day: '2026-11-01', price: 100 }] },    // +10%
+  XAUT: { current: 98, byDate: [{ day: '2026-11-01', price: 100 }] },    // -2%
+};
+r = goldChange(gold.parts, '7d', goldPrices, today);
+near(r.change, (500 * 0.10 + 300 * -0.02) / 800, 'weighted gold change'); assert.equal(r.state, 'known');
+assert.deepEqual(tileChange(gold, '7d', goldPrices, today), r);
+r = goldChange(gold.parts, '7d', { XAU: goldPrices.XAU }, today);                  // XAUT nodata: XAU alone
+near(r.change, 0.10, 'one part nodata');
+assert.deepEqual(goldChange(gold.parts, '7d', {}, today), { state: 'nodata', change: null });
+assert.deepEqual(goldChange(gold.parts, '7d', { XAU: { current: 100, byDate: [{ day: '2026-11-01', price: 100 }] } }, today),
+  { state: 'zero', change: 0 });
+
+// ---- 8. earnedRatio / tileEarned ----
+// bought 1000 in the period, worth 1100 now: +10% on its own money
+r = earnedRatio({ value_start: 0, value_end: 1100, put_in: 1000, taken_out: 0, income: 0, kind: 'stock' });
+near(r.change, 0.1, 'bought inside the period'); assert.equal(r.state, 'known');
+// held 1000 at the start, 500 more bought, worth 1800: earned 300 on 1500
+near(earnedRatio({ value_start: 1000, value_end: 1800, put_in: 500, taken_out: 0, income: 0, kind: 'stock' }).change, 300 / 1500, 'buy then a rise');
+// bought 1000, doubled, a quarter sold for 500: worth 1500, earned 1000 (500 of it realised) on 1000 - 500
+r = earnedRatio({ value_start: 0, value_end: 1500, put_in: 1000, taken_out: 500, income: 0, kind: 'stock' });
+near(r.earned, 1000, 'realised profit stays in earned'); near(r.change, 1000 / 500, 'partial sale');
+// a dividend of 50 paid out, the price flat: earned 50 on the 1000 -- the payout is no own money back
+r = earnedRatio({ value_start: 1000, value_end: 1000, put_in: 0, taken_out: 50, income: 50, kind: 'stock' });
+near(r.change, 0.05, 'dividend raises earned');
+// a price fall by exactly the dividend: total 0
+assert.equal(earnedRatio({ value_start: 1000, value_end: 950, put_in: 0, taken_out: 50, income: 50, kind: 'stock' }).state, 'zero');
+// savings interest stays in: not taken off the base
+near(earnedRatio({ value_start: 1000, value_end: 1010, put_in: 0, taken_out: 0, income: 10, kind: 'liquid' }).change, 0.01, 'interest in');
+// sold out at a profit / nothing at all -> nodata
+assert.deepEqual(earnedRatio({ value_start: 0, value_end: 0, put_in: 1000, taken_out: 1200, income: 0, kind: 'stock' }),
+  { state: 'nodata', change: null, note: 'no invested base', earned: 200, base: -200 });
+assert.equal(earnedRatio(null).state, 'nodata');
+assert.equal(earnedRatio({ value_start: 0, value_end: 0, put_in: 0, taken_out: 0, income: 0 }).note, 'no value');
+const earnedRows = [
+  { asset: 'SBER', value_start: 1000, value_end: 1100, put_in: 0, taken_out: 0, income: 0, kind: 'stock' },
+  { asset: 'XAU', value_start: 400, value_end: 500, put_in: 0, taken_out: 0, income: 0, kind: 'gold' },     // +25%
+  { asset: 'ETH', value_start: 100, value_end: 90, put_in: 0, taken_out: 0, income: 0, kind: 'crypto' },
+];
+near(tileEarned({ ticker: 'SBER' }, earnedRows).change, 0.1, 'instrument tile');
+assert.equal(assetKey('stETH'), 'ETH'); assert.equal(assetKey('TEUR2'), 'TEUR');
+near(tileEarned({ ticker: 'STETH' }, earnedRows).change, -0.1, 'stETH is ETH');
+assert.equal(tileEarned({ ticker: 'NONE' }, earnedRows).state, 'nodata');
+near(tileEarned(gold, earnedRows).change, 0.25, 'gold: XAUT has no row, XAU alone');
+
+// ---- 9. savingsChains / mergeSavings ----
+const sv = n => `SAVINGS:${n} RUB`;
+assert.deepEqual(savingsChains([{ from: sv('Fin'), to: sv('Ozon') }, { from: sv('Ozon'), to: sv('Alfa') }, { from: sv('X'), to: sv('Y') }])
+  .map(g => g.slice().sort()), [[sv('Alfa'), sv('Fin'), sv('Ozon')], [sv('X'), sv('Y')]]);
+const svRows = [L('Ozon Bank', sv('Ozon'), 0), L('Alfa', sv('Alfa'), 1050), L('Sber', sv('Sber'), 300), L('Sber', 'SBER', 2000, 'stock')];
+const twoLinks = [{ from: sv('Ozon'), to: sv('Alfa'), day: '2026-06-01' }];
+const svPeriods = { [sv('Ozon')]: { first: '2026-01-10', last: '2026-06-01' }, [sv('Alfa')]: { first: '2026-06-01', last: '2026-11-08' } };
+tiles = aggregate({ rows: svRows, fundHoldings: {}, savingsLinks: twoLinks, savingsPeriods: svPeriods });
+let chain = tiles.find(t => t.isChain);
+assert.equal(chain.ticker, sv('Alfa'), 'named after the most recent member');
+assert.equal(chain.value_usd, 1050);
+assert.deepEqual(chain.members.map(m => m.ticker).sort(), [sv('Alfa'), sv('Ozon')]);
+assert.deepEqual(chain.members.find(m => m.ticker === sv('Ozon')), { ticker: sv('Ozon'), value_usd: 0, first: '2026-01-10', last: '2026-06-01' });
+assert.ok(tiles.find(t => t.ticker === sv('Sber') && !t.isChain), 'an unlinked product stays separate');
+// 1000 put into Ozon, moved to Alfa (taken out of one, put into the other), 1050 now: invested 1000, earned 50
+const svEarned = [
+  { asset: sv('Ozon'), value_start: 0, value_end: 0, put_in: 1000, taken_out: 1020, income: 20, kind: 'liquid' },
+  { asset: sv('Alfa'), value_start: 0, value_end: 1050, put_in: 1020, taken_out: 0, income: 30, kind: 'liquid' },
+];
+r = tileEarned(chain, svEarned);
+near(r.base, 1000, 'chain invested net of the transfer'); near(r.earned, 50, 'chain earned'); near(r.change, 0.05, 'chain ratio');
+assert.equal(tileEarned({ ticker: sv('Ozon') }, svEarned).state, 'nodata');    // alone: sold out, no base
+// off: separate tiles; the total is the same
+const off = aggregate({ rows: svRows, fundHoldings: {}, savingsLinks: twoLinks, mergeSavings: false });
+assert.equal(off.some(t => t.isChain), false);
+assert.ok(off.find(t => t.ticker === sv('Alfa')));
+near(sum(off, t => t.value_usd), sum(tiles, t => t.value_usd), 'merge keeps the total');
+// a chain of three, still holding two of them; without periods named by the last move
+const threeRows = [L('Finuslugi', sv('Fin'), 100), L('Ozon Bank', sv('Ozon'), 0), L('Alfa', sv('Alfa'), 500)];
+tiles = aggregate({ rows: threeRows, fundHoldings: {},
+  savingsLinks: [{ from: sv('Fin'), to: sv('Ozon'), day: '2026-02-01' }, { from: sv('Ozon'), to: sv('Alfa'), day: '2026-05-01' }] });
+assert.equal(tiles.length, 1);
+assert.equal(tiles[0].ticker, sv('Alfa')); assert.equal(tiles[0].value_usd, 600); assert.equal(tiles[0].members.length, 3);
+assert.deepEqual(tiles[0].sources, [{ from: sv('Fin'), value_usd: 100 }, { from: sv('Alfa'), value_usd: 500 }]);
 
 console.log('all passed');
