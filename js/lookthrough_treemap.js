@@ -467,7 +467,10 @@ export function drawTreemap(container, tiles, earned, opts = {}) {
   // tiles under 0.2% of the portfolio are too thin to read: they go into one grey tile
   const SMALL = 0.002;
   const small = group ? tiles.filter(t => t.share < SMALL) : [], big = tiles.filter(t => !group || t.share >= SMALL);
-  const items = big.map(t => ({ value: t.share, tile: t }));
+  // every tile gets at least MIN_AREA px² in the layout, so a one-cent tile is visible; the floor
+  // takes a fraction of a percent of the box, so the big tiles keep their size
+  const MIN_AREA = 4, minShare = MIN_AREA / (W * H);
+  const items = big.map(t => ({ value: Math.max(t.share, minShare), tile: t }));
   if (small.length) {
     const groupShare = small.reduce((s, t) => s + t.share, 0);
     items.push({ value: groupShare, tile: { ticker: `${small.length} small`, share: groupShare, value_usd: small.reduce((s, t) => s + t.value_usd, 0), isGroup: true, members: small } });
