@@ -614,6 +614,12 @@ function wireTreemap() {
   const stable = typeof SNOWBALL_STABLECOINS !== 'undefined' ? SNOWBALL_STABLECOINS : new Set();
   const assetOf = t => (stable.has(String(t).toUpperCase()) ? 'USD' : assetKey(t));
 
+  // the last drawn tiles are redrawn whenever the box changes size (a page scrollbar appearing
+  // changed its width after the layout was done: the tiles ran 10px past the box)
+  let last = null;
+  if (typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(() => { if (last) drawTreemap(box, ...last); }).observe(box);
+  }
   async function redraw() {
     const my = ++run;
     status.textContent = 'Loading…';
@@ -629,7 +635,8 @@ function wireTreemap() {
         includeRealEstate: $('lt_re').checked });
       box.style.height = `${Math.max(320, Math.min(620, Math.round(box.clientWidth * 0.55)))}px`;
       const realEstate = reEstateChange(data.reIndex, period, today());
-      drawTreemap(box, tiles, tile => tileEarned(tile, earnedRows, { assetOf, realEstate }), { tip, group: $('lt_small').checked });
+      last = [tiles, tile => tileEarned(tile, earnedRows, { assetOf, realEstate }), { tip, group: $('lt_small').checked }];
+      drawTreemap(box, ...last);
       drawLegend($('lt_legend'));
       status.textContent = `${tiles.length} tiles, total ${usd(tiles.reduce((s, t) => s + t.value_usd, 0))}`;
     } catch (e) {
