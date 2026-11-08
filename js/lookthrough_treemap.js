@@ -483,11 +483,13 @@ export function drawTreemap(container, tiles, earned, opts = {}) {
     const tile = r.item.tile, e = tile.isGroup ? { state: 'group' } : earned(tile);
     const el = document.createElement('div');
     el.className = 'lt-tile';
-    Object.assign(el.style, { position: 'absolute', boxSizing: 'border-box', overflow: 'hidden', border: '1px solid #0d1117',
+    // the outline is an inset shadow and the padding comes only with a label: a border or padding
+    // would force a tile to at least 10px, so thin tiles stuck out of the box
+    Object.assign(el.style, { position: 'absolute', boxSizing: 'border-box', overflow: 'hidden', boxShadow: 'inset 0 0 0 1px #0d1117',
       // positions in percent of the box, so the tiles fill it whatever its size is when drawn
       left: `${(r.x / W) * 100}%`, top: `${(r.y / H) * 100}%`, width: `${(r.w / W) * 100}%`, height: `${(r.h / H) * 100}%`,
       background: tile.isGroup ? '#2a2f36' : tileColor(e.state, e.change),
-      color: '#fff', padding: `${MIN_PAD - 1}px`, lineHeight: `${LINE}px`, fontSize: '12px', cursor: 'default' });
+      color: '#fff', padding: '0px', lineHeight: `${LINE}px`, fontSize: '12px', cursor: 'default' });
     if (tile.isGroup) {
       if (r.w >= textWidth(tile.ticker, true) + 2 * MIN_PAD + 2 && r.h >= LINE + 2 * MIN_PAD) {
         const a = document.createElement('div');
@@ -513,6 +515,7 @@ export function drawTreemap(container, tiles, earned, opts = {}) {
         el.append(a, b);
       }
     }
+    if (el.childNodes.length) el.style.padding = `${MIN_PAD - 1}px`;
     if (tip) {
       const lines = tile.isGroup ? [`${tile.members.length} small positions`, ...tile.members.map(m => `${m.ticker} ${(m.share * 100).toFixed(2)}%`)] : tooltipLines(tile, e);
       el.addEventListener('mousemove', ev => {
