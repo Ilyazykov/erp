@@ -73,6 +73,18 @@ def fetch_url(url, headers=None):
     with urllib.request.urlopen(req, timeout=20) as r:
         return r.read().decode('utf-8', errors='replace')
 
+def fetch_url_retry(url, attempts=3, pause=(2, 5)):
+    # MOEX ISS sometimes answers 500 or drops the connection for a moment (07.11.2026:
+    # ROSN, VTBR, YDEX, T, IRAO). Retry with a short pause, then give up for this run;
+    # the next run starts from the last saved day, so nothing is lost for good.
+    for attempt in range(attempts):
+        try:
+            return fetch_url(url)
+        except Exception:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(pause[min(attempt, len(pause) - 1)])
+
 # ── 1. Prices from MOEX ISS ───────────────────────────────────────────────────
 
 def update_prices(ticker):
@@ -96,7 +108,7 @@ def update_prices(ticker):
                f"/boards/TQBR/securities/{ticker}.json"
                f"?from={from_date}&till={today}&start={start}&limit=100")
         try:
-            html = fetch_url(url)
+            html = fetch_url_retry(url)
             data = json.loads(html)
             history = data['history']
             cols = history['columns']
