@@ -119,6 +119,12 @@ export function savingsChains(links) {
 // product money last moved into. Closed members are listed too: their
 // earnings belong to the chain.
 // Tiles of zero or negative value are dropped.
+// A cash or cushion row has no ticker: it gets one per currency ('CASH USD', 'CASH RUB', ...),
+// so the bank balances in one currency are one tile and each has a label.
+function unlistedTicker(r) {
+  const kind = r.instrument_type === 'cushion' ? 'CUSHION' : r.instrument_type === 'cash' ? 'CASH' : String(r.instrument_type || 'OTHER').toUpperCase();
+  return `${kind} ${r.currency || 'USD'}`;
+}
 export function aggregate({ rows, holdings, fundHoldings, expandFunds = false, includeCushion = false, includeRealEstate = false,
   mergeGold = true, mergeSavings = true, savingsLinks = [], savingsPeriods = {} }) {
   const isFundTicker = t => Object.prototype.hasOwnProperty.call(fundHoldings || {}, t);
@@ -129,7 +135,7 @@ export function aggregate({ rows, holdings, fundHoldings, expandFunds = false, i
       .filter(r => !r.excluded && (includeRealEstate || (r.account !== 'real estate' && r.instrument_type !== 'real_estate')))
       .map(r => ({ ...r, value_usd: Number(r.value_usd) })));
     entries = netted.filter(r => r.value_usd > 0)
-      .map(r => ({ ticker: r.ticker, value_usd: r.value_usd, kind: isFundTicker(r.ticker) ? 'fund' : 'direct',
+      .map(r => ({ ticker: r.ticker || unlistedTicker(r), value_usd: r.value_usd, kind: isFundTicker(r.ticker) ? 'fund' : 'direct',
         cushion: r.instrument_type === 'cushion', instrument_type: r.instrument_type }));
     // a ticker's type: of its biggest non-cushion row
     for (const e of [...entries].sort((x, y) => x.value_usd - y.value_usd)) {
@@ -290,6 +296,9 @@ export function assetKey(ticker) {
 export function tileEarned(tile, earnedRows, { assetOf = assetKey, realEstate = null } = {}) {
   // real estate has no purchase/sale history on this tab: its colour is the index change (see reEstateChange)
   if (String(tile.ticker).startsWith('REAL_ESTATE')) return realEstate || earnedRatio(null);
+  // cash has no price: dollars are exactly zero; other currencies have no rate history here
+  if (tile.ticker === 'CASH USD') return { state: 'zero', change: 0 };
+  if (String(tile.ticker).startsWith('CASH ') || String(tile.ticker).startsWith('CUSHION ')) return earnedRatio(null);
   const byAsset = new Map((earnedRows || []).map(r => [String(r.asset).toUpperCase(), r]));
   const rowOf = t => byAsset.get(String(assetOf(t)).toUpperCase());
   if (tile.isChain && tile.members) {
