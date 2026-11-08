@@ -42,9 +42,14 @@ vm.runInContext(`${script}
 ;globalThis.__t = {
   build: (...a) => { a[3] = mpChartsRun; return mpBuildCharts(...a); }, plan: mpSalaryPlan, deltas: mpSalaryDeltas,
   setData: d => { DATA = d; }, setPie: f => { mpTargetPie = f; },
-  RU_ACCOUNTS: MP_RU_ACCOUNTS, incomeDays: mpExpIncomeDays,
+  incomeDays: mpExpIncomeDays,
 };`, ctx);
 const T = ctx.__t;
+// the netting lives in js/lookthrough_treemap.js (the page's module script sets these globals)
+{
+  const net = await import('../js/lookthrough_treemap.js');
+  Object.assign(ctx, { MP_RU_ACCOUNTS: net.RU_ACCOUNTS, mpIsRuInfra: net.isRuInfra, mpNetCreditIntoLiquid: net.netCreditIntoLiquid });
+}
 
 // ---- synthetic portfolio ----
 const row = (account, ticker, value_usd, extra) => ({ account, ticker, value_usd, quantity: 1, price_usd: value_usd, ...extra });

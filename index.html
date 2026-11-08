@@ -5599,20 +5599,7 @@ const mpAdd = (acc, key, v) => { if (v) acc[key] = (acc[key] || 0) + v; return a
 // liquid assets held in Russian banks / brokers only, any other card
 // against the rest -- spread over those holdings in proportion to their
 // size (so no broker goes negative because of a card).
-const mpIsRuInfra = r => MP_RU_ACCOUNTS.has(r.account) || (r.account === '(unspecified)' && r.infra_region === 'ru');
-function mpNetCreditIntoLiquid(rows) {
-  const factor = {};
-  for (const ru of [true, false]) {
-    const group = rows.filter(r => mpIsRuInfra(r) === ru);
-    // (only the holdings carry the debt; a negative row -- the salary plan
-    // moving the debt-free part out -- is taken as is)
-    const credit = group.filter(r => r.instrument_type === 'credit').reduce((s, r) => s + r.value_usd, 0);
-    const liquid = group.filter(r => r.instrument_type === 'liquid' && r.value_usd > 0).reduce((s, r) => s + r.value_usd, 0);
-    factor[ru] = liquid > 0 ? Math.max(0, (liquid + credit) / liquid) : 1;
-  }
-  return rows.filter(r => r.instrument_type !== 'credit')
-    .map(r => (r.instrument_type === 'liquid' && r.value_usd > 0 ? { ...r, value_usd: r.value_usd * factor[mpIsRuInfra(r)] } : r));
-}
+// mpIsRuInfra and mpNetCreditIntoLiquid: js/lookthrough_treemap.js (one copy), set on window by the module script below.
 // Asset-type buckets (rows already credit-netted -- mpNetCreditIntoLiquid).
 function mpAssetBuckets(rows, keep = null) {
   const b = {};
@@ -8080,7 +8067,7 @@ async function mpRenderLookThrough() {
 // or yuan (CNY-denominated MOEX funds and bonds, yuan accounts). Other
 // currencies there (T-Bank's few dollars / euros) and credit-card debt are
 // left out. TRND's repo counts as liquid assets (mpSplitFundsCash).
-const MP_RU_ACCOUNTS = new Set(['Sber', 'T-Bank', 'Alfa', 'Ozon Bank', 'Yandex Bank', 'Finuslugi']);
+// MP_RU_ACCOUNTS: js/lookthrough_treemap.js (one copy), set on window by the module script below.
 const MP_RU_INFRA_TYPES = ['stock', 'deposit', 'bond', 'liquid', 'cash'];
 // A Russian brokerage account's funds for its cash where it holds none of
 // that currency yet (the salary plan's step 8), in the order to try: Alfa's
@@ -13228,6 +13215,12 @@ function mpOnAuth(session) {
 }
 sb.auth.getSession().then(({ data: { session } }) => mpOnAuth(session));
 sb.auth.onAuthStateChange((_event, session) => mpOnAuth(session));
+</script>
+<script type="module">
+import { RU_ACCOUNTS, isRuInfra, netCreditIntoLiquid } from './js/lookthrough_treemap.js';
+window.MP_RU_ACCOUNTS = RU_ACCOUNTS;
+window.mpIsRuInfra = isRuInfra;
+window.mpNetCreditIntoLiquid = netCreditIntoLiquid;
 </script>
 </body>
 </html>
