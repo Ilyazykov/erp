@@ -22,9 +22,11 @@
 // (receipts.js' carryOverNotes), and a note that can't be placed is
 // appended to the receipt's own note instead of being dropped.
 //
-// Items never change expense categories (bank_transactions is not
-// touched here beyond match_receipts setting place_id when a linked
-// transaction has none).
+// A receipt with no bank transaction to link to makes one itself
+// (account '<unknown>', external_source 'receipt_csv'), and a statement
+// that later carries the same payment is folded into that row -- both in
+// match_receipts (migration ...191), not here. Items never change expense
+// categories.
 //
 // Items are linked to a transaction, resolved against the store's place and
 // have their "Other" gap computed by match_receipts / the receipt_lines
