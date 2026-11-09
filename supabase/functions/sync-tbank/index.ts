@@ -33,6 +33,11 @@
 // tickers; a redemption closes the holding (a sell at 0 next to the
 // repayment), as the app rows did.
 //
+// The held shares' and funds' last prices (MarketDataService/GetLastPrices, the
+// positions from GetPortfolio) go into price_history in USD, as sync-ibkr's mark
+// prices do -- the day of each price is the Moscow day it was traded. Bonds and
+// ЦФА aren't taken; a failed price read is reported, the rows still go.
+//
 // Before anything is written the API is checked against the latest report:
 // the month before its end, every deal of the report must come back by its
 // number with the same quantity and price, every payout with its amount.
@@ -73,6 +78,7 @@ const exchangeOf = (classCode: string) => /^(TQ|EQ|PS|SM)/.test(classCode) ? 'М
 type Inst = { ticker: string; isin: string; name: string; type: string; classCode: string; nominal: number; iso: string };
 // deno-lint-ignore no-explicit-any
 type Op = any;
+type PriceRow = { ticker: string; day: string; price: number; currency: string };
 type CashRow = { tx_date: string; currency: string; amount: number; description: string; external_id: string };
 type TradeRow = {
   ticker: string; side: string; quantity: number; price: number; trade_date: string; settle_date: null;
@@ -110,6 +116,8 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
 
   const results = [];
   const allTrades: TradeRow[] = [];
+  // the held shares' and funds' last prices (native currency), into the price history
+  const allPrices: PriceRow[] = [];
   // notes on accounts left out (a ЦФА account with more than one Atomyze wallet)
   const dfa: string[] = [];
   for (const acc of list) {
@@ -298,8 +306,35 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
     }
     if (odd.length) throw new Error(`Not understood on ${agr} -- nothing replaced: ${odd.slice(0, 8).join('; ')}`);
 
+    // The held shares' and funds' last prices -- IBKR's mark prices, as sync-ibkr
+    // has them: the price of the day it was traded (Moscow day of the last trade).
+    // Bonds and ЦФА aren't taken. A failure here leaves the prices out, not the rows.
+    const prices: PriceRow[] = [];
+    let pricesError: string | null = null;
+    if (!isDfa) {
+      try {
+        const { positions = [] } = await tinvest(token, 'OperationsService/GetPortfolio', { accountId: acc.id, currency: 'RUB' });
+        const held = positions.filter((p: Op) => ['share', 'etf'].includes(String(p.instrumentType)) && money(p.quantity) > 0);
+        if (held.length) {
+          const { lastPrices = [] } = await tinvest(token, 'MarketDataService/GetLastPrices', { instrumentId: held.map((p: Op) => p.instrumentUid) });
+          // answered by uid or by figi, whichever the response carries
+          const lastOf = new Map<string, Op>();
+          for (const l of lastPrices) for (const k of [l.instrumentUid, l.figi]) if (k) lastOf.set(k, l);
+          for (const p of held) {
+            const l = lastOf.get(p.instrumentUid) ?? lastOf.get(p.figi);
+            const price = money(l?.price);
+            if (!l || !(price > 0) || !l.time) continue;
+            prices.push({ ticker: tickerFor(await instOf(p.instrumentUid)), day: msk(l.time).slice(0, 10), price,
+              currency: String(p.currentPrice?.currency ?? '').toUpperCase() });
+          }
+        }
+      } catch (err) {
+        pricesError = String(err);
+      }
+    }
+
     results.push({ agr, from, lastEnd, cash: cash.filter(c => c.tx_date.slice(0, 10) >= from), trades: trades.filter(r => r.trade_date >= from), checked,
-      moves: moves.filter(m => m.slice(0, 10) >= from) });
+      moves: moves.filter(m => m.slice(0, 10) >= from), prices, pricesError });
   }
 
   // All accounts understood: replace.
@@ -327,15 +362,34 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
       if (error) throw new Error(error.message);
     }
     allTrades.push(...r.trades);
+    allPrices.push(...r.prices);
     summary.push({ agreement: r.agr, from: r.from, after_report: r.lastEnd, deals: r.trades.filter(t => t.external_id.includes(':deal:')).length,
       payouts: r.trades.filter(t => t.external_id.includes(':income:')).length, cash_rows: bank.length, cash_change: bal, checked: r.checked,
-      ...(r.moves.length ? { securities_moved: r.moves } : {}) });
+      ...(r.moves.length ? { securities_moved: r.moves } : {}), ...(r.pricesError ? { prices_error: r.pricesError } : {}) });
+  }
+  // The held prices, in USD, into the price history (one row per ticker and day; the last one wins).
+  const priceRows = new Map<string, { ticker: string; day: string; price_usd: number }>();
+  for (const x of allPrices) {
+    let rate = 1;
+    if (x.currency !== 'USD') {
+      const { data: fx } = await db.from('fx_history').select('usd_per_unit').eq('currency', x.currency)
+        .lte('day', x.day).order('day', { ascending: false }).limit(1);
+      rate = Number(fx?.[0]?.usd_per_unit || 0);
+      if (!(rate > 0)) continue;
+    }
+    priceRows.set(`${x.ticker}|${x.day}`, { ticker: x.ticker, day: x.day, price_usd: Math.round(x.price * rate * 1e6) / 1e6 });
+  }
+  const priceList = [...priceRows.values()];
+  for (let i = 0; i < priceList.length; i += 500) {
+    const { error } = await db.from('price_history').upsert(priceList.slice(i, i + 500), { onConflict: 'ticker,day' });
+    if (error) throw new Error(error.message);
   }
   const removedSnowball = await removeCoveredSnowball(db, userId, allTrades);
   const { error: rq } = await db.rpc('request_capital_refresh', { p_user: userId });
   if (rq) throw new Error(rq.message);
   // the day of the run as the page counts days (UTC), not the Moscow one
-  return { period_to: new Date().toISOString().slice(0, 10), accounts: list, synced: summary, removed_snowball_duplicates: removedSnowball, ...(dfa.length ? { dfa } : {}) };
+  return { period_to: new Date().toISOString().slice(0, 10), accounts: list, synced: summary, prices_written: priceList.length,
+    removed_snowball_duplicates: removedSnowball, ...(dfa.length ? { dfa } : {}) };
 }
 
 Deno.serve(async (req) => {
