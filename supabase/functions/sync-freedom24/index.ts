@@ -268,6 +268,15 @@ Deno.serve(async (req) => {
         return json({ error: String(err) }, 400);
       }
     }
+    // A one-off look at the positions reply, for the field names (nothing is written): body.positions_shape.
+    if (userId && body.positions_shape) {
+      try {
+        const r = await tradernet(picked[0].public_key, picked[0].private_key, 'getPositionJson', {});
+        return json({ top_keys: Object.keys(r ?? {}), sample: JSON.stringify(r).slice(0, 4000) });
+      } catch (err) {
+        return json({ error: String(err) }, 400);
+      }
+    }
     // The daily job: users whose slot has come and who aren't synced today; a
     // failed run is retried by the next, but not keys Tradernet refuses.
     const nowSlot = Math.floor((new Date().getUTCHours() * 60 + new Date().getUTCMinutes() - SLOT_START_MIN) / SLOT_MINUTES);
