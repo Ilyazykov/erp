@@ -915,7 +915,10 @@ function wireTreemap() {
       const realEstate = reEstateChange(data.reIndex, period, today());
       const from = periodStart(period, today()) ?? data.firstDay;
       const cap = portfolioCapital(earnedRows, from, today());
-      const ctx = { earnedRows: tileRows, cap, from, to: today(), assetOf };
+      // a savings product of an exchange in dollars (SAVINGS:Bybit USD: its Earn) has no row of its own: it
+      // is the exchanges' dollars, the 'USD' row of investment_by_asset
+      const tileAsset = t => (/^SAVINGS:.* USD$/i.test(String(t)) && !tileRows.some(r => String(r.asset).toUpperCase() === assetKey(t)) ? 'USD' : assetOf(t));
+      const ctx = { earnedRows: tileRows, cap, from, to: today(), assetOf: tileAsset };
       // a cash tile in a currency: the currency's change against the dollar over the period; real
       // estate: its index's. By every method that change, as a contribution what it gained.
       const bare = tile => {
@@ -931,7 +934,7 @@ function wireTreemap() {
       const by = (m, tile) => {
         const b = bare(tile);
         if (b) return m === 'contrib' ? changeAsContribution(b, tile.value_usd, cap) : b;
-        return m === 'kept' ? tileEarned(tile, tileRows, { assetOf, realEstate }) : tileMetric(m, tile, ctx);
+        return m === 'kept' ? tileEarned(tile, tileRows, { assetOf: tileAsset, realEstate }) : tileMetric(m, tile, ctx);
       };
       const colour = tile => {
         const all = Object.fromEntries(METHODS.map(m => [m, by(m, tile)]));
