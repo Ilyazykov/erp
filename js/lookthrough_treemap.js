@@ -14,7 +14,7 @@
 
 // The Snowball portfolio's first deal (the page's MP_SNOWBALL_START): the 'snowball' period counts from here.
 export const SNOWBALL_START = '2025-08-28';
-export const PERIODS = ['1d', '2d', '3d', '7d', '1m', '3m', '6m', 'ytd', '1y', '5y', 'all', 'snowball'];
+export const PERIODS = ['1d', '2d', '3d', '4d', '7d', '1m', '3m', '6m', 'ytd', '1y', '5y', 'all', 'snowball'];
 
 const parseDay = s => {
   const [y, m, d] = s.split('-').map(Number);
@@ -43,6 +43,7 @@ export function periodStart(period, today) {
     case '1d': return daysBack(1);
     case '2d': return daysBack(2);
     case '3d': return daysBack(3);
+    case '4d': return daysBack(4);
     case '7d': return daysBack(7);
     case '1m': return monthsBack(today, 1);
     case '3m': return monthsBack(today, 3);
@@ -552,7 +553,10 @@ export const LEGEND_STOPS = [-0.12, -0.08, -0.04, 0, 0.04, 0.08, 0.12];
 // unit 'pp': percentage points of the portfolio (a contribution)
 export function formatChange(change, unit = '%') {
   const p = change * 100;
-  return `${p > 0 ? '+' : p < 0 ? '−' : ''}${Math.abs(p).toFixed(Math.abs(p) < 0.1 && p !== 0 ? 2 : 1)}${unit === 'pp' ? ' pp' : '%'}`;
+  const text = Math.abs(p).toFixed(Math.abs(p) < 0.1 && p !== 0 ? 2 : 1);
+  // no sign on a figure that rounds to zero: "−0.00%" is no fall
+  const sign = Number(text) === 0 ? '' : p > 0 ? '+' : '−';
+  return `${sign}${text}${unit === 'pp' ? ' pp' : '%'}`;
 }
 
 // ---- Savings links and periods from the savings trades ----
@@ -685,7 +689,10 @@ export function drawTreemap(container, tiles, earned, opts = {}) {
   }).filter(r => r.w > 0 && r.h > 0);
   const frag = document.createDocumentFragment();
   for (const r of rects) {
-    const tile = r.item.tile, e = tile.isGroup ? { state: 'group' } : earned(tile);
+    const tile = r.item.tile;
+    let e = tile.isGroup ? { state: 'group' } : earned(tile);
+    // a change that shows as 0.00% is no change: no colour of a fall or a rise
+    if (e.state === 'known' && Math.abs(e.change) < 0.00005) e = { ...e, state: 'zero', change: 0 };
     const name = names[tile.ticker] || tile.ticker;
     const el = document.createElement('div');
     el.className = 'lt-tile';

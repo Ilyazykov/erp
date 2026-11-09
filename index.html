@@ -653,7 +653,7 @@
       <b>MWR</b> (money-weighted return): the return of the money put in and taken out (a dividend is money back) over the time held, not made yearly -- XIRR over the period.
       <b>Dividends kept</b>: a dividend stays in the paper's capital as idle cash. The tooltip shows all three. Striped tiles have nothing to judge by.</p>
     <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
-    <div class="form-row" id="lt_periods" style="gap:6px"><button class="btn primary" type="button" data-period="1d">1d</button><button class="btn" type="button" data-period="2d">2d</button><button class="btn" type="button" data-period="3d">3d</button><button class="btn" type="button" data-period="7d">7d</button><button class="btn" type="button" data-period="1m">1m</button><button class="btn" type="button" data-period="3m">3m</button><button class="btn" type="button" data-period="6m">6m</button><button class="btn" type="button" data-period="ytd">YTD</button><button class="btn" type="button" data-period="1y">1y</button><button class="btn" type="button" data-period="5y">5y</button><button class="btn" type="button" data-period="all">all</button><button class="btn" type="button" data-period="snowball" title="From the Snowball portfolio's first deal (2025-08-28)">Snowball</button></div>
+    <div class="form-row" id="lt_periods" style="gap:6px"><button class="btn primary" type="button" data-period="1d">1d</button><button class="btn" type="button" data-period="2d">2d</button><button class="btn" type="button" data-period="3d">3d</button><button class="btn" type="button" data-period="4d">4d</button><button class="btn" type="button" data-period="7d">7d</button><button class="btn" type="button" data-period="1m">1m</button><button class="btn" type="button" data-period="3m">3m</button><button class="btn" type="button" data-period="6m">6m</button><button class="btn" type="button" data-period="ytd">YTD</button><button class="btn" type="button" data-period="1y">1y</button><button class="btn" type="button" data-period="5y">5y</button><button class="btn" type="button" data-period="all">all</button><button class="btn" type="button" data-period="snowball" title="From the Snowball portfolio's first deal (2025-08-28)">Snowball</button></div>
     <div id="lt_legend" style="flex:1 1 260px;max-width:480px"></div>
     </div>
     <div class="form-row" style="gap:16px;flex-wrap:wrap">
@@ -13289,13 +13289,13 @@ sb.auth.getSession().then(({ data: { session } }) => mpOnAuth(session));
 sb.auth.onAuthStateChange((_event, session) => mpOnAuth(session));
 </script>
 <script type="module">
-import { RU_ACCOUNTS, isRuInfra, netCreditIntoLiquid, periodIrr, portfolioCapital } from './js/lookthrough_treemap.js?v=20261109r';
+import { RU_ACCOUNTS, isRuInfra, netCreditIntoLiquid, periodIrr, portfolioCapital } from './js/lookthrough_treemap.js?v=20261109s';
 window.MP_RU_ACCOUNTS = RU_ACCOUNTS;
 window.mpPeriodIrr = periodIrr;
 window.mpPortfolioCapital = portfolioCapital;
 window.mpIsRuInfra = isRuInfra;
 window.mpNetCreditIntoLiquid = netCreditIntoLiquid;
 </script>
-<script type="module" src="./js/lookthrough_treemap.js?v=20261109r"></script>
+<script type="module" src="./js/lookthrough_treemap.js?v=20261109s"></script>
 </body>
 </html>
