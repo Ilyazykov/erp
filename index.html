@@ -5194,6 +5194,17 @@ async function mpFetchCashRows(fxByCurrency) {
       add(r.account, r.currency, 'cash', bal, isBroker(r));
     }
   }
+  // A receipt paid from an account (the bank chosen for it) is a payment out of it, but its row has no
+  // balance of its own: it comes after the account's last balance row, so it is taken off that balance.
+  try {
+    const { data: paid } = await sb.from('bank_transactions').select('account, currency, amount, tx_date')
+      .eq('external_source', 'receipt_csv').is('balance_after', null);
+    for (const x of paid || []) {
+      const last = data.filter(r => r.account === x.account && r.currency === x.currency && r.product !== 'credit_card')
+        .reduce((m, r) => (!m || r.tx_date > m.tx_date ? r : m), null);
+      if (last && x.tx_date > last.tx_date) add(x.account, x.currency, 'cash', Number(x.amount));
+    }
+  } catch { /* the balances without the receipts */ }
   if (!totals.size) return [];
 
   return [...totals.values()].map(t => ({
