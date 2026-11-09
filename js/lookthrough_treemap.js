@@ -293,6 +293,17 @@ const capitalOf = r => {
   const p = pctOf(r), e = Number(r.earned);
   return p && e ? Math.abs(e / p * 100) : (Number(r.value_start) || 0) + (Number(r.put_in) || 0);
 };
+// The rows with the cushion's money taken out of their capital: the cushion sits idle in the position, so
+// what it held is not in the base the earned is over, while the earned stays (cushionOf: asset -> money).
+// Its pct is the earned over what is left of the capital.
+export function withoutCushion(rows, cushionOf) {
+  return (rows || []).map(r => {
+    const c = cushionOf.get(String(r.asset).toUpperCase()) || 0;
+    if (!c || pctOf(r) === null) return r;
+    const cap = capitalOf(r) - c;
+    return cap > 0 ? { ...r, pct: Number(r.earned) / cap * 100 } : r;
+  });
+}
 export function earnedRatio(r) {
   if (!r) return { state: 'nodata', change: null, note: 'no value' };
   const n = k => Number(r[k]) || 0;
@@ -887,10 +898,14 @@ function wireTreemap() {
       const cushionMode = $('lt_cushion').value;
       const cushion = cushionMode === 'merged';
       let rows = data.rows;
+      // the cushion's money per asset, taken out of the asset's capital below (its earnings stay)
+      const cushionOf = new Map();
       if (cushionMode !== 'accounts' && g('mpWithCushion')) {
-        rows = [...window.mpWithCushion(rows.filter(r => r.account !== 'real estate')), ...rows.filter(r => r.account === 'real estate')]
-          .map(r => (r.instrument_type !== 'cushion' ? r : { ...r, ticker: 'CUSHION' }));
+        rows = [...window.mpWithCushion(rows.filter(r => r.account !== 'real estate')), ...rows.filter(r => r.account === 'real estate')];
+        for (const r of rows) if (r.instrument_type === 'cushion') cushionOf.set(assetKey(r.ticker), (cushionOf.get(assetKey(r.ticker)) || 0) + Number(r.value_usd));
+        rows = rows.map(r => (r.instrument_type !== 'cushion' ? r : { ...r, ticker: 'CUSHION' }));
       }
+      const tileRows = withoutCushion(earnedRows, cushionOf);
       const tiles = aggregate({ rows, fundHoldings: data.fundHoldings, expandFunds: $('lt_expand').checked, includeCushion: cushion,
         mergeGold: $('lt_gold').checked, mergeSavings: $('lt_savings').checked, savingsLinks: data.savingsLinks, savingsPeriods: data.savingsPeriods,
         includeRealEstate: $('lt_re').checked });
@@ -898,7 +913,7 @@ function wireTreemap() {
       const realEstate = reEstateChange(data.reIndex, period, today());
       const from = periodStart(period, today()) ?? data.firstDay;
       const cap = portfolioCapital(earnedRows, from, today());
-      const ctx = { earnedRows, cap, from, to: today(), assetOf };
+      const ctx = { earnedRows: tileRows, cap, from, to: today(), assetOf };
       // a cash tile in a currency: the currency's change against the dollar over the period; real
       // estate: its index's. By every method that change, as a contribution what it gained.
       const bare = tile => {
@@ -914,7 +929,7 @@ function wireTreemap() {
       const by = (m, tile) => {
         const b = bare(tile);
         if (b) return m === 'contrib' ? changeAsContribution(b, tile.value_usd, cap) : b;
-        return m === 'kept' ? tileEarned(tile, earnedRows, { assetOf, realEstate }) : tileMetric(m, tile, ctx);
+        return m === 'kept' ? tileEarned(tile, tileRows, { assetOf, realEstate }) : tileMetric(m, tile, ctx);
       };
       const colour = tile => {
         const all = Object.fromEntries(METHODS.map(m => [m, by(m, tile)]));

@@ -14,7 +14,7 @@
 import assert from 'node:assert/strict';
 import { periodStart, priceChange, aggregate, tileChange, isRuInfra, netCreditIntoLiquid,
   goldChange, earnedRatio, tileEarned, savingsChains, assetKey, periodCapital, portfolioCapital, periodIrr, tileMetric,
-  mergeRows, changeAsContribution, formatChange } from '../js/lookthrough_treemap.js';
+  mergeRows, changeAsContribution, formatChange, withoutCushion } from '../js/lookthrough_treemap.js';
 
 const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-9, `${msg}: ${a} != ${b}`);
 
@@ -323,3 +323,14 @@ near(changeAsContribution({ state: 'known', change: 0.1 }, 110, 200).change, 0.0
 assert.equal(formatChange(0.0123, 'pp'), '+1.2 pp');
 
 console.log('all passed');
+
+// the cushion's money leaves the asset's capital, its earned stays: 100 earned on 200 of capital is 50%,
+// on 200 - 100 of it 100%; no cushion money, the row as it is
+{
+  const rows = [{ asset: 'REVOLUT', earned: 100, pct: 50, value_start: 0, value_end: 0, put_in: 200, taken_out: 0, income: 0 }];
+  const cut = withoutCushion(rows, new Map([['REVOLUT', 100]]));
+  near(cut[0].pct, 100, 'the cushion out of the capital');
+  near(earnedRatio(cut[0]).change, 1, 'the colour follows');
+  assert.equal(withoutCushion(rows, new Map())[0], rows[0], 'no cushion money: the same row');
+}
+console.log('withoutCushion ok');
