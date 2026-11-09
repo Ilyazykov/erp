@@ -33,10 +33,12 @@
 // tickers; a redemption closes the holding (a sell at 0 next to the
 // repayment), as the app rows did.
 //
-// The held shares' and funds' last prices (MarketDataService/GetLastPrices, the
-// positions from GetPortfolio) go into price_history in USD, as sync-ibkr's mark
-// prices do -- the day of each price is the Moscow day it was traded. Bonds and
-// ЦФА aren't taken; a failed price read is reported, the rows still go.
+// The held Russian shares' and funds' last prices (MarketDataService/GetLastPrices,
+// the positions from GetPortfolio) go into price_history in USD, source 'tbank',
+// as sync-ibkr's mark prices do -- the day of each price is the Moscow day it was
+// traded. Each day's row is overwritten by the last value received for it, from
+// any source (the source column, migration ...200, says which). Bonds and ЦФА
+// aren't taken; a failed price read is reported, the rows still go.
 //
 // Before anything is written the API is checked against the latest report:
 // the month before its end, every deal of the report must come back by its
@@ -314,7 +316,9 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
     if (!isDfa) {
       try {
         const { positions = [] } = await tinvest(token, 'OperationsService/GetPortfolio', { accountId: acc.id, currency: 'RUB' });
-        const held = positions.filter((p: Op) => ['share', 'etf'].includes(String(p.instrumentType)) && money(p.quantity) > 0);
+        // Russian: priced in rubles (MOEX); a foreign share on the same account is left to the other sources
+        const held = positions.filter((p: Op) => ['share', 'etf'].includes(String(p.instrumentType)) && money(p.quantity) > 0
+          && String(p.currentPrice?.currency ?? '').toUpperCase() === 'RUB');
         if (held.length) {
           const { lastPrices = [] } = await tinvest(token, 'MarketDataService/GetLastPrices', { instrumentId: held.map((p: Op) => p.instrumentUid) });
           // answered by uid or by figi, whichever the response carries
@@ -368,7 +372,7 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
       ...(r.moves.length ? { securities_moved: r.moves } : {}), ...(r.pricesError ? { prices_error: r.pricesError } : {}) });
   }
   // The held prices, in USD, into the price history (one row per ticker and day; the last one wins).
-  const priceRows = new Map<string, { ticker: string; day: string; price_usd: number }>();
+  const priceRows = new Map<string, { ticker: string; day: string; price_usd: number; source: string }>();
   for (const x of allPrices) {
     let rate = 1;
     if (x.currency !== 'USD') {
@@ -377,7 +381,7 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
       rate = Number(fx?.[0]?.usd_per_unit || 0);
       if (!(rate > 0)) continue;
     }
-    priceRows.set(`${x.ticker}|${x.day}`, { ticker: x.ticker, day: x.day, price_usd: Math.round(x.price * rate * 1e6) / 1e6 });
+    priceRows.set(`${x.ticker}|${x.day}`, { ticker: x.ticker, day: x.day, price_usd: Math.round(x.price * rate * 1e6) / 1e6, source: 'tbank' });
   }
   const priceList = [...priceRows.values()];
   for (let i = 0; i < priceList.length; i += 500) {

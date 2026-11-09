@@ -239,7 +239,7 @@ async function syncUser(db: any, userId: string, token: string, queryId: string)
       rate = Number(fx?.[0]?.usd_per_unit || 0);
       if (!(rate > 0)) continue;
     }
-    priceRows.push({ ticker: x.ticker, day: x.day, price_usd: Math.round(x.price * rate * 1e6) / 1e6 });
+    priceRows.push({ ticker: x.ticker, day: x.day, price_usd: Math.round(x.price * rate * 1e6) / 1e6, source: 'ibkr' });
   }
   for (let i = 0; i < priceRows.length; i += 500) {
     const { error } = await db.from('price_history').upsert(priceRows.slice(i, i + 500), { onConflict: 'ticker,day' });

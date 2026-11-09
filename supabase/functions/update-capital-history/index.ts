@@ -482,7 +482,7 @@ Deno.serve(async (req) => {
       const rows = [];
       for (const p of points) {
         const rate = await fxOn(p.currency, p.day);
-        if (rate) rows.push({ ticker, day: p.day, price_usd: Math.round(p.price * rate * 1e6) / 1e6 });
+        if (rate) rows.push({ ticker, day: p.day, price_usd: Math.round(p.price * rate * 1e6) / 1e6, source: 'market' });
       }
       for (let i = 0; i < rows.length; i += 1000) {
         const { error } = await db.from('price_history').upsert(rows.slice(i, i + 1000));
