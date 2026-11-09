@@ -3417,6 +3417,8 @@ async function mpImportOneFile(file, statusEl, session) {
       statusEl.textContent = `Detected: ${label}. ${result.accepted} receipt(s), ${result.total_lines} line(s): `
         + `${result.linked} linked to a transaction, ${result.waiting} waiting for one, ${result.ambiguous} matching more than one (resolve by hand).${skipped}${unmatched}`;
       mpExpCache = null;   // the Expenses tab's items re-load with the new receipts
+      // the tab on screen now re-reads its rows: a tab already open is not re-rendered by a tab switch
+      if (document.getElementById('expenses')?.offsetParent) mpRenderExpenses().catch(() => { /* the tab shows its own error */ });
       mpRenderReceiptsPanel();
       mpRenderProductList();
     } else {
