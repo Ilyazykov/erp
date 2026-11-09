@@ -193,7 +193,17 @@ function parse(xml: string) {
     const o = tOcc.get(t.external_id) ?? 0; tOcc.set(t.external_id, o + 1);
     if (o) t.external_id = `${t.external_id}:dup${o}`;
   }
-  return { from, to, trades, bank, balance, ending };
+  // Open Positions (one row per security in the Summary): the mark price on the report date -- the
+  // closing price the price history takes for that day. A Lot row repeats the price, so it is skipped.
+  const prices: { ticker: string; day: string; price: number; currency: string }[] = [];
+  for (const o of elements(xml, 'OpenPosition')) {
+    if (o.levelOfDetail && o.levelOfDetail !== 'SUMMARY') continue;
+    const day = isoTime(o.reportDate)?.slice(0, 10);
+    const price = Number(o.markPrice);
+    if (!o.symbol || !day || !(price > 0)) continue;
+    prices.push({ ticker: o.symbol, day, price, currency: o.currency || 'USD' });
+  }
+  return { from, to, trades, bank, balance, ending, prices };
 }
 
 // Pulls one user's statement and replaces the period's IBKR rows with it.
@@ -217,6 +227,22 @@ async function syncUser(db: any, userId: string, token: string, queryId: string)
   }
   for (let i = 0; i < trades.length; i += 500) {
     const { error } = await db.from('trades').upsert(trades.slice(i, i + 500), { onConflict: 'user_id,external_source,external_id' });
+    if (error) throw new Error(error.message);
+  }
+  // The open positions' mark prices, in USD, into the price history (the report day's price).
+  const priceRows: { ticker: string; day: string; price_usd: number }[] = [];
+  for (const x of p.prices) {
+    let rate = 1;
+    if (x.currency !== 'USD') {
+      const { data: fx } = await db.from('fx_history').select('usd_per_unit').eq('currency', x.currency)
+        .lte('day', x.day).order('day', { ascending: false }).limit(1);
+      rate = Number(fx?.[0]?.usd_per_unit || 0);
+      if (!(rate > 0)) continue;
+    }
+    priceRows.push({ ticker: x.ticker, day: x.day, price_usd: Math.round(x.price * rate * 1e6) / 1e6 });
+  }
+  for (let i = 0; i < priceRows.length; i += 500) {
+    const { error } = await db.from('price_history').upsert(priceRows.slice(i, i + 500), { onConflict: 'ticker,day' });
     if (error) throw new Error(error.message);
   }
   // Statement over Snowball, as the CSV import: Snowball rows of these operations go.
