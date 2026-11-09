@@ -905,6 +905,8 @@ function wireTreemap() {
         for (const r of rows) if (r.instrument_type === 'cushion') cushionOf.set(assetKey(r.ticker), (cushionOf.get(assetKey(r.ticker)) || 0) + Number(r.value_usd));
         rows = rows.map(r => (r.instrument_type !== 'cushion' ? r : { ...r, ticker: 'CUSHION' }));
       }
+      // 'total': the cash in the currencies is out of the total with the cushion (not drawn, not counted)
+      if (cushionMode === 'total') rows = rows.filter(r => r.instrument_type !== 'cash');
       const tileRows = withoutCushion(earnedRows, cushionOf);
       const tiles = aggregate({ rows, fundHoldings: data.fundHoldings, expandFunds: $('lt_expand').checked, includeCushion: cushion,
         mergeGold: $('lt_gold').checked, mergeSavings: $('lt_savings').checked, savingsLinks: data.savingsLinks, savingsPeriods: data.savingsPeriods,
