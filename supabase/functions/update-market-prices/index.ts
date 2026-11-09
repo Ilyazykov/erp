@@ -328,11 +328,14 @@ async function latestUsdRubRate(): Promise<number | null> {
   const text = new TextDecoder('windows-1251').decode(buf);
   const records = [...text.matchAll(/<Record Date="(\d{2})\.(\d{2})\.(\d{4})"[^>]*>[\s\S]*?<Value>([\d,]+)<\/Value>/g)];
   if (!records.length) return null;
-  // Records are already in ascending date order from CBR; take the last
-  // (most recently published, which may be dated "tomorrow" -- CBR
-  // publishes a rate in advance for the next business day, same behavior
-  // the Python version's data source exhibits).
-  const last = records[records.length - 1];
+  // The rate in force today: the last record dated on or before today (UTC).
+  // CBR publishes the next business day's rate in advance, dated that day;
+  // using it for today made market_prices disagree with fx_history (which
+  // values the same day with the rate dated on or before it, the weekend's
+  // rate for a Monday).
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const inForce = records.filter((m) => `${m[3]}-${m[2]}-${m[1]}` <= todayIso);
+  const last = (inForce.length ? inForce : records)[(inForce.length ? inForce : records).length - 1];
   const rate = parseFloat(last[4].replace(',', '.'));
   return Number.isNaN(rate) ? null : rate;
 }
