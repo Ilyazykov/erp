@@ -318,7 +318,7 @@ export function earnedRatio(r) {
   const earned = v1 - v0 - putIn + takenOut;
   const base = v0 + putIn - (takenOut - paidOut);
   // nothing paid for it (a share given as a dividend): all of what it is worth is earned, 100%
-  if (!(base > 0) && !v0 && !putIn && v1 > 0) return { state: 'known', change: 1, earned, base: v1 };
+  if (!(base > 0) && !v0 && !putIn && v1 > 0) return { state: 'known', change: 1, earned, base: v1, gift: true };
   if (!(base > 0)) return { state: 'nodata', change: null, note: 'no invested base', earned, base };
   const change = earned / base;
   return change === 0 ? { state: 'zero', change: 0, earned, base } : { state: 'known', change, earned, base };
@@ -937,8 +937,9 @@ function wireTreemap() {
         const all = Object.fromEntries(METHODS.map(m => [m, by(m, tile)]));
         return { ...all[method], all, method };
       };
-      // the colour scale is this period's largest change on the map (so a one-day map is not all pale)
-      const changes = tiles.filter(t => !t.isGroup).map(colour).filter(e => e.state === 'known' && e.change != null).map(e => Math.abs(e.change));
+      // the colour scale is this period's largest change on the map (so a one-day map is not all pale); a share
+      // given for nothing is 100% by definition and would set the scale alone, so it is left out of the scale
+      const changes = tiles.filter(t => !t.isGroup).map(colour).filter(e => e.state === 'known' && e.change != null && !e.gift).map(e => Math.abs(e.change));
       const scale = Math.max(...changes, 0.001);
       // human names: Revolut's funds, and the bonds by MOEX's name (cached in the browser) instead of the ISIN
       let bondNames = {};
