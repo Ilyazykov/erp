@@ -934,7 +934,11 @@ function wireTreemap() {
       const by = (m, tile) => {
         const b = bare(tile);
         if (b) return m === 'contrib' ? changeAsContribution(b, tile.value_usd, cap) : b;
-        return m === 'kept' ? tileEarned(tile, tileRows, { assetOf: tileAsset, realEstate }) : tileMetric(m, tile, ctx);
+        const kept = tileEarned(tile, tileRows, { assetOf: tileAsset, realEstate });
+        if (m === 'kept') return kept;
+        // a share given for nothing has no money in to judge a method by: its 100% is the same in each method
+        const v = tileMetric(m, tile, ctx);
+        return kept.gift && (!v || v.state === 'nodata') ? kept : v;
       };
       const colour = tile => {
         const all = Object.fromEntries(METHODS.map(m => [m, by(m, tile)]));
