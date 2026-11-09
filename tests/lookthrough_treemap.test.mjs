@@ -171,9 +171,9 @@ near(tileOf('SAVINGS:Sber RUB').value_usd, 300, 'Sber liquid netted'); near(tile
 near(tileOf('MMF').value_usd, 700, 'foreign liquid netted, one tile');
 assert.equal(tileOf('MMF').sources.length, 1);
 assert.ok(tiles.every(t => t.value_usd > 0), 'no negative tile');
-// cushion off: not drawn, still in the total of the shares
+// cushion off: not drawn, and out of the total of the shares too
 near(sum(tiles, t => t.value_usd), nettedTotal - 400, 'tiles = netted rows less the cushion');
-near(sum(tiles, t => t.share), (nettedTotal - 400) / nettedTotal, 'shares of the netted total');
+near(sum(tiles, t => t.share), 1, 'shares of the tiles add up to 1 without the cushion');
 tiles = aggregate({ rows: capRows, fundHoldings: {}, mergeGold: false, includeCushion: true });
 near(sum(tiles, t => t.value_usd), nettedTotal, 'tiles = netted rows with the cushion');
 near(sum(tiles, t => t.share), 1, 'shares sum to 1 with the cushion');

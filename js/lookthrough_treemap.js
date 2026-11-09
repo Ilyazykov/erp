@@ -152,7 +152,8 @@ export function aggregate({ rows, holdings, fundHoldings, expandFunds = false, i
   } else {
     entries = (holdings || []).map(h => ({ ticker: h.ticker, value_usd: Number(h.value_usd) || 0, kind: h.kind }));
   }
-  const total = entries.reduce((s, e) => s + (e.value_usd > 0 ? e.value_usd : 0), 0);
+  // a cushion left out of the tiles is left out of their total too
+  const total = entries.reduce((s, e) => s + (e.value_usd > 0 && (includeCushion || !e.cushion) ? e.value_usd : 0), 0);
   const share = v => (total ? v / total : 0);
 
   const direct = new Map(), funds = new Map();
@@ -691,12 +692,18 @@ export function drawTreemap(container, tiles, earned, opts = {}) {
         a.textContent = tile.ticker; el.append(a);
       }
     } else if (e.state === 'nodata') {
-      // no price: no change to show, but a big tile still names its instrument
-      const fitW = textWidth(name, true) + 2 * MIN_PAD + 2;
-      if (r.w >= fitW && r.h >= LINE + 2 * MIN_PAD) {
+      // no price: no change to show, but a big tile still names its instrument; the cushion shows its money
+      const money = /^CUSHION( |$)/.test(String(tile.ticker)) ? `$${Math.round(tile.value_usd).toLocaleString('en-US')}` : null;
+      const fitW = Math.max(textWidth(name, true), money ? textWidth(money, false) : 0) + 2 * MIN_PAD + 2;
+      if (r.w >= fitW && r.h >= (money ? 2 : 1) * LINE + 2 * MIN_PAD) {
         const a = document.createElement('div');
         a.style.cssText = 'font-weight:bold;white-space:nowrap;overflow:hidden';
         a.textContent = name; el.append(a);
+        if (money) {
+          const b = document.createElement('div');
+          b.style.cssText = 'white-space:nowrap;overflow:hidden';
+          b.textContent = money; el.append(b);
+        }
       }
     } else {
       const change = e.state === 'zero' ? (e.unit === 'pp' ? '0.0 pp' : '0.0%') : formatChange(e.change, e.unit);
@@ -874,14 +881,15 @@ function wireTreemap() {
       if (!data) data = await (loading = loading || loadData());
       const earnedRows = await earnedFor(period);
       if (my !== run) return;
-      // the cushion: 'merged' -- one tile; 'split' -- a tile per account it came from; 'hidden' -- out of
-      // the calculations altogether (the rows as they are, nothing moved to the cushion)
+      // the cushion: 'merged' -- one tile, the money moved out of its accounts into it; 'accounts' -- the rows
+      // as they are, the cushion not drawn; 'total' -- the cushion moved out of its accounts and computed, but
+      // neither drawn nor in the total
       const cushionMode = $('lt_cushion').value;
-      const cushion = cushionMode !== 'hidden';
+      const cushion = cushionMode === 'merged';
       let rows = data.rows;
-      if (cushion && g('mpWithCushion')) {
+      if (cushionMode !== 'accounts' && g('mpWithCushion')) {
         rows = [...window.mpWithCushion(rows.filter(r => r.account !== 'real estate')), ...rows.filter(r => r.account === 'real estate')]
-          .map(r => (r.instrument_type !== 'cushion' ? r : { ...r, ticker: cushionMode === 'merged' ? 'CUSHION' : `CUSHION ${r.account}` }));
+          .map(r => (r.instrument_type !== 'cushion' ? r : { ...r, ticker: 'CUSHION' }));
       }
       const tiles = aggregate({ rows, fundHoldings: data.fundHoldings, expandFunds: $('lt_expand').checked, includeCushion: cushion,
         mergeGold: $('lt_gold').checked, mergeSavings: $('lt_savings').checked, savingsLinks: data.savingsLinks, savingsPeriods: data.savingsPeriods,
