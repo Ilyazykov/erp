@@ -1299,6 +1299,17 @@ async function runUpdate(): Promise<Record<string, unknown>> {
   log(`Upserting ${rowsOut.length} rows into market_prices...`);
   const { upserted, error } = await upsertMarketPrices(supabase, rowsOut);
 
+  // Today's price goes into price_history too, so the portfolio map's 1-day change has a price for today.
+  // Each run overwrites today's row; update-capital-history (nightly) writes the day's close over it.
+  const todayUtc = new Date().toISOString().slice(0, 10);
+  const histRows = rowsOut
+    .filter((r) => r.price_usd > 0 && r.asset_class !== 'blocked')
+    .map((r) => ({ ticker: r.ticker, day: todayUtc, price_usd: r.price_usd }));
+  for (let i = 0; i < histRows.length; i += 200) {
+    const { error: histErr } = await supabase.from('price_history').upsert(histRows.slice(i, i + 200), { onConflict: 'ticker,day' });
+    if (histErr) { log(`price_history: ${histErr.message}`); break; }
+  }
+
   return {
     total_tickers: tickers.length,
     resolved: resolved.size,
