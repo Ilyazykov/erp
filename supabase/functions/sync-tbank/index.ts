@@ -33,12 +33,13 @@
 // tickers; a redemption closes the holding (a sell at 0 next to the
 // repayment), as the app rows did.
 //
-// The held Russian shares' and funds' last prices (MarketDataService/GetLastPrices,
+// The held shares, funds and bonds listed on MOEX (MarketDataService/GetLastPrices,
 // the positions from GetPortfolio) go into price_history in USD, source 'tbank',
 // as sync-ibkr's mark prices do -- the day of each price is the Moscow day it was
-// traded. Each day's row is overwritten by the last value received for it, from
-// any source (the source column, migration ...200, says which). Bonds and ЦФА
-// aren't taken; a failed price read is reported, the rows still go.
+// traded; a bond's is its price plus the accrued interest. Each day's row is
+// overwritten by the last value received for it, from any source (the source
+// column, migration ...200, says which). ЦФА and foreign securities aren't taken;
+// a failed price read is reported, the rows still go.
 //
 // Before anything is written the API is checked against the latest report:
 // the month before its end, every deal of the report must come back by its
@@ -47,8 +48,8 @@
 // differently from the report shows as an error, not as wrong rows.
 //
 // Two ways in, as the other syncs: the page's Save ({"check": true}: only
-// the token and its accounts) / "Sync now" (the user's JWT), or the daily
-// pg_cron job with the cron secret (_shared/cron_auth.ts). Each run's result
+// the token and its accounts) / "Sync now" (the user's JWT), or the pg_cron
+// job, three runs a day (migration ...201), with the cron secret (_shared/cron_auth.ts). Each run's result
 // is kept in broker_credentials.last_sync_*.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
@@ -61,13 +62,9 @@ const ACCOUNT = 'T-Bank';
 const SOURCE = 'tbank_api';
 const CHECK_DAYS = 31;
 const ISIN = /^[A-Z]{2}[A-Z0-9]{9}\d$/;
-// The daily job's slots: 24 runs, 10 minutes apart, from 04:00 UTC.
-const SLOT_START_MIN = 4 * 60, SLOT_MINUTES = 10, SLOTS = 24, RUN_USERS = 2;
-function slotOf(userId: string): number {
-  let h = 0;
-  for (const ch of userId) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return h % SLOTS;
-}
+// The cron job's runs (migration ...201): at most RUN_USERS users a run, and a
+// user is synced again once RUN_GAP_MS has passed since the last run.
+const RUN_USERS = 2, RUN_GAP_MS = 3 * 3600e3;
 // T-Invest's answers that mean the token itself is no good -- not retried the same day.
 const KEY_REFUSED = /T-Invest (16|40003)\b|not read-only/;
 
@@ -77,7 +74,7 @@ const msk = (iso: string) => new Date(Date.parse(iso) + 3 * 3600000).toISOString
 const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
 const exchangeOf = (classCode: string) => /^(TQ|EQ|PS|SM)/.test(classCode) ? 'ММВБ' : /^SPB/.test(classCode) ? 'СПБ' : null;
 
-type Inst = { ticker: string; isin: string; name: string; type: string; classCode: string; nominal: number; iso: string };
+type Inst = { ticker: string; isin: string; name: string; type: string; classCode: string; nominal: number; aci: number; iso: string };
 // deno-lint-ignore no-explicit-any
 type Op = any;
 type PriceRow = { ticker: string; day: string; price: number; currency: string };
@@ -89,7 +86,7 @@ type TradeRow = {
 };
 
 // deno-lint-ignore no-explicit-any
-async function syncUser(db: any, userId: string, token: string, checkOnly: boolean) {
+async function syncUser(db: any, userId: string, token: string, checkOnly: boolean, priceOnly = false) {
   const { accounts = [] } = await tinvest(token, 'UsersService/GetAccounts', {});
   // deno-lint-ignore no-explicit-any
   const full = accounts.filter((a: any) => a.accessLevel === 'ACCOUNT_ACCESS_LEVEL_FULL_ACCESS');
@@ -103,8 +100,12 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
   const instOf = async (uid: string): Promise<Inst> => {
     if (insts.has(uid)) return insts.get(uid)!;
     const { instrument: i } = await tinvest(token, 'InstrumentsService/GetInstrumentBy', { idType: 'INSTRUMENT_ID_TYPE_UID', id: uid });
-    const inst: Inst = { ticker: i.ticker ?? '', isin: i.isin ?? '', name: i.name ?? '', type: i.instrumentType ?? '', classCode: i.classCode ?? '', nominal: 0, iso: '' };
-    if (inst.type === 'bond') inst.nominal = money((await tinvest(token, 'InstrumentsService/BondBy', { idType: 'INSTRUMENT_ID_TYPE_UID', id: uid })).instrument?.nominal);
+    const inst: Inst = { ticker: i.ticker ?? '', isin: i.isin ?? '', name: i.name ?? '', type: i.instrumentType ?? '', classCode: i.classCode ?? '', nominal: 0, aci: 0, iso: '' };
+    if (inst.type === 'bond') {
+      const b = (await tinvest(token, 'InstrumentsService/BondBy', { idType: 'INSTRUMENT_ID_TYPE_UID', id: uid })).instrument;
+      inst.nominal = money(b?.nominal);
+      inst.aci = money(b?.aciValue);
+    }
     if (inst.type === 'currency') inst.iso = String((await tinvest(token, 'InstrumentsService/CurrencyBy', { idType: 'INSTRUMENT_ID_TYPE_UID', id: uid })).instrument?.isoCurrencyName ?? '').toUpperCase();
     insts.set(uid, inst);
     return inst;
@@ -116,10 +117,45 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
     const c = i.ticker.replace(/@.*$/, ''); return !c || ISIN.test(c) ? (i.isin || c) : c;
   };
 
+  // The held shares, funds and bonds listed on MOEX, with their last prices (the
+  // day of each price is the Moscow day it was traded; a bond's is its price plus
+  // the accrued interest). A failure leaves the prices out, not the rows.
+  const lastPricesOf = async (accountId: string, tickerFor: (i: Inst) => string) => {
+    const prices: PriceRow[] = [];
+    try {
+      const { positions = [] } = await tinvest(token, 'OperationsService/GetPortfolio', { accountId, currency: 'RUB' });
+      // the held ones on MOEX, in any currency (the yuan bonds too); a foreign security is left out
+      const held: { p: Op; inst: Inst }[] = [];
+      for (const p of positions) {
+        if (!['share', 'etf', 'bond'].includes(String(p.instrumentType)) || !(money(p.quantity) > 0)) continue;
+        const inst = await instOf(p.instrumentUid);
+        if (exchangeOf(inst.classCode) === 'ММВБ') held.push({ p, inst });
+      }
+      if (held.length) {
+        const { lastPrices = [] } = await tinvest(token, 'MarketDataService/GetLastPrices', { instrumentId: held.map(({ p }) => p.instrumentUid) });
+        // answered by uid or by figi, whichever the response carries
+        const lastOf = new Map<string, Op>();
+        for (const l of lastPrices) for (const k of [l.instrumentUid, l.figi]) if (k) lastOf.set(k, l);
+        for (const { p, inst } of held) {
+          const l = lastOf.get(p.instrumentUid) ?? lastOf.get(p.figi);
+          const last = money(l?.price);
+          if (!l || !(last > 0) || !l.time) continue;
+          const price = round(last + (inst.type === 'bond' ? inst.aci : 0), 6);
+          prices.push({ ticker: tickerFor(inst), day: msk(l.time).slice(0, 10), price,
+            currency: String(p.currentPrice?.currency ?? '').toUpperCase() });
+        }
+      }
+      return { prices, pricesError: null as string | null };
+    } catch (err) {
+      return { prices, pricesError: String(err) };
+    }
+  };
+
   const results = [];
   const allTrades: TradeRow[] = [];
-  // the held shares' and funds' last prices (native currency), into the price history
+  // the held securities' last prices (native currency), into the price history
   const allPrices: PriceRow[] = [];
+  const priceErrors: string[] = [];
   // notes on accounts left out (a ЦФА account with more than one Atomyze wallet)
   const dfa: string[] = [];
   for (const acc of list) {
@@ -148,6 +184,15 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
     if (uErr) throw new Error(uErr.message);
     const used = new Set((usedRows ?? []).map((r: { ticker: string }) => r.ticker));
     const tickerFor = (i: Inst) => { const d = tickerOf(i); return !used.has(d) && i.isin && used.has(i.isin) ? i.isin : d; };
+    // the price-only run (migration ...201): the prices, nothing else
+    if (priceOnly) {
+      if (!isDfa) {
+        const p = await lastPricesOf(acc.id, tickerFor);
+        allPrices.push(...p.prices);
+        if (p.pricesError) priceErrors.push(`${acc.id}: ${p.pricesError}`);
+      }
+      continue;
+    }
     const pullFrom = checkFrom ?? from;
 
     // Every executed operation since then (Moscow midnight = 21:00 UTC the day before).
@@ -308,34 +353,9 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
     }
     if (odd.length) throw new Error(`Not understood on ${agr} -- nothing replaced: ${odd.slice(0, 8).join('; ')}`);
 
-    // The held shares' and funds' last prices -- IBKR's mark prices, as sync-ibkr
-    // has them: the price of the day it was traded (Moscow day of the last trade).
-    // Bonds and ЦФА aren't taken. A failure here leaves the prices out, not the rows.
-    const prices: PriceRow[] = [];
-    let pricesError: string | null = null;
-    if (!isDfa) {
-      try {
-        const { positions = [] } = await tinvest(token, 'OperationsService/GetPortfolio', { accountId: acc.id, currency: 'RUB' });
-        // Russian: priced in rubles (MOEX); a foreign share on the same account is left to the other sources
-        const held = positions.filter((p: Op) => ['share', 'etf'].includes(String(p.instrumentType)) && money(p.quantity) > 0
-          && String(p.currentPrice?.currency ?? '').toUpperCase() === 'RUB');
-        if (held.length) {
-          const { lastPrices = [] } = await tinvest(token, 'MarketDataService/GetLastPrices', { instrumentId: held.map((p: Op) => p.instrumentUid) });
-          // answered by uid or by figi, whichever the response carries
-          const lastOf = new Map<string, Op>();
-          for (const l of lastPrices) for (const k of [l.instrumentUid, l.figi]) if (k) lastOf.set(k, l);
-          for (const p of held) {
-            const l = lastOf.get(p.instrumentUid) ?? lastOf.get(p.figi);
-            const price = money(l?.price);
-            if (!l || !(price > 0) || !l.time) continue;
-            prices.push({ ticker: tickerFor(await instOf(p.instrumentUid)), day: msk(l.time).slice(0, 10), price,
-              currency: String(p.currentPrice?.currency ?? '').toUpperCase() });
-          }
-        }
-      } catch (err) {
-        pricesError = String(err);
-      }
-    }
+    // The held securities' last prices (see lastPricesOf). ЦФА aren't taken.
+    const { prices, pricesError } = isDfa ? { prices: [] as PriceRow[], pricesError: null as string | null }
+      : await lastPricesOf(acc.id, tickerFor);
 
     results.push({ agr, from, lastEnd, cash: cash.filter(c => c.tx_date.slice(0, 10) >= from), trades: trades.filter(r => r.trade_date >= from), checked,
       moves: moves.filter(m => m.slice(0, 10) >= from), prices, pricesError });
@@ -388,6 +408,7 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
     const { error } = await db.from('price_history').upsert(priceList.slice(i, i + 500), { onConflict: 'ticker,day' });
     if (error) throw new Error(error.message);
   }
+  if (priceOnly) return { period_to: new Date().toISOString().slice(0, 10), prices_written: priceList.length, prices_errors: priceErrors };
   const removedSnowball = await removeCoveredSnowball(db, userId, allTrades);
   const { error: rq } = await db.rpc('request_capital_refresh', { p_user: userId });
   if (rq) throw new Error(rq.message);
@@ -438,23 +459,26 @@ Deno.serve(async (req) => {
         return json({ error: String(err) }, 400);
       }
     }
-    // The daily job: users whose slot has come and who aren't synced today; a
-    // failed run is retried by the next, but not a token T-Invest refuses.
-    const nowSlot = Math.floor((new Date().getUTCHours() * 60 + new Date().getUTCMinutes() - SLOT_START_MIN) / SLOT_MINUTES);
+    // The cron job (three runs a day while MOEX is open, migration ...201): users
+    // whose last run is 3 hours or more old. A token T-Invest refuses waits a day
+    // (a new one is saved on the page); a failed run is retried by the next.
+    // The cron's morning and noon runs take prices only (body prices_only); the
+    // evening run takes the whole sync -- the day's trades are all in by then.
+    const priceOnly = body.prices_only === true;
     if (!userId) {
-      const today = new Date().toISOString().slice(0, 10);
-      const syncedToday = (c: Cred) => !!c.last_sync_at && c.last_sync_at.slice(0, 10) >= today
-        && (!(c.last_sync_result || '').startsWith('{"error"') || KEY_REFUSED.test(c.last_sync_result || ''));
-      picked = picked.filter(c => slotOf(c.user_id) <= nowSlot && !syncedToday(c))
-        .sort((a, b) => slotOf(a.user_id) - slotOf(b.user_id)).slice(0, RUN_USERS);
-      if (!picked.length) return json({ users: 0, slot: nowSlot });
+      const now = Date.now();
+      const refusedToday = (c: Cred) => KEY_REFUSED.test(c.last_sync_result || '')
+        && now - Date.parse(c.last_sync_at ?? '0') < 24 * 3600e3;
+      picked = picked.filter(c => (!c.last_sync_at || now - Date.parse(c.last_sync_at) >= RUN_GAP_MS) && !refusedToday(c))
+        .slice(0, RUN_USERS);
+      if (!picked.length) return json({ users: 0 });
     }
 
     const results = [];
     for (const c of picked) {
       let result: Record<string, unknown>;
       try {
-        result = await syncUser(db, c.user_id, c.token, false);
+        result = await syncUser(db, c.user_id, c.token, false, priceOnly);
       } catch (err) {
         result = { error: String(err) };
       }
