@@ -135,9 +135,9 @@ export function aggregate({ rows, holdings, fundHoldings, expandFunds = false, i
   const isFundTicker = t => Object.prototype.hasOwnProperty.call(fundHoldings || {}, t);
   let entries, typeOf = new Map();
   if (rows) {
-    // real estate is not on the map (it is not in the pies' totals either; it has no price history)
+    // real estate is on the map and in its total only when includeRealEstate ("show real estate")
     const netted = netCreditIntoLiquid(rows.filter(r => Number.isFinite(Number(r.value_usd)))
-      .filter(r => !r.excluded && (includeRealEstate || (r.account !== 'real estate' && r.instrument_type !== 'real_estate')))
+      .filter(r => includeRealEstate || (r.account !== 'real estate' && r.instrument_type !== 'real_estate'))
       .map(r => ({ ...r, value_usd: Number(r.value_usd) })));
     // a cushion row is a tile of its own: named by the caller ('CUSHION ...') when it says how the
     // cushion is shown, else one per currency. Its part of a fund's row keeps the fund's ticker, so
