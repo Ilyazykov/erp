@@ -774,8 +774,19 @@ function fetchUsStockPrice(ticker: string): Promise<YahooHit | null> {
   return yahooFetchSymbol(ticker);
 }
 
-function fetchCryptoPrice(ticker: string): Promise<YahooHit | null> {
-  const symbol = CRYPTO_YAHOO_OVERRIDES[ticker.toUpperCase()] ?? `${ticker.toUpperCase()}-USD`;
+// Crypto: Bybit's spot USDT pair first (its last price), Yahoo only for what Bybit doesn't list. Metals stay on Yahoo.
+const METAL_TICKERS = new Set(['XAU', 'XAUT', 'PAXG']);
+async function fetchCryptoPrice(ticker: string): Promise<YahooHit | null> {
+  const t = ticker.toUpperCase();
+  if (!METAL_TICKERS.has(t)) {
+    try {
+      const r = await fetch(`https://api.bybit.com/v5/market/tickers?category=spot&symbol=${encodeURIComponent(t + 'USDT')}`);
+      const j = await r.json();
+      const price = Number(j?.result?.list?.[0]?.lastPrice);
+      if (j?.retCode === 0 && price > 0) return { price, currency: 'USD', as_of: new Date().toISOString(), symbol: `${t}USDT` };
+    } catch { /* Yahoo below */ }
+  }
+  const symbol = CRYPTO_YAHOO_OVERRIDES[t] ?? `${t}-USD`;
   return yahooFetchSymbol(symbol);
 }
 

@@ -450,7 +450,14 @@ Deno.serve(async (req) => {
         // a few were renamed outright (RENAMED_YAHOO).
         const base = RENAMED_YAHOO[ticker.toUpperCase()] ?? (/_?old$/i.test(ticker) ? ticker.replace(/_?old$/i, '').toUpperCase() : null);
         if (base) candidates.push(viaYahoo(base));
-        if (CRYPTO_BYBIT[ticker.toUpperCase()]) candidates.push(async () => {
+        // Crypto: Bybit's spot USDT pair first (its daily closes), Yahoo behind it for what Bybit doesn't list
+        const bybitSymbol = CRYPTO_BYBIT[ticker.toUpperCase()] ?? (m?.asset_class === 'crypto' ? `${ticker.toUpperCase()}USDT` : null);
+        if (bybitSymbol && m?.asset_class === 'crypto') { candidates.push(async () => {
+          points = await bybitHistory(bybitSymbol, from);
+          if (points.length) { src = { ticker, source: 'bybit', symbol: bybitSymbol, currency: 'USD' }; return true; }
+          return false;
+        }, viaYahoo(crypto)); }
+        else if (CRYPTO_BYBIT[ticker.toUpperCase()]) candidates.push(async () => {
           const symbol = CRYPTO_BYBIT[ticker.toUpperCase()];
           points = await bybitHistory(symbol, from);
           if (points.length) { src = { ticker, source: 'bybit', symbol, currency: 'USD' }; return true; }
