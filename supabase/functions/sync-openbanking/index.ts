@@ -450,10 +450,14 @@ async function syncBank(db: any, userId: string, jwt: string, bankKey: string, s
       for (const x of r.transactions ?? [] as any[]) {
         const a = Number(x.transaction_amount?.amount);
         if (!Number.isFinite(a)) continue;
+        // the day it was made, when the bank gives it (Revolut books a card payment a day or two later)
+        const madeDay = x.transaction_date ? String(x.transaction_date).slice(0, 10) : undefined;
+        const bookedDay = String(x.booking_date ?? x.value_date ?? x.transaction_date ?? '').slice(0, 10);
         txs.push({
-          day: String(x.booking_date ?? x.value_date ?? x.transaction_date ?? '').slice(0, 10),
-          // the day it was made, when the bank gives it (Revolut books a card payment a day or two later)
-          made: x.transaction_date ? String(x.transaction_date).slice(0, 10) : undefined,
+          // a purchase made after the booking day's cut-off (Revolut books a payment made just after midnight
+          // on the day before, e.g. made 21.10 00:37 booked 20.10): the day it was made, 21.10
+          day: madeDay && madeDay > bookedDay && Date.parse(madeDay) - Date.parse(bookedDay) <= 86400000 ? madeDay : bookedDay,
+          made: madeDay,
           // a card payment in another currency: the rate it was converted at, as
           // the other currency per unit of the account's (Revolut: "2.8798... EUR"
           // for 40 GEL paid with 13.89 EUR) -- the expenses take what it cost over
