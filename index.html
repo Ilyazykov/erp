@@ -3188,6 +3188,8 @@ async function mpImportOneFile(file, statusEl, session) {
     // "Binance-Transaction-History-202609261140(UTC+3)-part1-of1.csv".
     const query = kind === 'binance' ? `?tz=${encodeURIComponent(file.name.match(/\(UTC([+-]\d+(?:\.\d+)?)\)/)?.[1] ?? '0')}` : '';
     statusEl.textContent = `Detected: ${label}. Uploading and parsing on the server…`;
+    // a receipt file's rows show in the Expenses tab at once, from the file itself
+    if (kind === 'receipt_csv') mpShowPendingReceipts(csvText);
 
     const res = await fetch(`${SUPABASE_URL}/functions/v1/${fn}${query}`, {
       method: 'POST',
@@ -3210,6 +3212,7 @@ async function mpImportOneFile(file, statusEl, session) {
       // `error` field (e.g. {code: 'WORKER_LIMIT', message: ...}).
       statusEl.textContent = `Error (HTTP ${res.status}): ${result.error || result.message || result.msg
         || result.code || res.statusText || 'no details'}`;
+      mpDropPendingReceipts();
       return;
     }
     mpImportedSinceRefresh = true;
@@ -3432,6 +3435,7 @@ async function mpImportOneFile(file, statusEl, session) {
     }
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}`;
+    mpDropPendingReceipts();
   }
 }
 
@@ -11598,6 +11602,53 @@ function mpMergeExpCache(part) {
 // whether the rows of a period are in the cache: the period of the first load or a loaded span
 function mpExpCovers(w) {
   return [mpExpCache.range, ...(mpExpCache.loaded || [])].some(s => s && s.from <= w.from && s.to >= w.to);
+}
+// A receipt CSV's rows, read in the browser while the server still writes them: the
+// Expenses tab shows them at once (pending, no id yet); the server's answer reloads the
+// tab from the database, and a failed upload takes them off again (mpDropPendingReceipts).
+function mpCsvRows(text) {
+  const rows = [];
+  let row = [], field = '', quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else quoted = false; }
+      else field += c;
+    } else if (c === '"') quoted = true;
+    else if (c === ',') { row.push(field); field = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(field); rows.push(row); row = []; field = '';
+    } else field += c;
+  }
+  if (field || row.length) { row.push(field); rows.push(row); }
+  const head = (rows.shift() || []).map(h => h.replace(/^﻿/, '').trim().toLowerCase());
+  return rows.filter(r => r.length === head.length).map(r => Object.fromEntries(head.map((h, i) => [h, r[i].trim()])));
+}
+function mpPendingRerender() {
+  if (document.getElementById('expenses')?.offsetParent) mpRenderExpenses().catch(() => { /* the tab shows its own error */ });
+}
+function mpShowPendingReceipts(text) {
+  if (!mpExpCache) return;   // the tab not loaded yet: its first load reads the database
+  const byId = new Map();
+  for (const r of mpCsvRows(text)) {
+    if (!r.receipt || !r.date) continue;
+    const xid = `${r.date}|${r.receipt}|${Number(r.total)}`;   // the same key the server stores
+    if (byId.has(xid)) continue;
+    const amt = Number(r.total);
+    const usd = typeof mpExpCache.usdPer === 'function' ? mpExpCache.usdPer(r.currency, r.date) * amt : NaN;
+    byId.set(xid, { id: null, day: r.date, paid_day: r.date, tx_date: r.date, at: r.time || '', ts: r.date,
+      account: '<unknown>', description: r.chain || r.store, amt, ccy: r.currency, usd, cat: null,
+      counted: true, extrapolated: false, note: null, src: 'receipt_csv', xid, pending: true });
+  }
+  const kept = mpExpCache.spent.filter(x => !x.pending);
+  mpExpCache.spent = [...kept, ...byId.values()].sort((x, y) => (x.day < y.day ? -1 : x.day > y.day ? 1 : 0));
+  mpPendingRerender();
+}
+function mpDropPendingReceipts() {
+  if (!mpExpCache?.spent?.some(x => x.pending)) return;
+  mpExpCache.spent = mpExpCache.spent.filter(x => !x.pending);
+  mpPendingRerender();
 }
 async function mpRenderExpenses() {
   mpExpAskFirstDay();
