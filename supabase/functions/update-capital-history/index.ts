@@ -507,6 +507,8 @@ Deno.serve(async (req) => {
     report.no_price = failed;
     report.splits_changed = splitsFound;
     report.tickers_left = queue.length - done.length - failed.length;
+    // Yahoo / Bybit / MOEX gave no history for these in this run (kept for the response and the function's log)
+    if (failed.length) console.warn(`capital history: no price from Yahoo/Bybit/MOEX for ${failed.length}: ${failed.join(', ')}`);
 
     // 3. Ask the database to rebuild every user's history: pg_cron's
     // run_capital_refresh_step (migration 040) does it in the background,

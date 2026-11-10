@@ -1236,7 +1236,7 @@ async function runUpdate(): Promise<Record<string, unknown>> {
   for (const ticker of cryptoCandidates) {
     const hit = await fetchCryptoPrice(ticker);
     if (hit === null) {
-      log(`  ${ticker}: no Yahoo crypto/metal quote found`);
+      log(`  ${ticker}: no Bybit or Yahoo quote found -- no price for it today`);
       continue;
     }
     const priceUsd = await toUsd(hit.price, hit.currency ?? 'USD', usdRubRate);
@@ -1308,6 +1308,9 @@ async function runUpdate(): Promise<Record<string, unknown>> {
   log(`Resolved ${resolved.size}/${tickers.length} tickers.`);
   if (unresolved.length) {
     log(`Unresolved (${unresolved.length}): ${[...unresolved].sort().join(', ')}`);
+    // the summary for the log: those Bybit / Yahoo (and MOEX shares) gave no price for in this run
+    const noApiPrice = unresolved.filter((t) => classifyTicker(t) !== 'moex_ofz' && classifyTicker(t) !== 'moex_bond');
+    if (noApiPrice.length) console.warn(`market prices: no price from Bybit/Yahoo/MOEX for ${noApiPrice.length}: ${noApiPrice.sort().join(', ')}`);
   }
 
   log(`Upserting ${rowsOut.length} rows into market_prices...`);

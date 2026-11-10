@@ -217,21 +217,24 @@ const PRICE_WINDOW_MINUTES = 300;
 // deno-lint-ignore no-explicit-any
 async function writeOpenPositionPrices(db: any, xml: string): Promise<number> {
   const rows: { ticker: string; day: string; price_usd: number; source: string }[] = [];
+  let skipped = 0;
   for (const o of elements(xml, 'OpenPosition')) {
     if (o.levelOfDetail && o.levelOfDetail !== 'SUMMARY') continue;
     const day = isoTime(o.reportDate)?.slice(0, 10);
     const price = Number(o.markPrice);
-    if (!o.symbol || !day || !(price > 0)) continue;
+    if (!o.symbol || !day || !(price > 0)) { skipped++; continue; }
     const ccy = o.currency || 'USD';
     let rate = 1;
     if (ccy !== 'USD') {
       const { data: fx } = await db.from('fx_history').select('usd_per_unit').eq('currency', ccy)
         .lte('day', day).order('day', { ascending: false }).limit(1);
       rate = Number(fx?.[0]?.usd_per_unit || 0);
-      if (!(rate > 0)) continue;
+      if (!(rate > 0)) { skipped++; console.warn(`ibkr prices: no ${ccy} rate for ${o.symbol} on ${day}`); continue; }
     }
     rows.push({ ticker: o.symbol, day, price_usd: Math.round(price * rate * 1e6) / 1e6, source: 'ibkr' });
   }
+  if (skipped) console.warn(`ibkr prices: ${skipped} open position(s) without a usable price`);
+  if (!rows.length) console.warn('ibkr prices: nothing written from the Flex report');
   for (let i = 0; i < rows.length; i += 500) {
     const { error } = await db.from('price_history').upsert(rows.slice(i, i + 500), { onConflict: 'ticker,day' });
     if (error) throw new Error(error.message);
@@ -360,6 +363,7 @@ Deno.serve(async (req) => {
             .eq('user_id', c.user_id).eq('broker', 'ibkr');
         } catch (err) {
           written[c.user_id.slice(0, 8)] = `error: ${String(err)}`;
+          console.warn(`ibkr prices not updated for ${c.user_id.slice(0, 8)}: ${String(err)}`);
         }
       }
       return json({ users: Object.keys(written).length, written });

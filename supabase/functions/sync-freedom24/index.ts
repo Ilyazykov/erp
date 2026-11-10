@@ -156,10 +156,11 @@ async function writePositionPrices(db: any, pub: string, secret: string): Promis
   const reply = await tradernet(pub, secret, 'getPositionJson', {});
   const day = tradingDay();
   const priceRows: { ticker: string; day: string; price_usd: number; source: string }[] = [];
+  let skipped = 0;
   for (const x of reply?.result?.ps?.pos ?? []) {
     const price = Number(x.mkt_price);
     const ticker = String(x.i ?? '').replace(/\.[A-Z]{2}$/, '');
-    if (!ticker || !(price > 0)) continue;
+    if (!ticker || !(price > 0)) { skipped++; continue; }
     // Russian securities are the T-Bank sync's, not this one's: by the issuer's ISIN (RU...), whatever their
     // currency (rouble or yuan bonds on MOEX alike)
     if (/^RU/i.test(String(x.issue_nb ?? '')) || /\.RU$/i.test(String(x.i ?? ''))) continue;
@@ -168,10 +169,12 @@ async function writePositionPrices(db: any, pub: string, secret: string): Promis
       const { data: fx } = await db.from('fx_history').select('usd_per_unit').eq('currency', x.curr)
         .lte('day', day).order('day', { ascending: false }).limit(1);
       rate = Number(fx?.[0]?.usd_per_unit || 0);
-      if (!(rate > 0)) continue;
+      if (!(rate > 0)) { skipped++; console.warn(`freedom24 prices: no ${x.curr} rate for ${ticker} on ${day}`); continue; }
     }
     priceRows.push({ ticker, day, price_usd: Math.round(price * rate * 1e6) / 1e6, source: 'freedom24' });
   }
+  if (skipped) console.warn(`freedom24 prices: ${skipped} position(s) without a usable price`);
+  if (!priceRows.length) console.warn('freedom24 prices: nothing written from getPositionJson');
   for (let i = 0; i < priceRows.length; i += 500) {
     const { error } = await db.from('price_history').upsert(priceRows.slice(i, i + 500), { onConflict: 'ticker,day' });
     if (error) throw new Error(error.message);
@@ -325,6 +328,7 @@ Deno.serve(async (req) => {
           written[c.user_id.slice(0, 8)] = await writePositionPrices(db, c.public_key, c.private_key);
         } catch (err) {
           written[c.user_id.slice(0, 8)] = `error: ${String(err)}`;
+          console.warn(`freedom24 prices not updated for ${c.user_id.slice(0, 8)}: ${String(err)}`);
         }
       }
       return json({ users: Object.keys(written).length, written });
