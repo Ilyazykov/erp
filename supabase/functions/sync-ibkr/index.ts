@@ -208,6 +208,38 @@ function parse(xml: string) {
 
 // Pulls one user's statement and replaces the period's IBKR rows with it.
 // deno-lint-ignore no-explicit-any
+// The prices-only window: 15:00-19:59 UTC on weekdays (inside the US session in winter and summer).
+const PRICE_WINDOW_START_MIN = 15 * 60;
+const PRICE_WINDOW_MINUTES = 300;
+
+// The open positions' mark prices from a Flex report (Summary rows, the report date's day), in USD, into the
+// price history as source 'ibkr'. Returns how many rows were written.
+// deno-lint-ignore no-explicit-any
+async function writeOpenPositionPrices(db: any, xml: string): Promise<number> {
+  const rows: { ticker: string; day: string; price_usd: number; source: string }[] = [];
+  for (const o of elements(xml, 'OpenPosition')) {
+    if (o.levelOfDetail && o.levelOfDetail !== 'SUMMARY') continue;
+    const day = isoTime(o.reportDate)?.slice(0, 10);
+    const price = Number(o.markPrice);
+    if (!o.symbol || !day || !(price > 0)) continue;
+    const ccy = o.currency || 'USD';
+    let rate = 1;
+    if (ccy !== 'USD') {
+      const { data: fx } = await db.from('fx_history').select('usd_per_unit').eq('currency', ccy)
+        .lte('day', day).order('day', { ascending: false }).limit(1);
+      rate = Number(fx?.[0]?.usd_per_unit || 0);
+      if (!(rate > 0)) continue;
+    }
+    rows.push({ ticker: o.symbol, day, price_usd: Math.round(price * rate * 1e6) / 1e6, source: 'ibkr' });
+  }
+  for (let i = 0; i < rows.length; i += 500) {
+    const { error } = await db.from('price_history').upsert(rows.slice(i, i + 500), { onConflict: 'ticker,day' });
+    if (error) throw new Error(error.message);
+  }
+  return rows.length;
+}
+
+// deno-lint-ignore no-explicit-any
 async function syncUser(db: any, userId: string, token: string, queryId: string) {
   const p = parse(await fetchStatement(token, queryId));
 
@@ -295,6 +327,43 @@ Deno.serve(async (req) => {
     if (cErr) throw new Error(cErr.message);
     type Cred = { user_id: string; token: string; query_id: string; last_sync_at: string | null; last_sync_result: string | null };
     let picked = (creds ?? []) as Cred[];
+    // The prices-only run: the open positions' mark prices from the Flex report, nothing else. From the page:
+    // at once. From the cron (every 10 minutes in US market hours, weekdays): each user once a day, at their
+    // own minute of the window (priceSlotOf), when that minute has come and today's prices aren't in yet.
+    const body = await req.json().catch(() => ({}));
+    if (body.prices_only) {
+      const now = new Date();
+      const todayStart = new Date(now); todayStart.setUTCHours(0, 0, 0, 0);
+      const { data: marks } = await db.from('broker_credentials').select('user_id, last_prices_at, prices_due_at').eq('broker', 'ibkr');
+      const marksOf = new Map<string, { last: string | null; due: string | null }>(
+        (marks ?? []).map((m: { user_id: string; last_prices_at: string | null; prices_due_at: string | null }) =>
+          [m.user_id, { last: m.last_prices_at, due: m.prices_due_at }]));
+      const written: Record<string, unknown> = {};
+      for (const c of picked) {
+        if (userId && c.user_id !== userId) continue;
+        if (!userId) {
+          const mark = marksOf.get(c.user_id) ?? { last: null, due: null };
+          if (mark.last && new Date(mark.last) >= todayStart) continue;   // today's prices are in
+          // today's minute, drawn at random once a day: from the first run of the day that finds no minute for today
+          let due = mark.due ? new Date(mark.due) : null;
+          if (!due || due < todayStart) {
+            const minute = PRICE_WINDOW_START_MIN + Math.floor(Math.random() * PRICE_WINDOW_MINUTES);
+            due = new Date(todayStart.getTime() + minute * 60000);
+            await db.from('broker_credentials').update({ prices_due_at: due.toISOString() })
+              .eq('user_id', c.user_id).eq('broker', 'ibkr');
+          }
+          if (now < due) continue;
+        }
+        try {
+          written[c.user_id.slice(0, 8)] = await writeOpenPositionPrices(db, await fetchStatement(c.token, c.query_id));
+          await db.from('broker_credentials').update({ last_prices_at: now.toISOString() })
+            .eq('user_id', c.user_id).eq('broker', 'ibkr');
+        } catch (err) {
+          written[c.user_id.slice(0, 8)] = `error: ${String(err)}`;
+        }
+      }
+      return json({ users: Object.keys(written).length, written });
+    }
     // The daily job (every 10 minutes, 04:00-07:50 UTC -- migration ...095)
     // spreads the users over its 24 runs: each has a slot from its id, and a
     // run takes at most RUN_USERS whose slot has come and who aren't synced
