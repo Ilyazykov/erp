@@ -3420,7 +3420,8 @@ async function mpImportOneFile(file, statusEl, session) {
       const unmatched = result.unmatched_products ? ` ${result.unmatched_products} line(s) with no product yet -- resolve them from the Expenses tab's Items column.` : '';
       statusEl.textContent = `Detected: ${label}. ${result.accepted} receipt(s), ${result.total_lines} line(s): `
         + `${result.linked} linked to a transaction, ${result.waiting} waiting for one, ${result.ambiguous} matching more than one (resolve by hand).${skipped}${unmatched}`;
-      mpExpCache = null;   // the Expenses tab's items re-load with the new receipts
+      // the Expenses tab's items re-load with the new receipts; the history already loaded stays (the forecast reads it)
+      mpReloadPeriodKeepingHistory();
       // the tab on screen now re-reads its rows: a tab already open is not re-rendered by a tab switch
       if (document.getElementById('expenses')?.offsetParent) mpRenderExpenses().catch(() => { /* the tab shows its own error */ });
       mpRenderReceiptsPanel();
@@ -11644,6 +11645,25 @@ function mpShowPendingReceipts(text) {
   const kept = mpExpCache.spent.filter(x => !x.pending);
   mpExpCache.spent = [...kept, ...byId.values()].sort((x, y) => (x.day < y.day ? -1 : x.day > y.day ? 1 : 0));
   mpPendingRerender();
+}
+// Re-reads the period on screen after a receipt upload and puts its rows in place of the
+// cached ones; the rest of the loaded history stays, so the forecast isn't waiting for a full reload.
+async function mpReloadPeriodKeepingHistory() {
+  const cache = mpExpCache;
+  if (!cache) return;   // not loaded yet: the tab's first load reads the database
+  const from = document.getElementById('exp_from').value, to = document.getElementById('exp_to').value;
+  const inPeriod = r => r.day >= from && r.day <= to;
+  try {
+    const part = await mpExpLoad({ from, to });
+    if (mpExpCache !== cache) return;   // the tab re-loaded meanwhile
+    cache.spent = cache.spent.filter(r => !inPeriod(r) && !r.pending);
+    cache.skipped = cache.skipped.filter(r => !inPeriod(r));
+    cache.incomeRows = (cache.incomeRows || []).filter(r => !inPeriod(r));
+    mpMergeExpCache(part);
+    mpPendingRerender();
+  } catch (error) {
+    document.getElementById('exp_status').textContent = error.message;
+  }
 }
 function mpDropPendingReceipts() {
   if (!mpExpCache?.spent?.some(x => x.pending)) return;
