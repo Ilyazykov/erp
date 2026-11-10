@@ -39,6 +39,15 @@ const API = 'https://freedom24.com/api/';
 const PAGE = 500;
 // The daily job's slots (migration ...099): 24 runs, 10 minutes apart, from 04:00 UTC.
 const SLOT_START_MIN = 4 * 60, SLOT_MINUTES = 10, SLOTS = 24, RUN_USERS = 2;
+// The trading day a current price belongs to: the last weekday on or before today, today itself only after
+// the US close (21:00 UTC). A price read before that is the previous session's close.
+function tradingDay(now = new Date()): string {
+  const d = new Date(now);
+  if (d.getUTCHours() < 21) d.setUTCDate(d.getUTCDate() - 1);
+  while (d.getUTCDay() === 0 || d.getUTCDay() === 6) d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
 function slotOf(userId: string): number {
   let h = 0;
   for (const ch of userId) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
@@ -213,6 +222,32 @@ async function syncUser(db: any, userId: string, pub: string, secret: string) {
     const { error } = await db.from('trades').upsert(trades.slice(i, i + 500), { onConflict: 'user_id,external_source,external_id' });
     if (error) throw new Error(error.message);
   }
+  // The held securities' current prices (getPositionJson: result.ps.pos, mkt_price in the security's currency,
+  // the ticker with its exchange suffix, e.g. VWCE.EU) into the price history in USD. A failure leaves the prices out.
+  try {
+    const reply = await tradernet(pub, secret, 'getPositionJson', {});
+    const day = tradingDay();
+    const priceRows: { ticker: string; day: string; price_usd: number }[] = [];
+    for (const x of reply?.result?.ps?.pos ?? []) {
+      const price = Number(x.mkt_price);
+      const ticker = String(x.i ?? '').replace(/\.[A-Z]{2}$/, '');
+      if (!ticker || !(price > 0)) continue;
+      let rate = 1;
+      if (x.curr !== 'USD') {
+        const { data: fx } = await db.from('fx_history').select('usd_per_unit').eq('currency', x.curr)
+          .lte('day', day).order('day', { ascending: false }).limit(1);
+        rate = Number(fx?.[0]?.usd_per_unit || 0);
+        if (!(rate > 0)) continue;
+      }
+      priceRows.push({ ticker, day, price_usd: Math.round(price * rate * 1e6) / 1e6 });
+    }
+    for (let i = 0; i < priceRows.length; i += 500) {
+      const { error } = await db.from('price_history').upsert(priceRows.slice(i, i + 500), { onConflict: 'ticker,day' });
+      if (error) throw new Error(error.message);
+    }
+  } catch (err) {
+    console.warn('freedom24 prices not kept:', String(err));
+  }
   const removedSnowball = await removeCoveredSnowball(db, userId, trades);
   const { error: rq } = await db.rpc('request_capital_refresh', { p_user: userId });
   if (rq) throw new Error(rq.message);
@@ -264,15 +299,6 @@ Deno.serve(async (req) => {
       try {
         const { total } = await cashFlows(picked[0].public_key, picked[0].private_key, 1);
         return json({ operations: total });
-      } catch (err) {
-        return json({ error: String(err) }, 400);
-      }
-    }
-    // A one-off look at the positions reply, for the field names (nothing is written): body.positions_shape.
-    if (userId && body.positions_shape) {
-      try {
-        const r = await tradernet(picked[0].public_key, picked[0].private_key, 'getPositionJson', {});
-        return json({ top_keys: Object.keys(r ?? {}), sample: JSON.stringify(r).slice(0, 4000) });
       } catch (err) {
         return json({ error: String(err) }, 400);
       }
