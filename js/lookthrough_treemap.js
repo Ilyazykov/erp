@@ -550,6 +550,16 @@ export function tileColor(state, change, scale = SATURATE_AT) {
 }
 export const LEGEND_STOPS = [-0.12, -0.08, -0.04, 0, 0.04, 0.08, 0.12];
 
+// The labels' units (the map's "show" field): the method's % / pp, or what was earned in dollars / roubles
+export const SHOW_UNITS = ['%', 'usd', 'rub'];
+// Money earned, signed: "+$195", "−$0.42" (cents under $10), "+15 600 ₽"
+export function formatMoney(v, ccy = 'usd') {
+  const a = Math.abs(v);
+  const text = ccy === 'rub' ? Math.round(a).toLocaleString('ru-RU') : a < 10 ? a.toFixed(2) : Math.round(a).toLocaleString('en-US');
+  const sign = Number(text.replace(/[^\d.]/g, '')) === 0 ? '' : v > 0 ? '+' : '−';
+  return ccy === 'rub' ? `${sign}${text} ₽` : `${sign}$${text}`;
+}
+
 // unit 'pp': percentage points of the portfolio (a contribution)
 export function formatChange(change, unit = '%') {
   const p = change * 100;
@@ -611,14 +621,14 @@ const usd = v => `$${Math.round(v).toLocaleString('en-US')}`;
 
 // The tooltip's lines of a tile: ticker, value, share, change, and how it is
 // held. A tile with no data says only that.
-function tooltipLines(tile, e, name = tile.ticker) {
+function tooltipLines(tile, e, name = tile.ticker, money = { ccy: 'usd', rate: 1 }) {
   const head = name === tile.ticker ? [tile.ticker] : [name, tile.ticker];
   const fmt = x => (x.state === 'nodata' || x.change == null ? '—' : formatChange(x.change, x.unit));
   // e.all: the tile by every method, the one shown marked
   if (e.all) {
     const lines = [...head, `value ${usd(tile.value_usd)}`, `share ${(tile.share * 100).toFixed(2)}%`];
     const earned = e.all.contrib?.earned;
-    if (earned != null) lines.push(`earned ${earned < 0 ? '−' : '+'}${usd(Math.abs(earned))}`);
+    if (earned != null) lines.push(`earned ${formatMoney(earned * money.rate, money.ccy)}`);
     for (const m of METHODS) if (e.all[m]) lines.push(`${m === e.method ? '▸ ' : ''}${METHOD_LABELS[m]} ${fmt(e.all[m])}`);
     pushSources(tile, lines);
     return lines;
@@ -663,7 +673,8 @@ export function cornerLayout(items, group, W, H) {
 }
 
 export function drawTreemap(container, tiles, earned, opts = {}) {
-  const { tip, group = false, depth = 0, scale = SATURATE_AT, names = {} } = opts;
+  // money: { ccy: 'usd' | 'rub', rate: per dollar, label: the label says what was earned, not the % }
+  const { tip, group = false, depth = 0, scale = SATURATE_AT, names = {}, money = { ccy: 'usd', rate: 1, label: false } } = opts;
   // values are cents: a tile under one cent is dust (e.g. a stablecoin fraction), not drawn
   tiles = tiles.map(t => ({ ...t, value_usd: Math.round(t.value_usd * 100) / 100 })).filter(t => t.value_usd >= 0.01);
   container.textContent = '';
@@ -724,7 +735,9 @@ export function drawTreemap(container, tiles, earned, opts = {}) {
         }
       }
     } else {
-      const change = e.state === 'zero' ? (e.unit === 'pp' ? '0.0 pp' : '0.0%') : formatChange(e.change, e.unit);
+      const earnedUsd = e.all?.contrib?.earned;
+      const change = money.label && earnedUsd != null ? formatMoney(earnedUsd * money.rate, money.ccy)
+        : e.state === 'zero' ? (e.unit === 'pp' ? '0.0 pp' : '0.0%') : formatChange(e.change, e.unit);
       const fitW = Math.max(textWidth(name, true), textWidth(change, false)) + 2 * MIN_PAD + 2;
       if (r.w >= fitW && r.h >= 2 * LINE + 2 * MIN_PAD) {
         const a = document.createElement('div'), b = document.createElement('div');
@@ -736,7 +749,7 @@ export function drawTreemap(container, tiles, earned, opts = {}) {
     }
     if (el.childNodes.length) el.style.padding = `${MIN_PAD - 1}px`;
     if (tip) {
-      const lines = tile.isGroup ? [`${tile.members.length} small positions`, ...tile.members.map(m => `${m.ticker} ${(m.share * 100).toFixed(2)}%`)] : tooltipLines(tile, e, name);
+      const lines = tile.isGroup ? [`${tile.members.length} small positions`, ...tile.members.map(m => `${m.ticker} ${(m.share * 100).toFixed(2)}%`)] : tooltipLines(tile, e, name, money);
       el.addEventListener('mousemove', ev => {
         tip.textContent = '';
         lines.forEach((l, i) => { const d = document.createElement('div'); if (i === 0) d.style.fontWeight = 'bold'; d.textContent = l; tip.append(d); });
@@ -817,6 +830,10 @@ function wireTreemap() {
   let method = 'contrib';
   try { const v = localStorage.getItem('lt_method'); if (METHODS.includes(v)) method = v; } catch { /* no storage */ }
   if ($('lt_method')) $('lt_method').value = method;
+  // what a tile's label says: the method's % / pp, or what it earned in dollars or roubles
+  let showIn = '%';
+  try { const v = localStorage.getItem('lt_show'); if (SHOW_UNITS.includes(v)) showIn = v; } catch { /* no storage */ }
+  if ($('lt_show')) $('lt_show').value = showIn;
   const today = () => new Date().toISOString().slice(0, 10);
 
   async function loadData() {
@@ -858,7 +875,8 @@ function wireTreemap() {
     // eslint-disable-next-line no-undef
     const { data: reIndex } = await sb.from('real_estate_index').select('month, price_per_m2').eq('city', 'nizhny_novgorod').order('month');
     // the rates of the currencies held in cash (fx_history, the page's rates): their change is the cash tile's colour
-    const ccys = [...new Set(rows.map(r => r.currency).filter(c => c && c !== 'USD'))];
+    // (and the rouble's always: the labels in roubles)
+    const ccys = [...new Set([...rows.map(r => r.currency), 'RUB'].filter(c => c && c !== 'USD'))];
     const fx = new Map();
     if (ccys.length) {
       // eslint-disable-next-line no-undef
@@ -959,12 +977,16 @@ function wireTreemap() {
       let bondNames = {};
       try { bondNames = g('mpBondNames') ? await window.mpBondNames(tiles.map(t => t.ticker)) : {}; } catch { /* ISINs then */ }
       if (my !== run) return;
-      last = [tiles, colour, { tip, group: $('lt_small').checked, scale, names: { ...bondNames, ...FUND_NAMES } }];
+      // roubles at today's rate (the latest in fx_history)
+      const rub = data.fx.get('RUB');
+      const rubPerUsd = rub?.length && rub[rub.length - 1][1] > 0 ? 1 / rub[rub.length - 1][1] : null;
+      const money = { ccy: showIn === 'rub' && rubPerUsd ? 'rub' : 'usd', rate: showIn === 'rub' && rubPerUsd ? rubPerUsd : 1, label: showIn !== '%' };
+      last = [tiles, colour, { tip, group: $('lt_small').checked, scale, names: { ...bondNames, ...FUND_NAMES }, money }];
       drawTreemap(box, ...last);
       drawLegend($('lt_legend'), scale, method === 'contrib' ? 'pp' : '%');
       const earnedAll = earnedRows.reduce((s, r) => s + earnedOf(r), 0);
       status.textContent = `${tiles.length} tiles, total ${usd(tiles.reduce((s, t) => s + t.value_usd, 0))}`
-        + (cap > 0 ? ` · the portfolio earned ${earnedAll < 0 ? '−' : '+'}${usd(Math.abs(earnedAll))}, ${formatChange(earnedAll / cap)} on ${usd(cap)} at work on average` : '');
+        + (cap > 0 ? ` · the portfolio earned ${formatMoney(earnedAll * money.rate, money.ccy)}, ${formatChange(earnedAll / cap)} on ${usd(cap)} at work on average` : '');
     } catch (e) {
       if (my === run) status.textContent = e.message || String(e);
       loading = null;
@@ -979,6 +1001,11 @@ function wireTreemap() {
     });
   }
   for (const id of ['lt_expand', 'lt_cushion', 'lt_gold', 'lt_savings', 'lt_re', 'lt_small']) $(id).addEventListener('change', redraw);
+  $('lt_show')?.addEventListener('change', e => {
+    showIn = SHOW_UNITS.includes(e.target.value) ? e.target.value : '%';
+    try { localStorage.setItem('lt_show', showIn); } catch { /* no storage */ }
+    redraw();
+  });
   $('lt_method')?.addEventListener('change', e => {
     method = METHODS.includes(e.target.value) ? e.target.value : 'contrib';
     try { localStorage.setItem('lt_method', method); } catch { /* no storage */ }

@@ -658,6 +658,7 @@
     </div>
     <div class="form-row" style="gap:16px;flex-wrap:wrap">
       <label>method <select id="lt_method"><option value="contrib">contribution (pp)</option><option value="xirr">MWR</option><option value="kept">dividends kept</option></select></label>
+      <label title="What the tiles' labels say: the method's % (or pp), or what each earned over the period in dollars, or in roubles at today's rate. The colour stays the method's"><span class="note">show</span> <select id="lt_show"><option value="%">% / pp</option><option value="usd">earned $</option><option value="rub">earned ₽</option></select></label>
       <label><input type="checkbox" id="lt_expand"> expand funds</label>
       <label title="The cash at Bank of Cyprus, Ziraat, Raiffeisen and Wise, TBC's savings account and Revolut's euro liquid assets up to $10,000 -- as one tile; or left in its accounts, not drawn; or taken out of its accounts and out of the total"><span class="note">safety cushion</span> <select id="lt_cushion"><option value="merged">one tile</option><option value="accounts">in accounts</option><option value="total" selected>out of total</option></select></label>
       <label title="Real estate (the flat at the price per m2 of the Nizhny Novgorod index): its colour is the index change, not earned/invested"><input type="checkbox" id="lt_re"> show real estate</label>
@@ -13302,13 +13303,13 @@ sb.auth.getSession().then(({ data: { session } }) => mpOnAuth(session));
 sb.auth.onAuthStateChange((_event, session) => mpOnAuth(session));
 </script>
 <script type="module">
-import { RU_ACCOUNTS, isRuInfra, netCreditIntoLiquid, periodIrr, portfolioCapital } from './js/lookthrough_treemap.js?v=20261109s';
+import { RU_ACCOUNTS, isRuInfra, netCreditIntoLiquid, periodIrr, portfolioCapital } from './js/lookthrough_treemap.js?v=20261110a';
 window.MP_RU_ACCOUNTS = RU_ACCOUNTS;
 window.mpPeriodIrr = periodIrr;
 window.mpPortfolioCapital = portfolioCapital;
 window.mpIsRuInfra = isRuInfra;
 window.mpNetCreditIntoLiquid = netCreditIntoLiquid;
 </script>
-<script type="module" src="./js/lookthrough_treemap.js?v=20261109s"></script>
+<script type="module" src="./js/lookthrough_treemap.js?v=20261110a"></script>
 </body>
 </html>

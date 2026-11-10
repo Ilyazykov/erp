@@ -14,7 +14,7 @@
 import assert from 'node:assert/strict';
 import { periodStart, priceChange, aggregate, tileChange, isRuInfra, netCreditIntoLiquid,
   goldChange, earnedRatio, tileEarned, savingsChains, assetKey, periodCapital, portfolioCapital, periodIrr, tileMetric,
-  mergeRows, changeAsContribution, formatChange, withoutCushion } from '../js/lookthrough_treemap.js';
+  mergeRows, changeAsContribution, formatChange, formatMoney, withoutCushion } from '../js/lookthrough_treemap.js';
 
 const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-9, `${msg}: ${a} != ${b}`);
 
@@ -321,6 +321,13 @@ near(tileMetric('contrib', { ticker: 'GOLD', isGold: true, parts: [{ ticker: 'XA
 // a bare change as a contribution: 110 now after +10% gained 10
 near(changeAsContribution({ state: 'known', change: 0.1 }, 110, 200).change, 0.05, 'cash contribution');
 assert.equal(formatChange(0.0123, 'pp'), '+1.2 pp');
+// the labels in money: cents under $10, roubles whole
+assert.equal(formatMoney(195.4), '+$195');
+assert.equal(formatMoney(-0.42), '−$0.42');
+assert.equal(formatMoney(1234.6), '+$1,235');
+assert.equal(formatMoney(0.001), '$0.00');
+assert.equal(formatMoney(15600.2, 'rub').replace(/\s/g, ' '), '+15 600 ₽');
+assert.equal(formatMoney(-0.3, 'rub'), '0 ₽');
 
 console.log('all passed');
 
