@@ -11660,6 +11660,8 @@ async function mpReloadPeriodKeepingHistory() {
     cache.skipped = cache.skipped.filter(r => !inPeriod(r));
     cache.incomeRows = (cache.incomeRows || []).filter(r => !inPeriod(r));
     mpMergeExpCache(part);
+    // the monthly sums the chart and the forecast's actuals read: re-read with the rows
+    cache.totals = await mpExpLoadTotals().catch(() => cache.totals);
     mpPendingRerender();
   } catch (error) {
     document.getElementById('exp_status').textContent = error.message;
