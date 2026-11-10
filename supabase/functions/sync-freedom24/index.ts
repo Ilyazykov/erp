@@ -39,11 +39,11 @@ const API = 'https://freedom24.com/api/';
 const PAGE = 500;
 // The daily job's slots (migration ...099): 24 runs, 10 minutes apart, from 04:00 UTC.
 const SLOT_START_MIN = 4 * 60, SLOT_MINUTES = 10, SLOTS = 24, RUN_USERS = 2;
-// The trading day a current price belongs to: the last weekday on or before today, today itself only after
-// the US close (21:00 UTC). A price read before that is the previous session's close.
+// The trading day a current price belongs to: today on a weekday from the US open (14:00 UTC, the open is
+// 14:30 in winter and 13:30 in summer), else the last weekday before today (before the open, the previous session's close).
 function tradingDay(now = new Date()): string {
   const d = new Date(now);
-  if (d.getUTCHours() < 21) d.setUTCDate(d.getUTCDate() - 1);
+  if (d.getUTCHours() < 14) d.setUTCDate(d.getUTCDate() - 1);
   while (d.getUTCDay() === 0 || d.getUTCDay() === 6) d.setUTCDate(d.getUTCDate() - 1);
   return d.toISOString().slice(0, 10);
 }
@@ -148,6 +148,38 @@ function tradeRows(t: any, time: string): CashRow[] | null {
 }
 
 // deno-lint-ignore no-explicit-any
+// The held securities' current prices (getPositionJson: result.ps.pos, mkt_price in the security's currency,
+// the ticker with its exchange suffix, e.g. VWCE.EU) into the price history in USD, source 'freedom24'.
+// Returns how many rows were written.
+// deno-lint-ignore no-explicit-any
+async function writePositionPrices(db: any, pub: string, secret: string): Promise<number> {
+  const reply = await tradernet(pub, secret, 'getPositionJson', {});
+  const day = tradingDay();
+  const priceRows: { ticker: string; day: string; price_usd: number; source: string }[] = [];
+  for (const x of reply?.result?.ps?.pos ?? []) {
+    const price = Number(x.mkt_price);
+    const ticker = String(x.i ?? '').replace(/\.[A-Z]{2}$/, '');
+    if (!ticker || !(price > 0)) continue;
+    // Russian securities are the T-Bank sync's, not this one's: by the issuer's ISIN (RU...), whatever their
+    // currency (rouble or yuan bonds on MOEX alike)
+    if (/^RU/i.test(String(x.issue_nb ?? '')) || /\.RU$/i.test(String(x.i ?? ''))) continue;
+    let rate = 1;
+    if (x.curr !== 'USD') {
+      const { data: fx } = await db.from('fx_history').select('usd_per_unit').eq('currency', x.curr)
+        .lte('day', day).order('day', { ascending: false }).limit(1);
+      rate = Number(fx?.[0]?.usd_per_unit || 0);
+      if (!(rate > 0)) continue;
+    }
+    priceRows.push({ ticker, day, price_usd: Math.round(price * rate * 1e6) / 1e6, source: 'freedom24' });
+  }
+  for (let i = 0; i < priceRows.length; i += 500) {
+    const { error } = await db.from('price_history').upsert(priceRows.slice(i, i + 500), { onConflict: 'ticker,day' });
+    if (error) throw new Error(error.message);
+  }
+  return priceRows.length;
+}
+
+// deno-lint-ignore no-explicit-any
 async function syncUser(db: any, userId: string, pub: string, secret: string) {
   const { list } = await cashFlows(pub, secret);
   const firstDay = list.map(x => String(x.date ?? '').slice(0, 10)).filter(Boolean).sort()[0] ?? '2000-01-01';
@@ -225,26 +257,7 @@ async function syncUser(db: any, userId: string, pub: string, secret: string) {
   // The held securities' current prices (getPositionJson: result.ps.pos, mkt_price in the security's currency,
   // the ticker with its exchange suffix, e.g. VWCE.EU) into the price history in USD. A failure leaves the prices out.
   try {
-    const reply = await tradernet(pub, secret, 'getPositionJson', {});
-    const day = tradingDay();
-    const priceRows: { ticker: string; day: string; price_usd: number }[] = [];
-    for (const x of reply?.result?.ps?.pos ?? []) {
-      const price = Number(x.mkt_price);
-      const ticker = String(x.i ?? '').replace(/\.[A-Z]{2}$/, '');
-      if (!ticker || !(price > 0)) continue;
-      let rate = 1;
-      if (x.curr !== 'USD') {
-        const { data: fx } = await db.from('fx_history').select('usd_per_unit').eq('currency', x.curr)
-          .lte('day', day).order('day', { ascending: false }).limit(1);
-        rate = Number(fx?.[0]?.usd_per_unit || 0);
-        if (!(rate > 0)) continue;
-      }
-      priceRows.push({ ticker, day, price_usd: Math.round(price * rate * 1e6) / 1e6 });
-    }
-    for (let i = 0; i < priceRows.length; i += 500) {
-      const { error } = await db.from('price_history').upsert(priceRows.slice(i, i + 500), { onConflict: 'ticker,day' });
-      if (error) throw new Error(error.message);
-    }
+    await writePositionPrices(db, pub, secret);
   } catch (err) {
     console.warn('freedom24 prices not kept:', String(err));
   }
@@ -302,6 +315,19 @@ Deno.serve(async (req) => {
       } catch (err) {
         return json({ error: String(err) }, 400);
       }
+    }
+    // The prices-only run (the cron after the US close, or the page): the held securities' prices, nothing else.
+    if (body.prices_only) {
+      const written: Record<string, number | string> = {};
+      for (const c of picked) {
+        if (userId && c.user_id !== userId) continue;
+        try {
+          written[c.user_id.slice(0, 8)] = await writePositionPrices(db, c.public_key, c.private_key);
+        } catch (err) {
+          written[c.user_id.slice(0, 8)] = `error: ${String(err)}`;
+        }
+      }
+      return json({ users: Object.keys(written).length, written });
     }
     // The daily job: users whose slot has come and who aren't synced today; a
     // failed run is retried by the next, but not keys Tradernet refuses.
