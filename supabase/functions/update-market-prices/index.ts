@@ -1307,7 +1307,11 @@ async function runUpdate(): Promise<Record<string, unknown>> {
   const todayUtc = new Date().toISOString().slice(0, 10);
   const histRows = rowsOut
     .filter((r) => r.price_usd > 0 && r.asset_class !== 'blocked')
-    .map((r) => ({ ticker: r.ticker, day: todayUtc, price_usd: r.price_usd, source: 'market' }));
+    .map((r) => ({
+      ticker: r.ticker, day: todayUtc, price_usd: r.price_usd,
+      // where the price came from: MOEX, Yahoo, or the market-wide fallbacks ('market')
+      source: r.source === 'moex_iss' ? 'moex' : r.source === 'yahoo_finance' ? 'yahoo' : 'market',
+    }));
   for (let i = 0; i < histRows.length; i += 200) {
     const { error: histErr } = await supabase.from('price_history').upsert(histRows.slice(i, i + 200), { onConflict: 'ticker,day' });
     if (histErr) { log(`price_history: ${histErr.message}`); break; }
