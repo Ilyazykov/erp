@@ -2910,6 +2910,8 @@ async function mpLogUpload(kind, fileName, csvText, result) {
 // new account: it goes in here with the number its first export had.
 const TBC_ACCOUNTS = {
   19475881: { currency: 'GEL', product: 'current_account' },
+  // the same GEL account, exported under a new number: its 272 (02.11) and 600 (06.11) transfers are in 19475881's rows
+  19760843: { currency: 'GEL', product: 'current_account', sameAs: 19475881 },
   19475897: { currency: 'EUR', product: 'current_account' },
   19475906: { currency: 'GEL', product: 'savings_account' },   // My Safe
   19526746: { currency: 'USD', product: 'current_account' },
@@ -2979,8 +2981,9 @@ function tbcToBankCsv(text, fileName) {
   // the account: by its number if listed, else by its kind (see TBC_ACCOUNTS)
   const kind = TBC_ACCOUNTS[fileNumber] || tbcKindOf(rows);
   if (!kind) throw new Error(`TBC statement ${fileName}: which account it is can't be told from its rows (no currency exchange, no cash-in) -- add its number to TBC_ACCOUNTS (index.html)`);
-  const accountNumber = TBC_ACCOUNTS[fileNumber] ? fileNumber
-    : Object.keys(TBC_ACCOUNTS).find(n => TBC_ACCOUNTS[n].product === kind.product && TBC_ACCOUNTS[n].currency === kind.currency) || fileNumber;
+  // a listed number with sameAs is another export of that account (its rows go under it)
+  const accountNumber = TBC_ACCOUNTS[fileNumber]?.sameAs ?? (TBC_ACCOUNTS[fileNumber] ? fileNumber
+    : Object.keys(TBC_ACCOUNTS).find(n => TBC_ACCOUNTS[n].product === kind.product && TBC_ACCOUNTS[n].currency === kind.currency) || fileNumber);
   return ['bank,account_number,product,currency,date,time,card,description,amount,balance,category_bank,source_file',
     ...rows.map(r => ['TBC Bank', accountNumber, kind.product, kind.currency, r.date, '', '', r.description, r.amount, r.balance, r.type, fileName].map(v => q(String(v))).join(','))].join('\n');
 }
