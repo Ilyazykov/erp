@@ -8955,11 +8955,12 @@ const mpShortAddress = a => `${a.slice(0, 6)}…${a.slice(-4)}`;
 let mpWallets = [];
 const mpFindWallet = (chain, address) => mpWallets.find(w => w.chain === chain
   && (chain === 'ethereum' ? w.address.toLowerCase() === address.toLowerCase() : w.address === address));
-const MP_CHAIN_LABELS = { ethereum: 'Ethereum', tron: 'TRON', bitcoin: 'Bitcoin', solana: 'Solana', binance: 'Binance', bybit: 'Bybit', cryptocom: 'Crypto.com', telegram: 'Walt (Telegram)' };
+const MP_CHAIN_LABELS = { ethereum: 'Ethereum', tron: 'TRON', bitcoin: 'Bitcoin', solana: 'Solana', binance: 'Binance', bybit: 'Bybit', cryptocom: 'Crypto.com', telegram: 'Walt (Telegram)', ton: 'TON (Gram)' };
 
 // Which network an address belongs to, from its own format -- no picker:
 //   0x + 40 hex                          -> Ethereum
 //   bc1… (bech32)                         -> Bitcoin
+//   EQ/UQ… (TON, 48 chars) or 0:<64 hex>  -> TON (Gram)
 //   base58 decoding to 25 bytes with a valid double-SHA256 checksum:
 //     version 0x41 -> TRON, 0x00 / 0x05 -> Bitcoin (legacy / P2SH)
 //   base58 decoding to 32 bytes           -> Solana (an ed25519 public key)
@@ -8968,6 +8969,8 @@ async function mpDetectChain(address) {
   const a = address.trim();
   if (/^0x[0-9a-fA-F]{40}$/.test(a)) return 'ethereum';
   if (/^bc1[02-9ac-hj-np-z]{11,71}$/.test(a)) return 'bitcoin';
+  // TON: user-friendly (EQ/UQ/kQ/0Q + 46 base64url chars) or raw (workchain:64 hex)
+  if (/^(EQ|UQ|kQ|0Q)[A-Za-z0-9_-]{46}$/.test(a) || /^-?\d:[0-9a-fA-F]{64}$/.test(a)) return 'ton';
   const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
   if (!/^[1-9A-HJ-NP-Za-km-z]{25,44}$/.test(a)) return null;
   let n = 0n;
