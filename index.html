@@ -10975,6 +10975,9 @@ async function mpEditItems(src, xid) {
   if (receipt && receipt.source !== 'manual') {
     const real = receipt.lines.filter(l => !l.is_other);
     const other = receipt.lines.find(l => l.is_other);
+    // dollars at the purchase day's rate: the row's own dollars over its own amount (the receipt's currency)
+    const usdPer = (receipt.currency || r.ccy) === r.ccy && r.amt ? r.usd / r.amt : NaN;
+    const usdOf = gel => (Number.isFinite(usdPer) ? `$${(gel * usdPer).toFixed(2)}` : '—');
     const lineRow = l => `<tr data-item="${l.line_no}">
         <td style="text-align:left">${l.product_id != null
           ? `<a href="#" class="item-product" data-pid="${l.product_id}" style="color:#58a6ff">${mpEscapeHtml(l.name_en || l.name_printed)}</a>`
@@ -10983,10 +10986,11 @@ async function mpEditItems(src, xid) {
         <td>${l.qty} ${l.unit}</td>
         <td>${l.unit_price_paid != null ? mpFormatCurrency(l.unit_price_paid, receipt.currency || r.ccy, true) : '—'}</td>
         <td>${mpFormatCurrency(l.line_total, receipt.currency || r.ccy, true)}</td>
+        <td>${usdOf(Number(l.line_total))}</td>
         <td class="item-note" data-item="${l.line_no}" style="cursor:pointer;color:#8b949e">${mpNoteHtml(l.note)}</td></tr>`;
     const form = mpDialog(`Items · ${r.day} · ${mpShortDesc(r.description)}`, `
       <p class="note" style="margin:0">${mpEscapeHtml(receipt.source === 'receipt_csv' ? 'From a receipt' : 'From the statement')}${receipt.chain ? ` · ${mpEscapeHtml(receipt.chain)}` : ''}${receipt.store ? ` · ${mpEscapeHtml(receipt.store)}` : ''}</p>
-      <table class="data-table"><thead><tr><th style="text-align:left">Item</th><th>Qty</th><th>Price</th><th>Line</th><th style="text-align:left">Note</th></tr></thead>
+      <table class="data-table"><thead><tr><th style="text-align:left">Item</th><th>Qty</th><th>Price</th><th>Line</th><th>USD</th><th style="text-align:left">Note</th></tr></thead>
         <tbody>${real.map(lineRow).join('')}${other ? lineRow(other) : ''}</tbody></table>
       <label>Receipt note <input name="rnote" value="${mpEscapeHtml(receipt.note || '')}" style="${MP_FIELD}"></label>`);
     form.querySelector('[data-act=save]').textContent = 'Close';
@@ -11791,9 +11795,13 @@ async function mpRenderCumulative() {
   };
   // this period's line stops at today; the axis runs over the whole length of both periods
   const c = running(cur, curFrom, curFull).map((v, i) => (i < soFar ? v : null)), p = running(prev, prevFrom, prevDays);
+  // green while this period is at or below the one before on the same day, red when above it
+  const sameDay = Math.min(soFar, prevDays);
+  const above = (c[soFar - 1] ?? 0) > (p[sameDay - 1] ?? 0);
+  const nowColor = above ? '#f85149' : '#3fb950';
   const traces = [
     // each line starts at 0 before the period's first day (x = 0)
-    { x: [0, ...c.map((_, i) => i + 1)], y: [0, ...c], name: 'this period', type: 'scatter', mode: 'lines', line: { color: '#f85149', width: 2 },
+    { x: [0, ...c.map((_, i) => i + 1)], y: [0, ...c], name: 'this period', type: 'scatter', mode: 'lines', line: { color: nowColor, width: 2 },
       customdata: ['', ...c.map((_, i) => mpCmpDay(curFrom, i))], hovertemplate: ['<extra></extra>', ...c.map(() => '%{customdata}: $%{y:,.0f}<extra></extra>')] },
     { x: [0, ...p.map((_, i) => i + 1)], y: [0, ...p], name: 'the period before', type: 'scatter', mode: 'lines', line: { color: '#8b949e', width: 2, dash: 'dot' },
       customdata: ['', ...p.map((_, i) => mpCmpDay(prevFrom, i))], hovertemplate: ['<extra></extra>', ...p.map(() => '%{customdata}: $%{y:,.0f}<extra></extra>')] },
@@ -11811,6 +11819,7 @@ async function mpRenderCumulative() {
   const pct = before ? Math.round((now / before - 1) * 100) : null;
   note.textContent = `Day ${soFar} of ${curFull}: $${Math.round(now)} this ${MP_CMP_NAME[span]}, $${Math.round(before)} the ${MP_CMP_NAME[span]} before`
     + (pct === null ? '' : ` (${pct > 0 ? '+' : ''}${pct}%)`);
+  note.style.color = nowColor;
 }
 async function mpRenderExpenses() {
   mpExpAskFirstDay();
