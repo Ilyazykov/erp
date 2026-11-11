@@ -589,8 +589,11 @@ async function syncWallet(db: any, w: Wallet) {
   const now = new Date().toISOString();
   const { error: delErr } = await db.from('wallet_balances').delete().eq('wallet_id', w.id);
   if (delErr) throw new Error(delErr.message);
+  // one row per asset: the table's key is (wallet, contract), so an asset the explorer lists twice keeps its first entry
+  const seenContract = new Set<string>();
   const balRows = balances
     .filter(b => b.contract === '' || b.quantity !== '0')
+    .filter(b => (seenContract.has(b.contract) ? false : (seenContract.add(b.contract), true)))
     .map(b => ({ ...b, wallet_id: w.id, user_id: w.user_id, account: w.account, chain: w.chain, as_of: now }));
   if (balRows.length) {
     const { error } = await db.from('wallet_balances').insert(balRows);
