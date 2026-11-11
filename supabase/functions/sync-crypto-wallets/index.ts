@@ -538,7 +538,7 @@ async function syncTon(w: Wallet, knownTx: Set<string>): Promise<{ balances: Bal
   const a = w.address;
   const acc = await getJson(`${TONCENTER}/account?address=${encodeURIComponent(a)}`);
   const balances: Balance[] = [{ contract: '', symbol: 'TON', name: 'Toncoin', decimals: 9,
-    quantity: formatUnits(BigInt(acc.balance ?? '0'), 9), price_usd: null, ticker: 'TON' }];
+    quantity: formatUnits(BigInt(acc.balance ?? '0'), 9), price_usd: null, ticker: 'GRAM' }];
 
   const all: any[] = [];
   for (let offset = 0; offset < 100 * MAX_PAGES; offset += 100) {
