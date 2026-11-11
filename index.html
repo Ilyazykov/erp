@@ -11744,6 +11744,18 @@ function mpCmpStart(span, today) {
 }
 const MP_CMP_NAME = { week: 'week', month: 'month', quarter: 'quarter', half: 'half a year', year: 'year' };
 const MP_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+// the x-axis labels of a longer period: a month: each week from its first day ("1 Nov", "8 Nov"...);
+// a quarter, half a year, a year: each month at its first day. The first day of the period is x = 1.
+function mpCmpTicks(span, curFrom, curFull) {
+  if (span === 'week') return { tickmode: 'array', tickvals: [1, 2, 3, 4, 5, 6, 7], ticktext: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] };
+  const xs = Array.from({ length: curFull }, (_, i) => i + 1);
+  const at = span === 'month' ? xs.filter(i => (i - 1) % 7 === 0) : xs.filter(i => i === 1 || mpCmpDay(curFrom, i - 1).endsWith('-01'));
+  const label = i => {
+    const d = mpCmpDay(curFrom, i - 1);
+    return span === 'month' ? `${Number(d.slice(8, 10))} ${MP_MONTHS[Number(d.slice(5, 7)) - 1]}` : MP_MONTHS[Number(d.slice(5, 7)) - 1];
+  };
+  return { tickmode: 'array', tickvals: at, ticktext: at.map(label) };
+}
 function mpCmpDay(day, k) { return new Date(Date.parse(`${day}T00:00:00Z`) + k * 86400000).toISOString().slice(0, 10); }
 function mpCmpMonths(day, k) { const [y, m, d] = day.split('-').map(Number); return new Date(Date.UTC(y, m - 1 + k, d)).toISOString().slice(0, 10); }
 async function mpRenderCumulative() {
@@ -11780,20 +11792,17 @@ async function mpRenderCumulative() {
   // this period's line stops at today; the axis runs over the whole length of both periods
   const c = running(cur, curFrom, curFull).map((v, i) => (i < soFar ? v : null)), p = running(prev, prevFrom, prevDays);
   const traces = [
-    { x: c.map((_, i) => i + 1), y: c, name: 'this period', type: 'scatter', mode: 'lines', line: { color: '#f85149', width: 2 },
-      customdata: c.map((_, i) => mpCmpDay(curFrom, i)), hovertemplate: '%{customdata}: $%{y:,.0f}<extra></extra>' },
-    { x: p.map((_, i) => i + 1), y: p, name: 'the period before', type: 'scatter', mode: 'lines', line: { color: '#8b949e', width: 2, dash: 'dot' },
-      customdata: p.map((_, i) => mpCmpDay(prevFrom, i)), hovertemplate: '%{customdata}: $%{y:,.0f}<extra></extra>' },
+    // each line starts at 0 before the period's first day (x = 0)
+    { x: [0, ...c.map((_, i) => i + 1)], y: [0, ...c], name: 'this period', type: 'scatter', mode: 'lines', line: { color: '#f85149', width: 2 },
+      customdata: ['start', ...c.map((_, i) => mpCmpDay(curFrom, i))], hovertemplate: '%{customdata}: $%{y:,.0f}<extra></extra>' },
+    { x: [0, ...p.map((_, i) => i + 1)], y: [0, ...p], name: 'the period before', type: 'scatter', mode: 'lines', line: { color: '#8b949e', width: 2, dash: 'dot' },
+      customdata: ['start', ...p.map((_, i) => mpCmpDay(prevFrom, i))], hovertemplate: '%{customdata}: $%{y:,.0f}<extra></extra>' },
   ];
   Plotly.react(el, traces, {
     paper_bgcolor: 'transparent', plot_bgcolor: 'transparent', font: { color: '#c9d1d9' },
     margin: { l: 60, r: 20, t: 20, b: 50 }, hovermode: 'x unified', legend: { orientation: 'h', y: -0.25 },
-    xaxis: { title: span === 'week' ? 'day of the week' : 'month', range: [0.5, xMax + 0.5], dtick: span === 'week' ? 1 : undefined,
-      // longer periods: labelled by month, at the first day of each month of this period
-      ...(span === 'week' ? {} : { tickmode: 'array',
-        tickvals: Array.from({ length: curFull }, (_, i) => i + 1).filter(i => i === 1 || mpCmpDay(curFrom, i - 1).endsWith('-01')),
-        ticktext: Array.from({ length: curFull }, (_, i) => i + 1).filter(i => i === 1 || mpCmpDay(curFrom, i - 1).endsWith('-01'))
-          .map(i => MP_MONTHS[Number(mpCmpDay(curFrom, i - 1).slice(5, 7)) - 1]) }) },
+    xaxis: { title: span === 'week' ? 'day of the week' : span === 'month' ? 'week' : 'month', range: [0, xMax + 0.5],
+      dtick: span === 'week' ? 1 : undefined, ...mpCmpTicks(span, curFrom, curFull) },
     yaxis: { tickprefix: '$', separatethousands: true, gridcolor: '#30363d' },
   }, { displayModeBar: false, responsive: true });
   // the same day of each period: where the spending stands on it
