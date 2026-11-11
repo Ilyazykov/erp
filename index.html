@@ -498,7 +498,7 @@
     </div>
     <div class="section-title" style="margin-top:24px">This period against the one before</div>
     <div class="form-row" style="gap:12px">
-      <label>period <select id="exp_cmp_span"><option value="week">week</option><option value="month" selected>month</option><option value="half">half a year</option><option value="year">year</option></select></label>
+      <label>period <select id="exp_cmp_span"><option value="week" selected>week</option><option value="month">month</option><option value="quarter">quarter</option><option value="half">half a year</option><option value="year">year</option></select></label>
     </div>
     <div id="plot_exp_cumulative" style="height:360px"></div>
     <div id="exp_cumulative_note" class="note"></div>
@@ -11732,16 +11732,17 @@ function mpDropPendingReceipts() {
 // This period so far against the period before it, of the same length: the spending summed day by day.
 // The length is set by exp_cmp_span (week, month, half a year, year); the periods run back from today. USD.
 let mpCmpKey = '';
-const MP_CMP_STEP = { month: 1, half: 6, year: 12 };   // months back to the period before
+const MP_CMP_STEP = { month: 1, quarter: 3, half: 6, year: 12 };   // months back to the period before
 // the first day of the period today is in
 function mpCmpStart(span, today) {
   if (span === 'week') { const dow = (new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7; return mpCmpDay(today, -dow); }
   const [y, m] = today.split('-').map(Number);
   if (span === 'month') return `${y}-${String(m).padStart(2, '0')}-01`;
+  if (span === 'quarter') return `${y}-${String(Math.floor((m - 1) / 3) * 3 + 1).padStart(2, '0')}-01`;
   if (span === 'half') return m <= 6 ? `${y}-01-01` : `${y}-07-01`;
   return `${y}-01-01`;
 }
-const MP_CMP_NAME = { week: 'week', month: 'month', half: 'half a year', year: 'year' };
+const MP_CMP_NAME = { week: 'week', month: 'month', quarter: 'quarter', half: 'half a year', year: 'year' };
 function mpCmpDay(day, k) { return new Date(Date.parse(`${day}T00:00:00Z`) + k * 86400000).toISOString().slice(0, 10); }
 function mpCmpMonths(day, k) { const [y, m, d] = day.split('-').map(Number); return new Date(Date.UTC(y, m - 1 + k, d)).toISOString().slice(0, 10); }
 async function mpRenderCumulative() {
@@ -11753,18 +11754,18 @@ async function mpRenderCumulative() {
   if (key === mpCmpKey) return;
   mpCmpKey = key;
   const note = document.getElementById('exp_cumulative_note');
-  // the period so far: from its first day (the Monday, the 1st of the month, of the half year, of the year) to today;
-  // the period before, from its first day, over the same number of days (or to its end, if it's shorter)
+  // the current period (its first day, the Monday, the 1st of the month, of the half year, of the year) and its
+  // whole length; so far it runs to today; the period before, whole
   const curFrom = mpCmpStart(span, today);
   const soFar = Math.round((Date.parse(today) - Date.parse(curFrom)) / 86400000) + 1;
+  const curNext = span === 'week' ? mpCmpDay(curFrom, 7) : mpCmpMonths(curFrom, MP_CMP_STEP[span] || 1);
+  const curFull = Math.round((Date.parse(curNext) - Date.parse(curFrom)) / 86400000);
   const prevFrom = span === 'week' ? mpCmpDay(curFrom, -7) : mpCmpMonths(curFrom, -MP_CMP_STEP[span]);
-  const prevEnd = mpCmpDay(curFrom, -1);
-  const prevSame = mpCmpDay(prevFrom, soFar - 1);
-  const prevTo = prevSame < prevEnd ? prevSame : prevEnd;
+  const prevTo = mpCmpDay(curFrom, -1);
   note.textContent = 'Loading…';
   const [cur, prev] = await Promise.all([mpExpLoad({ from: curFrom, to: today }), mpExpLoad({ from: prevFrom, to: prevTo })]);
-  const days = Math.round((Date.parse(today) - Date.parse(curFrom)) / 86400000) + 1;
   const prevDays = Math.round((Date.parse(prevTo) - Date.parse(prevFrom)) / 86400000) + 1;
+  const xMax = Math.max(curFull, prevDays);
   const running = (part, from, n) => {
     const per = new Array(n).fill(0);
     for (const r of part.spent) {
@@ -11775,7 +11776,8 @@ async function mpRenderCumulative() {
     let run = 0;
     return per.map(v => (run += v));
   };
-  const c = running(cur, curFrom, days), p = running(prev, prevFrom, prevDays);
+  // this period's line stops at today; the axis runs over the whole length of both periods
+  const c = running(cur, curFrom, curFull).map((v, i) => (i < soFar ? v : null)), p = running(prev, prevFrom, prevDays);
   const traces = [
     { x: c.map((_, i) => i + 1), y: c, name: 'this period', type: 'scatter', mode: 'lines', line: { color: '#f85149', width: 2 },
       customdata: c.map((_, i) => mpCmpDay(curFrom, i)), hovertemplate: '%{customdata}: $%{y:,.0f}<extra></extra>' },
@@ -11785,14 +11787,14 @@ async function mpRenderCumulative() {
   Plotly.react(el, traces, {
     paper_bgcolor: 'transparent', plot_bgcolor: 'transparent', font: { color: '#c9d1d9' },
     margin: { l: 60, r: 20, t: 20, b: 50 }, hovermode: 'x unified', legend: { orientation: 'h', y: -0.25 },
-    xaxis: { title: `day of the ${MP_CMP_NAME[span]}`, dtick: span === 'week' ? 1 : undefined },
+    xaxis: { title: `day of the ${MP_CMP_NAME[span]}`, range: [0.5, xMax + 0.5], dtick: span === 'week' ? 1 : undefined },
     yaxis: { tickprefix: '$', separatethousands: true, gridcolor: '#30363d' },
   }, { displayModeBar: false, responsive: true });
   // the same day of each period: where the spending stands on it
-  const onDay = Math.min(days, prevDays);
-  const now = c[days - 1] ?? 0, before = p[onDay - 1] ?? 0;
+  const onDay = Math.min(soFar, prevDays);
+  const now = c[soFar - 1] ?? 0, before = p[onDay - 1] ?? 0;
   const pct = before ? Math.round((now / before - 1) * 100) : null;
-  note.textContent = `Day ${days}: $${Math.round(now)} this ${MP_CMP_NAME[span]}, $${Math.round(before)} the ${MP_CMP_NAME[span]} before`
+  note.textContent = `Day ${soFar} of ${curFull}: $${Math.round(now)} this ${MP_CMP_NAME[span]}, $${Math.round(before)} the ${MP_CMP_NAME[span]} before`
     + (pct === null ? '' : ` (${pct > 0 ? '+' : ''}${pct}%)`);
 }
 async function mpRenderExpenses() {
