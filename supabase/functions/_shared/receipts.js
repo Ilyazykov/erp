@@ -86,7 +86,8 @@ export function parseReceiptCsv(text) {
     const cells = parseCsvLine(lines[i]);
     let printedReceipt = cell(cells, 'receipt');
     const date = cell(cells, 'date');
-    const store = cell(cells, 'store');
+    // no store named on the receipt: the store is 'unknown', the place is set by hand later
+    const store = cell(cells, 'store') || 'unknown';
     const currency = cell(cells, 'currency');
     const total = parseNum(cell(cells, 'total'));
     const lineNo = parseNum(cell(cells, 'line'));
@@ -96,7 +97,6 @@ export function parseReceiptCsv(text) {
     const lineTotal = parseNum(cell(cells, 'line_total'));
 
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { error: `Row ${rowNo}: "date" is not YYYY-MM-DD ("${date}")` };
-    if (!store) return { error: `Row ${rowNo}: empty "store"` };
     if (!currency) return { error: `Row ${rowNo}: empty "currency"` };
     if (total === null || total <= 0) return { error: `Row ${rowNo}: "total" doesn't parse as a positive number ("${cell(cells, 'total')}")` };
     const time = cell(cells, 'time');
