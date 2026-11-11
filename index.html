@@ -11730,7 +11730,15 @@ function mpDropPendingReceipts() {
 // This period so far against the period before it, of the same length: the spending summed day by day.
 // The length is set by exp_cmp_span (week, month, half a year, year); the periods run back from today. USD.
 let mpCmpKey = '';
-const MP_CMP_MONTHS = { month: 1, half: 6, year: 12 };
+const MP_CMP_STEP = { month: 1, half: 6, year: 12 };   // months back to the period before
+// the first day of the period today is in
+function mpCmpStart(span, today) {
+  if (span === 'week') { const dow = (new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7; return mpCmpDay(today, -dow); }
+  const [y, m] = today.split('-').map(Number);
+  if (span === 'month') return `${y}-${String(m).padStart(2, '0')}-01`;
+  if (span === 'half') return m <= 6 ? `${y}-01-01` : `${y}-07-01`;
+  return `${y}-01-01`;
+}
 const MP_CMP_NAME = { week: 'week', month: 'month', half: 'half a year', year: 'year' };
 function mpCmpDay(day, k) { return new Date(Date.parse(`${day}T00:00:00Z`) + k * 86400000).toISOString().slice(0, 10); }
 function mpCmpMonths(day, k) { const [y, m, d] = day.split('-').map(Number); return new Date(Date.UTC(y, m - 1 + k, d)).toISOString().slice(0, 10); }
@@ -11743,9 +11751,14 @@ async function mpRenderCumulative() {
   if (key === mpCmpKey) return;
   mpCmpKey = key;
   const note = document.getElementById('exp_cumulative_note');
-  const curFrom = span === 'week' ? mpCmpDay(today, -6) : mpCmpDay(mpCmpMonths(today, -MP_CMP_MONTHS[span]), 1);
-  const prevTo = mpCmpDay(curFrom, -1);
-  const prevFrom = span === 'week' ? mpCmpDay(prevTo, -6) : mpCmpDay(mpCmpMonths(prevTo, -MP_CMP_MONTHS[span]), 1);
+  // the period so far: from its first day (the Monday, the 1st of the month, of the half year, of the year) to today;
+  // the period before, from its first day, over the same number of days (or to its end, if it's shorter)
+  const curFrom = mpCmpStart(span, today);
+  const soFar = Math.round((Date.parse(today) - Date.parse(curFrom)) / 86400000) + 1;
+  const prevFrom = span === 'week' ? mpCmpDay(curFrom, -7) : mpCmpMonths(curFrom, -MP_CMP_STEP[span]);
+  const prevEnd = mpCmpDay(curFrom, -1);
+  const prevSame = mpCmpDay(prevFrom, soFar - 1);
+  const prevTo = prevSame < prevEnd ? prevSame : prevEnd;
   note.textContent = 'Loading…';
   const [cur, prev] = await Promise.all([mpExpLoad({ from: curFrom, to: today }), mpExpLoad({ from: prevFrom, to: prevTo })]);
   const days = Math.round((Date.parse(today) - Date.parse(curFrom)) / 86400000) + 1;
