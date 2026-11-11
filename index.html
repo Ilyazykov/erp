@@ -11165,8 +11165,12 @@ async function mpEditItems(src, xid) {
         if (error) { alert(error.message); return; }
         receiptId = data.id;
       }
+      // a typed name with no product picked: the product of the same English name, if there is one
+      const { data: known } = await sb.from('products').select('id, name_en').is('merged_into', null);
+      const byName = new Map((known || []).map(p => [mpReceiptNorm(p.name_en), p.id]));
       const { error: itemsErr } = await sb.from('receipt_items').insert(lines.map((d, i) => ({
-        receipt_id: receiptId, line_no: i + 1, name_printed: d.name, name_en: d.name, product_id: d.productId, qty: d.qty, unit: d.unit, line_total: d.total,
+        receipt_id: receiptId, line_no: i + 1, name_printed: d.name, name_en: d.name,
+        product_id: d.productId ?? byName.get(mpReceiptNorm(d.name)) ?? null, qty: d.qty, unit: d.unit, line_total: d.total,
       })));
       if (itemsErr) { alert(itemsErr.message); return; }
       done = true;
