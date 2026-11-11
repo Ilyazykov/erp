@@ -2910,8 +2910,6 @@ async function mpLogUpload(kind, fileName, csvText, result) {
 // new account: it goes in here with the number its first export had.
 const TBC_ACCOUNTS = {
   19475881: { currency: 'GEL', product: 'current_account' },
-  // the same GEL account, exported under a new number: its 272 (02.11) and 600 (06.11) transfers are in 19475881's rows
-  19760843: { currency: 'GEL', product: 'current_account', sameAs: 19475881 },
   19475897: { currency: 'EUR', product: 'current_account' },
   19475906: { currency: 'GEL', product: 'savings_account' },   // My Safe
   19526746: { currency: 'USD', product: 'current_account' },
@@ -2957,7 +2955,30 @@ function mpParseCsvLine(line) {
 // project's generic bank CSV for import-bank-csv; the bank's Type
 // ("Transfer Between Own Accounts", "Currency Exchange", ...) goes in as its
 // category.
-function tbcToBankCsv(text, fileName) {
+// The account a statement is of, by its rows: the stored rows (bank_transactions, tbc_bank_csv:<number>)
+// that have the same day and amount as the statement's rows; the account with most of them.
+async function tbcMatchAccount(rows) {
+  const days = rows.map(r => r.date).sort();
+  if (!days.length) return null;
+  const { data, error } = await sb.from('bank_transactions').select('external_source, tx_date, amount, currency')
+    .like('external_source', 'tbc_bank_csv:%').gte('tx_date', `${days[0]}T00:00:00Z`).lte('tx_date', `${days[days.length - 1]}T23:59:59Z`);
+  if (error) throw new Error(error.message);
+  const key = (d, a) => `${d}|${Math.round(Number(a) * 100)}`;
+  const want = new Set(rows.map(r => key(r.date, r.amount)));
+  const hits = new Map();
+  for (const r of data ?? []) {
+    const num = String(r.external_source).split(':')[1];
+    if (!num || num === 'pending' || !want.has(key(String(r.tx_date).slice(0, 10), r.amount))) continue;
+    const h = hits.get(num) ?? { n: 0, currency: r.currency };
+    h.n++;
+    hits.set(num, h);
+  }
+  let best = null;
+  for (const [num, h] of hits) if (!best || h.n > best.h.n) best = { num, h };
+  if (!best) return null;
+  return { num: best.num, currency: best.h.currency, product: TBC_ACCOUNTS[best.num]?.product ?? 'current_account' };
+}
+function tbcToBankCsv(text, fileName, pick = null) {
   const fileNumber = fileName.match(/account_statement_(\d+)_/)?.[1];
   const lines = text.split(/\r?\n/).filter(l => l.trim());
   const head = lines.findIndex(l => l.startsWith('Date,Description,Additional Information,'));
@@ -2979,10 +3000,16 @@ function tbcToBankCsv(text, fileName) {
   // oldest first: import-bank-csv orders a day's untimed rows as they come
   if (rows.length > 1 && rows[0].date > rows[rows.length - 1].date) rows.reverse();
   // the account: by its number if listed, else by its kind (see TBC_ACCOUNTS)
-  const kind = TBC_ACCOUNTS[fileNumber] || tbcKindOf(rows);
-  if (!kind) throw new Error(`TBC statement ${fileName}: which account it is can't be told from its rows (no currency exchange, no cash-in) -- add its number to TBC_ACCOUNTS (index.html)`);
+  // no number listed and no kind told from the rows: the account the rows match in the database (tbcMatchAccount)
+  const told = TBC_ACCOUNTS[fileNumber] || tbcKindOf(rows);
+  if (!told && !pick) {
+    const err = new Error(`TBC statement ${fileName}: which account it is can't be told from its rows`);
+    err.tbcRows = rows;
+    throw err;
+  }
+  const kind = told || { product: pick.product, currency: pick.currency };
   // a listed number with sameAs is another export of that account (its rows go under it)
-  const accountNumber = TBC_ACCOUNTS[fileNumber]?.sameAs ?? (TBC_ACCOUNTS[fileNumber] ? fileNumber
+  const accountNumber = pick ? pick.num : TBC_ACCOUNTS[fileNumber]?.sameAs ?? (TBC_ACCOUNTS[fileNumber] ? fileNumber
     : Object.keys(TBC_ACCOUNTS).find(n => TBC_ACCOUNTS[n].product === kind.product && TBC_ACCOUNTS[n].currency === kind.currency) || fileNumber);
   return ['bank,account_number,product,currency,date,time,card,description,amount,balance,category_bank,source_file',
     ...rows.map(r => ['TBC Bank', accountNumber, kind.product, kind.currency, r.date, '', '', r.description, r.amount, r.balance, r.type, fileName].map(v => q(String(v))).join(','))].join('\n');
@@ -3146,7 +3173,14 @@ async function mpImportOneFile(file, statusEl, session) {
       const headerLine = csvText.split(/\r\n|\r|\n/)[0] || '';
       kind = mpDetectCsvKind(headerLine, csvText);
       if (kind === 'tbc_account') {
-        csvText = tbcToBankCsv(csvText, file.name);
+        try {
+          csvText = tbcToBankCsv(csvText, file.name);
+        } catch (err) {
+          if (!err.tbcRows) throw err;
+          const pick = await tbcMatchAccount(err.tbcRows);
+          if (!pick) throw new Error(`${err.message} -- none of its rows is in the database yet`);
+          csvText = tbcToBankCsv(csvText, file.name, pick);
+        }
         kind = 'bank_csv';
       }
     }
