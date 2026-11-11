@@ -11603,6 +11603,8 @@ async function mpExpLoadRest() {
       if (!mpExpCovers(want)) await mpRenderExpenses();
     }
     mpExpFull = true;
+    // the comparison chart draws once the whole history is in, not alongside the tab's own loads
+    mpRenderCumulative().catch(() => { /* the chart shows its own note */ });
     // the calendar modes are drawn already and do not change with the history: only the note goes
     if (/_td$/.test(document.getElementById('exp_step').value)) await mpRenderExpenses();
     else document.getElementById('exp_status').textContent = '';
@@ -11795,7 +11797,6 @@ async function mpRenderCumulative() {
 }
 async function mpRenderExpenses() {
   mpExpAskFirstDay();
-  mpRenderCumulative().catch(() => { /* the chart shows its own note */ });
   const status = document.getElementById('exp_status');
   if (!document.getElementById('exp_from').value) mpExpSetPeriod(document.getElementById('exp_period').value, new Date().toISOString().slice(0, 10));
   if (!mpExpCache) {
