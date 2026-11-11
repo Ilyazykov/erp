@@ -11743,6 +11743,7 @@ function mpCmpStart(span, today) {
   return `${y}-01-01`;
 }
 const MP_CMP_NAME = { week: 'week', month: 'month', quarter: 'quarter', half: 'half a year', year: 'year' };
+const MP_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 function mpCmpDay(day, k) { return new Date(Date.parse(`${day}T00:00:00Z`) + k * 86400000).toISOString().slice(0, 10); }
 function mpCmpMonths(day, k) { const [y, m, d] = day.split('-').map(Number); return new Date(Date.UTC(y, m - 1 + k, d)).toISOString().slice(0, 10); }
 async function mpRenderCumulative() {
@@ -11787,7 +11788,12 @@ async function mpRenderCumulative() {
   Plotly.react(el, traces, {
     paper_bgcolor: 'transparent', plot_bgcolor: 'transparent', font: { color: '#c9d1d9' },
     margin: { l: 60, r: 20, t: 20, b: 50 }, hovermode: 'x unified', legend: { orientation: 'h', y: -0.25 },
-    xaxis: { title: `day of the ${MP_CMP_NAME[span]}`, range: [0.5, xMax + 0.5], dtick: span === 'week' ? 1 : undefined },
+    xaxis: { title: span === 'week' ? 'day of the week' : 'month', range: [0.5, xMax + 0.5], dtick: span === 'week' ? 1 : undefined,
+      // longer periods: labelled by month, at the first day of each month of this period
+      ...(span === 'week' ? {} : { tickmode: 'array',
+        tickvals: Array.from({ length: curFull }, (_, i) => i + 1).filter(i => i === 1 || mpCmpDay(curFrom, i - 1).endsWith('-01')),
+        ticktext: Array.from({ length: curFull }, (_, i) => i + 1).filter(i => i === 1 || mpCmpDay(curFrom, i - 1).endsWith('-01'))
+          .map(i => MP_MONTHS[Number(mpCmpDay(curFrom, i - 1).slice(5, 7)) - 1]) }) },
     yaxis: { tickprefix: '$', separatethousands: true, gridcolor: '#30363d' },
   }, { displayModeBar: false, responsive: true });
   // the same day of each period: where the spending stands on it
