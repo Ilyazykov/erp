@@ -2935,6 +2935,9 @@ function tbcKindOf(rows) {
     if (pos) { currency = pos[1]; break; }
   }
   if (!currency && product === 'savings_account') currency = 'GEL';
+  // only transfers between one's own accounts (no card payments, no deposit, no exchange): the savings
+  // account, which sends its money to the lari current account; the current accounts have card payments
+  if (!currency && rows.length && rows.every(r => /Transfer between your accounts/.test(r.description))) return { product: 'savings_account', currency: 'GEL' };
   return currency ? { product, currency } : null;
 }
 function mpParseCsvLine(line) {
