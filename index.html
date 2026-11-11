@@ -11794,9 +11794,9 @@ async function mpRenderCumulative() {
   const traces = [
     // each line starts at 0 before the period's first day (x = 0)
     { x: [0, ...c.map((_, i) => i + 1)], y: [0, ...c], name: 'this period', type: 'scatter', mode: 'lines', line: { color: '#f85149', width: 2 },
-      customdata: ['start', ...c.map((_, i) => mpCmpDay(curFrom, i))], hovertemplate: '%{customdata}: $%{y:,.0f}<extra></extra>' },
+      customdata: ['', ...c.map((_, i) => mpCmpDay(curFrom, i))], hovertemplate: ['<extra></extra>', ...c.map(() => '%{customdata}: $%{y:,.0f}<extra></extra>')] },
     { x: [0, ...p.map((_, i) => i + 1)], y: [0, ...p], name: 'the period before', type: 'scatter', mode: 'lines', line: { color: '#8b949e', width: 2, dash: 'dot' },
-      customdata: ['start', ...p.map((_, i) => mpCmpDay(prevFrom, i))], hovertemplate: '%{customdata}: $%{y:,.0f}<extra></extra>' },
+      customdata: ['', ...p.map((_, i) => mpCmpDay(prevFrom, i))], hovertemplate: ['<extra></extra>', ...p.map(() => '%{customdata}: $%{y:,.0f}<extra></extra>')] },
   ];
   Plotly.react(el, traces, {
     paper_bgcolor: 'transparent', plot_bgcolor: 'transparent', font: { color: '#c9d1d9' },
