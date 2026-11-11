@@ -496,6 +496,12 @@
       <div id="plot_inc_donut" style="height:380px"></div>
       <div id="inc_categories"></div>
     </div>
+    <div class="section-title" style="margin-top:24px">This period against the one before</div>
+    <div class="form-row" style="gap:12px">
+      <label>period <select id="exp_cmp_span"><option value="week">week</option><option value="month" selected>month</option><option value="half">half a year</option><option value="year">year</option></select></label>
+    </div>
+    <div id="plot_exp_cumulative" style="height:360px"></div>
+    <div id="exp_cumulative_note" class="note"></div>
     <div class="section-title" style="margin-top:24px">Over time</div>
     <p class="note">Up to this month; click a bar to open it above.</p>
     <div class="form-row" style="gap:12px">
@@ -11721,8 +11727,62 @@ function mpDropPendingReceipts() {
   mpExpCache.spent = mpExpCache.spent.filter(x => !x.pending);
   mpPendingRerender();
 }
+// This period so far against the period before it, of the same length: the spending summed day by day.
+// The length is set by exp_cmp_span (week, month, half a year, year); the periods run back from today. USD.
+let mpCmpKey = '';
+const MP_CMP_MONTHS = { month: 1, half: 6, year: 12 };
+const MP_CMP_NAME = { week: 'week', month: 'month', half: 'half a year', year: 'year' };
+function mpCmpDay(day, k) { return new Date(Date.parse(`${day}T00:00:00Z`) + k * 86400000).toISOString().slice(0, 10); }
+function mpCmpMonths(day, k) { const [y, m, d] = day.split('-').map(Number); return new Date(Date.UTC(y, m - 1 + k, d)).toISOString().slice(0, 10); }
+async function mpRenderCumulative() {
+  const el = document.getElementById('plot_exp_cumulative');
+  if (!el) return;
+  const span = document.getElementById('exp_cmp_span').value;
+  const today = new Date().toISOString().slice(0, 10);
+  const key = `${span}|${today}`;
+  if (key === mpCmpKey) return;
+  mpCmpKey = key;
+  const note = document.getElementById('exp_cumulative_note');
+  const curFrom = span === 'week' ? mpCmpDay(today, -6) : mpCmpDay(mpCmpMonths(today, -MP_CMP_MONTHS[span]), 1);
+  const prevTo = mpCmpDay(curFrom, -1);
+  const prevFrom = span === 'week' ? mpCmpDay(prevTo, -6) : mpCmpDay(mpCmpMonths(prevTo, -MP_CMP_MONTHS[span]), 1);
+  note.textContent = 'Loading…';
+  const [cur, prev] = await Promise.all([mpExpLoad({ from: curFrom, to: today }), mpExpLoad({ from: prevFrom, to: prevTo })]);
+  const days = Math.round((Date.parse(today) - Date.parse(curFrom)) / 86400000) + 1;
+  const prevDays = Math.round((Date.parse(prevTo) - Date.parse(prevFrom)) / 86400000) + 1;
+  const running = (part, from, n) => {
+    const per = new Array(n).fill(0);
+    for (const r of part.spent) {
+      if (!Number.isFinite(r.usd)) continue;
+      const k = Math.round((Date.parse(r.day) - Date.parse(from)) / 86400000);
+      if (k >= 0 && k < n) per[k] += r.usd;
+    }
+    let run = 0;
+    return per.map(v => (run += v));
+  };
+  const c = running(cur, curFrom, days), p = running(prev, prevFrom, prevDays);
+  const traces = [
+    { x: c.map((_, i) => i + 1), y: c, name: 'this period', type: 'scatter', mode: 'lines', line: { color: '#f85149', width: 2 },
+      customdata: c.map((_, i) => mpCmpDay(curFrom, i)), hovertemplate: '%{customdata}: $%{y:,.0f}<extra></extra>' },
+    { x: p.map((_, i) => i + 1), y: p, name: 'the period before', type: 'scatter', mode: 'lines', line: { color: '#8b949e', width: 2, dash: 'dot' },
+      customdata: p.map((_, i) => mpCmpDay(prevFrom, i)), hovertemplate: '%{customdata}: $%{y:,.0f}<extra></extra>' },
+  ];
+  Plotly.react(el, traces, {
+    paper_bgcolor: 'transparent', plot_bgcolor: 'transparent', font: { color: '#c9d1d9' },
+    margin: { l: 60, r: 20, t: 20, b: 50 }, hovermode: 'x unified', legend: { orientation: 'h', y: -0.25 },
+    xaxis: { title: `day of the ${MP_CMP_NAME[span]}`, dtick: span === 'week' ? 1 : undefined },
+    yaxis: { tickprefix: '$', separatethousands: true, gridcolor: '#30363d' },
+  }, { displayModeBar: false, responsive: true });
+  // the same day of each period: where the spending stands on it
+  const onDay = Math.min(days, prevDays);
+  const now = c[days - 1] ?? 0, before = p[onDay - 1] ?? 0;
+  const pct = before ? Math.round((now / before - 1) * 100) : null;
+  note.textContent = `Day ${days}: $${Math.round(now)} this ${MP_CMP_NAME[span]}, $${Math.round(before)} the ${MP_CMP_NAME[span]} before`
+    + (pct === null ? '' : ` (${pct > 0 ? '+' : ''}${pct}%)`);
+}
 async function mpRenderExpenses() {
   mpExpAskFirstDay();
+  mpRenderCumulative().catch(() => { /* the chart shows its own note */ });
   const status = document.getElementById('exp_status');
   if (!document.getElementById('exp_from').value) mpExpSetPeriod(document.getElementById('exp_period').value, new Date().toISOString().slice(0, 10));
   if (!mpExpCache) {
@@ -12497,6 +12557,10 @@ for (const id of ['exp_span', 'exp_step']) {
     if (mpIsSignedIn) mpRenderExpenses();
   });
 }
+document.getElementById('exp_cmp_span').addEventListener('change', () => {
+  mpCmpKey = '';
+  if (mpIsSignedIn) mpRenderCumulative().catch(() => { /* the chart shows its own note */ });
+});
 try { const saved = localStorage.getItem('mp_exp_extrapolated'); if (saved) document.getElementById('exp_extrapolated').checked = saved === '1'; } catch { /* no storage */ }
 document.getElementById('exp_extrapolated').addEventListener('change', e => {
   try { localStorage.setItem('mp_exp_extrapolated', e.target.checked ? '1' : '0'); } catch { /* no storage */ }
