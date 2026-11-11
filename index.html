@@ -12565,7 +12565,8 @@ document.getElementById('exp_income').addEventListener('change', e => {
   if (mpIsSignedIn) mpRenderExpenses();
 });
 for (const id of ['exp_span', 'exp_step']) {
-  try { const saved = localStorage.getItem('mp_' + id); if (saved) document.getElementById(id).value = saved; } catch { /* no storage */ }
+  // the grouping ('by') starts at month every time; the choice is still remembered while the page is open
+  try { const saved = id === 'exp_step' ? null : localStorage.getItem('mp_' + id); if (saved) document.getElementById(id).value = saved; } catch { /* no storage */ }
   document.getElementById(id).addEventListener('change', e => {
     try { localStorage.setItem('mp_' + id, e.target.value); } catch { /* no storage */ }
     if (mpIsSignedIn) mpRenderExpenses();
