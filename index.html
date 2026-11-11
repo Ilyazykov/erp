@@ -2929,6 +2929,11 @@ function tbcKindOf(rows) {
     currency = cash ? cash[1] : fx ? (r.amount < 0 ? fx[1] : 'GEL') : null;
     if (currency) break;
   }
+  // no exchange and no cash-in: the currency is named by a card payment ("POS ..., 13.60 GEL, ...")
+  if (!currency) for (const r of rows) {
+    const pos = r.description.match(/\b\d[\d,.]* ([A-Z]{3}),/);
+    if (pos) { currency = pos[1]; break; }
+  }
   if (!currency && product === 'savings_account') currency = 'GEL';
   return currency ? { product, currency } : null;
 }
