@@ -528,6 +528,51 @@ async function syncSolana(w: Wallet, knownTx: Set<string>): Promise<{ balances: 
 
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// TON (Gram) via toncenter's public v3 API: TON balance and every transfer
+// the address made or received, with the network fee as its own row.
+// ---------------------------------------------------------------------------
+const TONCENTER = 'https://toncenter.com/api/v3';
+
+async function syncTon(w: Wallet, knownTx: Set<string>): Promise<{ balances: Balance[]; txs: Tx[] }> {
+  const a = w.address;
+  const acc = await getJson(`${TONCENTER}/account?address=${encodeURIComponent(a)}`);
+  const balances: Balance[] = [{ contract: '', symbol: 'TON', name: 'Toncoin', decimals: 9,
+    quantity: formatUnits(BigInt(acc.balance ?? '0'), 9), price_usd: null, ticker: 'TON' }];
+
+  const all: any[] = [];
+  for (let offset = 0; offset < 100 * MAX_PAGES; offset += 100) {
+    const d = await getJson(`${TONCENTER}/transactions?account=${encodeURIComponent(a)}&limit=100&offset=${offset}&sort=desc`);
+    const list = d.transactions ?? [];
+    all.push(...list);
+    if (list.length < 100 || list.every((t: any) => knownTx.has(String(t.hash)))) break;
+    await sleep(200);
+  }
+
+  const txs: Tx[] = [];
+  const seen = new Set<string>();
+  for (const t of all) {
+    const hash = String(t.hash);
+    if (seen.has(hash)) continue;
+    seen.add(hash);
+    const outs = (t.out_msgs ?? []).filter((m: any) => m.source === a);
+    const sent = outs.reduce((s: bigint, m: any) => s + BigInt(m.value ?? '0'), 0n);
+    const inMsg = t.in_msg ?? {};
+    const recv = inMsg.destination === a ? BigInt(inMsg.value ?? '0') : 0n;
+    const fee = BigInt(t.total_fees ?? '0');
+    const base = {
+      tx_hash: hash, tx_time: new Date((t.now ?? Date.now() / 1000) * 1000).toISOString(),
+      contract: '', symbol: 'TON', decimals: 9, status: 'confirmed',
+    };
+    const other = outs.length ? outs[0].destination : (inMsg.source ?? null);
+    // net effect on the address = received - sent - fee; the fee is its own row
+    const net = recv - sent - fee;
+    if (net !== 0n) txs.push({ ...base, seq: 0, kind: 'native', amount: formatUnits(net, 9), counterparty: other ?? null });
+    if (fee) txs.push({ ...base, seq: 0, kind: 'fee', amount: formatUnits(-fee, 9), counterparty: null });
+  }
+  return { balances, txs };
+}
+
 async function syncWallet(db: any, w: Wallet) {
   const { data: existing, error: exErr } = await db.from('wallet_transactions').select('tx_hash').eq('wallet_id', w.id);
   if (exErr) throw new Error(exErr.message);
@@ -538,6 +583,7 @@ async function syncWallet(db: any, w: Wallet) {
     w.chain === 'ethereum' ? await syncEthereum(w, known, warnings)
     : w.chain === 'tron' ? await syncTron(w, known)
     : w.chain === 'bitcoin' ? await syncBitcoin(w, known)
+    : w.chain === 'ton' ? await syncTon(w, known)
     : await syncSolana(w, known);
 
   const now = new Date().toISOString();
@@ -600,7 +646,7 @@ Deno.serve(async (req) => {
     // On-chain wallets only -- a custodial account like Bybit (chain 'bybit')
     // comes from its own CSV import, there's no blockchain to read.
     let q = db.from('crypto_wallets').select('id, user_id, chain, address, account')
-      .in('chain', ['ethereum', 'tron', 'bitcoin', 'solana']);
+      .in('chain', ['ethereum', 'tron', 'bitcoin', 'solana', 'ton']);
     if (userId) q = q.eq('user_id', userId);
     const { data: wallets, error } = await q;
     if (error) throw new Error(error.message);
