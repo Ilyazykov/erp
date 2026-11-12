@@ -97,12 +97,13 @@ const toStr = (v: bigint) => {
   return `${neg ? '-' : ''}${a / SCALE}.${(a % SCALE).toString().padStart(18, '0')}`.replace(/\.?0+$/, '');
 };
 
-function parse(text: string) {
+function parse(text: string, extraEarn: Set<string> = new Set()) {
   const lines = text.replace(/^﻿/, '').split(/\r\n|\r|\n/).filter(l => l.trim());
   if ((lines[0] || '').trim() !== HEADER) return null;
   // No quoting needed: titles are "Withdrew to UQ...fDVO" and the like.
   const body = lines.slice(1).map(l => l.split(','));
-  const earnCoins = new Set(body.filter(r => r[1] === 'earn').map(r => r[4]));
+  // a coin is an Earn coin when this file has its Earn rows, or the store already has them (an earlier upload)
+  const earnCoins = new Set([...body.filter(r => r[1] === 'earn').map(r => r[4]), ...extraEarn]);
   const main = new Map<string, bigint>();   // main-wallet balance per coin, in file order
   const occ = new Map<string, number>();
   const rows = [];
@@ -165,7 +166,8 @@ Deno.serve(async (req) => {
 
     if (!user) return json({ error: 'Not authenticated' }, 401);
 
-    const parsed = parse(await req.text());
+    const csvText = await req.text();
+    let parsed = parse(csvText);
     if (!parsed) return json({ error: `Not a Telegram Wallet CSV (expected header "${HEADER}")` }, 400);
 
     let { data: wallet, error: wErr } = await supabase.from('crypto_wallets')
@@ -179,6 +181,15 @@ Deno.serve(async (req) => {
       wallet = ins.data;
     }
 
+    // Earn coins from the store: a coin whose Earn rows an earlier upload stored (interest) is classified the same
+    // here, so a return from Earn in this file isn't counted as income of the coin
+    const fileCoins = [...new Set(parsed.rows.map(r => r.symbol))];
+    const storedEarn = new Set<string>();
+    for (const sym of fileCoins) {
+      const { data } = await supabase.from('wallet_transactions').select('kind').eq('wallet_id', wallet!.id).eq('symbol', sym).eq('kind', 'interest').limit(1);
+      if (data && data.length) storedEarn.add(sym);
+    }
+    if (storedEarn.size) parsed = parse(csvText, storedEarn) ?? parsed;
     const rows = parsed.rows.map(r => ({
       ...r, wallet_id: wallet!.id, user_id: user!.id, chain: 'telegram', contract: '', decimals: null,
       estimated: (r as { estimated?: boolean }).estimated ?? false,   // every row the same columns for the bulk upsert
