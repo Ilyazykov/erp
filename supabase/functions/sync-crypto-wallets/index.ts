@@ -71,7 +71,7 @@ const MAX_PAGES = 200;
 // TON jettons by master address: name and decimals, and the ticker that prices them (none = not counted)
 const TON_JETTONS: Record<string, { symbol: string; decimals: number; ticker: string | null }> = {
   '0:BDF3FA8098D129B54B4F73B5BAC5D1E1FD91EB054169C3916DFC8CCD536D1000': { symbol: 'tsTON', decimals: 9, ticker: 'GRAM' },  // Tonstakers, priced as TON
-  '0:3547F2EE4022C794C80EA354B81BB63B5B571DD05AC091B035D19ABBADD74AC6': { symbol: 'XAUt0', decimals: 6, ticker: null },   // Tether Gold on TON
+  '0:3547F2EE4022C794C80EA354B81BB63B5B571DD05AC091B035D19ABBADD74AC6': { symbol: 'XAUt0', decimals: 6, ticker: 'XAUT' },   // Tether Gold on TON, priced as XAUT
 };
 
 const KNOWN_TOKEN_TICKERS: Record<string, Record<string, string>> = {
