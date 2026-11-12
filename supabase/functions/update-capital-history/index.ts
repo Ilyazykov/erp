@@ -371,6 +371,34 @@ Deno.serve(async (req) => {
     // held first, then the ones whose prices are oldest (the last day we have a close for):
     // ordering by the last try let a ticker tried yesterday wait behind all the others for days
     // (a MOEX bond stopped at 03.11.2026 while the run got through only part of the list)
+    // A liquid-staking token is its coin at the pool's exchange rate, which
+    // moves a few % a year: tsTON (Tonstakers) is Gram x ~1.18. Its own market
+    // price (update-market-prices) is stored from 12.11.2026 on; the days it
+    // was held before -- from its first movement in a wallet -- are the coin's
+    // close that day x the rate of tsTON's earliest own price (to the coin's
+    // the same day). Without them the first day held had no price: 0.
+    const STAKED_ON: Record<string, string> = { TSTON: 'GRAM' };
+    const derived: string[] = [];
+    for (const [ticker, coin] of Object.entries(STAKED_ON)) {
+      const { data: own } = await db.from('price_history').select('day, price_usd').eq('ticker', ticker).neq('source', 'derived').order('day').limit(1);
+      const { data: held } = await db.from('wallet_transactions').select('tx_time').eq('symbol', ticker).order('tx_time').limit(1);
+      if (!own?.[0] || !held?.[0]) continue;
+      const first = String(held[0].tx_time).slice(0, 10);
+      if (first >= own[0].day) continue;
+      const { data: anchor } = await db.from('price_history').select('price_usd').eq('ticker', coin).eq('day', own[0].day).maybeSingle();
+      if (!anchor || !(Number(anchor.price_usd) > 0)) continue;
+      const rate = Number(own[0].price_usd) / Number(anchor.price_usd);
+      const coinDays = await selectAll(() => db.from('price_history').select('day, price_usd').eq('ticker', coin)
+        .gte('day', first).lt('day', own[0].day).order('day'));
+      const rows = coinDays.map(r => ({ ticker, day: r.day, price_usd: Math.round(Number(r.price_usd) * rate * 1e6) / 1e6, source: 'derived' }));
+      if (rows.length) {
+        const { error } = await db.from('price_history').upsert(rows);
+        if (error) throw new Error(error.message);
+        derived.push(`${ticker}:${rows.length}`);
+      }
+    }
+    report.derived_prices = derived;
+
     const queue = [...since.keys()].filter(t => !dead(t))
       .sort((a, b) => Number(!held.has(a)) - Number(!held.has(b)) || (lastDay.get(a) ?? '').localeCompare(lastDay.get(b) ?? '') || tried(a).localeCompare(tried(b)));
     // Six tickers at a time (05.11.2026): one by one, a run got through some
