@@ -127,9 +127,10 @@ Deno.serve(async (req) => {
         if (!productId) {
           const norm = receiptNorm(l.namePrinted);
           const { data: aliases } = await supabase.from('product_aliases')
-            .select('product_id, chain').eq('name_norm', norm)
-            .in('chain', [r.chain || '', '']);
-          const best = (aliases ?? []).sort((a, b) => (b.chain === (r.chain || '') ? 1 : 0) - (a.chain === (r.chain || '') ? 1 : 0))[0];
+            .select('product_id, chain').eq('name_norm', norm);
+          // filtered here, not with .in('chain', [...]): for a receipt with no
+          // chain that list is ['', ''], sent as in.(,) -- which matches nothing
+          const best = (aliases ?? []).filter(a => a.chain === '' || a.chain === (r.chain || '')).sort((a, b) => (b.chain === (r.chain || '') ? 1 : 0) - (a.chain === (r.chain || '') ? 1 : 0))[0];
           productId = best?.product_id ?? null;
         }
         if (!productId) unmatched++;
