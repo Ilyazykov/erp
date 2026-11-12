@@ -5291,6 +5291,10 @@ const MP_UNIT_QUOTED_ASSET_CLASSES = new Set(['crypto', 'gold']);
 // prev. Toncoin) gets its own column (user's choice).
 const MP_MAJOR_CRYPTO_COLUMNS = new Set(['BTC', 'ETH', 'SOL', 'GRAM']);
 const MP_ALTCOINS_COLUMN = 'Altcoins';
+// Charts only: a staked coin is the coin itself -- tsTON (Tonstakers' staked
+// TON) is drawn as GRAM. The tables keep it apart (its price isn't GRAM's).
+const MP_CHART_COIN_OF = { TSTON: 'GRAM' };
+const mpChartCoin = t => MP_CHART_COIN_OF[t] || t;
 function mpBrokerCurrencyUnit(r) {
   if (r.ticker === 'XAUT') return 'XAU';
   if (r.asset_class === 'crypto' && !MP_MAJOR_CRYPTO_COLUMNS.has(r.ticker)) return MP_ALTCOINS_COLUMN;
@@ -7654,7 +7658,7 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   // flagged by the country an ISO code starts with), Altcoins into coins.
   for (const r of curRows) if (!r.excluded) {
     const label = r.currency === MP_OTHER_CURRENCIES_COLUMN ? `${r.own_currency} ${mpFlagOf(r.own_currency.slice(0, 2))}`
-      : r.currency === MP_ALTCOINS_COLUMN ? r.ticker
+      : r.currency === MP_ALTCOINS_COLUMN ? (MP_CHART_COIN_OF[r.ticker] ? currencyLabel(mpChartCoin(r.ticker)) : r.ticker)
       : currencyLabel(r.currency);
     mpAdd(byCurrency, label, r.value_usd);
   }
@@ -7717,7 +7721,7 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   }
   // 5. Crypto by coin.
   const crypto = {};
-  for (const r of base.data) if (r.asset_class === 'crypto' && r.value_usd > 0) mpAdd(crypto, r.ticker, r.value_usd);
+  for (const r of base.data) if (r.asset_class === 'crypto' && r.value_usd > 0) mpAdd(crypto, mpChartCoin(r.ticker), r.value_usd);
   // 6 / 10. Russian infrastructure -- the Russian table's cells.
   const ruCells = {};
   for (const r of assetRows) {
