@@ -46,11 +46,49 @@ function toStr(v: bigint): string {
 export interface ExchangeWallet { id: string; user_id: string; account: string; chain: string }
 export interface BalanceRules {
   internalKinds: Set<string>; earnKinds: Set<string>; savingsTicker: string; unknownKinds?: Set<string>;
+  // Telegram Wallet: see earnPositions
+  closeEarnOnReturn?: boolean;
+}
+
+export interface BalanceRow { kind: string; symbol: string; amount: unknown; tx_time?: string; tx_hash?: string }
+
+// Telegram Wallet's Earn, per coin. The app shows each Earn reward cut (not
+// rounded) to 4 decimals, while Earn itself holds the exact amounts and gives
+// them all back on withdrawal: GRAM's 493 rewards show 3.6652, but 36.8337
+// put in came back as 40.5241 -- 0.0252 more, what cutting 493 amounts loses
+// on average (half a last digit each, 0.0247 +- 0.0006). So the Earn
+// position -- its rewards less the main wallet's transfers into / out of it
+// ('wallet' rows of earn_internal; the Earn's own "Deposited" rows mirror
+// them) -- is followed in time order, and when a withdrawal takes more than
+// it holds by no more than what the cut rewards since the last such close can
+// have lost (a last digit each), the withdrawal is what Earn held: the
+// excess is the rewards' cut-off part (`extra`, counted in the balance) and
+// the position is 0. A bigger excess isn't rounding: it stays, visible.
+export function earnPositions(rows: BalanceRow[]) {
+  const pos = new Map<string, { held: bigint; extra: bigint; rewards: number; unit: bigint }>();
+  const sorted = rows.filter(r => r.kind === 'interest' || (r.kind === 'earn_internal' && r.tx_hash?.split('|')[2] === 'wallet'))
+    .sort((a, b) => String(a.tx_time).localeCompare(String(b.tx_time)));
+  for (const r of sorted) {
+    const p = pos.get(r.symbol) ?? { held: 0n, extra: 0n, rewards: 0, unit: 0n };
+    pos.set(r.symbol, p);
+    const v = toBig(r.amount);
+    if (r.kind === 'interest') {
+      p.held += v; p.rewards++;
+      const digits = (dec(String(r.amount)).split('.')[1] ?? '').length;
+      const unit = 10n ** BigInt(18 - Math.min(digits, 18));      // one unit of its last shown digit
+      if (unit > p.unit) p.unit = unit;
+      continue;
+    }
+    p.held -= v;                                                 // to Earn: amount < 0, from Earn: > 0
+    if (p.held < 0n && -p.held <= BigInt(p.rewards) * p.unit) {
+      p.extra += -p.held; p.held = 0n; p.rewards = 0; p.unit = 0n;
+    }
+  }
+  return pos;
 }
 
 // Pure part: rows -> wallet_balances rows (and per-coin totals for reporting).
-export function computeBalances(wallet: ExchangeWallet, rows: { kind: string; symbol: string; amount: unknown }[],
-                                rules: BalanceRules) {
+export function computeBalances(wallet: ExchangeWallet, rows: BalanceRow[], rules: BalanceRules) {
   const total = new Map<string, bigint>();
   const inEarn = new Map<string, bigint>();
   const unknown = new Set(rows.filter(r => rules.unknownKinds?.has(r.kind)).map(r => r.symbol));
@@ -59,6 +97,11 @@ export function computeBalances(wallet: ExchangeWallet, rows: { kind: string; sy
     if (rules.earnKinds.has(r.kind)) inEarn.set(r.symbol, (inEarn.get(r.symbol) ?? 0n) - toBig(r.amount));
     if (rules.internalKinds.has(r.kind)) continue;
     total.set(r.symbol, (total.get(r.symbol) ?? 0n) + toBig(r.amount));
+  }
+  if (rules.closeEarnOnReturn) {
+    for (const [coin, p] of earnPositions(rows)) {
+      if (p.extra !== 0n && !unknown.has(coin)) total.set(coin, (total.get(coin) ?? 0n) + p.extra);
+    }
   }
   const base = { wallet_id: wallet.id, user_id: wallet.user_id, account: wallet.account, chain: wallet.chain,
                  name: null, decimals: null, price_usd: null, as_of: new Date().toISOString() };
@@ -81,12 +124,13 @@ export function computeBalances(wallet: ExchangeWallet, rows: { kind: string; sy
 // Recompute one account's wallet_balances from all its stored rows.
 // deno-lint-ignore no-explicit-any
 export async function recomputeExchange(db: any, wallet: ExchangeWallet, rules: BalanceRules) {
-  const all: { kind: string; symbol: string; amount: unknown }[] = [];
+  const all: BalanceRow[] = [];
   for (let from = 0; ; from += 1000) {
     const { data, error } = await db.from('wallet_transactions')
       // amount::text -- as JSON numbers, numeric values lose digits and
       // tiny ones come back in exponent form ("9e-8")
-      .select('kind, symbol, amount::text').eq('wallet_id', wallet.id).range(from, from + 999);
+      .select('kind, symbol, amount::text, tx_time, tx_hash').eq('wallet_id', wallet.id)
+      .order('tx_hash').order('kind').order('seq').range(from, from + 999);
     if (error) throw new Error(error.message);
     all.push(...data);
     if (data.length < 1000) break;

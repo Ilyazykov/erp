@@ -30,7 +30,7 @@
 //     Raiffeisen's package fee and insurance): on their day each month --
 //     bank_transactions 'estimate_fee:<account>'.
 
-import { recomputeExchange, type ExchangeWallet } from './exchange_balances.ts';
+import { earnPositions, recomputeExchange, type BalanceRow, type ExchangeWallet } from './exchange_balances.ts';
 import { money, tinvest } from './tinvest.ts';
 
 // The Telegram Wallet's balance rules, shared with import-telegram-wallet.
@@ -39,6 +39,7 @@ export const TELEGRAM_RULES = {
   earnKinds: new Set<string>(),
   savingsTicker: 'SAVINGS:Telegram USD',
   unknownKinds: new Set(['trade_out_unknown']),
+  closeEarnOnReturn: true,
 };
 export const ESTIMATE_SOURCE = { bond: 'estimate_bond', dividend: 'estimate_dividend', deposit: 'estimate_deposit', brokerCash: 'estimate_broker:', fee: 'estimate_fee:' };
 
@@ -371,12 +372,24 @@ async function telegramEstimates(db: any, userId: string, until: string) {
       .eq('wallet_id', wallet.id).eq('estimated', false).eq('kind', 'interest').gte('tx_time', `${addDays(end || until, -14)}T00:00:00Z`)
       .order('tx_time');
     if (rErr) throw new Error(rErr.message);
+    // what each coin still holds in Earn: one withdrawn in full earns nothing more
+    const earnRows: BalanceRow[] = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error: eErr } = await db.from('wallet_transactions').select('kind, symbol, amount::text, tx_time, tx_hash')
+        .eq('wallet_id', wallet.id).eq('estimated', false).in('kind', ['interest', 'earn_internal'])
+        .order('tx_hash').order('kind').order('seq').range(from, from + 999);
+      if (eErr) throw new Error(eErr.message);
+      earnRows.push(...data);
+      if (data.length < 1000) break;
+    }
+    const inEarn = earnPositions(earnRows);
     const out = [];
     for (const symbol of new Set((recent ?? []).map((r: { symbol: string }) => r.symbol))) {
       const own = (recent ?? []).filter((r: { symbol: string }) => r.symbol === symbol);
       const lastDay = String(own.at(-1).tx_time).slice(0, 10);
-      // still paying: daily up to the export's end
+      // still paying: daily up to the export's end, and something still in Earn
       if (own.length < 5 || (end && daysBetween(lastDay, end) > 2)) continue;
+      if ((inEarn.get(symbol)?.held ?? 0n) <= 0n) continue;
       const tail = own.slice(-7).map((r: { amount: string }) => Number(r.amount));
       const amount = Number((tail.reduce((a: number, x: number) => a + x, 0) / tail.length).toFixed(9));
       const clock = String(own.at(-1).tx_time).slice(11, 19);
