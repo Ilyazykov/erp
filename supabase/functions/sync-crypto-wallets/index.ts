@@ -69,6 +69,10 @@ const MAX_PAGES = 200;
 //     as ETH (wstETH is NOT 1:1 -- it's worth more than 1 ETH -- so it isn't
 //     mapped).
 const KNOWN_TOKEN_TICKERS: Record<string, Record<string, string>> = {
+  // TON jettons: tsTON (Tonstakers, priced as TON -- the GRAM ticker)
+  ton: {
+    '0:BDF3FA8098D129B54B4F73B5BAC5D1E1FD91EB054169C3916DFC8CCD536D1000': 'GRAM',
+  },
   ethereum: {
     '0xdac17f958d2ee523a2206206994597c13d831ec7': 'USDT',
     '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48': 'USDC',
@@ -584,7 +588,7 @@ async function syncTon(w: Wallet, knownTx: Set<string>): Promise<{ balances: Bal
       symbol = c.symbol ?? null;
       if (c.decimals != null) decimals = Number(c.decimals);
     } catch { /* no metadata: the balance stays, unnamed */ }
-    balances.push({ contract: master, symbol, name: null, decimals, quantity: formatUnits(BigInt(j.balance ?? '0'), decimals), price_usd: null, ticker: null });
+    balances.push({ contract: master, symbol, name: null, decimals, quantity: formatUnits(BigInt(j.balance ?? '0'), decimals), price_usd: null, ticker: KNOWN_TOKEN_TICKERS.ton[master] ?? null });
     await sleep(150);
   }
   return { balances, txs };
