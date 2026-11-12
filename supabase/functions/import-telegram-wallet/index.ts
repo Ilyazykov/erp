@@ -188,19 +188,21 @@ Deno.serve(async (req) => {
         .upsert(rows.slice(i, i + 500), { onConflict: 'wallet_id,tx_hash,kind,seq' });
       if (error) throw new Error(error.message);
     }
-    // The file is the whole history: a stored row it no longer has was
-    // replaced (XAUT's monthly totals by its daily rewards) -- drop it.
+    // A file may be only part of the history: a stored move it doesn't mention is kept. A move it does
+    // mention again may have been replaced (XAUT's monthly totals by its daily rewards) -- its old rows are dropped.
     // A row is its tx_hash, kind and seq (the upsert's key): the same move can
     // change kind between uploads ("Transfer to Earn" is 'earn_move' until the
     // coin has Earn rows, 'earn_internal' after), and the old kind must go too.
     const key = (r: { tx_hash: string; kind: string; seq: number }) => `${r.tx_hash}|${r.kind}|${r.seq}`;
     const inFile = new Set(rows.map(key));
+    // only a move the file has again can be replaced; a stored move the file doesn't mention is kept
+    const fileHashes = new Set(rows.map(r => r.tx_hash));
     const stale: { tx_hash: string; kind: string; seq: number }[] = [];
     for (let from = 0; ; from += 1000) {
       const { data, error } = await supabase.from('wallet_transactions').select('tx_hash, kind, seq')
         .eq('wallet_id', wallet!.id).order('tx_hash').order('kind').order('seq').range(from, from + 999);
       if (error) throw new Error(error.message);
-      for (const r of data ?? []) if (!inFile.has(key(r))) stale.push(r);
+      for (const r of data ?? []) if (fileHashes.has(r.tx_hash) && !inFile.has(key(r))) stale.push(r);
       if (!data || data.length < 1000) break;
     }
     for (const r of stale) {
