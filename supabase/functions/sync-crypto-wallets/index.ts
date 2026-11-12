@@ -536,44 +536,91 @@ async function syncSolana(w: Wallet, knownTx: Set<string>): Promise<{ balances: 
 
 // ---------------------------------------------------------------------------
 // TON (Gram) via toncenter's public v3 API: TON balance and every transfer
-// the address made or received, with the network fee as its own row.
+// the address made or received, with the network fee as its own row; jetton
+// (token) transfers and liquid staking from toncenter's decoded actions.
+//
+// toncenter names the address in raw form ("0:5D68..."), not as the user
+// typed it ("UQBd..."): a transaction's own `account` is what its messages'
+// source / destination are compared with.
+//
+// The rows' symbol is the ticker that prices the coin (GRAM for Toncoin,
+// XAUT for Tether Gold's XAUt0, TSTON for tsTON): the investment views price
+// a wallet movement by its symbol, and a move from Telegram Wallet (GRAM,
+// XAUT there) must be worth the same on both sides. The balances keep the
+// coins' own names, with those tickers.
+//
+// Staking TON for tsTON (Tonstakers' "stake_deposit": TON to the pool, its
+// excess back, tsTON minted) is an exchange inside the wallet, not money in
+// or out: its rows are 'staking_internal' (counted in the coins' quantities,
+// not as money put in or taken out).
+//
+// Every sync re-reads the whole history and replaces the stored rows of the
+// transactions it read (a small wallet; an earlier version stored wrong amounts).
 // ---------------------------------------------------------------------------
 const TONCENTER = 'https://toncenter.com/api/v3';
 
-async function syncTon(w: Wallet, knownTx: Set<string>): Promise<{ balances: Balance[]; txs: Tx[] }> {
+async function syncTon(w: Wallet): Promise<{ balances: Balance[]; txs: Tx[] }> {
   const a = w.address;
   const acc = await getJson(`${TONCENTER}/account?address=${encodeURIComponent(a)}`);
   const balances: Balance[] = [{ contract: '', symbol: 'TON', name: 'Toncoin', decimals: 9,
     quantity: formatUnits(BigInt(acc.balance ?? '0'), 9), price_usd: null, ticker: 'GRAM' }];
 
-  const all: any[] = [];
-  for (let offset = 0; offset < 100 * MAX_PAGES; offset += 100) {
-    const d = await getJson(`${TONCENTER}/transactions?account=${encodeURIComponent(a)}&limit=100&offset=${offset}&sort=desc`);
-    const list = d.transactions ?? [];
-    all.push(...list);
-    if (list.length < 100 || list.every((t: any) => knownTx.has(String(t.hash)))) break;
-    await sleep(200);
-  }
+  const pages = async (path: string, key: string) => {
+    const out: any[] = [];
+    for (let offset = 0; offset < 100 * MAX_PAGES; offset += 100) {
+      const d = await getJson(`${TONCENTER}/${path}?account=${encodeURIComponent(a)}&limit=100&offset=${offset}&sort=desc`);
+      const list = d[key] ?? [];
+      out.push(...list);
+      if (list.length < 100) break;
+      await sleep(1100);   // toncenter without a key: 1 request a second
+    }
+    return out;
+  };
+  const all = await pages('transactions', 'transactions');
+  await sleep(1100);
+  const actions = (await pages('actions', 'actions')).filter((x: any) => x.success);
 
   const txs: Tx[] = [];
+  const staking = new Set<string>();   // the transactions of a stake / unstake
+  const me = String(all[0]?.account ?? '');
+  for (const x of actions) {
+    const d = x.details ?? {};
+    const time = new Date((x.start_utime ?? Date.now() / 1000) * 1000).toISOString();
+    const jetton = (master: string, raw: string, kind: string, counterparty: string | null) => {
+      const known = TON_JETTONS[master];
+      if (!known || !me) return;   // a token nothing prices (spam airdrops and the like): not a movement worth storing
+      txs.push({ tx_hash: `action:${x.action_id}`, seq: 0, kind, tx_time: time, contract: master, symbol: known.ticker,
+        decimals: known.decimals, amount: formatUnits(BigInt(raw), known.decimals), counterparty, status: x.type });
+    };
+    if (x.type === 'jetton_transfer') {
+      if (d.receiver === me) jetton(String(d.asset), String(d.amount), 'token', d.sender ?? null);
+      else if (d.sender === me) jetton(String(d.asset), `-${d.amount}`, 'token', d.receiver ?? null);
+    } else if ((x.type === 'stake_deposit' || x.type === 'stake_withdrawal') && d.stake_holder === me) {
+      for (const h of x.transactions ?? []) staking.add(String(h));
+      if (x.type === 'stake_deposit' && d.tokens_minted && d.asset) jetton(String(d.asset), String(d.tokens_minted), 'staking_internal', d.pool ?? null);
+      if (x.type === 'stake_withdrawal' && d.tokens_burnt && d.asset) jetton(String(d.asset), `-${d.tokens_burnt}`, 'staking_internal', d.pool ?? null);
+    }
+  }
+
   const seen = new Set<string>();
   for (const t of all) {
     const hash = String(t.hash);
     if (seen.has(hash)) continue;
     seen.add(hash);
-    const outs = (t.out_msgs ?? []).filter((m: any) => m.source === a);
+    const self = String(t.account);
+    const outs = (t.out_msgs ?? []).filter((m: any) => m.source === self);
     const sent = outs.reduce((s: bigint, m: any) => s + BigInt(m.value ?? '0'), 0n);
     const inMsg = t.in_msg ?? {};
-    const recv = inMsg.destination === a ? BigInt(inMsg.value ?? '0') : 0n;
+    const recv = inMsg.destination === self ? BigInt(inMsg.value ?? '0') : 0n;
     const fee = BigInt(t.total_fees ?? '0');
     const base = {
       tx_hash: hash, tx_time: new Date((t.now ?? Date.now() / 1000) * 1000).toISOString(),
-      contract: '', symbol: 'TON', decimals: 9, status: 'confirmed',
+      contract: '', symbol: 'GRAM', decimals: 9, status: 'confirmed',
     };
     const other = outs.length ? outs[0].destination : (inMsg.source ?? null);
-    // net effect on the address = received - sent - fee; the fee is its own row
-    const net = recv - sent - fee;
-    if (net !== 0n) txs.push({ ...base, seq: 0, kind: 'native', amount: formatUnits(net, 9), counterparty: other ?? null });
+    // net effect on the address = received - sent; the fee is its own row (as for bitcoin and solana)
+    const net = recv - sent;
+    if (net !== 0n) txs.push({ ...base, seq: 0, kind: staking.has(hash) ? 'staking_internal' : 'native', amount: formatUnits(net, 9), counterparty: other ?? null });
     if (fee) txs.push({ ...base, seq: 0, kind: 'fee', amount: formatUnits(-fee, 9), counterparty: null });
   }
 
@@ -608,7 +655,7 @@ async function syncWallet(db: any, w: Wallet) {
     w.chain === 'ethereum' ? await syncEthereum(w, known, warnings)
     : w.chain === 'tron' ? await syncTron(w, known)
     : w.chain === 'bitcoin' ? await syncBitcoin(w, known)
-    : w.chain === 'ton' ? await syncTon(w, known)
+    : w.chain === 'ton' ? await syncTon(w)
     : await syncSolana(w, known);
 
   const now = new Date().toISOString();
@@ -639,7 +686,16 @@ async function syncWallet(db: any, w: Wallet) {
     if (error) throw new Error(error.message);
   }
 
-  const newTxs = txs.filter(t => !known.has(t.tx_hash))
+  // TON re-reads its whole history: what's stored for a transaction it read is replaced
+  const replace = w.chain === 'ton';
+  if (replace) {
+    const hashes = [...new Set(txs.map(t => t.tx_hash))];
+    for (let i = 0; i < hashes.length; i += 100) {
+      const { error } = await db.from('wallet_transactions').delete().eq('wallet_id', w.id).in('tx_hash', hashes.slice(i, i + 100));
+      if (error) throw new Error(error.message);
+    }
+  }
+  const newTxs = txs.filter(t => replace || !known.has(t.tx_hash))
     .map(t => ({ ...t, wallet_id: w.id, user_id: w.user_id, chain: w.chain }));
   for (let i = 0; i < newTxs.length; i += 500) {
     const { error } = await db.from('wallet_transactions')

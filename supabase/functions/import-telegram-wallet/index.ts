@@ -78,7 +78,9 @@ function kindOf(section: string, title: string, hasEarnHistory: boolean): string
   if (/^Exchanged /.test(title)) return 'trade';
   if (/^Crypto purchase/.test(title)) return 'purchase';
   if (/^Top-up/.test(title)) return 'deposit';
-  if (/^Withdrew/.test(title)) return 'withdrawal';
+  // "Transfer to DeFi Account": to the user's own non-custodial TON wallet (crypto_wallets chain 'ton', which
+  // sync-crypto-wallets reads) -- out of here as any withdrawal, in there as a transfer received
+  if (/^Withdrew|^Transfer to DeFi Account/.test(title)) return 'withdrawal';
   if (/^Gift/.test(title)) return 'reward';
   return 'other';
 }
@@ -114,7 +116,7 @@ function parse(text: string, extraEarn: Set<string> = new Set()) {
     const n = occ.get(sig) ?? 0; occ.set(sig, n + 1);
     const tx_time = `${ts.replace(' ', 'T')}:00Z`;
     const base = { tx_hash: sig, tx_time, status: `${title}${status ? ` | ${status}` : ''}` };
-    const counterparty = title.match(/^(?:Withdrew to|Top-up from) (\S+)/)?.[1] ?? null;
+    const counterparty = title.match(/^(?:Withdrew to|Top-up from) (\S+)/)?.[1] ?? (/^Transfer to DeFi Account/.test(title) ? 'DeFi Account' : null);
     // a day worked out, not seen ("Rewarded (extrapolated)"): estimated -- for
     // good, unlike sync-estimates' projections ('estimated:' hashes), which
     // its nightly rebuild and estimate_archive alone take (migration ...125)
