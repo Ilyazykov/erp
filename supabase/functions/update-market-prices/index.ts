@@ -1262,6 +1262,38 @@ async function runUpdate(): Promise<Record<string, unknown>> {
     await sleep(150);
   }
 
+  // --- tsTON (Tonstakers, on TON): median of three keyless sources (GeckoTerminal, CoinGecko, and the
+  //     deepest pool on DEX Screener, so a thin pool can't set the price). Used by the wallet sync. ---
+  const TSTON = 'EQC98_qAmNEptUtPc7W6xdHh_ZHrBUFpw5Ft_IzNU20QAJav';
+  const [tstonGecko, tstonCg, tstonDex] = await Promise.all([
+    fetchJson(`https://api.geckoterminal.com/api/v2/networks/ton/tokens/${TSTON}`),
+    fetchJson('https://api.coingecko.com/api/v3/simple/price?ids=tonstakers&vs_currencies=usd'),
+    fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${TSTON}`),
+  ]);
+  const tstonPrices: number[] = [];
+  const g = Number(tstonGecko?.data?.attributes?.price_usd);
+  if (Number.isFinite(g) && g > 0) tstonPrices.push(g);
+  const c = Number(tstonCg?.tonstakers?.usd);
+  if (Number.isFinite(c) && c > 0) tstonPrices.push(c);
+  // the pool with the most liquidity: its price, not an average over thin pools
+  const deepest = (tstonDex?.pairs ?? []).filter((p: any) => p.baseToken?.address === TSTON)
+    .sort((a: any, b: any) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))[0];
+  const d = Number(deepest?.priceUsd);
+  if (Number.isFinite(d) && d > 0) tstonPrices.push(d);
+  if (tstonPrices.length) {
+    tstonPrices.sort((x, y) => x - y);
+    const mid = Math.floor(tstonPrices.length / 2);
+    const tstonUsd = tstonPrices.length % 2 ? tstonPrices[mid] : (tstonPrices[mid - 1] + tstonPrices[mid]) / 2;
+    rowsOut.push({
+      ticker: 'TSTON', price_usd: Math.round(tstonUsd * 1e6) / 1e6, native_price: tstonUsd, currency: 'USD',
+      asset_class: 'crypto', infra_region: 'foreign', instrument_type: 'crypto', underlying_currency: 'tsTON',
+      source: `median(${tstonPrices.length})`, as_of: new Date().toISOString().slice(0, 10),
+    });
+    resolved.add('TSTON');
+  } else {
+    log('  TSTON: no price from any source');
+  }
+
   // --- everything left over: try as a plain US stock, then as a
   //     Western-exchange ETF with common suffixes ---
   const leftover = tickers.filter(
