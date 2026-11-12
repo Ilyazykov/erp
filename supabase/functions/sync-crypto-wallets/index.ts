@@ -68,11 +68,13 @@ const MAX_PAGES = 200;
 //   - Lido stETH -> ETH: staked ETH redeemable 1:1, and the user counts it
 //     as ETH (wstETH is NOT 1:1 -- it's worth more than 1 ETH -- so it isn't
 //     mapped).
+// TON jettons by master address: name and decimals, and the ticker that prices them (none = not counted)
+const TON_JETTONS: Record<string, { symbol: string; decimals: number; ticker: string | null }> = {
+  '0:BDF3FA8098D129B54B4F73B5BAC5D1E1FD91EB054169C3916DFC8CCD536D1000': { symbol: 'tsTON', decimals: 9, ticker: 'GRAM' },  // Tonstakers, priced as TON
+  '0:3547F2EE4022C794C80EA354B81BB63B5B571DD05AC091B035D19ABBADD74AC6': { symbol: 'XAUt0', decimals: 6, ticker: null },   // Tether Gold on TON
+};
+
 const KNOWN_TOKEN_TICKERS: Record<string, Record<string, string>> = {
-  // TON jettons: tsTON (Tonstakers, priced as TON -- the GRAM ticker)
-  ton: {
-    '0:BDF3FA8098D129B54B4F73B5BAC5D1E1FD91EB054169C3916DFC8CCD536D1000': 'GRAM',
-  },
   ethereum: {
     '0xdac17f958d2ee523a2206206994597c13d831ec7': 'USDT',
     '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48': 'USDC',
@@ -588,7 +590,9 @@ async function syncTon(w: Wallet, knownTx: Set<string>): Promise<{ balances: Bal
       symbol = c.symbol ?? null;
       if (c.decimals != null) decimals = Number(c.decimals);
     } catch { /* no metadata: the balance stays, unnamed */ }
-    balances.push({ contract: master, symbol, name: null, decimals, quantity: formatUnits(BigInt(j.balance ?? '0'), decimals), price_usd: null, ticker: KNOWN_TOKEN_TICKERS.ton[master] ?? null });
+    const known = TON_JETTONS[master];
+    if (known) { symbol = known.symbol; decimals = known.decimals; }
+    balances.push({ contract: master, symbol, name: null, decimals, quantity: formatUnits(BigInt(j.balance ?? '0'), decimals), price_usd: null, ticker: known?.ticker ?? null });
     await sleep(150);
   }
   return { balances, txs };
