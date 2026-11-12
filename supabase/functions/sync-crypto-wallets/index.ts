@@ -570,6 +570,23 @@ async function syncTon(w: Wallet, knownTx: Set<string>): Promise<{ balances: Bal
     if (net !== 0n) txs.push({ ...base, seq: 0, kind: 'native', amount: formatUnits(net, 9), counterparty: other ?? null });
     if (fee) txs.push({ ...base, seq: 0, kind: 'fee', amount: formatUnits(-fee, 9), counterparty: null });
   }
+
+  // Jettons (tokens, staked tsTON included): one balance per jetton wallet, symbol and decimals from the jetton master.
+  // They have no price here, so they're kept but not counted in the portfolio until a ticker is set for them.
+  const jw = await getJson(`${TONCENTER}/jetton/wallets?owner_address=${encodeURIComponent(a)}&limit=100&offset=0`);
+  for (const j of jw.jetton_wallets ?? []) {
+    const master = String(j.jetton);
+    let symbol: string | null = null;
+    let decimals = 9;
+    try {
+      const m = await getJson(`${TONCENTER}/jetton/masters?address=${encodeURIComponent(master)}&limit=1`);
+      const c = m.jetton_masters?.[0]?.jetton_content?.data ?? {};
+      symbol = c.symbol ?? null;
+      if (c.decimals != null) decimals = Number(c.decimals);
+    } catch { /* no metadata: the balance stays, unnamed */ }
+    balances.push({ contract: master, symbol, name: null, decimals, quantity: formatUnits(BigInt(j.balance ?? '0'), decimals), price_usd: null, ticker: null });
+    await sleep(150);
+  }
   return { balances, txs };
 }
 
