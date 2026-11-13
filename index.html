@@ -7282,7 +7282,9 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
   if (c.usAlloc && (c.usAlloc.Stocks + c.usAlloc.Bonds) > 0) {
     const share = c.usAlloc.Stocks / (c.usAlloc.Stocks + c.usAlloc.Bonds);
     // The Russian stocks step 5 buys count toward the same target.
-    stockAdd = take(share * (c.groupAll + ruAdd + left) - c.stockAll - ruStocksSpent);
+    // (the liquidity funds sold leave the group and come back through `left`:
+    // counted once)
+    stockAdd = take(share * (c.groupAll - parts.liquidFree + ruAdd + left) - c.stockAll - ruStocksSpent);
   } else stockAdd = take(left);
   rows.push(['4', 'Stocks (US ERP target)', stockAdd, '']);
   parts.usBonds = take(left);
@@ -7828,9 +7830,20 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     if (!(usAlloc && (usAlloc.Stocks + usAlloc.Bonds) > 0 && nowTotal > 0 && whole > 0)) return null;
     const stockLabel = MP_ASSET_CLASS_LABELS.stock;
     const stockUsd = usAlloc.Stocks / (usAlloc.Stocks + usAlloc.Bonds) * whole;
-    const restNow = nowTotal - (now[stockLabel] || 0);
+    // Bonds and deposits at what they are, the liquid assets the rest -- so
+    // spending the liquid assets above their target brings the stocks to
+    // theirs, and selling them doesn't move the targets (13.11.2026: the rest
+    // used to be split in today's proportions, so bonds / deposits took part
+    // of the overweight and the stocks stayed short). When bonds and deposits
+    // alone are over the rest, they share it in today's proportions.
+    const liquidLabel = MP_ASSET_CLASS_LABELS.liquid;
+    const rest = whole - stockUsd;
+    const fixedNow = Object.entries(now).filter(([l]) => l !== stockLabel && l !== liquidLabel).reduce((s, [, v]) => s + v, 0);
+    const liquidUsd = Math.max(0, rest - fixedNow);
+    const scale = fixedNow > 0 ? (rest - liquidUsd) / fixedNow : 0;
     const out = Object.fromEntries(Object.entries(now).map(([l, v]) =>
-      [l, l === stockLabel ? stockUsd : (whole - stockUsd) * (restNow ? v / restNow : 0)]));
+      [l, l === stockLabel ? stockUsd : l === liquidLabel ? liquidUsd : v * scale]));
+    if (!(liquidLabel in out)) out[liquidLabel] = liquidUsd;
     if (!(stockLabel in out)) out[stockLabel] = stockUsd;
     return out;
   };
