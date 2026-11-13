@@ -7105,14 +7105,17 @@ async function mpRenderCryptoStrategy() {
       const close = end => zZone !== 'neutral' && zoneShapes.push({ type: 'rect', xref: 'x', yref: 'paper', x0: zStart, x1: end, y0: 0, y1: 1,
         fillcolor: zoneColor[zZone], opacity: 0.15, line: { width: 0 }, layer: 'below' });
       if (z !== zZone) { if (zZone) close(r.day); zStart = r.day; zZone = z; }
-      if (i === span.length - 1) close(r.day);
+      // the last zone runs on to the chart's last day: a day the indicator
+      // isn't out for yet (today's, computed the next morning) keeps the last one
+      if (i === span.length - 1) close(shown.length && shown[shown.length - 1].day > r.day ? shown[shown.length - 1].day : r.day);
     });
     // the strategy's target day by day (mpCryptoTarget, as the card has it)
     const ahrOn = new Map(ind.map(r => [r.day, r.ahr]));
     let regime = null;
     for (const r of ind) { if (r.day >= start) break; const z = mpAhrZone(r.ahr); if (z !== 'neutral') regime = z; }
     const targets = shown.map(x => {
-      const a = ahrOn.get(x.day);
+      // (no value for the day yet -- today's: the last one there is)
+      const a = ahrOn.get(x.day) ?? [...ind].reverse().find(r => r.day <= x.day)?.ahr;
       const z = a === undefined ? 'neutral' : mpAhrZone(a);
       if (z !== 'neutral') regime = z;
       return mpCryptoTarget(x.day, x.pct, z, regime, mpLastBefore(mpCryptoBuyDays, x.day), mpLastBefore(mpCryptoSellDays, x.day)).target;
