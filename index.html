@@ -10895,14 +10895,15 @@ async function mpAddressAt(lat, lng) {
 // there's a link), under it what tells it from another of its name; a
 // delivery's also where it was brought to, on a line of its own ("→ 🏠 ...").
 function mpPlaceHtml(place, to) {
-  const one = (p, icon) => {
+  const one = (p, icon, arrow) => {
     const [name, addr] = [p.name.split(' · ')[0], p.name.split(' · ').slice(1).join(' · ')];
     const text = `${icon} ${mpEscapeHtml(name)}${addr ? `<br><span style="font-size:0.85em;color:#8b949e">${mpEscapeHtml(addr)}</span>` : ''}`;
-    return `<div>${p.url
+    // the arrow before "delivered to" is plain text, not part of the link
+    return `<div>${arrow ? '→ ' : ''}${p.url
       ? `<a href="${mpEscapeHtml(p.url)}" target="_blank" rel="noopener" style="color:#58a6ff">${text}</a>`
       : `<span>${text}</span>`}</div>`;
   };
-  return [place && one(place, '📍'), to && one(to, '→ 🏠')].filter(Boolean).join('');
+  return [place && one(place, '📍'), to && one(to, '🏠', true)].filter(Boolean).join('');
 }
 // A note's text with its links cut short: a Google Maps place shows as its
 // name ("📍 Mugsy's Burger"), any other link as its site; a click opens it.
