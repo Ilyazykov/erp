@@ -291,7 +291,7 @@
       turned into one by an LLM outside this app -- items within a purchase, see the Expenses tab's Items column) —
       the file type is detected automatically from its header row or extension.</p>
     <div class="form-row">
-      <input type="file" id="mp_any_csv_file" accept=".csv,.xlsx,.json,.html,.htm,.xml" multiple>
+      <input type="file" id="mp_any_csv_file" accept=".csv,.xlsx,.json,.html,.htm,.xml,.pdf" multiple>
       <button class="btn primary" id="mp_any_csv_upload">Upload</button>
     </div>
     <div id="mp_any_csv_drop" class="drop-zone">…or drop any number of files here — they're queued and imported one by one</div>
@@ -2277,6 +2277,98 @@ function mpDetectCsvKind(headerLine, fullText) {
 const mpImportQueue = [];
 let mpImportRunning = false;
 let mpImportedSinceRefresh = false;   // a file went in since the last capital-rebuild request
+// A PDF's text as rows (14.11.2026, Wolt's receipts): pdf.js, loaded the first time
+// one's needed; per page, the pieces on one line by their height, left to right, a
+// piece close to the one before it joined to it -- [{ cells: [{ s, x }] }]
+async function mpPdfRows(file) {
+  if (!window.pdfjsLib) {
+    await new Promise((ok, fail) => { const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'; s.onload = ok; s.onerror = () => fail(new Error('pdf.js did not load')); document.head.appendChild(s); });
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
+  const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  const rows = [];
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const byY = new Map();
+    for (const it of (await (await pdf.getPage(p)).getTextContent()).items) {
+      if (!it.str || !it.str.trim()) continue;
+      const y = Math.round(it.transform[5]);
+      if (!byY.has(y)) byY.set(y, []);
+      byY.get(y).push({ s: it.str.trim(), x: it.transform[4], end: it.transform[4] + (it.width || 0) });
+    }
+    for (const y of [...byY.keys()].sort((a, b) => b - a)) {
+      const cells = [];
+      for (const it of byY.get(y).sort((a, b) => a.x - b.x)) {
+        const last = cells[cells.length - 1];
+        if (last && it.x - last.end < 4) { last.s += (it.x - last.end > 0.5 ? ' ' : '') + it.s; last.end = it.end; }
+        else cells.push({ ...it });
+      }
+      rows.push({ cells });
+    }
+  }
+  return rows;
+}
+// Wolt's receipts (PDFs, 14.11.2026) as this project's receipt CSV: an order comes as two --
+// the venue's (the food, "Receipt #...") and Wolt's own ("Wolt delivery receipt #...": delivery,
+// service fee) -- and is paid as one (TBC: "POS - WOLT GEORGIA LTD", the sum of both). Both are
+// one receipt here, by their Order ID: its lines one after the other, chain 'Wolt' (the bank
+// row's description has it -- match_receipts' chain_hit), the venue as the store. A dish with
+// options (a group row, its parts under it, indented) is one line, the options its note.
+// docs: [{ name, rows }] (mpPdfRows) -> { csv, orders, problems }; csv null when none is whole
+function mpWoltReceiptsCsv(docs) {
+  const num = s => Number(String(s).replace(/[^\d.,-]/g, '').replace(',', '.'));
+  const problems = [];
+  const parsed = [];
+  for (const { name, rows } of docs) {
+    const first = s => rows.find(r => r.cells[0]?.s === s);
+    const head = rows.find(r => /receipt #\d+/i.test(r.cells[0]?.s || ''));
+    const orderId = first('Order ID')?.cells[1]?.s;
+    if (!head || !orderId) { problems.push(`${name}: not a Wolt receipt`); continue; }
+    const when = rows.find(r => /time$/i.test(r.cells[0]?.s || '') && /^\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}$/.test(r.cells[1]?.s || ''));
+    const [, dd, mm, yyyy, hhmm] = when ? when.cells[1].s.match(/^(\d{2})\.(\d{2})\.(\d{4}) (\d{2}:\d{2})$/) : [];
+    const iHead = rows.findIndex(r => r.cells[0]?.s === 'Item');
+    const iTotal = rows.findIndex(r => /^Total in [A-Z]{3}/.test(r.cells[0]?.s || ''));
+    const iPay = rows.findIndex(r => r.cells[0]?.s === 'Payment method');
+    if (!dd || iHead < 0 || iTotal < iHead) { problems.push(`${name}: its date or items not found`); continue; }
+    const itemX = rows[iHead].cells[0].x;
+    const items = [];
+    for (const r of rows.slice(iHead + 1, iTotal)) {
+      const c = r.cells, price = num(c[c.length - 1].s);
+      if (c[0].x > itemX + 8 && items.length && items[items.length - 1].group) {
+        // a group's part: the dish itself gives its quantity, the rest are its options
+        const g = items[items.length - 1];
+        if (c[0].s === g.name && c.length >= 5) { g.qty = num(c[2].s); g.unit = num(c[3].s); }
+        else g.opts.push(price ? `${c[0].s} (+${price.toFixed(2)})` : c[0].s);
+      } else if (c.length >= 5) items.push({ name: c[0].s, qty: num(c[2].s), unit: num(c[3].s), price, opts: [] });
+      else items.push({ name: c[0].s, qty: 1, unit: null, price, opts: [], group: true });
+    }
+    const total = num(rows[iTotal].cells[rows[iTotal].cells.length - 1].s);
+    const paid = iPay >= 0 ? rows.slice(iPay + 1, iHead).reduce((s, r) => s + (r.cells.length >= 2 ? num(r.cells[r.cells.length - 1].s) : 0), 0) : total;
+    const sum = items.reduce((s, it) => s + it.price, 0);
+    if (Math.abs(sum - total) > 0.005 || Math.abs(paid - total) > 0.005) { problems.push(`${name}: its items add up to ${sum.toFixed(2)}, paid ${paid.toFixed(2)}, total ${total.toFixed(2)}`); continue; }
+    parsed.push({ name, orderId, delivery: /^Wolt delivery receipt/i.test(head.cells[0].s), venue: first('Venue')?.cells[1]?.s,
+      type: first('Order type')?.cells[1]?.s || '', date: `${yyyy}-${mm}-${dd}`, time: hhmm,
+      currency: rows[iTotal].cells[0].s.match(/^Total in ([A-Z]{3})/)[1], total, items });
+  }
+  const q = v => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+  const out = ['receipt,date,time,store,chain,city,country,currency,total,line,item,item_en,qty,unit,unit_price_list,unit_price_paid,line_total,barcode,note'];
+  const orders = [];
+  for (const orderId of new Set(parsed.map(p => p.orderId))) {
+    const docsOf = parsed.filter(p => p.orderId === orderId);
+    const food = docsOf.find(p => !p.delivery), fees = docsOf.find(p => p.delivery);
+    // one half alone would be a receipt of a part of the payment: none, until both come
+    if (!food) { problems.push(`order ${orderId}: Wolt's delivery receipt without the venue's -- upload both together`); continue; }
+    if (!fees && /deliver/i.test(food.type)) { problems.push(`order ${orderId}: the venue's receipt without Wolt's delivery receipt -- upload both together`); continue; }
+    const total = Math.round((food.total + (fees?.total || 0)) * 100) / 100;
+    let line = 0;
+    for (const it of [...food.items, ...(fees?.items || [])]) {
+      const unit = it.unit ?? (it.qty ? Math.round(it.price / it.qty * 100) / 100 : it.price);
+      out.push([orderId, food.date, food.time, food.venue || 'Wolt', 'Wolt', '', '', food.currency, total.toFixed(2), ++line,
+        it.name, it.name, it.qty || 1, 'pcs', unit.toFixed(2), unit.toFixed(2), it.price.toFixed(2), '', it.opts.join('; ')].map(q).join(','));
+    }
+    orders.push({ orderId, venue: food.venue, date: food.date, total, currency: food.currency, files: docsOf.map(p => p.name) });
+  }
+  return { csv: orders.length ? out.join('\n') + '\n' : null, orders, problems };
+}
 async function mpImportFiles(files) {
   const listEl = document.getElementById('mp_any_csv_status');
   files = [...files];
@@ -2284,6 +2376,25 @@ async function mpImportFiles(files) {
   const { data: { session } } = await sb.auth.getSession();
   if (!session) { listEl.textContent = 'Sign in first.'; return; }
   if (!mpImportRunning) listEl.textContent = '';
+  // PDFs (Wolt's receipts): read here, an order's two put together, and uploaded as one receipt CSV
+  const pdfs = files.filter(f => /\.pdf$/i.test(f.name));
+  if (pdfs.length) {
+    files = files.filter(f => !pdfs.includes(f));
+    const line = document.createElement('div');
+    line.textContent = `${pdfs.length} PDF(s): reading…`;
+    listEl.appendChild(line);
+    try {
+      const docs = [];
+      for (const f of pdfs) docs.push({ name: f.name, rows: await mpPdfRows(f) });
+      const { csv, orders, problems } = mpWoltReceiptsCsv(docs);
+      line.textContent = `${pdfs.length} PDF(s): ${orders.length} Wolt order(s)`
+        + `${orders.length ? ` (${orders.map(o => `${o.date} ${o.venue || ''} ${o.total.toFixed(2)} ${o.currency}`).join('; ')})` : ''}`
+        + `${problems.length ? `. Left out: ${problems.join('; ')}` : ''}.`;
+      if (csv) files.push(new File([csv], `wolt_${orders.map(o => `${o.date}_${(o.venue || 'order').replace(/\W+/g, '_')}`).join('+')}.csv`, { type: 'text/csv' }));
+    } catch (error) {
+      line.textContent = `${pdfs.length} PDF(s): ${error.message}`;
+    }
+  }
   for (const file of files) {
     const line = document.createElement('div');
     const name = document.createElement('b');
@@ -3449,6 +3560,12 @@ async function mpImportOneFile(file, statusEl, session) {
         + `${result.covered_by_report ? `; ${result.covered_by_report} left out, a broker report already has them` : ''}`
         + `${result.dropped_stale ? `; ${result.dropped_stale} stored rows on these dates no longer in the file removed` : ''}`
         + `${result.settled_pending ? `; ${result.settled_pending} held payments replaced by the statement's rows (notes kept)` : ''}.`;
+      // the statement takes over the rows receipts made themselves (match_receipts folds them
+      // into its own rows, with their place and items): the Expenses tab re-reads, else it kept
+      // showing the gone receipt rows -- "unknown", no place, no items, the account editable (14.11.2026)
+      mpExpCache = null;
+      mpPendingRerender();
+      mpRenderReceiptsPanel();
       if (result.imported_deposit) {
         mpRenderPortfolioPies();
         mpRenderBondByType();
