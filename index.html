@@ -10619,7 +10619,7 @@ async function mpExpLoad(range) {
     r.approx = !!t.authorized_approx;
   }
   // the places one's rows can be set to (the Place column's picker)
-  const placeList = await page(() => sb.from('places').select('id, name, lat, lng, url, google_id, city, street, house').order('name'))
+  const placeList = await page(() => sb.from('places').select('id, name, lat, lng, url, google_id, city, street, house, country').order('name'))
     .catch(() => page(() => sb.from('places').select('id, name, lat, lng, url, google_id').order('name')).catch(() => []));
   // the receipt in force for a row out, with its lines (migration ...179,
   // design: docs/items-design.md, not tracked in git): none yet or no table
@@ -10999,9 +10999,12 @@ function mpEditPlace(src, xid) {
   // a new place first, then none, then the places A-Z; the search box above filters them
   const opts = sel => `<option value="new">+ new place…</option><option value=""${sel == null ? ' selected' : ''}>—</option>${
     list.map(p => [p, mpPlaceLabel(p, list)]).sort((a, b) => a[1].localeCompare(b[1])).map(([p, label]) => `<option value="${p.id}"${p.id === sel ? ' selected' : ''}>${mpEscapeHtml(label)}</option>`).join('')}`;
+  // under each list: the chosen place's own fields (address, map link) to fill in or fix --
+  // a place a receipt made has its name only (15.11.2026)
   const picker = (name, label, sel) => `<label>${label}
     <input type="search" data-for="${name}" placeholder="search…" style="${MP_FIELD};margin:4px 0">
-    <select name="${name}" size="7" style="${MP_FIELD}">${opts(sel)}</select></label>`;
+    <select name="${name}" size="7" style="${MP_FIELD}">${opts(sel)}</select></label>
+    <a href="#" data-edit="${name}" style="font-size:12px;color:#8b949e;align-self:flex-start">✎ edit the chosen place</a>`;
   const form = mpDialog(`Place · ${r.day} · ${mpShortDesc(r.description)}`, `
     ${picker('from', '📍 Where', r.placeId)}
     ${delivery ? picker('to', '→ 🏠 Delivered to', r.deliveredToId) : ''}
@@ -11020,11 +11023,30 @@ function mpEditPlace(src, xid) {
     for (const o of form[box.dataset.for].options) o.hidden = !!q && o.value !== 'new' && !o.text.toLowerCase().includes(q);
   }));
   let target = null;   // which select the new place is for
+  let editing = null;  // the place whose fields are being fixed (its id), else a new one
   const nw = form.querySelector('fieldset');
+  form.querySelectorAll('a[data-edit]').forEach(a => a.addEventListener('click', ev => {
+    ev.preventDefault();
+    const p = list.find(x => x.id === Number(form[a.dataset.edit].value));
+    if (!p) { alert('Choose a place in the list first.'); return; }
+    target = null;
+    editing = p.id;
+    nw.querySelector('legend').textContent = `Place · ${p.name}`;
+    form.link.value = '';
+    form.pname.value = p.name || ''; form.lat.value = p.lat ?? ''; form.lng.value = p.lng ?? '';
+    form.city.value = p.city || ''; form.country.value = p.country || ''; form.street.value = p.street || ''; form.house.value = p.house || '';
+    form.url.value = p.url || ''; form.gid.value = p.google_id || '';
+    nw.style.display = 'flex';
+    form.pname.required = true;
+    form.link.focus();
+  }));
   for (const name of delivery ? ['from', 'to'] : ['from']) {
     form[name].addEventListener('change', () => {
       if (form[name].value !== 'new') return;
       target = name;
+      editing = null;
+      nw.querySelector('legend').textContent = 'New place';
+      for (const f of ['link', 'pname', 'lat', 'lng', 'city', 'country', 'street', 'house', 'url', 'gid']) form[f].value = '';
       nw.style.display = 'flex';
       form.pname.required = true;
       form.link.focus();
@@ -11044,12 +11066,23 @@ function mpEditPlace(src, xid) {
   form.addEventListener('submit', async e => {
     e.preventDefault();
     let newId = null;
+    const num = v => (v.trim() === '' ? null : Number(v));
+    const txt = v => v.trim() || null;
+    const fields = () => ({ name: form.pname.value.trim(), lat: num(form.lat.value), lng: num(form.lng.value), url: txt(form.url.value), google_id: txt(form.gid.value),
+      city: txt(form.city.value), street: txt(form.street.value), house: txt(form.house.value), country: txt(form.country.value) });
+    const cols = 'id, name, lat, lng, url, google_id, city, street, house, country';
+    if (editing) {
+      // the chosen place's own fields, fixed in place: every row with it shows them
+      const { data, error } = await sb.from('places').update(fields()).eq('id', editing).select(cols).single();
+      if (error) { alert(error.message); return; }
+      Object.assign(list.find(x => x.id === editing), data);
+      for (const x of [...(mpExpCache?.spent || []), ...(mpExpCache?.skipped || []), ...(mpExpCache?.incomeRows || [])]) {
+        if (x.placeId === editing) x.place = { name: mpPlaceLabel(data, list), url: data.url };
+        if (x.deliveredToId === editing) x.deliveredTo = { name: mpPlaceLabel(data, list), url: data.url };
+      }
+    }
     if (target) {
-      const num = v => (v.trim() === '' ? null : Number(v));
-      const txt = v => v.trim() || null;
-      const place = { name: form.pname.value.trim(), lat: num(form.lat.value), lng: num(form.lng.value), url: txt(form.url.value), google_id: txt(form.gid.value),
-        city: txt(form.city.value), street: txt(form.street.value), house: txt(form.house.value), country: txt(form.country.value) };
-      const cols = 'id, name, lat, lng, url, google_id, city, street, house, country';
+      const place = fields();
       const { data, error } = place.google_id
         ? await sb.from('places').upsert(place, { onConflict: 'user_id,google_id' }).select(cols).single()
         : await sb.from('places').insert(place).select(cols).single();
@@ -11066,7 +11099,9 @@ function mpEditPlace(src, xid) {
     // itself (receipt_resolve_place does the same on the database side)
     const receiptHere = mpExpCache?.receiptOf?.get(`${src}|${xid}`);
     if (from && receiptHere) {
-      const key = mpStoreKey(receiptHere.chain, receiptHere.store);
+      // (a Wolt order's store is Wolt: its place is the restaurant, remembered by
+      // receipt_resolve_place under the restaurant's name -- none under Wolt's here)
+      const key = /wolt/i.test(receiptHere.chain || '') ? null : mpStoreKey(receiptHere.chain, receiptHere.store);
       // best effort: the pick is saved either way; a failure here must not stop the dialog closing
       if (key) {
         try { await sb.from('store_places').upsert({ store_key: key, place_id: from }, { onConflict: 'user_id,store_key' }); } catch { /* the row's place is set already */ }
