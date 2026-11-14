@@ -1,6 +1,6 @@
 {
-  "date": "2026-11-13",
-  "updated": "2026-11-13 19:54:50 UTC",
+  "date": "2026-11-14",
+  "updated": "2026-11-14 18:22:00 UTC",
   "z_threshold": 1.5,
   "key_rate_midpoint": 10.322,
   "key_rate_slope": 2.531,
@@ -9,7 +9,7 @@
   "composite_z_date": "2026-11",
   "base_stocks": 18.9513,
   "base_bonds": 81.0487,
-  "z": 1.1928,
+  "z": 1.4786,
   "signal": "neutral",
   "stocks_adjustment": 0.0,
   "bonds_adjustment": 0.0,
