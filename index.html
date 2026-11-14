@@ -2310,10 +2310,13 @@ async function mpPdfRows(file) {
 // Wolt's receipts (PDFs, 14.11.2026) as this project's receipt CSV: an order comes as two --
 // the venue's (the food, "Receipt #...") and Wolt's own ("Wolt delivery receipt #...": delivery,
 // service fee) -- and is paid as one (TBC: "POS - WOLT GEORGIA LTD", the sum of both). Both are
-// one receipt here, by their Order ID: its lines one after the other, chain 'Wolt' (the bank
-// row's description has it -- match_receipts' chain_hit), the venue as the store. A dish with
-// options (a group row, its parts under it, indented) is one line, the options its note.
-// docs: [{ name, rows }] (mpPdfRows) -> { csv, orders, problems }; csv null when none is whole
+// one receipt, its number the Order ID, store and chain as the bank names Wolt ("WOLT GEORGIA LTD";
+// both receipts are Wolt's; the bank row's description has it -- match_receipts' chain_hit), the restaurant its venue (the place); the venue's lines numbered from 1, Wolt's
+// from 101. Uploaded together they're one receipt here already; uploaded one by one, each
+// is a receipt of its own part and import-receipts puts the second into the first (by the
+// day and the Order ID). A dish with options (a group row, its parts under it, indented) is
+// one line, the options its note.
+// docs: [{ name, rows }] (mpPdfRows) -> { csv, orders, problems }; csv null when none read
 function mpWoltReceiptsCsv(docs) {
   const num = s => Number(String(s).replace(/[^\d.,-]/g, '').replace(',', '.'));
   const problems = [];
@@ -2350,22 +2353,23 @@ function mpWoltReceiptsCsv(docs) {
       currency: rows[iTotal].cells[0].s.match(/^Total in ([A-Z]{3})/)[1], total, items });
   }
   const q = v => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
-  const out = ['receipt,date,time,store,chain,city,country,currency,total,line,item,item_en,qty,unit,unit_price_list,unit_price_paid,line_total,barcode,note'];
+  const out = ['receipt,date,time,store,chain,city,country,currency,total,line,item,item_en,qty,unit,unit_price_list,unit_price_paid,line_total,barcode,note,venue'];
   const orders = [];
   for (const orderId of new Set(parsed.map(p => p.orderId))) {
     const docsOf = parsed.filter(p => p.orderId === orderId);
     const food = docsOf.find(p => !p.delivery), fees = docsOf.find(p => p.delivery);
-    // one half alone would be a receipt of a part of the payment: none, until both come
-    if (!food) { problems.push(`order ${orderId}: Wolt's delivery receipt without the venue's -- upload both together`); continue; }
-    if (!fees && /deliver/i.test(food.type)) { problems.push(`order ${orderId}: the venue's receipt without Wolt's delivery receipt -- upload both together`); continue; }
-    const total = Math.round((food.total + (fees?.total || 0)) * 100) / 100;
-    let line = 0;
-    for (const it of [...food.items, ...(fees?.items || [])]) {
+    const any = food || fees;
+    const total = Math.round(((food?.total || 0) + (fees?.total || 0)) * 100) / 100;
+    // named as the bank names it: TBC's "POS - WOLT GEORGIA LTD" (the Expenses tab's description)
+    const wolt = any.currency === 'GEL' ? 'WOLT GEORGIA LTD' : 'Wolt';
+    const lines = [...(food?.items || []).map((it, i) => [i + 1, it]), ...(fees?.items || []).map((it, i) => [101 + i, it])];
+    for (const [line, it] of lines) {
       const unit = it.unit ?? (it.qty ? Math.round(it.price / it.qty * 100) / 100 : it.price);
-      out.push([orderId, food.date, food.time, food.venue || 'Wolt', 'Wolt', '', '', food.currency, total.toFixed(2), ++line,
-        it.name, it.name, it.qty || 1, 'pcs', unit.toFixed(2), unit.toFixed(2), it.price.toFixed(2), '', it.opts.join('; ')].map(q).join(','));
+      out.push([orderId, any.date, any.time, wolt, wolt, '', '', any.currency, total.toFixed(2), line,
+        it.name, it.name, it.qty || 1, 'pcs', unit.toFixed(2), unit.toFixed(2), it.price.toFixed(2), '', it.opts.join('; '), food?.venue || ''].map(q).join(','));
     }
-    orders.push({ orderId, venue: food.venue, date: food.date, total, currency: food.currency, files: docsOf.map(p => p.name) });
+    orders.push({ orderId, venue: food?.venue || null, date: any.date, total, currency: any.currency, files: docsOf.map(p => p.name),
+      part: food && fees ? null : food ? 'the food receipt' : 'the delivery receipt' });
   }
   return { csv: orders.length ? out.join('\n') + '\n' : null, orders, problems };
 }
@@ -2388,7 +2392,7 @@ async function mpImportFiles(files) {
       for (const f of pdfs) docs.push({ name: f.name, rows: await mpPdfRows(f) });
       const { csv, orders, problems } = mpWoltReceiptsCsv(docs);
       line.textContent = `${pdfs.length} PDF(s): ${orders.length} Wolt order(s)`
-        + `${orders.length ? ` (${orders.map(o => `${o.date} ${o.venue || ''} ${o.total.toFixed(2)} ${o.currency}`).join('; ')})` : ''}`
+        + `${orders.length ? ` (${orders.map(o => `${o.date} WOLT ${o.venue || ''} ${o.total.toFixed(2)} ${o.currency}${o.part ? `, ${o.part} only -- the other part joins it when uploaded` : ''}`).join('; ')})` : ''}`
         + `${problems.length ? `. Left out: ${problems.join('; ')}` : ''}.`;
       if (csv) files.push(new File([csv], `wolt_${orders.map(o => `${o.date}_${(o.venue || 'order').replace(/\W+/g, '_')}`).join('+')}.csv`, { type: 'text/csv' }));
     } catch (error) {

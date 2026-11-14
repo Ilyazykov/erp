@@ -115,6 +115,8 @@ export function parseReceiptCsv(text) {
       unitPriceList: parseNum(cell(cells, 'unit_price_list')),
       unitPricePaid: parseNum(cell(cells, 'unit_price_paid')),
       lineTotal, barcode: cell(cells, 'barcode') || null, note: cell(cells, 'note') || null,
+      // optional: where a delivery service brought it from (Wolt's restaurant) -- the place
+      venue: cell(cells, 'venue') || null,
     };
     if (!byReceipt.has(printedReceipt)) byReceipt.set(printedReceipt, []);
     byReceipt.get(printedReceipt).push(row);
@@ -155,6 +157,7 @@ export function parseReceiptCsv(text) {
       printedReceipt, date: first.date, time: first.time,
       purchasedAt: first.time ? `${first.date}T${first.time}:00Z` : null,
       store: first.store, chain: first.chain || null, city: first.city, country: first.country,
+      venue: rows.find(r => r.venue)?.venue || null,
       currency: first.currency, total: first.total,
       lines: lines2.map(r => ({
         lineNo: r.lineNo, namePrinted: r.item, nameEn: r.itemEn, qty: r.qty, unit: r.unit,

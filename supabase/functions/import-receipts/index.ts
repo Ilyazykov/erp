@@ -71,19 +71,55 @@ Deno.serve(async (req) => {
       otherAmount: number; warnings: string[]; unmatchedProducts: number;
     }> = [];
 
-    for (const r of fileReceipts) {
-      const { data: existing, error: exErr } = await supabase.from('receipts')
+    for (const fileReceipt of fileReceipts) {
+      let r = fileReceipt;
+      let { data: existing, error: exErr } = await supabase.from('receipts')
         .select('id, note').eq('user_id', user.id).eq('source', 'receipt_csv').eq('receipt_key', r.receiptKey).maybeSingle();
       if (exErr) throw new Error(exErr.message);
+
+      // A Wolt order's part (15.11.2026): the venue's receipt (lines 1..100) and Wolt's own
+      // (delivery, service fee: lines 101..) are one payment, one receipt -- the Order ID its
+      // number. A part uploaded on its own is put into the receipt of the other part already
+      // in (the same day and Order ID): its lines replace that part's lines, if any, the other
+      // part's stay as they are (products, notes), the total is the sum, and the receipt with
+      // its own transaction moves to the whole order's key (receipt_rekey, migration ...210).
+      let keptRows: Record<string, unknown>[] = [];
+      let replacedNos: Set<number> | null = null;
+      if (!existing && /wolt/i.test(r.chain || '')) {
+        const { data: parts, error: pErr } = await supabase.from('receipts')
+          .select('id, note, venue').eq('user_id', user.id).eq('source', 'receipt_csv')
+          .like('receipt_key', `${r.date}|${r.printedReceipt}|%`);
+        if (pErr) throw new Error(pErr.message);
+        const part = (parts ?? [])[0];
+        if (part) {
+          const { data: old, error: oErr } = await supabase.from('receipt_items')
+            .select('line_no, name_printed, name_en, product_id, qty, unit, unit_price_list, unit_price_paid, line_total, barcode, note')
+            .eq('receipt_id', part.id);
+          if (oErr) throw new Error(oErr.message);
+          const hasVenue = r.lines.some(l => l.lineNo <= 100), hasWolt = r.lines.some(l => l.lineNo > 100);
+          const replaced = (old ?? []).filter(l => (l.line_no <= 100 ? hasVenue : hasWolt));
+          replacedNos = new Set(replaced.map(l => l.line_no));
+          keptRows = (old ?? []).filter(l => !replacedNos!.has(l.line_no)).map(l => ({ ...l, user_id: user.id, receipt_id: part.id }));
+          const total = Math.round((keptRows.reduce((s, l) => s + Number(l.line_total), 0) + r.total) * 100) / 100;
+          const receiptKey = `${r.date}|${r.printedReceipt}|${total}`;
+          const { error: rkErr } = await supabase.rpc('receipt_rekey', { p_receipt_id: part.id, p_key: receiptKey, p_total: total });
+          if (rkErr) throw new Error(rkErr.message);
+          // the delivery receipt names no restaurant: the food receipt's stays
+          r = { ...r, receiptKey, total, venue: r.venue || part.venue || null };
+          existing = { id: part.id, note: part.note };
+        }
+      }
 
       let receiptId: number;
       let leftoverNote = '';
       let lines = r.lines;
       if (existing) {
         receiptId = existing.id;
-        const { data: oldLines, error: olErr } = await supabase.from('receipt_items')
+        const { data: oldLinesAll, error: olErr } = await supabase.from('receipt_items')
           .select('line_no, name_printed, note').eq('receipt_id', receiptId);
         if (olErr) throw new Error(olErr.message);
+        // a part put into a receipt: only the lines it replaces hand their notes on
+        const oldLines = replacedNos ? (oldLinesAll ?? []).filter(l => replacedNos!.has(l.line_no)) : oldLinesAll;
         const carried = carryOverNotes(
           (oldLines ?? []).map(l => ({ lineNo: l.line_no, namePrinted: l.name_printed, note: l.note })),
           r.lines,
@@ -97,6 +133,7 @@ Deno.serve(async (req) => {
         const note = leftoverNote ? [existing.note, leftoverNote].filter(Boolean).join(' | ') : undefined;
         const { error: upErr } = await supabase.from('receipts').update({
           store_printed: r.store, chain: r.chain, city: r.city, country: r.country,
+          ...(r.venue ? { venue: r.venue } : {}),
           purchased_at: r.purchasedAt, note, updated_at: new Date().toISOString(),
         }).eq('id', receiptId);
         if (upErr) throw new Error(upErr.message);
@@ -106,7 +143,7 @@ Deno.serve(async (req) => {
         const { data: ins, error: insErr } = await supabase.from('receipts').insert({
           user_id: user.id, source: 'receipt_csv', receipt_key: r.receiptKey,
           purchased_at: r.purchasedAt, purchased_on: r.date,
-          store_printed: r.store, chain: r.chain, city: r.city, country: r.country,
+          store_printed: r.store, chain: r.chain, city: r.city, country: r.country, venue: r.venue,
           currency: r.currency, total: r.total, note: leftoverNote || null,
         }).select('id').single();
         if (insErr) throw new Error(insErr.message);
@@ -140,6 +177,7 @@ Deno.serve(async (req) => {
           line_total: l.lineTotal, barcode: l.barcode, note: l.note,
         });
       }
+      rows.push(...keptRows);
       if (rows.length) {
         const { error: itemsErr } = await supabase.from('receipt_items').insert(rows);
         if (itemsErr) throw new Error(itemsErr.message);
@@ -147,17 +185,25 @@ Deno.serve(async (req) => {
 
       results.push({
         receiptKey: r.receiptKey, printedReceipt: r.printedReceipt, date: r.date, store: r.store,
-        lines: rows.length, otherAmount: r.otherAmount, warnings: r.warnings, unmatchedProducts: unmatched,
+        lines: rows.length - keptRows.length, otherAmount: r.otherAmount, warnings: r.warnings, unmatchedProducts: unmatched,
       });
     }
 
     const { data: linkedCount, error: mErr } = await supabase.rpc('match_receipts');
     if (mErr) throw new Error(mErr.message);
 
+    // a Wolt order whose delivery receipt came first has no place yet (receipt_resolve_place,
+    // migration ...210: the restaurant, named on the food receipt only): asked again now
+    const { data: unplaced } = await supabase.from('receipts').select('id')
+      .eq('user_id', user.id).eq('source', 'receipt_csv').ilike('chain', '%wolt%').is('place_id', null)
+      .in('receipt_key', results.map(r => r.receiptKey));
+    for (const u of unplaced ?? []) await supabase.rpc('receipt_resolve_place', { p_receipt_id: u.id, p_account: '<unknown>' });
+
     // the final match_state / linked account per receipt, for the page's
     // status line and for statement_uploads (logged client-side, same as
     // every other importer -- mpLogUpload, index.html)
-    const keys = fileReceipts.map(r => r.receiptKey);
+    // (a Wolt part's key is the whole order's by now)
+    const keys = results.map(r => r.receiptKey);
     const { data: states } = await supabase.from('receipts')
       .select('receipt_key, match_state, tx_source, tx_external_id, last_match_candidates')
       .eq('user_id', user.id).eq('source', 'receipt_csv').in('receipt_key', keys);
