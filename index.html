@@ -2295,17 +2295,114 @@ async function mpPdfRows(file) {
       if (!byY.has(y)) byY.set(y, []);
       byY.get(y).push({ s: it.str.trim(), x: it.transform[4], end: it.transform[4] + (it.width || 0) });
     }
+    // pieces a point or two apart in height are one line (Raiffeisen's statements set a
+    // row's description a point above its dates): the lines, each its pieces
+    const lines = [];
     for (const y of [...byY.keys()].sort((a, b) => b - a)) {
+      const last = lines[lines.length - 1];
+      if (last && last.y - y <= 2) last.items.push(...byY.get(y));
+      else lines.push({ y, items: [...byY.get(y)] });
+    }
+    for (const { y, items } of lines) {
       const cells = [];
-      for (const it of byY.get(y).sort((a, b) => a.x - b.x)) {
+      for (const it of items.sort((a, b) => a.x - b.x)) {
         const last = cells[cells.length - 1];
         if (last && it.x - last.end < 4) { last.s += (it.x - last.end > 0.5 ? ' ' : '') + it.s; last.end = it.end; }
         else cells.push({ ...it });
       }
-      rows.push({ cells });
+      rows.push({ cells, y });
     }
   }
   return rows;
+}
+// Raiffeisen Bank Serbia's monthly statement ("Izvod po tekućem / deviznom računu", PDF,
+// 15.11.2026) as import-raiffeisen-statement's CSV: the rows of its period, uploaded with
+// ?from=&to= so only those days are replaced. A transaction starts at a row with its two
+// dates (received, executed) and has its amounts on that row by their column (ref.
+// currency, debit "Isplata", credit "Uplata", balance "Stanje"); the rows under it, as far
+// as the next one, carry the rest of its description and the original amount / rate. Each
+// row's balance is checked against the one before it and the "Prethodno stanje" (opening):
+// a statement read wrong is left out, not loaded.
+function mpIsRaifPdf(rows) {
+  const t = rows.slice(0, 40).map(r => r.cells.map(c => c.s).join(' ')).join('\n');
+  return /Raiffeisen bank/i.test(t) && /Izvod po (tekućem|deviznom) računu/i.test(t);
+}
+function mpRaifPdfCsv({ name, rows }) {
+  const num = s => Number(String(s).replace(/,/g, ''));
+  const isNum = s => /^-?[\d,]*\d\.\d{2}$/.test(s);
+  const iso = d => d.replace(/^(\d{2})\.(\d{2})\.(\d{4})$/, '$3-$2-$1');
+  const DATE = /^\d{2}\.\d{2}\.\d{4}$/;
+  const txt = rows.map(r => r.cells.map(c => c.s).join(' ')).join('\n');
+  const account = txt.match(/\b(\d{18})\b/)?.[1];
+  const from = txt.match(/Od (\d{2}\.\d{2}\.\d{4})/)?.[1], to = txt.match(/do (\d{2}\.\d{2}\.\d{4})/)?.[1];
+  if (!account || !from || !to) return { error: 'Raiffeisen statement: its account or period not found' };
+  const out = [];
+  let ccy = null, opening = null, bal = null, cur = null;
+  // a description piece, the original amount ("18.00 EUR") cut out of it where the two ran together
+  const descPart = (t, x) => {
+    const m = x.s.match(/^(.*?)\s*([\d,]+\.\d{2}) ([A-Z]{3})\b\s*(.*)$/);
+    if (m && x.x < 375) { t.orig = m[2]; t.origCcy = m[3]; return [m[1], m[4]].filter(Boolean).join(' '); }
+    return x.s;
+  };
+  const close = () => {
+    if (!cur) return;
+    const desc = cur.desc.join(' ').replace(/\s+/g, ' ').trim();
+    out.push({ ...cur, desc });
+    cur = null;
+  };
+  for (let i = 0; i < rows.length; i++) {
+    const c = rows[i].cells, s0 = c[0]?.s || '';
+    if (s0 === 'Valuta:') { close(); ccy = c[1]?.s; opening = null; bal = null; continue; }
+    // the opening balance: a number at the right on the "Prethodno stanje" row or the one above it
+    if (c.some(x => x.s === 'Prethodno stanje:')) {
+      const here = [...c, ...(rows[i - 1]?.cells || [])].find(x => x.x >= 540 && isNum(x.s));
+      if (here) { opening = num(here.s); bal = opening; }
+      continue;
+    }
+    if (c.length >= 2 && DATE.test(s0) && c[0].x < 60 && DATE.test(c[1].s) && c[1].x < 130) {
+      close();
+      // the amounts' column by their right edge (they're set flush right: a long one starts to the left of its column)
+      const at = (lo, hi) => c.find(x => x.end > lo && x.end <= hi && isNum(x.s))?.s;
+      cur = { received: iso(s0), executed: iso(c[1].s), ccy,
+        card: c.find(x => x.x >= 130 && x.x < 185 && /^\d{4}$/.test(x.s))?.s || '',
+        desc: [], ref: at(330, 380), debit: at(440, 500), credit: at(500, 545), balance: at(545, 700), orig: '', origCcy: '', rate: '' };
+      cur.desc = c.filter(x => x.x >= 185 && x.x < 330).map(x => descPart(cur, x));
+      for (const x of c.filter(x => x.x >= 375 && x.x < 440)) {
+        const o = x.s.match(/^([\d,]+\.\d{2}) ([A-Z]{3})$/); if (o) { cur.orig = o[1]; cur.origCcy = o[2]; }
+      }
+      continue;
+    }
+    // under a transaction: its description's next lines, the original amount, the rate; anything
+    // else (the closing balance, "STANJE", the notes at the end, a page's header) ends it
+    if (cur && c.length && c.every(x => x.x >= 185) && !c.some(x => /Izvod|^Od \d|^do \d|^\d{18}$/.test(x.s)) && !c.every(x => x.x >= 540)) {
+      for (const x of c) {
+        const o = x.s.match(/^([\d,]+\.\d{2}) ([A-Z]{3})$/), k = x.s.match(/^Kurs:\s*([\d.,]+)?$/);
+        if (x.x >= 375 && x.x < 440 && o) { cur.orig = o[1]; cur.origCcy = o[2]; }
+        else if (k) cur.rate = k[1] || '';
+        else if (x.x < 330) cur.desc.push(descPart(cur, x));
+      }
+      continue;
+    }
+    close();
+  }
+  close();
+  if (!out.length) return { error: 'Raiffeisen statement: no transactions in it' };
+  // each balance from the one before (the opening first): the statement was read right
+  let prev = null, prevCcy = null;
+  for (const t of out) {
+    if (!t.ccy || t.balance == null || (t.debit == null && t.credit == null)) return { error: `Raiffeisen statement: a row of ${t.executed} not read whole` };
+    if (t.ccy !== prevCcy) { prev = null; prevCcy = t.ccy; }
+    const start = prev ?? (t === out.find(x => x.ccy === t.ccy) ? opening : null);
+    if (start != null && Math.abs(start + num(t.credit || 0) - num(t.debit || 0) - num(t.balance)) > 0.005) {
+      return { error: `Raiffeisen statement: the balance after the row of ${t.executed} (${t.desc}) doesn't follow from the one before -- not loaded` };
+    }
+    prev = num(t.balance);
+  }
+  const q = v => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+  const csv = ['account_number,currency,date_executed,date_received,card_number,description,debit,credit,balance,amount_orig_value,amount_orig_currency,exchange_rate,amount_ref_currency,source_file',
+    ...out.map(t => [account, t.ccy, t.executed, t.received, t.card, t.desc || '(no description in statement)', num(t.debit || 0), num(t.credit || 0), num(t.balance),
+      t.orig ? num(t.orig) : 0, t.origCcy, t.rate ? num(t.rate) : 0, num(t.ref || 0), name].map(q).join(','))].join('\n') + '\n';
+  return { csv, account, from: iso(from), to: iso(to), currencies: [...new Set(out.map(t => t.ccy))], count: out.length };
 }
 // Wolt's receipts (PDFs, 14.11.2026) as this project's receipt CSV: an order comes as two --
 // the venue's (the food, "Receipt #...") and Wolt's own ("Wolt delivery receipt #...": delivery,
@@ -2380,7 +2477,8 @@ async function mpImportFiles(files) {
   const { data: { session } } = await sb.auth.getSession();
   if (!session) { listEl.textContent = 'Sign in first.'; return; }
   if (!mpImportRunning) listEl.textContent = '';
-  // PDFs (Wolt's receipts): read here, an order's two put together, and uploaded as one receipt CSV
+  // PDFs, read here: Raiffeisen's monthly statements -- each its own CSV of the
+  // statement's days -- and Wolt's receipts (an order's two put together, one receipt CSV)
   const pdfs = files.filter(f => /\.pdf$/i.test(f.name));
   if (pdfs.length) {
     files = files.filter(f => !pdfs.includes(f));
@@ -2388,10 +2486,24 @@ async function mpImportFiles(files) {
     line.textContent = `${pdfs.length} PDF(s): reading…`;
     listEl.appendChild(line);
     try {
-      const docs = [];
+      let docs = [];
       for (const f of pdfs) docs.push({ name: f.name, rows: await mpPdfRows(f) });
-      const { csv, orders, problems } = mpWoltReceiptsCsv(docs);
-      line.textContent = `${pdfs.length} PDF(s): ${orders.length} Wolt order(s)`
+      const raif = docs.filter(d => mpIsRaifPdf(d.rows));
+      docs = docs.filter(d => !raif.includes(d));
+      for (const d of raif) {
+        const rl = document.createElement('div');
+        listEl.appendChild(rl);
+        const r = mpRaifPdfCsv(d);
+        if (r.error) { rl.textContent = `${d.name}: ${r.error}`; continue; }
+        rl.textContent = `${d.name}: Raiffeisen statement, ${r.account} ${r.currencies.join('/')}, ${r.from} – ${r.to}: ${r.count} transaction(s)`
+          + ' (the days of the statement are replaced; the history before and after stays).';
+        const f = new File([r.csv], `raif_${r.account}_${r.from}_${r.to}.csv`, { type: 'text/csv' });
+        f.mpQuery = `?from=${r.from}&to=${r.to}`;
+        files.push(f);
+      }
+      if (!docs.length) { line.remove(); }
+      const { csv, orders, problems } = docs.length ? mpWoltReceiptsCsv(docs) : { csv: null, orders: [], problems: [] };
+      if (docs.length) line.textContent = `${docs.length} PDF(s): ${orders.length} Wolt order(s)`
         + `${orders.length ? ` (${orders.map(o => `${o.date} WOLT ${o.venue || ''} ${o.total.toFixed(2)} ${o.currency}${o.part ? `, ${o.part} only -- the other part joins it when uploaded` : ''}`).join('; ')})` : ''}`
         + `${problems.length ? `. Left out: ${problems.join('; ')}` : ''}.`;
       if (csv) files.push(new File([csv], `wolt_${orders.map(o => `${o.date}_${(o.venue || 'order').replace(/\W+/g, '_')}`).join('+')}.csv`, { type: 'text/csv' }));
@@ -3352,7 +3464,8 @@ async function mpImportOneFile(file, statusEl, session) {
     let { label } = endpoints[kind];
     // Binance writes times in the zone named in the file name, e.g.
     // "Binance-Transaction-History-202609261140(UTC+3)-part1-of1.csv".
-    const query = kind === 'binance' ? `?tz=${encodeURIComponent(file.name.match(/\(UTC([+-]\d+(?:\.\d+)?)\)/)?.[1] ?? '0')}` : '';
+    // (a CSV the page made from a Raiffeisen PDF carries its statement's period: only those days are replaced)
+    const query = kind === 'binance' ? `?tz=${encodeURIComponent(file.name.match(/\(UTC([+-]\d+(?:\.\d+)?)\)/)?.[1] ?? '0')}` : (file.mpQuery || '');
     statusEl.textContent = `Detected: ${label}. Uploading and parsing on the server…`;
     // a receipt file's rows show in the Expenses tab at once, from the file itself
     if (kind === 'receipt_csv') mpShowPendingReceipts(csvText);

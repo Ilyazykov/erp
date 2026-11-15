@@ -40,7 +40,12 @@
 // legitimate same-day duplicates (e.g. the several identical "Yandex Go"
 // rows a single day can carry).
 //
-// Each CSV is an account's whole history (rebuilt from every PDF each
+// A CSV made by the page from one monthly PDF (15.11.2026, mpRaifPdfCsv in
+// index.html) comes with ?from=&to= -- the statement's period: it replaces
+// only the rows of those days (the app-screenshot rows entered for them
+// before the PDF came, say), the rest of the history stays.
+//
+// Else each CSV is an account's whole history (rebuilt from every PDF each
 // time), so an upload replaces what's stored for the currencies it carries
 // -- rows imported earlier under a different date / description (e.g.
 // before the booking date was read from the right column) don't linger as
@@ -190,6 +195,12 @@ Deno.serve(async (req) => {
 
     const csvText = await req.text();
     const csvRows = parseRows(csvText);
+    // one statement's period (a PDF read by the page): only its days are replaced
+    const params = new URL(req.url).searchParams;
+    const from = parseDate(params.get('from') || ''), to = parseDate(params.get('to') || '');
+    if ((params.has('from') || params.has('to')) && !(from && to && from <= to)) {
+      return new Response(JSON.stringify({ error: 'from / to: not a period (YYYY-MM-DD)' }), { status: 400, headers: corsHeaders });
+    }
     if (!csvRows.length) {
       return new Response(JSON.stringify({ error: 'No parseable rows found (unrecognized CSV header?)' }),
         { status: 400, headers: corsHeaders });
@@ -242,8 +253,13 @@ Deno.serve(async (req) => {
     }
 
     const currencies = [...new Set(rows.map(r => r.currency))];
-    const { error: delErr } = await supabase.from('bank_transactions').delete()
+    if (from && rows.some(r => r.tx_date.slice(0, 10) < from || r.tx_date.slice(0, 10) > to!)) {
+      return new Response(JSON.stringify({ error: `rows outside the statement's period ${from} - ${to}` }), { status: 400, headers: corsHeaders });
+    }
+    let del = supabase.from('bank_transactions').delete()
       .eq('user_id', user.id).eq('external_source', 'raiffeisen_csv').in('currency', currencies);
+    if (from) del = del.gte('tx_date', `${from}T00:00:00Z`).lte('tx_date', `${to}T23:59:59Z`);
+    const { error: delErr } = await del;
     if (delErr) {
       return new Response(JSON.stringify({ error: delErr.message }), { status: 500, headers: corsHeaders });
     }
@@ -261,6 +277,7 @@ Deno.serve(async (req) => {
       imported: count ?? rows.length,
       total_rows: csvRows.length,
       replaced_currencies: currencies,
+      replaced_period: from ? { from, to } : null,
     }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (err) {
     return new Response(JSON.stringify({ error: String(err) }),
