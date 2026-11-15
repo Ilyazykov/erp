@@ -2638,9 +2638,11 @@ const MP_PART_SOURCE = {
   'Revolut|Cards & current accounts': 'Revolut app → avatar → Documents & statements → account statement, CSV. Upload as is.',
   'Revolut|Flexible Cash Funds': 'Revolut app → avatar → Documents & statements → Flexible Cash Funds statement, CSV. Upload as is.',
   'Revolut|Deposits & savings': 'Revolut app → avatar → Documents & statements → savings statement, CSV. Upload as is.',
+  'Telegram|Custodial wallet': 'Walt (ex. Wallet) in Telegram → History, and Earn → each coin → history (screenshots or copied text) → to Claude, who builds the Telegram wallet CSV.',
+  'Telegram|Non-custodial wallet': 'On-chain TON wallet: synced from the blockchain by itself (Crypto tab), nothing to upload.',
 };
 const MP_SPLIT_ACCOUNTS = new Set(['T-Bank', 'Sber', 'Alfa', 'Yandex Bank', 'Ozon Bank', 'Finuslugi', 'Revolut']);
-const MP_PART_ORDER = ['Broker', 'ЦФА (Atomyze)', 'Flexible Cash Funds', 'Crypto', 'Metals', 'Cards & current accounts', 'Credit card', 'Deposits & savings'];
+const MP_PART_ORDER = ['Broker', 'ЦФА (Atomyze)', 'Flexible Cash Funds', 'Crypto', 'Metals', 'Cards & current accounts', 'Credit card', 'Deposits & savings', 'Custodial wallet', 'Non-custodial wallet'];
 const mpOpenAccounts = new Set();
 // Accounts that could sync by themselves but don't yet (TODO.md, section 17):
 // the part it would be, or '' for the whole account.
@@ -2904,12 +2906,37 @@ async function mpRenderLatestSources() {
       if (!parts.has(p.account)) parts.set(p.account, []);
       parts.get(p.account).push(p);
     }
+    // An account with both an exchange-held wallet and an on-chain one
+    // (Telegram: Walt and the TON wallet, 16.11.2026) splits into the two: the
+    // custodial one is a statement (its export, on the account's period), the
+    // non-custodial one syncs from the blockchain by itself ("auto")
+    const { data: wallets } = await sb.from('crypto_wallets').select('id, account, chain, last_synced_at');
+    const walletsOf = new Map();
+    for (const w of wallets || []) if (w.account) (walletsOf.get(w.account) || walletsOf.set(w.account, []).get(w.account)).push(w);
+    for (const [name, ws] of walletsOf) {
+      const cust = ws.filter(w => MP_EXCHANGE_CHAINS.has(w.chain)), own = ws.filter(w => !MP_EXCHANGE_CHAINS.has(w.chain));
+      if (!cust.length || !own.length || parts.has(name)) continue;
+      const lastTx = async list => {
+        const { data } = await sb.from('wallet_transactions').select('tx_time').in('wallet_id', list.map(w => w.id))
+          .eq('estimated', false).order('tx_time', { ascending: false }).limit(1);
+        return (data?.[0]?.tx_time || '').slice(0, 10);
+      };
+      const chains = list => [...new Set(list.map(w => MP_CHAIN_LABELS[w.chain] || w.chain))].join(', ');
+      const synced = own.map(w => (w.last_synced_at || '').slice(0, 10)).sort().pop() || '';
+      parts.set(name, [
+        { account: name, part: 'Custodial wallet', label: `Custodial: ${chains(cust)}`, last_day: await lastTx(cust),
+          period: MP_ACCOUNT_SCHEDULE[name] ?? 30 },
+        { account: name, part: 'Non-custodial wallet', label: `Non-custodial: ${chains(own)}`, last_day: await lastTx(own) || synced,
+          onchain: { error: '', to: synced, onchain: true } },
+      ]);
+    }
     for (const ps of parts.values()) ps.sort((x, y) => MP_PART_ORDER.indexOf(x.part) - MP_PART_ORDER.indexOf(y.part));
     // Each part's statements: the upload's kind and file name tell the part
     // (tbank_credit_card_*.csv, revolut_fund, *broker*, ...); a file naming
     // none (yandex_combined.csv) covers them all.
     const partOfUpload = u => {
       const k = u.kind || '', f = (u.file_name || '').toLowerCase();
+      if (k === 'telegram_wallet') return 'Custodial wallet';
       if (k === 'revolut_account') return 'Cards & current accounts';
       if (k === 'revolut_metal') return 'Metals';
       if (k === 'revolut_fund') return 'Flexible Cash Funds';
@@ -2940,11 +2967,11 @@ async function mpRenderLatestSources() {
     // ahead), 0 after a failed run, none for a key without an end
     const keyLeft = f => f.error || f.warning ? 0 : f.expires ? Math.round((Date.parse(f.expires + 'T00:00:00Z') - today) / dayMs) - 7 : null;
     for (const [name, ps] of parts) for (const p of ps) {
-      p.auto = partAuto.get(`${name}|${p.part}`);
+      p.auto = p.onchain || partAuto.get(`${name}|${p.part}`);
       p.up = partUploaded.get(`${name}|${p.part}`) || '';
       if (p.auto && p.auto.to > p.up) p.up = p.auto.to;   // (a failed run's to: its last good day)
       p.day = p.up > p.last_day ? p.up : p.last_day;
-      p.every = p.auto ? 'auto' : mpPartPeriod(p);
+      p.every = p.auto ? 'auto' : p.period ?? mpPartPeriod(p);
       p.left = p.auto ? keyLeft(p.auto) : typeof p.every === 'number' ? p.every - daysAgo(p.day) : null;
     }
     // a split account: labelled by its most frequent part
@@ -2984,7 +3011,7 @@ async function mpRenderLatestSources() {
       const late = !closed && p.left !== null && p.left < 0 && !auto;
       return `<tr class="mp-part" data-acc="${esc(name)}"${mpOpenAccounts.has(name) ? '' : ' hidden'} style="color:${late ? '#ff9500' : '#8b949e'}${closed ? ';opacity:.7' : ''}">`
         + `<td><span style="display:inline-block;width:32px"></span><span class="mp-src" data-src="${esc(what)}">${esc(p.label || p.part)}</span></td>`
-        + `<td>${update}</td><td>${!auto ? '' : auto.perpetual ? 'no end' : auto.expires ? `<span${Math.round((Date.parse(auto.expires + 'T00:00:00Z') - today) / dayMs) <= 7 ? ' style="color:#ff9500"' : ''}>${auto.expires}</span>` : 'renews'}</td><td>${p.last_day}</td><td>${up || '—'}</td><td>${d}</td>${closed ? '<td></td>' : toCheckCell(p.left)}</tr>`;
+        + `<td>${update}</td><td>${!auto || auto.onchain ? '' : auto.perpetual ? 'no end' : auto.expires ? `<span${Math.round((Date.parse(auto.expires + 'T00:00:00Z') - today) / dayMs) <= 7 ? ' style="color:#ff9500"' : ''}>${auto.expires}</span>` : 'renews'}</td><td>${p.last_day}</td><td>${up || '—'}</td><td>${d}</td>${closed ? '<td></td>' : toCheckCell(p.left)}</tr>`;
     }).join('');
     wrap.innerHTML = `<table class="data-table"><thead><tr><th>Account</th><th>Update</th><th>Key valid until</th><th>Latest record</th><th>Statements to</th><th>Days ago</th><th>Days to check</th></tr></thead><tbody>${
       rows.map(([name, a]) => {
