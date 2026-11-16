@@ -2824,7 +2824,7 @@ async function mpOpenAppleHistory(title, nameEn) {
     for (const [c, pts] of groups) {
       // the price of a month through time (a subscription's price holds until the next payment: steps)
       traces.push({ x: pts.map(p => p.day), y: pts.map(perMonth), name: c, mode: 'lines', type: 'scatter', hoverinfo: 'skip',
-        line: { shape: 'hv', color: '#6e7681', width: 1.5 }, showlegend: false });
+        line: { shape: usd ? 'linear' : 'hv', color: '#4c8bf5', width: 2 }, showlegend: false });
       // each payment, coloured by what it paid for
       for (const k of kinds) {
         const kp = pts.filter(p => p.months === k);
