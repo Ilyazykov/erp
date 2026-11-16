@@ -3856,11 +3856,20 @@ async function mpImportOneFile(file, statusEl, session) {
           if (!res.ok) throw new Error(`${fn} (HTTP ${res.status}): ${out.error || out.message || res.statusText}`);
           return out;
         };
+        const hasRows = csv => csv.split(/\r?\n/).slice(1).some(Boolean);
+        // a report with no deals and no money (an account unused those days): nothing to
+        // import -- noted as checked to its end, from the name's "(dd.mm.yy-dd.mm.yy)"
+        if (!hasRows(conv.cash) && !hasRows(conv.trades)) {
+          const days = [...file.name.matchAll(/(\d{2})\.(\d{2})\.(\d{2})(?!\d)/g)].map(m => `20${m[3]}-${m[2]}-${m[1]}`);
+          if (days.length) await sb.from('statement_uploads').insert({ account: 'Alfa', kind: 'broker_csv', file_name: file.name, period_from: days[0], period_to: days[days.length - 1] });
+          statusEl.textContent = `Detected: Alfa-Investments broker report (XML). No deals or money movements in it${days.length ? ` -- noted as checked to ${days[days.length - 1]}` : ''}.`;
+          return;
+        }
         statusEl.textContent = 'Detected: Alfa-Investments broker report (XML). Uploading the cash…';
-        const cashRes = await post('import-bank-csv', conv.cash);
+        const cashRes = hasRows(conv.cash) ? await post('import-bank-csv', conv.cash) : { imported: 0 };
         statusEl.textContent = 'Detected: Alfa-Investments broker report (XML). Uploading the deals and payouts…';
         // ?replace=1: the report is the record of its days -- the app-screenshot rows it covers go
-        const tradeRes = await post('import-broker-csv?replace=1', conv.trades);
+        const tradeRes = hasRows(conv.trades) ? await post('import-broker-csv?replace=1', conv.trades) : {};
         mpImportedSinceRefresh = true;
         mpLogUpload('bank_csv', file.name, conv.cash, cashRes);
         mpLogUpload('broker_csv', file.name, conv.trades, tradeRes);
