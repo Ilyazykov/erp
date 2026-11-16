@@ -299,6 +299,9 @@ const CASH_DEPOSIT_SOURCE = 'cash_auto:deposits';
 const SBER_IN_RE = /sberbank|сбербанк/i;
 const SBER_SELF_RE = /^external bank transfer\b|^top-up from\b|Илья (Михайлович )?З\./i;
 const SBER_STANDIN_SOURCE = 'estimate_standin:sber';
+// an SBP transfer to one's own phone (+7 991 829-70-07, its default bank Sber;
+// Alfa's statement breaks the number over two lines: "829-70- 07")
+const SBER_OUT_RE = /Систем[аеуы] быстрых платежей на \+7 \(991\) 829-70-\s?07/i;
 // deno-lint-ignore no-explicit-any
 async function sberStandIns(db: any, userId: string): Promise<number> {
   const { data: first, error: fErr } = await db.from('bank_transactions').select('tx_date')
@@ -377,6 +380,43 @@ async function sberStandIns(db: any, userId: string): Promise<number> {
       });
     }
   }
+  // The other way (16.11.2026): a transfer to oneself into Sber out of another
+  // bank -- Alfa's SBP transfer to one's own phone, which lands on the Sber
+  // card -- that the Sber statements don't have yet: a stand-in puts it on the
+  // card (+), until a Sber statement brings its own incoming row of the amount
+  // (from 2 days before to 3 days after). Keyed by the outgoing row.
+  const { data: outs, error: oErr } = await db.from('bank_transactions').select('external_source, external_id, tx_date, amount, currency, description, account')
+    .eq('user_id', userId).neq('account', 'Sber').lt('amount', 0).eq('synthetic', false)
+    .gte('tx_date', first[0].tx_date).ilike('description', '%829-70-%').order('tx_date');
+  if (oErr) throw new Error(oErr.message);
+  const outgoing = (outs ?? []).filter((t: { description: string }) => SBER_OUT_RE.test(t.description));
+  if (outgoing.length) {
+    const from = new Date(Date.parse(outgoing[0].tx_date) - 3 * 86400000).toISOString();
+    const { data: cardIn, error } = await db.from('bank_transactions').select('tx_date, amount, currency')
+      .eq('user_id', userId).eq('account', 'Sber').eq('product', 'debit_card').gt('amount', 0)
+      .neq('external_source', SBER_STANDIN_SOURCE).gte('tx_date', from).order('tx_date');
+    if (error) throw new Error(error.message);
+    const used = new Set<number>();
+    for (const t of outgoing) {
+      const amount = -Number(t.amount), day = Date.parse(String(t.tx_date).slice(0, 10));
+      const i = (cardIn ?? []).findIndex((s: { tx_date: string; amount: number; currency: string }, n: number) => !used.has(n)
+        && s.currency === t.currency && Math.abs(Number(s.amount) - amount) < 0.005
+        && Date.parse(s.tx_date.slice(0, 10)) >= day - 2 * 86400000 && Date.parse(s.tx_date.slice(0, 10)) <= day + 3 * 86400000);
+      if (i >= 0) { used.add(i); continue; }
+      bankRows.push({
+        user_id: userId, account: 'Sber', tx_date: t.tx_date, description: `PENDING: transfer from ${t.account} the Sber statements don't have yet`,
+        counterparty: null, amount, currency: t.currency, category: 'internal_transfer', balance_after: 0,
+        product: 'debit_card', synthetic: false, synthetic_kind: null, data_gap_until: null, amount_approximate: false,
+        note: `stand-in for ${t.account} ${t.external_source.split(':')[1] ?? ''}: "${String(t.description).slice(0, 120)}" ${-amount} ${t.currency}`,
+        external_source: SBER_STANDIN_SOURCE, external_id: `${t.external_source}:${t.external_id}`,
+      });
+    }
+  }
+  // the stand-ins' own running balance (bank_latest_balances takes it per source:
+  // the latest row's is what they add to the Sber card), in and out by date
+  bankRows.sort((a, b) => String(a.tx_date).localeCompare(String(b.tx_date)));
+  const runBal: Record<string, number> = {};
+  for (const r of bankRows) r.balance_after = runBal[r.currency] = Math.round(((runBal[r.currency] ?? 0) + Number(r.amount)) * 100) / 100;
   for (const table of ['bank_transactions', 'trades']) {
     const { error } = await db.from(table).delete().eq('user_id', userId).eq('external_source', SBER_STANDIN_SOURCE);
     if (error) throw new Error(error.message);
