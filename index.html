@@ -2728,6 +2728,13 @@ function mpAppleDay(s) {
 // price over time, as a product's (mpOpenProductView), in the currency Apple
 // charged or -- the toggle -- in dollars at each day's rate (the
 // apple_purchase_prices view, migration ...212).
+// The service an Apple purchase belongs to: its app's first word -- "Tinder Dating App:
+// Meet & Date" and "Tinder: новые знакомства" are both Tinder's; Yandex's app is named
+// in either language.
+function mpAppleService(app, title) {
+  const w = (app || title || '').toLowerCase().match(/[\p{L}\p{N}]+/u)?.[0] || '';
+  return { яндекс: 'yandex' }[w] || w;
+}
 async function mpOpenAppleHistory(title, nameEn) {
   const app = (nameEn || '').includes(' · ') ? nameEn.split(' · ').slice(1).join(' · ') : (/^iCloud\+/.test(title) ? 'iCloud' : '');
   const appOf = r => (r.name_en || '').includes(' · ') ? r.name_en.split(' · ').slice(1).join(' · ') : (/^iCloud\+/.test(title) ? 'iCloud' : '');
@@ -2739,7 +2746,8 @@ async function mpOpenAppleHistory(title, nameEn) {
     if (res.error) { alert(res.error.message); return; }
     res.data = (res.data || []).map(r => ({ day: r.receipts.purchased_on, currency: r.receipts.currency, price: r.line_total, price_usd: null, name_en: r.name_en, note: r.note }));
   }
-  const pays = (res.data || []).filter(r => appOf(r) === app)
+  // the same plan of the same service, whatever the app called itself then and in whichever currency
+  const pays = (res.data || []).filter(r => mpAppleService(appOf(r), title) === mpAppleService(app, title))
     .map(r => ({ day: r.day, ccy: r.currency, price: Number(r.price), usd: r.price_usd == null ? null : Number(r.price_usd), note: r.note || '' }))
     .sort((a, b) => a.day.localeCompare(b.day));
   const hasUsd = pays.some(p => p.usd != null);
@@ -2825,19 +2833,23 @@ async function mpRenderApplePurchases() {
   for (const r of rows) {
     const title = r.name_printed;
     const app = (r.name_en || '').includes(' · ') ? r.name_en.split(' · ').slice(1).join(' · ') : (/^iCloud\+/.test(title) ? 'iCloud' : '');
-    const ccy = r.currency;
-    const key = `${title}|${app}|${ccy}`;
-    if (!groups.has(key)) groups.set(key, { title, app, ccy, pays: [] });
-    groups.get(key).pays.push({ day: r.day, price: r.price, usd: r.usd, note: r.note || '' });
+    // one plan of one service, whichever currency it was paid in (iCloud+ 200 GB in roubles, euros, lira)
+    const key = `${mpAppleService(app, title)}|${title.toLowerCase()}`;
+    if (!groups.has(key)) groups.set(key, { title, app, pays: [] });
+    groups.get(key).pays.push({ day: r.day, price: r.price, usd: r.usd, ccy: r.currency, app, note: r.note || '' });
   }
   const list = [...groups.values()].map(g => {
     g.pays.sort((a, b) => a.day.localeCompare(b.day));
     const last = g.pays[g.pays.length - 1];
     g.sub = g.pays.some(p => p.note);
-    g.first = g.pays[0].price;
+    g.app = last.app;
+    g.ccy = last.ccy;
+    // the first price in the currency it's paid in now (a price in another currency is no comparison)
+    g.first = g.pays.find(p => p.ccy === g.ccy).price;
     g.last = last.price;
     g.lastDay = last.day;
-    g.spent = g.pays.reduce((s, p) => s + p.price, 0);
+    // what it cost in all, in its currency when it was only ever one
+    g.spent = g.pays.every(p => p.ccy === g.ccy) ? g.pays.reduce((s, p) => s + p.price, 0) : null;
     g.lastUsd = last.usd;
     g.spentUsd = g.pays.some(p => p.usd == null) ? null : g.pays.reduce((s, p) => s + p.usd, 0);
     // its period's end: the date the latest payment names, else a month / a year after it
@@ -2847,10 +2859,51 @@ async function mpRenderApplePurchases() {
     g.renews = /^Renews/i.test(last.note);
     g.active = g.sub && g.end >= today;
     // the price's changes: each new price with the day it came
-    g.changes = g.pays.filter((p, i) => i === 0 || p.price !== g.pays[i - 1].price);
+    g.changes = g.pays.filter((p, i) => i === 0 || p.price !== g.pays[i - 1].price || p.ccy !== g.pays[i - 1].ccy);
+    // how long one payment lasts -- the latest payment naming its period ("12 Oct 2026 - 12 Nov 2026",
+    // "Renews 12 Dec 2026" from its day, "Monthly" / "Yearly"), else the title ("Annual", "3 months")
+    let span = null;
+    for (const p of [...g.pays].reverse()) {
+      const two = [...p.note.matchAll(/\d{1,2} [A-Za-z]+\.? \d{4}/g)].map(m => mpAppleDay(m[0]));
+      if (two.length >= 2) span = (Date.parse(two[1]) - Date.parse(two[0])) / 864e5;
+      else if (two.length === 1 && /^(Renews|Expires)/i.test(p.note)) span = (Date.parse(two[0]) - Date.parse(p.day)) / 864e5;
+      else if (/^Monthly$/i.test(p.note)) span = 30;
+      else if (/^Yearly$/i.test(p.note)) span = 365;
+      if (span > 0) break;
+    }
+    if (!(span > 0)) span = /year|annual|12[- ]month/i.test(g.title) ? 365 : /6[- ]month/i.test(g.title) ? 182 : /3[- ]month/i.test(g.title) ? 91 : 30;
+    // payments a year: monthly 12, quarterly 4, half-yearly 2, yearly 1
+    g.perYear = span > 300 ? 1 : span > 150 ? 2 : span > 80 ? 4 : 12;
+    g.yearUsd = g.lastUsd == null ? null : g.lastUsd * g.perYear;
     return g;
   });
-  const subs = list.filter(g => g.sub).sort((a, b) => (b.active - a.active) || (a.active ? a.end.localeCompare(b.end) : b.lastDay.localeCompare(a.lastDay)));
+  // one service's subscriptions together (Tinder Gold, Platinum and Plus; a month's and a
+  // year's plan): by the app's first word -- "Tinder Dating App: Meet & Date", "Tinder:
+  // новые знакомства" are both Tinder's; Yandex's app is named in either language
+  const serviceKey = g => mpAppleService(g.app, g.title);
+  const serviceName = g => (g.app || g.title).split(/\s*(?::|\||–|—|-\s|,)\s*/)[0].trim();
+  const subs = list.filter(g => g.sub);
+  const services = new Map();
+  for (const g of subs) {
+    const k = serviceKey(g);
+    if (!services.has(k)) services.set(k, []);
+    services.get(k).push(g);
+  }
+  const svcList = [...services.values()].map(items => {
+    items.sort((a, b) => (b.active - a.active) || b.lastDay.localeCompare(a.lastDay));
+    const latest = [...items].sort((a, b) => b.lastDay.localeCompare(a.lastDay))[0];
+    const active = items.filter(g => g.active);
+    const ccys = new Set(items.map(g => g.ccy));
+    return {
+      items, name: serviceName(latest), active: active.length > 0, renews: active.some(g => g.renews), lastDay: latest.lastDay,
+      end: active.length ? active.map(g => g.end).sort()[0] : latest.end,
+      // a year of what runs now (each running plan at its price now); none running: the latest plan's
+      yearUsd: active.length ? active.reduce((s, g) => s + (g.yearUsd ?? 0), 0) : latest.yearUsd,
+      payments: items.reduce((s, g) => s + g.pays.length, 0),
+      spent: ccys.size === 1 && items.every(g => g.spent != null) ? items.reduce((s, g) => s + g.spent, 0) : null, ccy: ccys.size === 1 ? latest.ccy : null,
+      spentUsd: items.some(g => g.spentUsd == null) ? null : items.reduce((s, g) => s + g.spentUsd, 0),
+    };
+  }).sort((a, b) => (b.active - a.active) || (a.active ? a.end.localeCompare(b.end) : b.lastDay.localeCompare(a.lastDay)));
   const once = list.filter(g => !g.sub).sort((a, b) => b.lastDay.localeCompare(a.lastDay));
   const money = (v, c) => mpFormatCurrency(v, c, true);
   const usd = v => (v == null ? '—' : `$${v.toFixed(2)}`);
@@ -2862,21 +2915,36 @@ async function mpRenderApplePurchases() {
     return `<span style="color:${pct > 0 ? '#ff9500' : '#3fb950'}">${pct > 0 ? '+' : ''}${pct.toFixed(0)}%</span>`;
   };
   const status = g => g.active ? `${g.renews ? 'renews' : 'until'} ${dmy(g.end)}` : `<span style="color:#6a7381">ended ${dmy(g.end)}</span>`;
-  const subRow = (g, i) => `<tr class="apple-sub" data-i="${i}" style="cursor:pointer${g.active ? '' : ';color:#8b949e'}">
-      <td style="text-align:left">${name(g)}</td><td>${status(g)}</td><td>${money(g.last, g.ccy)}</td><td>${usd(g.lastUsd)}</td>
-      <td>${g.changes.length > 1 ? money(g.first, g.ccy) : ''}</td><td>${change(g)}</td><td>${g.pays.length}</td><td>${money(g.spent, g.ccy)}</td><td>${usd(g.spentUsd)}</td><td>${dmy(g.lastDay)}</td></tr>`;
+  const every = n => ({ 12: 'a month', 4: 'a quarter', 2: 'half a year', 1: 'a year' }[n]);
+  const renewingYear = subs.filter(g => g.active && g.renews).reduce((s, g) => s + (g.yearUsd ?? 0), 0);
+  const runningYear = subs.filter(g => g.active).reduce((s, g) => s + (g.yearUsd ?? 0), 0);
+  let n = 0;
+  const flat = [];
+  const subRow = (g, indent) => {
+    flat.push(g);
+    return `<tr class="apple-sub" data-i="${n++}" style="cursor:pointer${g.active ? '' : ';color:#8b949e'}">
+      <td style="text-align:left${indent ? ';padding-left:28px' : ''}">${name(g)}</td><td>${status(g)}</td><td>${money(g.last, g.ccy)}<div style="font-size:0.85em;color:#6a7381">${every(g.perYear)}</div></td><td>${usd(g.lastUsd)}</td>
+      <td>${usd(g.yearUsd)}</td><td>${g.changes.length > 1 ? money(g.first, g.ccy) : ''}</td><td>${change(g)}</td><td>${g.pays.length}</td><td>${money(g.spent, g.ccy)}</td><td>${usd(g.spentUsd)}</td><td>${dmy(g.lastDay)}</td></tr>`;
+  };
+  const svcRow = s => s.items.length === 1 ? subRow(s.items[0], false)
+    : `<tr style="${s.active ? '' : 'color:#8b949e'}"><td style="text-align:left"><b>${mpEscapeHtml(s.name)}</b><div style="font-size:0.85em;color:#6a7381">${s.items.length} plans</div></td>
+        <td>${s.active ? `${s.renews ? 'renews' : 'until'} ${dmy(s.end)}` : `<span style="color:#6a7381">ended</span>`}</td><td></td><td></td><td><b>${usd(s.yearUsd)}</b></td><td></td><td></td>
+        <td><b>${s.payments}</b></td><td>${s.spent == null ? '' : `<b>${money(s.spent, s.ccy)}</b>`}</td><td><b>${usd(s.spentUsd)}</b></td><td>${dmy(s.lastDay)}</td></tr>`
+      + s.items.map(g => subRow(g, true)).join('');
+  const body = svcList.map(svcRow).join('');
   wrap.innerHTML = `<div class="section-title" style="margin-top:22px">Apple purchases &amp; subscriptions</div>
-    <p class="note">From Apple's purchase history (upload the text of reportaproblem.apple.com in My Portfolio). Prices in the currency Apple charged and in dollars at each day's rate.
-      ${subs.filter(g => g.active).length} subscription(s) running. Click one for its price history.</p>
-    <div style="max-height:520px;overflow:auto"><table class="data-table"><thead><tr><th style="text-align:left">Subscription</th><th>Status</th><th>Price now</th><th>Now, USD</th>
-      <th>First price</th><th>Change</th><th>Payments</th><th>Spent</th><th>Spent, USD</th><th>Last paid</th></tr></thead>
-      <tbody>${subs.map(subRow).join('')}</tbody></table></div>
+    <p class="note">From Apple's purchase history (upload the text of reportaproblem.apple.com in My Portfolio). Prices in the currency Apple charged and in dollars at each day's rate;
+      "Per year, USD": the price now times the payments in a year. One service's plans are grouped under it.
+      ${subs.filter(g => g.active).length} subscription(s) running: <b>${usd(runningYear)} a year</b>, of it renewing by itself ${usd(renewingYear)}. Click one for its price history.</p>
+    <div style="max-height:620px;overflow:auto"><table class="data-table"><thead><tr><th style="text-align:left">Subscription</th><th>Status</th><th>Price now</th><th>Now, USD</th>
+      <th>Per year, USD</th><th>First price</th><th>Change</th><th>Payments</th><th>Spent</th><th>Spent, USD</th><th>Last paid</th></tr></thead>
+      <tbody>${body}</tbody></table></div>
     <details style="margin-top:10px"><summary class="note" style="cursor:pointer">One-off purchases: ${once.length} (apps, games, in-app purchases, films)</summary>
       <div style="max-height:420px;overflow:auto"><table class="data-table"><thead><tr><th style="text-align:left">Item</th><th>Price</th><th>USD</th><th>Times</th><th>Spent</th><th>Spent, USD</th><th>Last bought</th></tr></thead>
       <tbody>${once.map(g => `<tr><td style="text-align:left">${name(g)}</td><td>${money(g.last, g.ccy)}</td><td>${usd(g.lastUsd)}</td><td>${g.pays.length}</td><td>${money(g.spent, g.ccy)}</td><td>${usd(g.spentUsd)}</td><td>${dmy(g.lastDay)}</td></tr>`).join('')}</tbody></table></div>
     </details>`;
   wrap.querySelectorAll('tr.apple-sub').forEach(tr => tr.addEventListener('click', () => {
-    const g = subs[Number(tr.dataset.i)];
+    const g = flat[Number(tr.dataset.i)];
     mpOpenAppleHistory(g.title, g.app ? `${g.title} · ${g.app}` : g.title);
   }));
 }
