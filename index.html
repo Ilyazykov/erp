@@ -2923,21 +2923,44 @@ async function mpRenderApplePurchases() {
   const subRow = (g, indent) => {
     flat.push(g);
     return `<tr class="apple-sub" data-i="${n++}" style="cursor:pointer${g.active ? '' : ';color:#8b949e'}">
-      <td style="text-align:left${indent ? ';padding-left:28px' : ''}">${name(g)}</td><td>${status(g)}</td><td>${money(g.last, g.ccy)}<div style="font-size:0.85em;color:#6a7381">${every(g.perYear)}</div></td><td>${usd(g.lastUsd)}</td>
-      <td>${usd(g.yearUsd)}</td><td>${g.changes.length > 1 ? money(g.first, g.ccy) : ''}</td><td>${change(g)}</td><td>${g.pays.length}</td><td>${money(g.spent, g.ccy)}</td><td>${usd(g.spentUsd)}</td><td>${dmy(g.lastDay)}</td></tr>`;
+      <td style="text-align:left;padding-left:${12 + 22 * (indent || 0)}px">${name(g)}</td><td>${status(g)}</td><td>${money(g.last, g.ccy)}<div style="font-size:0.85em;color:#6a7381">${every(g.perYear)}</div></td><td>${usd(g.lastUsd)}</td>
+      <td>${g.changes.length > 1 ? money(g.first, g.ccy) : ''}</td><td>${change(g)}</td><td>${g.pays.length}</td><td>${money(g.spent, g.ccy)}</td><td>${usd(g.spentUsd)}</td><td>${usd(g.yearUsd)}</td><td>${dmy(g.lastDay)}</td></tr>`;
   };
-  const svcRow = s => s.items.length === 1 ? subRow(s.items[0], false)
-    : `<tr style="${s.active ? '' : 'color:#8b949e'}"><td style="text-align:left"><b>${mpEscapeHtml(s.name)}</b><div style="font-size:0.85em;color:#6a7381">${s.items.length} plans</div></td>
-        <td>${s.active ? `${s.renews ? 'renews' : 'until'} ${dmy(s.end)}` : `<span style="color:#6a7381">ended</span>`}</td><td></td><td></td><td><b>${usd(s.yearUsd)}</b></td><td></td><td></td>
-        <td><b>${s.payments}</b></td><td>${s.spent == null ? '' : `<b>${money(s.spent, s.ccy)}</b>`}</td><td><b>${usd(s.spentUsd)}</b></td><td>${dmy(s.lastDay)}</td></tr>`
-      + s.items.map(g => subRow(g, true)).join('');
+  // a group's own row: its plans' sums (a year of what runs now, else of its latest plan)
+  const sumOf = items => {
+    const latest = [...items].sort((a, b) => b.lastDay.localeCompare(a.lastDay))[0];
+    const active = items.filter(g => g.active);
+    const ccys = new Set(items.map(g => g.ccy));
+    return {
+      items, active: active.length > 0, renews: active.some(g => g.renews), lastDay: latest.lastDay,
+      end: active.length ? active.map(g => g.end).sort()[0] : latest.end,
+      yearUsd: active.length ? active.reduce((s, g) => s + (g.yearUsd ?? 0), 0) : latest.yearUsd,
+      payments: items.reduce((s, g) => s + g.pays.length, 0),
+      spent: ccys.size === 1 && items.every(g => g.spent != null) ? items.reduce((s, g) => s + g.spent, 0) : null, ccy: latest.ccy,
+      spentUsd: items.some(g => g.spentUsd == null) ? null : items.reduce((s, g) => s + g.spentUsd, 0),
+    };
+  };
+  const groupRow = (label, sub, s, indent) => `<tr style="${s.active ? '' : 'color:#8b949e'}"><td style="text-align:left;padding-left:${12 + 22 * indent}px"><b>${mpEscapeHtml(label)}</b><div style="font-size:0.85em;color:#6a7381">${sub}</div></td>
+        <td>${s.active ? `${s.renews ? 'renews' : 'until'} ${dmy(s.end)}` : `<span style="color:#6a7381">ended</span>`}</td><td></td><td></td><td></td><td></td>
+        <td><b>${s.payments}</b></td><td>${s.spent == null ? '' : `<b>${money(s.spent, s.ccy)}</b>`}</td><td><b>${usd(s.spentUsd)}</b></td><td><b>${usd(s.yearUsd)}</b></td><td>${dmy(s.lastDay)}</td></tr>`;
+  // YouTube: its own plans (Premium), and the channels' memberships ("Политик", "Мэр" --
+  // a channel's tiers, named by the channel) together under one row of their own
+  const svcRow = s => {
+    if (s.items.length === 1) return subRow(s.items[0], 0);
+    const members = mpAppleService(s.items[0].app, s.items[0].title) === 'youtube' ? s.items.filter(g => !/youtube/i.test(g.title)) : [];
+    const own = s.items.filter(g => !members.includes(g));
+    return groupRow(s.name, `${s.items.length} plans`, s, 0)
+      + own.map(g => subRow(g, 1)).join('')
+      + (members.length > 1 ? groupRow('Channel memberships', `${members.length} tiers`, sumOf(members), 1) + members.map(g => subRow(g, 2)).join('')
+        : members.map(g => subRow(g, 1)).join(''));
+  };
   const body = svcList.map(svcRow).join('');
   wrap.innerHTML = `<div class="section-title" style="margin-top:22px">Apple purchases &amp; subscriptions</div>
     <p class="note">From Apple's purchase history (upload the text of reportaproblem.apple.com in My Portfolio). Prices in the currency Apple charged and in dollars at each day's rate;
       "Per year, USD": the price now times the payments in a year. One service's plans are grouped under it.
       ${subs.filter(g => g.active).length} subscription(s) running: <b>${usd(runningYear)} a year</b>, of it renewing by itself ${usd(renewingYear)}. Click one for its price history.</p>
     <div style="max-height:620px;overflow:auto"><table class="data-table"><thead><tr><th style="text-align:left">Subscription</th><th>Status</th><th>Price now</th><th>Now, USD</th>
-      <th>Per year, USD</th><th>First price</th><th>Change</th><th>Payments</th><th>Spent</th><th>Spent, USD</th><th>Last paid</th></tr></thead>
+      <th>First price</th><th>Change</th><th>Payments</th><th>Spent</th><th>Spent, USD</th><th>Per year, USD</th><th>Last paid</th></tr></thead>
       <tbody>${body}</tbody></table></div>
     <details style="margin-top:10px"><summary class="note" style="cursor:pointer">One-off purchases: ${once.length} (apps, games, in-app purchases, films)</summary>
       <div style="max-height:420px;overflow:auto"><table class="data-table"><thead><tr><th style="text-align:left">Item</th><th>Price</th><th>USD</th><th>Times</th><th>Spent</th><th>Spent, USD</th><th>Last bought</th></tr></thead>
