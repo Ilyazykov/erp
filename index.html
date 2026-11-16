@@ -730,6 +730,7 @@
   <div id="products_signed_out" class="empty-note">Sign in with Google (top of page) to see your products.</div>
   <div id="products_signed_in" style="display:none">
     <div id="mp_products_panel"></div>
+    <div id="mp_apple_panel"></div>
   </div>
 </div>
 
@@ -1124,7 +1125,7 @@ function showTab(id) {
   if (id === 'maturities' && mpIsSignedIn) mpRenderMaturities();
   if (id === 'invested' && mpIsSignedIn) mpRenderInvested();
   if (id === 'expenses' && mpIsSignedIn) mpRenderExpenses();
-  if (id === 'products' && mpIsSignedIn) mpRenderProductList();
+  if (id === 'products' && mpIsSignedIn) { mpRenderProductList(); mpRenderApplePurchases(); }
   if (DATA && !rendered[id]) {
     rendered[id] = true;
     renderChart(id);
@@ -2706,6 +2707,98 @@ async function mpPickReceiptMatch(receiptId) {
 // to this user, so a product only they bought shows no prices here). A click
 // on a row opens the product's dialog. Sorted by name; the "Last price"
 // header sorts by price, a second click on a header reverses it.
+// Apple's purchases (receipts of source 'apple', migration ...211), apart from
+// the products: each subscription or purchase -- its title and app -- with
+// what it costs now, what it cost first, how often it was paid, and when it
+// renews or ended (from the latest payment's period: "Renews 12 Dec 2026",
+// "Expires: 29 Nov 2026", "12 Oct 2026 - 12 Nov 2026"). Prices in the
+// currency Apple charged. A click on a subscription opens its price history:
+// every change of price, with the month it came. Subscriptions still running
+// first, by their next date; then the ended ones; the one-off purchases folded.
+function mpAppleDay(s) {
+  const m = String(s || '').match(/(\d{1,2}) ([A-Za-z]+)\.? (\d{4})/g);
+  if (!m) return null;
+  const last = m[m.length - 1].match(/(\d{1,2}) ([A-Za-z]+)\.? (\d{4})/);
+  const mon = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 }[last[2].slice(0, 3).toLowerCase()];
+  return mon ? `${last[3]}-${String(mon).padStart(2, '0')}-${last[1].padStart(2, '0')}` : null;
+}
+async function mpRenderApplePurchases() {
+  const wrap = document.getElementById('mp_apple_panel');
+  if (!wrap || !mpIsSignedIn) return;
+  const rows = [];
+  try {
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await sb.from('receipt_items')
+        .select('name_printed, name_en, line_total, note, receipts!inner(purchased_on, currency, source)')
+        .eq('receipts.source', 'apple').range(from, from + 999);
+      if (error) throw error;
+      rows.push(...data);
+      if (data.length < 1000) break;
+    }
+  } catch { wrap.innerHTML = ''; return; }
+  if (!rows.length) { wrap.innerHTML = ''; return; }
+  const today = new Date().toISOString().slice(0, 10);
+  const groups = new Map();
+  for (const r of rows) {
+    const title = r.name_printed;
+    const app = (r.name_en || '').includes(' · ') ? r.name_en.split(' · ').slice(1).join(' · ') : (/^iCloud\+/.test(title) ? 'iCloud' : '');
+    const ccy = r.receipts.currency;
+    const key = `${title}|${app}|${ccy}`;
+    if (!groups.has(key)) groups.set(key, { title, app, ccy, pays: [] });
+    groups.get(key).pays.push({ day: r.receipts.purchased_on, price: Number(r.line_total), note: r.note || '' });
+  }
+  const list = [...groups.values()].map(g => {
+    g.pays.sort((a, b) => a.day.localeCompare(b.day));
+    const last = g.pays[g.pays.length - 1];
+    g.sub = g.pays.some(p => p.note);
+    g.first = g.pays[0].price;
+    g.last = last.price;
+    g.lastDay = last.day;
+    g.spent = g.pays.reduce((s, p) => s + p.price, 0);
+    // its period's end: the date the latest payment names, else a month / a year after it
+    const named = mpAppleDay(last.note);
+    const step = /year|annual|12[- ]month/i.test(`${last.note} ${g.title}`) ? 365 : 31;
+    g.end = named || (g.sub ? new Date(Date.parse(last.day) + step * 864e5).toISOString().slice(0, 10) : null);
+    g.renews = /^Renews/i.test(last.note);
+    g.active = g.sub && g.end >= today;
+    // the price's changes: each new price with the day it came
+    g.changes = g.pays.filter((p, i) => i === 0 || p.price !== g.pays[i - 1].price);
+    return g;
+  });
+  const subs = list.filter(g => g.sub).sort((a, b) => (b.active - a.active) || (a.active ? a.end.localeCompare(b.end) : b.lastDay.localeCompare(a.lastDay)));
+  const once = list.filter(g => !g.sub).sort((a, b) => b.lastDay.localeCompare(a.lastDay));
+  const money = (v, c) => mpFormatCurrency(v, c, true);
+  const dmy = d => d ? `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}` : '';
+  const name = g => `${mpEscapeHtml(g.title)}${g.app && g.app !== g.title ? `<div style="font-size:0.85em;color:#6a7381">${mpEscapeHtml(g.app)}</div>` : ''}`;
+  const change = g => {
+    if (g.first === g.last || !g.first) return '';
+    const pct = (g.last / g.first - 1) * 100;
+    return `<span style="color:${pct > 0 ? '#ff9500' : '#3fb950'}">${pct > 0 ? '+' : ''}${pct.toFixed(0)}%</span>`;
+  };
+  const status = g => g.active ? `${g.renews ? 'renews' : 'until'} ${dmy(g.end)}` : `<span style="color:#6a7381">ended ${dmy(g.end)}</span>`;
+  const subRow = (g, i) => `<tr class="apple-sub" data-i="${i}" style="cursor:pointer${g.active ? '' : ';color:#8b949e'}">
+      <td style="text-align:left">${g.changes.length > 1 ? '▸ ' : ''}${name(g)}</td><td>${status(g)}</td><td>${money(g.last, g.ccy)}</td>
+      <td>${g.changes.length > 1 ? money(g.first, g.ccy) : ''}</td><td>${change(g)}</td><td>${g.pays.length}</td><td>${money(g.spent, g.ccy)}</td><td>${dmy(g.lastDay)}</td></tr>
+    <tr class="apple-hist" data-i="${i}" hidden><td colspan="8" style="text-align:left;color:#8b949e">${
+      g.changes.map(c => `${dmy(c.day)}: <b style="color:inherit">${money(c.price, g.ccy)}</b>`).join(' → ')}</td></tr>`;
+  wrap.innerHTML = `<div class="section-title" style="margin-top:22px">Apple purchases &amp; subscriptions</div>
+    <p class="note">From Apple's purchase history (upload the text of reportaproblem.apple.com in My Portfolio). Prices in the currency Apple charged.
+      ${subs.filter(g => g.active).length} subscription(s) running. Click one for its price history.</p>
+    <div style="max-height:520px;overflow:auto"><table class="data-table"><thead><tr><th style="text-align:left">Subscription</th><th>Status</th><th>Price now</th>
+      <th>First price</th><th>Change</th><th>Payments</th><th>Spent</th><th>Last paid</th></tr></thead>
+      <tbody>${subs.map(subRow).join('')}</tbody></table></div>
+    <details style="margin-top:10px"><summary class="note" style="cursor:pointer">One-off purchases: ${once.length} (apps, games, in-app purchases, films)</summary>
+      <div style="max-height:420px;overflow:auto"><table class="data-table"><thead><tr><th style="text-align:left">Item</th><th>Price</th><th>Times</th><th>Spent</th><th>Last bought</th></tr></thead>
+      <tbody>${once.map(g => `<tr><td style="text-align:left">${name(g)}</td><td>${money(g.last, g.ccy)}</td><td>${g.pays.length}</td><td>${money(g.spent, g.ccy)}</td><td>${dmy(g.lastDay)}</td></tr>`).join('')}</tbody></table></div>
+    </details>`;
+  wrap.querySelectorAll('tr.apple-sub').forEach(tr => tr.addEventListener('click', () => {
+    const h = wrap.querySelector(`tr.apple-hist[data-i="${tr.dataset.i}"]`);
+    if (!h || !h.textContent.includes('→')) return;
+    h.hidden = !h.hidden;
+    const cell = tr.querySelector('td');
+    cell.innerHTML = cell.innerHTML.replace(/^[▸▾] /, h.hidden ? '▸ ' : '▾ ');
+  }));
+}
 let mpProductSort = { key: 'name', dir: 1 };
 async function mpRenderProductList() {
   const wrap = document.getElementById('mp_products_panel');
@@ -3740,6 +3833,7 @@ async function mpImportOneFile(file, statusEl, session) {
         + `${result.warnings?.length ? `. Not adding up: ${result.warnings.join('; ')}` : ''}.`;
       mpExpCache = null;
       if (document.getElementById('expenses')?.offsetParent) mpRenderExpenses().catch(() => { /* the tab shows its own error */ });
+      mpRenderApplePurchases();
     } else if (kind === 'receipt_csv') {
       const skipped = result.skipped?.length ? ` ${result.skipped.length} receipt(s) skipped (their own rows disagreed): ${result.skipped.map(s => s.reason).join('; ')}.` : '';
       const unmatched = result.unmatched_products ? ` ${result.unmatched_products} line(s) with no product yet -- resolve them from the Expenses tab's Items column.` : '';
