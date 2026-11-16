@@ -2722,6 +2722,77 @@ function mpAppleDay(s) {
   const mon = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 }[last[2].slice(0, 3).toLowerCase()];
   return mon ? `${last[3]}-${String(mon).padStart(2, '0')}-${last[1].padStart(2, '0')}` : null;
 }
+// One Apple subscription's / purchase's price history (a click on it in a
+// transaction's Items, or in the Products tab's Apple table): every payment
+// with its day, price and period, the price's changes marked; a chart of the
+// price over time, as a product's (mpOpenProductView), in the currency Apple
+// charged or -- the toggle -- in dollars at each day's rate (the
+// apple_purchase_prices view, migration ...212).
+async function mpOpenAppleHistory(title, nameEn) {
+  const app = (nameEn || '').includes(' · ') ? nameEn.split(' · ').slice(1).join(' · ') : (/^iCloud\+/.test(title) ? 'iCloud' : '');
+  const appOf = r => (r.name_en || '').includes(' · ') ? r.name_en.split(' · ').slice(1).join(' · ') : (/^iCloud\+/.test(title) ? 'iCloud' : '');
+  let res = await sb.from('apple_purchase_prices').select('day, currency, price, price_usd, name_en, note').eq('name_printed', title);
+  // the view not there yet (migration ...212): the lines alone, no dollars
+  if (res.error) {
+    res = await sb.from('receipt_items').select('name_en, line_total, note, receipts!inner(purchased_on, currency, source)')
+      .eq('receipts.source', 'apple').eq('name_printed', title);
+    if (res.error) { alert(res.error.message); return; }
+    res.data = (res.data || []).map(r => ({ day: r.receipts.purchased_on, currency: r.receipts.currency, price: r.line_total, price_usd: null, name_en: r.name_en, note: r.note }));
+  }
+  const pays = (res.data || []).filter(r => appOf(r) === app)
+    .map(r => ({ day: r.day, ccy: r.currency, price: Number(r.price), usd: r.price_usd == null ? null : Number(r.price_usd), note: r.note || '' }))
+    .sort((a, b) => a.day.localeCompare(b.day));
+  const hasUsd = pays.some(p => p.usd != null);
+  const currencies = [...new Set(pays.map(p => p.ccy))];
+  const dmy = d => `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}`;
+  const money = (v, c) => (c === 'USD' ? (v == null ? '—' : `$${v.toFixed(2)}`) : mpFormatCurrency(v, c, true));
+  const pct = (a, b) => (b ? (a / b - 1) * 100 : null);
+  const pctHtml = v => v == null || !Number.isFinite(v) || Math.abs(v) < 0.5 ? ''
+    : `<span style="color:${v > 0 ? '#ff9500' : '#3fb950'}">${v > 0 ? '+' : ''}${v.toFixed(0)}%</span>`;
+  const dlg = document.createElement('dialog');
+  dlg.style.cssText = 'background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:16px 18px;min-width:320px;width:min(92vw,720px)';
+  dlg.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><b>${mpEscapeHtml(title)}${app && app !== title ? ` <span style="color:#8b949e;font-weight:normal">· ${mpEscapeHtml(app)}</span>` : ''}</b><button type="button" data-act="close">✕</button></div>
+    <label${hasUsd ? '' : ' style="color:#6a7381" title="dollars come once the database is updated"'}><input type="checkbox" id="mp_apple_usd"${hasUsd ? '' : ' disabled'}> show in USD</label>
+    <div id="mp_apple_chart" style="height:280px"></div>
+    <p class="note" style="margin:0" id="mp_apple_sum"></p>
+    <div style="max-height:320px;overflow:auto"><table class="data-table"><thead><tr><th>Paid</th><th>Price</th><th>Change</th><th style="text-align:left">Period</th></tr></thead><tbody id="mp_apple_rows"></tbody></table></div>
+  </div>`;
+  document.body.appendChild(dlg);
+  // opened before the chart is drawn (Plotly measures a closed dialog as empty); removed however it's closed
+  dlg.addEventListener('close', () => dlg.remove());
+  dlg.showModal();
+  dlg.querySelector('[data-act=close]').onclick = () => dlg.close();
+  const draw = () => {
+    const usd = dlg.querySelector('#mp_apple_usd').checked;
+    const val = p => (usd ? p.usd : p.price);
+    const unit = p => (usd ? 'USD' : p.ccy);
+    const groups = usd ? [['USD', pays.filter(p => p.usd != null)]] : currencies.map(c => [c, pays.filter(p => p.ccy === c)]);
+    // a subscription's price holds until the next payment: drawn as steps
+    Plotly.react(dlg.querySelector('#mp_apple_chart'), groups.map(([c, pts]) => ({
+      x: pts.map(p => p.day), y: pts.map(val), name: c, mode: 'lines+markers', type: 'scatter',
+      line: { shape: usd ? 'linear' : 'hv' }, hovertemplate: `%{x}: %{y:.2f} ${c}<extra></extra>`,
+    })), {
+      paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', font: { color: '#c9d1d9' },
+      margin: { l: 50, r: 10, t: 10, b: 30 }, showlegend: groups.length > 1, yaxis: { rangemode: 'tozero' },
+    }, { ...CONFIG, displayModeBar: false });
+    // the changes, oldest first, and the whole way from the first price to the last
+    const shown = usd ? pays.filter(p => p.usd != null) : pays;
+    const changes = shown.filter((p, i) => i === 0 || val(p) !== val(shown[i - 1]) || p.ccy !== shown[i - 1].ccy);
+    const first = shown[0], last = shown[shown.length - 1];
+    dlg.querySelector('#mp_apple_sum').innerHTML = `${pays.length} payment(s), ${dmy(pays[0].day)} – ${dmy(last.day)}`
+      + (first && last && unit(first) === unit(last) ? `: ${money(val(first), unit(first))} → ${money(val(last), unit(last))} ${pctHtml(pct(val(last), val(first)))}` : '')
+      + (usd ? '' : `. Price changes: ${changes.map(c => `${dmy(c.day)} <b>${money(c.price, c.ccy)}</b>`).join(' → ')}`);
+    dlg.querySelector('#mp_apple_rows').innerHTML = shown.slice().reverse().map((p, i, arr) => {
+      const prev = arr[i + 1];
+      return `<tr><td>${dmy(p.day)}</td><td>${money(val(p), unit(p))}</td>
+        <td>${prev && unit(prev) === unit(p) ? pctHtml(pct(val(p), val(prev))) : ''}</td>
+        <td style="text-align:left;color:#8b949e">${mpEscapeHtml(p.note)}</td></tr>`;
+    }).join('');
+  };
+  dlg.querySelector('#mp_apple_usd').addEventListener('change', draw);
+  draw();
+}
 async function mpRenderApplePurchases() {
   const wrap = document.getElementById('mp_apple_panel');
   if (!wrap || !mpIsSignedIn) return;
@@ -2792,11 +2863,8 @@ async function mpRenderApplePurchases() {
       <tbody>${once.map(g => `<tr><td style="text-align:left">${name(g)}</td><td>${money(g.last, g.ccy)}</td><td>${g.pays.length}</td><td>${money(g.spent, g.ccy)}</td><td>${dmy(g.lastDay)}</td></tr>`).join('')}</tbody></table></div>
     </details>`;
   wrap.querySelectorAll('tr.apple-sub').forEach(tr => tr.addEventListener('click', () => {
-    const h = wrap.querySelector(`tr.apple-hist[data-i="${tr.dataset.i}"]`);
-    if (!h || !h.textContent.includes('→')) return;
-    h.hidden = !h.hidden;
-    const cell = tr.querySelector('td');
-    cell.innerHTML = cell.innerHTML.replace(/^[▸▾] /, h.hidden ? '▸ ' : '▾ ');
+    const g = subs[Number(tr.dataset.i)];
+    mpOpenAppleHistory(g.title, g.app ? `${g.title} · ${g.app}` : g.title);
   }));
 }
 let mpProductSort = { key: 'name', dir: 1 };
@@ -11413,7 +11481,7 @@ async function mpEditItems(src, xid) {
     const lineRow = l => `<tr data-item="${l.line_no}">
         <td style="text-align:left">${l.product_id != null
           ? `<a href="#" class="item-product" data-pid="${l.product_id}" style="color:#58a6ff">${mpEscapeHtml(l.name_en || l.name_printed)}</a>`
-          : receipt.source === 'apple' ? mpEscapeHtml(l.name_en || l.name_printed)
+          : receipt.source === 'apple' ? `<a href="#" class="item-apple" data-item="${l.line_no}" style="color:#58a6ff" title="Price history">${mpEscapeHtml(l.name_en || l.name_printed)}</a>`
           : `${mpEscapeHtml(l.name_en || l.name_printed)} <a href="#" class="item-resolve" data-item="${l.line_no}" style="color:#d29922">resolve</a>`}
           <div style="font-size:0.85em;color:#6a7381">${mpEscapeHtml(l.name_printed)}</div></td>
         <td>${l.qty} ${l.unit}</td>
@@ -11463,6 +11531,11 @@ async function mpEditItems(src, xid) {
       });
     }));
     form.querySelectorAll('.item-product').forEach(a => a.addEventListener('click', e => { e.preventDefault(); mpOpenProductView(Number(a.dataset.pid)); }));
+    form.querySelectorAll('.item-apple').forEach(a => a.addEventListener('click', e => {
+      e.preventDefault();
+      const line = receipt.lines.find(l => l.line_no === Number(a.dataset.item));
+      if (line) mpOpenAppleHistory(line.name_printed, line.name_en);
+    }));
     return;
   }
 
