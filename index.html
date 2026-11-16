@@ -291,7 +291,7 @@
       turned into one by an LLM outside this app -- items within a purchase, see the Expenses tab's Items column) —
       the file type is detected automatically from its header row or extension.</p>
     <div class="form-row">
-      <input type="file" id="mp_any_csv_file" accept=".csv,.xlsx,.json,.html,.htm,.xml,.pdf" multiple>
+      <input type="file" id="mp_any_csv_file" accept=".csv,.xlsx,.json,.html,.htm,.xml,.pdf,.txt" multiple>
       <button class="btn primary" id="mp_any_csv_upload">Upload</button>
     </div>
     <div id="mp_any_csv_drop" class="drop-zone">…or drop any number of files here — they're queued and imported one by one</div>
@@ -2536,6 +2536,9 @@ async function mpImportFiles(files) {
     // (queued here; the capital-refresh-step cron job does the work)
     if (mpImportedSinceRefresh) {
       mpImportedSinceRefresh = false;
+      // Apple's orders still waiting for their charge: a statement just in may have it
+      // (not every importer calls match_receipts, which links them too -- Ziraat's doesn't)
+      await sb.rpc('match_apple_receipts').then(() => {}, () => {});
       const line = document.createElement('div');
       const { error } = await sb.rpc('request_my_capital_refresh');
       line.textContent = error ? `Capital history not queued for a rebuild: ${error.message}`
@@ -2658,7 +2661,8 @@ async function mpRenderReceiptsPanel() {
   if (!wrap || !mpIsSignedIn) return;
   const { data: open } = await sb.from('receipts')
     .select('id, purchased_on, store_printed, chain, currency, total, match_state')
-    .in('match_state', ['waiting', 'ambiguous']).order('purchased_on', { ascending: false })
+    // (Apple's orders with no charge -- from before the statements -- need nothing: left out)
+    .in('match_state', ['waiting', 'ambiguous']).neq('source', 'apple').order('purchased_on', { ascending: false })
     .then(r => r, () => ({ data: [] }));
   const waiting = (open || []).filter(r => r.match_state === 'waiting');
   const ambiguous = (open || []).filter(r => r.match_state === 'ambiguous');
@@ -3434,7 +3438,9 @@ async function mpImportOneFile(file, statusEl, session) {
         return;
       }
       const headerLine = csvText.split(/\r\n|\r|\n/)[0] || '';
-      kind = mpDetectCsvKind(headerLine, csvText);
+      // Apple's purchase history: reportaproblem.apple.com's page, its text copied as it is
+      kind = /Report a Problem/.test(csvText.slice(0, 3000)) && /Apple Account/.test(csvText.slice(0, 3000)) && /^Total /m.test(csvText)
+        ? 'apple_history' : mpDetectCsvKind(headerLine, csvText);
       if (kind === 'tbc_account') {
         try {
           csvText = tbcToBankCsv(csvText, file.name);
@@ -3486,6 +3492,7 @@ async function mpImportOneFile(file, statusEl, session) {
       atomyze_xlsx: { fn: 'import-atomyze', label: 'Atomyze (ЦФА) platform report' },
       xlsx: { fn: 'import-xlsx', label: 'spreadsheet (.xlsx)' },
       receipt_csv: { fn: 'import-receipts', label: 'receipt items (CSV)' },
+      apple_history: { fn: 'import-apple-purchases', label: 'Apple purchase history' },
     };
     const { fn } = endpoints[kind];
     let { label } = endpoints[kind];
@@ -3727,6 +3734,12 @@ async function mpImportOneFile(file, statusEl, session) {
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
       mpRenderBondByType();
+    } else if (kind === 'apple_history') {
+      statusEl.textContent = `Detected: ${label}. ${result.orders} paid order(s) (${result.free} free left out): ${result.new} new, ${result.already} already in; `
+        + `${result.linked_this_run} linked to a card's charge now -- ${result.linked} linked in all, ${result.waiting} with no charge found`
+        + `${result.warnings?.length ? `. Not adding up: ${result.warnings.join('; ')}` : ''}.`;
+      mpExpCache = null;
+      if (document.getElementById('expenses')?.offsetParent) mpRenderExpenses().catch(() => { /* the tab shows its own error */ });
     } else if (kind === 'receipt_csv') {
       const skipped = result.skipped?.length ? ` ${result.skipped.length} receipt(s) skipped (their own rows disagreed): ${result.skipped.map(s => s.reason).join('; ')}.` : '';
       const unmatched = result.unmatched_products ? ` ${result.unmatched_products} line(s) with no product yet -- resolve them from the Expenses tab's Items column.` : '';
@@ -10765,7 +10778,7 @@ async function mpExpLoad(range) {
   // design: docs/items-design.md, not tracked in git): none yet or no table
   // -- the items cell just offers "add items"
   const [receiptsList, receiptLineRows] = await Promise.all([
-    page(() => sb.from('receipts_active').select('id, tx_source, tx_external_id, source, chain, store_printed, currency, note')).catch(() => []),
+    page(() => sb.from('receipts_active').select('id, tx_source, tx_external_id, source, chain, store_printed, currency, note, receipt_key, purchased_on')).catch(() => []),
     page(() => sb.from('receipt_lines').select(MP_RECEIPT_LINE_COLS).order('line_no')).catch(() => []),
   ]);
   const linesByReceipt = new Map();
@@ -10774,7 +10787,7 @@ async function mpExpLoad(range) {
     linesByReceipt.get(l.receipt_id).push(l);
   }
   const receiptOf = new Map((receiptsList || []).map(r => [`${r.tx_source}|${r.tx_external_id}`,
-    { id: r.id, source: r.source, chain: r.chain, store: r.store_printed, currency: r.currency, note: r.note, lines: linesByReceipt.get(r.id) || [] }]));
+    { id: r.id, source: r.source, chain: r.chain, store: r.store_printed, currency: r.currency, note: r.note, key: r.receipt_key, day: r.purchased_on, lines: linesByReceipt.get(r.id) || [] }]));
   // a place shown by its name, with as much of its address as tells it from another of that name
   for (const r of [...spent, ...skipped, ...(inc || [])]) {
     const from = placeList.find(p => p.id === r.placeId), to = placeList.find(p => p.id === r.deliveredToId);
@@ -11066,6 +11079,11 @@ function mpNoteHtml(note) {
 // with none offers to add them by hand.
 function mpItemsHtml(receipt) {
   if (!receipt) return '<span style="color:#6a7381">+ items</span>';
+  // an Apple order: what it was, by name (its lines are no products)
+  if (receipt.source === 'apple') {
+    const names = receipt.lines.filter(l => !l.is_other).map(l => l.name_printed);
+    return `<span title="${mpEscapeHtml(names.join('\n'))}">🍏 ${mpEscapeHtml(names.slice(0, 2).join(', '))}${names.length > 2 ? ` +${names.length - 2}` : ''}</span>`;
+  }
   const n = receipt.lines.filter(l => !l.is_other).length;
   const other = receipt.lines.some(l => l.is_other);
   const unresolved = receipt.lines.some(l => !l.is_other && l.product_id == null);
@@ -11301,6 +11319,7 @@ async function mpEditItems(src, xid) {
     const lineRow = l => `<tr data-item="${l.line_no}">
         <td style="text-align:left">${l.product_id != null
           ? `<a href="#" class="item-product" data-pid="${l.product_id}" style="color:#58a6ff">${mpEscapeHtml(l.name_en || l.name_printed)}</a>`
+          : receipt.source === 'apple' ? mpEscapeHtml(l.name_en || l.name_printed)
           : `${mpEscapeHtml(l.name_en || l.name_printed)} <a href="#" class="item-resolve" data-item="${l.line_no}" style="color:#d29922">resolve</a>`}
           <div style="font-size:0.85em;color:#6a7381">${mpEscapeHtml(l.name_printed)}</div></td>
         <td>${l.qty} ${l.unit}</td>
@@ -11309,7 +11328,9 @@ async function mpEditItems(src, xid) {
         <td>${usdOf(Number(l.line_total))}</td>
         <td class="item-note" data-item="${l.line_no}" style="cursor:pointer;color:#8b949e">${mpNoteHtml(l.note)}</td></tr>`;
     const form = mpDialog(`Items · ${r.day} · ${mpShortDesc(r.description)}`, `
-      <p class="note" style="margin:0">${mpEscapeHtml(receipt.source === 'receipt_csv' ? 'From a receipt' : 'From the statement')}${receipt.chain ? ` · ${mpEscapeHtml(receipt.chain)}` : ''}${receipt.store ? ` · ${mpEscapeHtml(receipt.store)}` : ''}</p>
+      <p class="note" style="margin:0">${receipt.source === 'apple'
+        ? `From Apple's purchase history · order ${mpEscapeHtml(receipt.key || '')}, ${mpEscapeHtml(receipt.day || '')}`
+        : `${mpEscapeHtml(receipt.source === 'receipt_csv' ? 'From a receipt' : 'From the statement')}${receipt.chain ? ` · ${mpEscapeHtml(receipt.chain)}` : ''}${receipt.store ? ` · ${mpEscapeHtml(receipt.store)}` : ''}`}</p>
       <table class="data-table"><thead><tr><th style="text-align:left">Item</th><th>Qty</th><th>Price</th><th>Line</th><th>USD</th><th style="text-align:left">Note</th></tr></thead>
         <tbody>${real.map(lineRow).join('')}${other ? lineRow(other) : ''}</tbody></table>
       <label>Receipt note <input name="rnote" value="${mpEscapeHtml(receipt.note || '')}" style="${MP_FIELD}"></label>`);
