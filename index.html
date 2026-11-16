@@ -2738,10 +2738,10 @@ function mpAppleService(app, title) {
 // How many months each payment of one Apple plan paid for (pays oldest first: day,
 // price, ccy, note): the period it names ("12 Oct 2026 - 12 Nov 2026", "Renews 12 Dec
 // 2026" from its day, "Monthly" / "Yearly"); else the title ("Annual", "3 months");
-// else -- a payment from before Apple named periods (Tinder Gold, 2018) -- a long gap
-// to the next payment when its price is that much over the plan's cheapest (21.12.2018:
-// 3,590 ₽ after months of 999 ₽, the next payment a year later: a year); else the
-// period the plan's nearest payment named; else a month.
+// else -- a payment from before Apple named periods (Tinder Gold, 2018) -- by the next
+// payment: a month later, a month; a long gap, when its price is that much over the plan's
+// cheapest (21.12.2018: 3,590 ₽ after months of 999 ₽, the next payment a year later: a
+// year); else the period of the nearest payment of about its price; else a month.
 function mpApplePeriods(pays, title) {
   const snap = d => (d > 300 ? 12 : d > 150 ? 6 : d > 80 ? 3 : 1);
   const named = pays.map(p => {
@@ -2760,12 +2760,17 @@ function mpApplePeriods(pays, title) {
     const next = pays[i + 1];
     if (next) {
       const m = snap((Date.parse(next.day) - Date.parse(p.day)) / 864e5);
+      // paid again a month later: a month's (Yandex Plus, 229 ₽ every month of 2017)
+      if (m === 1) return 1;
       const cheapest = Math.min(...pays.filter(q => q.ccy === p.ccy).map(q => q.price));
-      if (m > 1 && p.price >= 2 * cheapest) return m;
+      if (p.price >= 2 * cheapest) return m;
     }
+    // the last one, or one after a pause: the period of the nearest payment of about its price
+    // (a year's 1,690 ₽ says nothing of a 229 ₽ payment)
+    const like = q => q.ccy === p.ccy && Math.abs(q.price / p.price - 1) <= 0.3;
     for (let d = 1; d < pays.length; d++) {
-      if (named[i - d]) return named[i - d];
-      if (named[i + d]) return named[i + d];
+      if (named[i - d] && like(pays[i - d])) return named[i - d];
+      if (named[i + d] && like(pays[i + d])) return named[i + d];
     }
     return 1;
   });
