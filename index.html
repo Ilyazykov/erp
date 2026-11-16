@@ -370,7 +370,7 @@
       trades or payouts from any of its sources; synthetic rows -- extrapolated, data gaps, snapshots -- left out),
       to see when a fresh statement is due -- dated by the later of the newest record and the end of the latest statement uploaded for it (an account with no movements stays fresh once its statement is in): a broker monthly, a bank in active use weekly, one in little use monthly; the Russian banks' and Revolut's parts each on a period set by how active the part has been (over 40 records a month — a broker over 20 — every 2 weeks, 2+ monthly, any in half a year every 2 months, none yearly), the account due with its most overdue part;
       an account synced by itself "auto", with its key's end date (orange within a week of it); Binance and Revolut's crypto "auto check" -- only their balances checked every morning, set against the stored export, orange when they differ; one that could be synced but isn't yet "TODO auto";
-      cash, Credo Bank and Binance yearly, crypto exchanges monthly, on-chain wallets (synced by themselves) dated by their last sync; closed accounts greyed out. Overdue in orange. Hover an account's name for where its statements come from.</p>
+      cash, Credo Bank, Yandex Bank, Binance and Walt (Telegram) yearly, crypto exchanges monthly, on-chain wallets (synced by themselves) dated by their last sync; closed accounts greyed out. Overdue in orange. Hover an account's name for where its statements come from.</p>
     <div id="mp_latest_sources"><div class="empty-note">Loading…</div></div>
   </div>
 </div>
@@ -2574,8 +2574,8 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', () => {
 // else monthly.
 const MP_ACCOUNT_SCHEDULE = {
   UniCredit: 'closed', Finuslugi: 'closed', YooMoney: 'closed', cash: 365, Wise: 365, 'Credo Bank': 365, 'TBC Bank': 30,
-  IBKR: 30, Freedom24: 30, Raiffeisen: 30, 'Ziraat Bank': 30, 'Yandex Bank': 30,
-  Bybit: 30, 'Crypto.com': 30, Telegram: 30, Binance: 365,
+  IBKR: 30, Freedom24: 30, Raiffeisen: 30, 'Ziraat Bank': 30, 'Yandex Bank': 365,
+  Bybit: 30, 'Crypto.com': 30, Telegram: 365, Binance: 365,
 };
 // The split accounts' parts, each on a period set by how active it is (its
 // real records over the last 90 / 180 days, income that comes by itself --
@@ -3310,7 +3310,9 @@ async function mpRenderLatestSources() {
       p.up = partUploaded.get(`${name}|${p.part}`) || '';
       if (p.auto && p.auto.to > p.up) p.up = p.auto.to;   // (a failed run's to: its last good day)
       p.day = p.up > p.last_day ? p.up : p.last_day;
-      p.every = p.auto ? 'auto' : p.period ?? mpPartPeriod(p);
+      // an account set yearly (emptied, left for now: Yandex Bank, 16.11.2026)
+      // takes its parts with it, however busy they were before
+      p.every = p.auto ? 'auto' : p.period ?? (MP_ACCOUNT_SCHEDULE[name] === 365 ? 365 : mpPartPeriod(p));
       p.left = p.auto ? keyLeft(p.auto) : typeof p.every === 'number' ? p.every - daysAgo(p.day) : null;
     }
     // a split account: labelled by its most frequent part
