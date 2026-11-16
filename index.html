@@ -12186,6 +12186,10 @@ function mpEditCategory(src, xid) {
     const { error } = await sb.from('bank_transactions').update({ expense_category: cat, expense_manual: true })
       .eq('external_source', src).eq('external_id', xid);
     if (error) { alert(error.message); return; }
+    // the expenses tab's own copy too (refresh_expenses sets it the same way): without it
+    // a reload showed the old category until the next run (16.11.2026)
+    const { error: eErr } = await sb.from('expenses').update({ category: cat }).eq('external_source', src).eq('external_id', xid);
+    if (eErr) { alert(eErr.message); return; }
     rows.forEach(x => { x.cat = cat; });
     form.closest('dialog').close();
     // the rows already on screen take the new category; the tab's totals re-count from the cache
@@ -12264,6 +12268,8 @@ async function mpLinkTransfer(src, xid) {
       const { error: cErr } = await sb.from('bank_transactions').update({ expense_category: 'Own accounts', expense_manual: true })
         .eq('external_source', o.src).eq('external_id', o.xid);
       if (cErr) { alert(cErr.message); return; }
+      const { error: eErr } = await sb.from('expenses').update({ category: 'Own accounts' }).eq('external_source', o.src).eq('external_id', o.xid);
+      if (eErr) { alert(eErr.message); return; }
     }
     form.closest('dialog').close();
     // on screen at once: the group's rows leave the expenses and the income and
