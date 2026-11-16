@@ -2735,6 +2735,42 @@ function mpAppleService(app, title) {
   const w = (app || title || '').toLowerCase().match(/[\p{L}\p{N}]+/u)?.[0] || '';
   return { яндекс: 'yandex' }[w] || w;
 }
+// How many months each payment of one Apple plan paid for (pays oldest first: day,
+// price, ccy, note): the period it names ("12 Oct 2026 - 12 Nov 2026", "Renews 12 Dec
+// 2026" from its day, "Monthly" / "Yearly"); else the title ("Annual", "3 months");
+// else -- a payment from before Apple named periods (Tinder Gold, 2018) -- a long gap
+// to the next payment when its price is that much over the plan's cheapest (21.12.2018:
+// 3,590 ₽ after months of 999 ₽, the next payment a year later: a year); else the
+// period the plan's nearest payment named; else a month.
+function mpApplePeriods(pays, title) {
+  const snap = d => (d > 300 ? 12 : d > 150 ? 6 : d > 80 ? 3 : 1);
+  const named = pays.map(p => {
+    const dates = [...(p.note || '').matchAll(/\d{1,2} [A-Za-z]+\.? \d{4}/g)].map(m => mpAppleDay(m[0]));
+    let span = null;
+    if (dates.length >= 2) span = (Date.parse(dates[1]) - Date.parse(dates[0])) / 864e5;
+    else if (dates.length === 1 && /^(Renews|Expires)/i.test(p.note)) span = (Date.parse(dates[0]) - Date.parse(p.day)) / 864e5;
+    else if (/^Monthly$/i.test(p.note)) span = 30;
+    else if (/^Yearly$/i.test(p.note)) span = 365;
+    return span > 0 ? snap(span) : null;
+  });
+  const byTitle = /year|annual|12[- ]month/i.test(title) ? 12 : /6[- ]month/i.test(title) ? 6 : /3[- ]month/i.test(title) ? 3 : null;
+  return pays.map((p, i) => {
+    if (named[i]) return named[i];
+    if (byTitle) return byTitle;
+    const next = pays[i + 1];
+    if (next) {
+      const m = snap((Date.parse(next.day) - Date.parse(p.day)) / 864e5);
+      const cheapest = Math.min(...pays.filter(q => q.ccy === p.ccy).map(q => q.price));
+      if (m > 1 && p.price >= 2 * cheapest) return m;
+    }
+    for (let d = 1; d < pays.length; d++) {
+      if (named[i - d]) return named[i - d];
+      if (named[i + d]) return named[i + d];
+    }
+    return 1;
+  });
+}
+const MP_APPLE_TERM = { 1: 'a month', 3: '3 months', 6: 'half a year', 12: 'a year' };
 async function mpOpenAppleHistory(title, nameEn) {
   const app = (nameEn || '').includes(' · ') ? nameEn.split(' · ').slice(1).join(' · ') : (/^iCloud\+/.test(title) ? 'iCloud' : '');
   const appOf = r => (r.name_en || '').includes(' · ') ? r.name_en.split(' · ').slice(1).join(' · ') : (/^iCloud\+/.test(title) ? 'iCloud' : '');
@@ -2764,38 +2800,57 @@ async function mpOpenAppleHistory(title, nameEn) {
     <label${hasUsd ? '' : ' style="color:#6a7381" title="dollars come once the database is updated"'}><input type="checkbox" id="mp_apple_usd"${hasUsd ? ' checked' : ' disabled'}> show in USD</label>
     <div id="mp_apple_chart" style="height:280px"></div>
     <p class="note" style="margin:0" id="mp_apple_sum"></p>
-    <div style="max-height:320px;overflow:auto"><table class="data-table"><thead><tr><th>Paid</th><th>Price</th><th>USD</th><th>Change</th><th style="text-align:left">Period</th></tr></thead><tbody id="mp_apple_rows"></tbody></table></div>
+    <div style="max-height:320px;overflow:auto"><table class="data-table"><thead><tr><th>Paid</th><th>Price</th><th>USD</th><th>For</th><th>A month</th><th>Change</th><th style="text-align:left">Period</th></tr></thead><tbody id="mp_apple_rows"></tbody></table></div>
   </div>`;
   document.body.appendChild(dlg);
   // opened before the chart is drawn (Plotly measures a closed dialog as empty); removed however it's closed
   dlg.addEventListener('close', () => dlg.remove());
   dlg.showModal();
   dlg.querySelector('[data-act=close]').onclick = () => dlg.close();
+  // what each payment paid for -- a month, half a year, a year -- and so its price of a month:
+  // the chart and the changes are of that (a year's price is no rise over a month's)
+  const terms = mpApplePeriods(pays, title);
+  pays.forEach((p, i) => { p.months = terms[i]; });
+  const TERM_COLOR = { 1: '#58a6ff', 3: '#d2a8ff', 6: '#f0883e', 12: '#3fb950' };
   const draw = () => {
     const usd = dlg.querySelector('#mp_apple_usd').checked;
     const val = p => (usd ? p.usd : p.price);
+    const perMonth = p => (val(p) == null ? null : val(p) / p.months);
     const unit = p => (usd ? 'USD' : p.ccy);
-    const groups = usd ? [['USD', pays.filter(p => p.usd != null)]] : currencies.map(c => [c, pays.filter(p => p.ccy === c)]);
-    // a subscription's price holds until the next payment: drawn as steps
-    Plotly.react(dlg.querySelector('#mp_apple_chart'), groups.map(([c, pts]) => ({
-      x: pts.map(p => p.day), y: pts.map(val), name: c, mode: 'lines+markers', type: 'scatter',
-      line: { shape: usd ? 'linear' : 'hv' }, hovertemplate: `%{x}: %{y:.2f} ${c}<extra></extra>`,
-    })), {
-      paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', font: { color: '#c9d1d9' },
-      margin: { l: 50, r: 10, t: 10, b: 30 }, showlegend: groups.length > 1, yaxis: { rangemode: 'tozero' },
-    }, { ...CONFIG, displayModeBar: false });
-    // the changes, oldest first, and the whole way from the first price to the last
     const shown = usd ? pays.filter(p => p.usd != null) : pays;
-    const changes = shown.filter((p, i) => i === 0 || val(p) !== val(shown[i - 1]) || p.ccy !== shown[i - 1].ccy);
+    const groups = usd ? [['USD', shown]] : currencies.map(c => [c, pays.filter(p => p.ccy === c)]);
+    const kinds = [...new Set(shown.map(p => p.months))].sort((a, b) => a - b);
+    const traces = [];
+    for (const [c, pts] of groups) {
+      // the price of a month through time (a subscription's price holds until the next payment: steps)
+      traces.push({ x: pts.map(p => p.day), y: pts.map(perMonth), name: c, mode: 'lines', type: 'scatter', hoverinfo: 'skip',
+        line: { shape: 'hv', color: '#6e7681', width: 1.5 }, showlegend: false });
+      // each payment, coloured by what it paid for
+      for (const k of kinds) {
+        const kp = pts.filter(p => p.months === k);
+        if (!kp.length) continue;
+        traces.push({ x: kp.map(p => p.day), y: kp.map(perMonth), type: 'scatter', mode: 'markers',
+          name: `paid for ${MP_APPLE_TERM[k]}${groups.length > 1 ? ` (${c})` : ''}`, marker: { color: TERM_COLOR[k], size: k === 1 ? 7 : 11 },
+          text: kp.map(p => `${dmy(p.day)}: paid ${money(val(p), unit(p)).replace(/<[^>]+>/g, '')} for ${MP_APPLE_TERM[k]}${k > 1 ? ` = ${money(perMonth(p), unit(p)).replace(/<[^>]+>/g, '')} a month` : ''}`),
+          hovertemplate: '%{text}<extra></extra>' });
+      }
+    }
+    Plotly.react(dlg.querySelector('#mp_apple_chart'), traces, {
+      paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', font: { color: '#c9d1d9' },
+      margin: { l: 50, r: 10, t: 10, b: 30 }, showlegend: kinds.length > 1 || groups.length > 1, legend: { orientation: 'h', y: 1.12 },
+      yaxis: { rangemode: 'tozero', title: { text: `a month, ${usd ? 'USD' : currencies.join(' / ')}`, font: { size: 11 } } },
+    }, { ...CONFIG, displayModeBar: false });
+    // the whole way, a month's price first and last
     const first = shown[0], last = shown[shown.length - 1];
     dlg.querySelector('#mp_apple_sum').innerHTML = `${pays.length} payment(s), ${dmy(pays[0].day)} – ${dmy(last.day)}`
-      + (first && last && unit(first) === unit(last) ? `: ${money(val(first), unit(first))} → ${money(val(last), unit(last))} ${pctHtml(pct(val(last), val(first)))}` : '')
-      + (usd ? '' : `. Price changes: ${changes.map(c => `${dmy(c.day)} <b>${money(c.price, c.ccy)}</b>`).join(' → ')}`);
+      + (first && last && unit(first) === unit(last) ? `; a month: ${money(perMonth(first), unit(first))} → ${money(perMonth(last), unit(last))} ${pctHtml(pct(perMonth(last), perMonth(first)))}` : '')
+      + '. The chart: the price of a month; a payment for longer is its price over its months.';
     dlg.querySelector('#mp_apple_rows').innerHTML = shown.slice().reverse().map((p, i, arr) => {
       const prev = arr[i + 1];
-      // both prices always; the change in the one shown on the chart
+      // both prices always; a month's price and its change in the one on the chart
       return `<tr><td>${dmy(p.day)}</td><td>${money(p.price, p.ccy)}</td><td>${money(p.usd, 'USD')}</td>
-        <td>${prev && unit(prev) === unit(p) ? pctHtml(pct(val(p), val(prev))) : ''}</td>
+        <td style="color:${TERM_COLOR[p.months]}">${MP_APPLE_TERM[p.months]}</td><td>${money(perMonth(p), unit(p))}</td>
+        <td>${prev && unit(prev) === unit(p) ? pctHtml(pct(perMonth(p), perMonth(prev))) : ''}</td>
         <td style="text-align:left;color:#8b949e">${mpEscapeHtml(p.note)}</td></tr>`;
     }).join('');
   };
@@ -2860,20 +2915,15 @@ async function mpRenderApplePurchases() {
     g.active = g.sub && g.end >= today;
     // the price's changes: each new price with the day it came
     g.changes = g.pays.filter((p, i) => i === 0 || p.price !== g.pays[i - 1].price || p.ccy !== g.pays[i - 1].ccy);
-    // how long one payment lasts -- the latest payment naming its period ("12 Oct 2026 - 12 Nov 2026",
-    // "Renews 12 Dec 2026" from its day, "Monthly" / "Yearly"), else the title ("Annual", "3 months")
-    let span = null;
-    for (const p of [...g.pays].reverse()) {
-      const two = [...p.note.matchAll(/\d{1,2} [A-Za-z]+\.? \d{4}/g)].map(m => mpAppleDay(m[0]));
-      if (two.length >= 2) span = (Date.parse(two[1]) - Date.parse(two[0])) / 864e5;
-      else if (two.length === 1 && /^(Renews|Expires)/i.test(p.note)) span = (Date.parse(two[0]) - Date.parse(p.day)) / 864e5;
-      else if (/^Monthly$/i.test(p.note)) span = 30;
-      else if (/^Yearly$/i.test(p.note)) span = 365;
-      if (span > 0) break;
-    }
-    if (!(span > 0)) span = /year|annual|12[- ]month/i.test(g.title) ? 365 : /6[- ]month/i.test(g.title) ? 182 : /3[- ]month/i.test(g.title) ? 91 : 30;
-    // payments a year: monthly 12, quarterly 4, half-yearly 2, yearly 1
-    g.perYear = span > 300 ? 1 : span > 150 ? 2 : span > 80 ? 4 : 12;
+    // how long each payment lasted (mpApplePeriods); payments a year by the latest one's
+    g.months = mpApplePeriods(g.pays, g.title);
+    g.perYear = 12 / g.months[g.months.length - 1];
+    // the first price against the price now, a month of each (a year's price is no rise
+    // over a month's), in the currency it's paid in now
+    const fi = g.pays.findIndex(p => p.ccy === g.ccy);
+    g.firstMonths = g.months[fi];
+    g.monthNow = g.last / g.months[g.months.length - 1];
+    g.monthFirst = g.first / g.firstMonths;
     g.yearUsd = g.lastUsd == null ? null : g.lastUsd * g.perYear;
     return g;
   });
@@ -2910,8 +2960,10 @@ async function mpRenderApplePurchases() {
   const dmy = d => d ? `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}` : '';
   const name = g => `${mpEscapeHtml(g.title)}${g.app && g.app !== g.title ? `<div style="font-size:0.85em;color:#6a7381">${mpEscapeHtml(g.app)}</div>` : ''}`;
   const change = g => {
-    if (g.first === g.last || !g.first) return '';
-    const pct = (g.last / g.first - 1) * 100;
+    // a month of each: a year's price against a month's is no rise
+    if (!g.monthFirst || Math.abs(g.monthNow - g.monthFirst) < 0.005) return '';
+    const pct = (g.monthNow / g.monthFirst - 1) * 100;
+    if (Math.abs(pct) < 0.5) return '';
     return `<span style="color:${pct > 0 ? '#ff9500' : '#3fb950'}">${pct > 0 ? '+' : ''}${pct.toFixed(0)}%</span>`;
   };
   const status = g => g.active ? `${g.renews ? 'renews' : 'until'} ${dmy(g.end)}` : `<span style="color:#6a7381">ended ${dmy(g.end)}</span>`;
@@ -2926,7 +2978,7 @@ async function mpRenderApplePurchases() {
     flat.push(g);
     return `<tr class="apple-sub" data-i="${n++}" data-in="${mpEscapeHtml(parents.join(' '))}"${shut(parents) ? ' hidden' : ''} style="cursor:pointer${g.active ? '' : ';color:#8b949e'}">
       <td style="text-align:left;padding-left:${12 + 22 * (indent || 0)}px">${name(g)}</td><td>${status(g)}</td><td>${money(g.last, g.ccy)}<div style="font-size:0.85em;color:#6a7381">${every(g.perYear)}</div></td><td>${usd(g.lastUsd)}</td>
-      <td>${g.changes.length > 1 ? money(g.first, g.ccy) : ''}</td><td>${change(g)}</td><td>${g.pays.length}</td><td>${money(g.spent, g.ccy)}</td><td>${usd(g.spentUsd)}</td><td>${usd(g.yearUsd)}</td><td>${dmy(g.lastDay)}</td></tr>`;
+      <td>${g.changes.length > 1 ? `${money(g.first, g.ccy)}<div style="font-size:0.85em;color:#6a7381">${MP_APPLE_TERM[g.firstMonths]}</div>` : ''}</td><td title="the price of a month, first and now">${change(g)}</td><td>${g.pays.length}</td><td>${money(g.spent, g.ccy)}</td><td>${usd(g.spentUsd)}</td><td>${usd(g.yearUsd)}</td><td>${dmy(g.lastDay)}</td></tr>`;
   };
   // a group's own row: its plans' sums (a year of what runs now, else of its latest plan)
   const sumOf = items => {
