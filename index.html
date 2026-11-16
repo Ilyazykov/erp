@@ -2753,10 +2753,10 @@ async function mpOpenAppleHistory(title, nameEn) {
   dlg.style.cssText = 'background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:16px 18px;min-width:320px;width:min(92vw,720px)';
   dlg.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><b>${mpEscapeHtml(title)}${app && app !== title ? ` <span style="color:#8b949e;font-weight:normal">· ${mpEscapeHtml(app)}</span>` : ''}</b><button type="button" data-act="close">✕</button></div>
-    <label${hasUsd ? '' : ' style="color:#6a7381" title="dollars come once the database is updated"'}><input type="checkbox" id="mp_apple_usd"${hasUsd ? '' : ' disabled'}> show in USD</label>
+    <label${hasUsd ? '' : ' style="color:#6a7381" title="dollars come once the database is updated"'}><input type="checkbox" id="mp_apple_usd"${hasUsd ? ' checked' : ' disabled'}> show in USD</label>
     <div id="mp_apple_chart" style="height:280px"></div>
     <p class="note" style="margin:0" id="mp_apple_sum"></p>
-    <div style="max-height:320px;overflow:auto"><table class="data-table"><thead><tr><th>Paid</th><th>Price</th><th>Change</th><th style="text-align:left">Period</th></tr></thead><tbody id="mp_apple_rows"></tbody></table></div>
+    <div style="max-height:320px;overflow:auto"><table class="data-table"><thead><tr><th>Paid</th><th>Price</th><th>USD</th><th>Change</th><th style="text-align:left">Period</th></tr></thead><tbody id="mp_apple_rows"></tbody></table></div>
   </div>`;
   document.body.appendChild(dlg);
   // opened before the chart is drawn (Plotly measures a closed dialog as empty); removed however it's closed
@@ -2785,7 +2785,8 @@ async function mpOpenAppleHistory(title, nameEn) {
       + (usd ? '' : `. Price changes: ${changes.map(c => `${dmy(c.day)} <b>${money(c.price, c.ccy)}</b>`).join(' → ')}`);
     dlg.querySelector('#mp_apple_rows').innerHTML = shown.slice().reverse().map((p, i, arr) => {
       const prev = arr[i + 1];
-      return `<tr><td>${dmy(p.day)}</td><td>${money(val(p), unit(p))}</td>
+      // both prices always; the change in the one shown on the chart
+      return `<tr><td>${dmy(p.day)}</td><td>${money(p.price, p.ccy)}</td><td>${money(p.usd, 'USD')}</td>
         <td>${prev && unit(prev) === unit(p) ? pctHtml(pct(val(p), val(prev))) : ''}</td>
         <td style="text-align:left;color:#8b949e">${mpEscapeHtml(p.note)}</td></tr>`;
     }).join('');
@@ -2796,27 +2797,38 @@ async function mpOpenAppleHistory(title, nameEn) {
 async function mpRenderApplePurchases() {
   const wrap = document.getElementById('mp_apple_panel');
   if (!wrap || !mpIsSignedIn) return;
-  const rows = [];
-  try {
+  // with dollars at each day's rate (apple_purchase_prices, migration ...212); the view not
+  // there yet: the lines alone
+  const load = async (q, map) => {
+    const out = [];
     for (let from = 0; ; from += 1000) {
-      const { data, error } = await sb.from('receipt_items')
-        .select('name_printed, name_en, line_total, note, receipts!inner(purchased_on, currency, source)')
-        .eq('receipts.source', 'apple').range(from, from + 999);
+      const { data, error } = await q().range(from, from + 999);
       if (error) throw error;
-      rows.push(...data);
+      out.push(...data.map(map));
       if (data.length < 1000) break;
     }
-  } catch { wrap.innerHTML = ''; return; }
+    return out;
+  };
+  let rows;
+  try {
+    rows = await load(() => sb.from('apple_purchase_prices').select('name_printed, name_en, price, price_usd, note, day, currency').order('day'),
+      r => ({ ...r, price: Number(r.price), usd: r.price_usd == null ? null : Number(r.price_usd) }));
+  } catch {
+    try {
+      rows = await load(() => sb.from('receipt_items').select('name_printed, name_en, line_total, note, receipts!inner(purchased_on, currency, source)').eq('receipts.source', 'apple'),
+        r => ({ name_printed: r.name_printed, name_en: r.name_en, note: r.note, price: Number(r.line_total), usd: null, day: r.receipts.purchased_on, currency: r.receipts.currency }));
+    } catch { wrap.innerHTML = ''; return; }
+  }
   if (!rows.length) { wrap.innerHTML = ''; return; }
   const today = new Date().toISOString().slice(0, 10);
   const groups = new Map();
   for (const r of rows) {
     const title = r.name_printed;
     const app = (r.name_en || '').includes(' · ') ? r.name_en.split(' · ').slice(1).join(' · ') : (/^iCloud\+/.test(title) ? 'iCloud' : '');
-    const ccy = r.receipts.currency;
+    const ccy = r.currency;
     const key = `${title}|${app}|${ccy}`;
     if (!groups.has(key)) groups.set(key, { title, app, ccy, pays: [] });
-    groups.get(key).pays.push({ day: r.receipts.purchased_on, price: Number(r.line_total), note: r.note || '' });
+    groups.get(key).pays.push({ day: r.day, price: r.price, usd: r.usd, note: r.note || '' });
   }
   const list = [...groups.values()].map(g => {
     g.pays.sort((a, b) => a.day.localeCompare(b.day));
@@ -2826,6 +2838,8 @@ async function mpRenderApplePurchases() {
     g.last = last.price;
     g.lastDay = last.day;
     g.spent = g.pays.reduce((s, p) => s + p.price, 0);
+    g.lastUsd = last.usd;
+    g.spentUsd = g.pays.some(p => p.usd == null) ? null : g.pays.reduce((s, p) => s + p.usd, 0);
     // its period's end: the date the latest payment names, else a month / a year after it
     const named = mpAppleDay(last.note);
     const step = /year|annual|12[- ]month/i.test(`${last.note} ${g.title}`) ? 365 : 31;
@@ -2839,6 +2853,7 @@ async function mpRenderApplePurchases() {
   const subs = list.filter(g => g.sub).sort((a, b) => (b.active - a.active) || (a.active ? a.end.localeCompare(b.end) : b.lastDay.localeCompare(a.lastDay)));
   const once = list.filter(g => !g.sub).sort((a, b) => b.lastDay.localeCompare(a.lastDay));
   const money = (v, c) => mpFormatCurrency(v, c, true);
+  const usd = v => (v == null ? '—' : `$${v.toFixed(2)}`);
   const dmy = d => d ? `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}` : '';
   const name = g => `${mpEscapeHtml(g.title)}${g.app && g.app !== g.title ? `<div style="font-size:0.85em;color:#6a7381">${mpEscapeHtml(g.app)}</div>` : ''}`;
   const change = g => {
@@ -2848,19 +2863,17 @@ async function mpRenderApplePurchases() {
   };
   const status = g => g.active ? `${g.renews ? 'renews' : 'until'} ${dmy(g.end)}` : `<span style="color:#6a7381">ended ${dmy(g.end)}</span>`;
   const subRow = (g, i) => `<tr class="apple-sub" data-i="${i}" style="cursor:pointer${g.active ? '' : ';color:#8b949e'}">
-      <td style="text-align:left">${g.changes.length > 1 ? '▸ ' : ''}${name(g)}</td><td>${status(g)}</td><td>${money(g.last, g.ccy)}</td>
-      <td>${g.changes.length > 1 ? money(g.first, g.ccy) : ''}</td><td>${change(g)}</td><td>${g.pays.length}</td><td>${money(g.spent, g.ccy)}</td><td>${dmy(g.lastDay)}</td></tr>
-    <tr class="apple-hist" data-i="${i}" hidden><td colspan="8" style="text-align:left;color:#8b949e">${
-      g.changes.map(c => `${dmy(c.day)}: <b style="color:inherit">${money(c.price, g.ccy)}</b>`).join(' → ')}</td></tr>`;
+      <td style="text-align:left">${name(g)}</td><td>${status(g)}</td><td>${money(g.last, g.ccy)}</td><td>${usd(g.lastUsd)}</td>
+      <td>${g.changes.length > 1 ? money(g.first, g.ccy) : ''}</td><td>${change(g)}</td><td>${g.pays.length}</td><td>${money(g.spent, g.ccy)}</td><td>${usd(g.spentUsd)}</td><td>${dmy(g.lastDay)}</td></tr>`;
   wrap.innerHTML = `<div class="section-title" style="margin-top:22px">Apple purchases &amp; subscriptions</div>
-    <p class="note">From Apple's purchase history (upload the text of reportaproblem.apple.com in My Portfolio). Prices in the currency Apple charged.
+    <p class="note">From Apple's purchase history (upload the text of reportaproblem.apple.com in My Portfolio). Prices in the currency Apple charged and in dollars at each day's rate.
       ${subs.filter(g => g.active).length} subscription(s) running. Click one for its price history.</p>
-    <div style="max-height:520px;overflow:auto"><table class="data-table"><thead><tr><th style="text-align:left">Subscription</th><th>Status</th><th>Price now</th>
-      <th>First price</th><th>Change</th><th>Payments</th><th>Spent</th><th>Last paid</th></tr></thead>
+    <div style="max-height:520px;overflow:auto"><table class="data-table"><thead><tr><th style="text-align:left">Subscription</th><th>Status</th><th>Price now</th><th>Now, USD</th>
+      <th>First price</th><th>Change</th><th>Payments</th><th>Spent</th><th>Spent, USD</th><th>Last paid</th></tr></thead>
       <tbody>${subs.map(subRow).join('')}</tbody></table></div>
     <details style="margin-top:10px"><summary class="note" style="cursor:pointer">One-off purchases: ${once.length} (apps, games, in-app purchases, films)</summary>
-      <div style="max-height:420px;overflow:auto"><table class="data-table"><thead><tr><th style="text-align:left">Item</th><th>Price</th><th>Times</th><th>Spent</th><th>Last bought</th></tr></thead>
-      <tbody>${once.map(g => `<tr><td style="text-align:left">${name(g)}</td><td>${money(g.last, g.ccy)}</td><td>${g.pays.length}</td><td>${money(g.spent, g.ccy)}</td><td>${dmy(g.lastDay)}</td></tr>`).join('')}</tbody></table></div>
+      <div style="max-height:420px;overflow:auto"><table class="data-table"><thead><tr><th style="text-align:left">Item</th><th>Price</th><th>USD</th><th>Times</th><th>Spent</th><th>Spent, USD</th><th>Last bought</th></tr></thead>
+      <tbody>${once.map(g => `<tr><td style="text-align:left">${name(g)}</td><td>${money(g.last, g.ccy)}</td><td>${usd(g.lastUsd)}</td><td>${g.pays.length}</td><td>${money(g.spent, g.ccy)}</td><td>${usd(g.spentUsd)}</td><td>${dmy(g.lastDay)}</td></tr>`).join('')}</tbody></table></div>
     </details>`;
   wrap.querySelectorAll('tr.apple-sub').forEach(tr => tr.addEventListener('click', () => {
     const g = subs[Number(tr.dataset.i)];
