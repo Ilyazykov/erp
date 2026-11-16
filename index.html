@@ -2405,6 +2405,84 @@ function mpRaifPdfCsv({ name, rows }) {
       t.orig ? num(t.orig) : 0, t.origCcy, t.rate ? num(t.rate) : 0, num(t.ref || 0), name].map(q).join(','))].join('\n') + '\n';
   return { csv, account, from: iso(from), to: iso(to), currencies: [...new Set(out.map(t => t.ccy))], count: out.length };
 }
+// Alfa-Bank's account statement ("Выписка по счету", PDF, 16.11.2026) as this project's bank
+// CSV (statements/alfa/alfa_*.csv, import-bank-csv): the current, the salary and the
+// daily-balance savings account ("Альфа-Счёт на ежедневный остаток" -- savings, a trade
+// row). A transaction starts at a row with its posting day and operation code, its amount
+// at the right; the rows just under it carry the rest of its description, joined with a
+// space (as the CSVs made by hand from these PDFs have it, so the keys match). "HOLD" rows
+// (an unconfirmed operation, 0.00) are left out. The sum of the rows must take the opening
+// balance to the closing one, and match the statement's own in and out totals: a statement
+// read wrong is left out, not loaded. The CSV's name carries the statement's period (the
+// freshness table's "Statements to").
+function mpIsAlfaPdf(rows) {
+  const t = rows.slice(0, 30).map(r => r.cells.map(c => c.s).join(' ')).join('\n');
+  return /Выписка по сч[её]ту/.test(t) && /Номер сч[её]та\s+\d{20}/.test(t) && rows.some(r => r.cells.some(c => /АЛЬФА-БАНК/.test(c.s)));
+}
+// Alfa-Investments' "Инвестиционный отчёт" (PDF): the portfolio's value, shares and return
+// -- no deals or money movements in it (those come from the broker report, XML)
+function mpIsAlfaInvestReport(rows) {
+  const t = rows.slice(0, 12).map(r => r.cells.map(c => c.s).join(' ')).join(' ');
+  return /Инвестиционный/.test(t) && /отч[её]т/.test(t) && /Клиент/.test(t) && /Период/.test(t);
+}
+function mpAlfaPdfCsv({ name, rows }) {
+  const money = s => { const m = String(s).replace(/[\s ]/g, '').match(/^(-?\d+(?:,\d{1,2})?)([A-Z]{3})?$/); return m ? Number(m[1].replace(',', '.')) : null; };
+  const iso = d => d.replace(/^(\d{2})\.(\d{2})\.(\d{4})$/, '$3-$2-$1');
+  const DATE = /^\d{2}\.\d{2}\.\d{4}$/;
+  const lines = rows.map(r => r.cells.map(c => c.s).join(' '));
+  const txt = lines.join('\n');
+  const account = txt.match(/Номер сч[её]та\s+(\d{20})/)?.[1];
+  const period = txt.match(/За период с (\d{2}\.\d{2}\.\d{4}) по (\d{2}\.\d{2}\.\d{4})/);
+  const ccyRaw = txt.match(/Валюта сч[её]та\s+([A-Z]{3})/)?.[1];
+  const type = txt.match(/Тип сч[её]та\s+([^\n]*?)(?:\s+(?:Поступления|Расходы|Входящий|Исходящий)\b|$)/m)?.[1]?.trim() || '';
+  const total = label => { const m = txt.match(new RegExp(`${label}\\s+(-?[\\d\\s\\u00a0]+,\\d{2})\\s*[A-Z]{3}`)); return m ? money(m[1]) : null; };
+  const opening = total('Входящий остаток'), closing = total('Исходящий остаток'), inflow = total('Поступления'), outflow = total('Расходы');
+  if (!account || !period || !ccyRaw || opening == null || closing == null) return { error: 'Alfa-Bank statement: its account, period or balances not found' };
+  if (/депозит|вклад/i.test(type)) return { error: `Alfa-Bank statement: a deposit ("${type}") -- not read here` };
+  const ccy = ccyRaw === 'RUR' ? 'RUB' : ccyRaw;
+  const product = /ежедневн|накопит/i.test(type) ? 'savings_account' : 'current_account';
+  const from = iso(period[1]), to = iso(period[2]);
+  // the transactions: a row with the day (left) and the code, its amount at the right;
+  // under it (a few points down, the same page) the rest of its description
+  const out = [];
+  let cur = null, prevY = null;
+  for (const { cells: c, y } of rows) {
+    const s0 = c[0]?.s || '';
+    const amountCell = c.find(x => x.x >= 440 && money(x.s) != null && /[A-Z]{3}$/.test(x.s.trim()));
+    if (DATE.test(s0) && c[0].x < 60 && c[1] && c[1].x < 180 && amountCell) {
+      cur = { date: iso(s0), code: c[1].s, desc: c.filter(x => x.x >= 180 && x !== amountCell).map(x => x.s), amount: money(amountCell.s) };
+      out.push(cur);
+      prevY = y;
+      continue;
+    }
+    if (cur && prevY != null && prevY - y > 0 && prevY - y <= 14 && c.length && c.every(x => x.x >= 180 && x.x < 440)) {
+      cur.desc.push(...c.map(x => x.s));
+      prevY = y;
+      continue;
+    }
+    cur = null; prevY = null;   // HOLD, the totals, the signature, a page's foot: the transaction's over
+  }
+  const r2 = x => Math.round(x * 100) / 100;
+  const sum = r2(out.reduce((a, t) => a + t.amount, 0));
+  if (Math.abs(opening + sum - closing) > 0.005) {
+    return { error: `Alfa-Bank statement: the rows (${sum}) don't take the opening balance ${opening} to the closing ${closing} -- not loaded` };
+  }
+  const ins = r2(out.filter(t => t.amount > 0).reduce((a, t) => a + t.amount, 0)), outs = r2(-out.filter(t => t.amount < 0).reduce((a, t) => a + t.amount, 0));
+  if ((inflow != null && Math.abs(ins - inflow) > 0.005) || (outflow != null && Math.abs(outs - outflow) > 0.005)) {
+    return { error: `Alfa-Bank statement: in ${ins} / out ${outs} read, the statement says ${inflow} / ${outflow} -- not loaded` };
+  }
+  // the statement's order, by day (stable); the balance after each
+  out.sort((a, b) => a.date.localeCompare(b.date));
+  let bal = opening;
+  const q = v => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+  const csv = ['bank,account_number,product,currency,date,time,card,description,amount,balance,operation_code,source_file',
+    ...out.map(t => {
+      bal = r2(bal + t.amount);
+      return ['Alfa', account, product, ccy, t.date, '', '', t.desc.join(' ').replace(/\s+/g, ' ').trim() || '(no description in statement)',
+        t.amount.toFixed(2), bal.toFixed(2), t.code, name].map(q).join(',');
+    })].join('\n') + '\n';
+  return { csv, account, product, type, currency: ccy, from, to, count: out.length, closing };
+}
 // Wolt's receipts (PDFs, 14.11.2026) as this project's receipt CSV: an order comes as two --
 // the venue's (the food, "Receipt #...") and Wolt's own ("Wolt delivery receipt #...": delivery,
 // service fee) -- and is paid as one (TBC: "POS - WOLT GEORGIA LTD", the sum of both). Both are
@@ -2478,7 +2556,7 @@ async function mpImportFiles(files) {
   const { data: { session } } = await sb.auth.getSession();
   if (!session) { listEl.textContent = 'Sign in first.'; return; }
   if (!mpImportRunning) listEl.textContent = '';
-  // PDFs, read here: Raiffeisen's monthly statements -- each its own CSV of the
+  // PDFs, read here: Raiffeisen's and Alfa-Bank's statements -- each its own CSV of the
   // statement's days -- and Wolt's receipts (an order's two put together, one receipt CSV)
   const pdfs = files.filter(f => /\.pdf$/i.test(f.name));
   if (pdfs.length) {
@@ -2501,6 +2579,31 @@ async function mpImportFiles(files) {
         const f = new File([r.csv], `raif_${r.account}_${r.from}_${r.to}.csv`, { type: 'text/csv' });
         f.mpQuery = `?from=${r.from}&to=${r.to}`;
         files.push(f);
+      }
+      // Alfa-Bank's account statements: each its bank CSV, named by its period
+      const alfa = docs.filter(d => mpIsAlfaPdf(d.rows));
+      const alfaInvest = docs.filter(d => !alfa.includes(d) && mpIsAlfaInvestReport(d.rows));
+      docs = docs.filter(d => !alfa.includes(d) && !alfaInvest.includes(d));
+      for (const d of alfaInvest) {
+        const rl = document.createElement('div');
+        rl.textContent = `${d.name}: Alfa-Investments' investment report -- the portfolio's value and return only, nothing to load (the deals and the money come from the broker report, XML).`;
+        listEl.appendChild(rl);
+      }
+      for (const d of alfa) {
+        const rl = document.createElement('div');
+        listEl.appendChild(rl);
+        const r = mpAlfaPdfCsv(d);
+        if (r.error) { rl.textContent = `${d.name}: ${r.error}`; continue; }
+        const what = `${d.name}: Alfa-Bank statement, ${r.type || r.product} …${r.account.slice(-4)} ${r.currency}, ${r.from} – ${r.to}`;
+        if (!r.count) {
+          // no movements: nothing to import, but the account's checked to the statement's end
+          await sb.from('statement_uploads').insert({ account: 'Alfa', kind: 'bank_csv', file_name: d.name, period_from: r.from, period_to: r.to });
+          mpImportedSinceRefresh = true;
+          rl.textContent = `${what}: no transactions, balance ${r.closing} -- noted as checked to ${r.to}.`;
+          continue;
+        }
+        rl.textContent = `${what}: ${r.count} transaction(s), closing balance ${r.closing}.`;
+        files.push(new File([r.csv], `alfa_${r.account}_${r.from}_${r.to}.csv`, { type: 'text/csv' }));
       }
       if (!docs.length) { line.remove(); }
       const { csv, orders, problems } = docs.length ? mpWoltReceiptsCsv(docs) : { csv: null, orders: [], problems: [] };
@@ -2600,7 +2703,7 @@ const MP_ACCOUNT_SOURCE = {
   Raiffeisen: 'Raiffeisen statements (PDF) → to Claude, who adds them to the combined Raiffeisen CSV.',
   'T-Bank': 'Broker and ЦФА: synced every morning through the T-Invest API (T-Bank broker automatic sync, below the uploads); or T-Investments → reports → broker report (.xlsx) / the Atomyze report, upload as is. Cards, credit card, deposit, metal account: «Справка о движении средств» (PDF) for each contract → to Claude.',
   Sber: 'Broker: SberBank Online → Инвестиции → account → Отчёты и справки → broker report (.html, one per month), upload as is. Card and savings account: Выписки и справки → PDF → to Claude.',
-  Alfa: 'Alfa-Online → statements of the current, salary and Alfa-Account (PDF); broker account: screenshots of Alfa-Investments → History → to Claude.',
+  Alfa: 'Alfa-Online → statements of the current, salary and Alfa-Account (PDF), uploaded as is; broker account: Alfa-Investments → broker report (XML), uploaded as is.',
   'Yandex Bank': 'Yandex Bank app → statement for each contract (current account, «Сейв») (PDF) → to Claude.',
   'Ozon Bank': 'Ozon Bank app → Ещё → Получить справку → О движении средств → language → основной / накопительный / кредитная карта (PDF, one each) → to Claude.',
   'TBC Bank': 'tbconline.ge → Transactions / the account → statement (CSV), one for each account and currency (GEL, EUR, My Safe); keep the file name. Upload as is.',
@@ -2632,8 +2735,8 @@ const MP_PART_SOURCE = {
   'Sber|Broker': 'SberBank Online → Инвестиции → account → Отчёты и справки → broker report (.html, one per month), upload as is.',
   'Sber|Cards & current accounts': 'SberBank Online → card → Выписки и справки → PDF → to Claude.',
   'Sber|Deposits & savings': 'SberBank Online → savings account → Выписки и справки → PDF → to Claude.',
-  'Alfa|Cards & current accounts': 'Alfa-Online → statements of the current, salary and Alfa-Account (PDF) → to Claude.',
-  'Alfa|Broker': 'Screenshots of Alfa-Investments → History → to Claude.',
+  'Alfa|Cards & current accounts': 'Alfa-Online → statements of the current, salary and Alfa-Account (PDF). Upload as is.',
+  'Alfa|Broker': 'Alfa-Investments → broker report (XML). Upload as is.',
   'Yandex Bank|Cards & current accounts': 'Yandex Bank app → statement of the current account (PDF) → to Claude.',
   'Yandex Bank|Deposits & savings': 'Yandex Bank app → statement of «Сейв» (PDF) → to Claude.',
   'Revolut|Broker': 'Revolut app → avatar → Documents & statements → stocks: account statement, CSV (not P&L). Upload as is.',
