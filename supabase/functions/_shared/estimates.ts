@@ -105,8 +105,16 @@ async function bondization(secid: string) {
   moexCache.set(secid, out);
   return out;
 }
-// a payment due on a weekend comes on the Monday
-const workday = (day: string) => { const w = new Date(`${day}T00:00:00Z`).getUTCDay(); return w === 6 ? addDays(day, 2) : w === 0 ? addDays(day, 1) : day; };
+// a payment due on a weekend or a Russian public holiday (these are Russian
+// brokers' bonds) comes on the next working day: Яндекс 001P-02's coupon of
+// 03.11.2026, paid by Alfa a workday later, came on 05.11, 04.11 being a
+// holiday (16.11.2026). The fixed dates only -- the days a holiday moves to
+// change each year and aren't here.
+const RU_HOLIDAYS = new Set(['01-01', '01-02', '01-03', '01-04', '01-05', '01-06', '01-07', '01-08', '02-23', '03-08', '05-01', '05-09', '06-12', '11-04']);
+const workday = (day: string): string => {
+  const w = new Date(`${day}T00:00:00Z`).getUTCDay();
+  return w === 6 || w === 0 || RU_HOLIDAYS.has(day.slice(5)) ? workday(addDays(day, 1)) : day;
+};
 const workdaysLater = (day: string, n: number) => { let d = workday(day); for (let i = 0; i < n; i++) d = workday(addDays(d, 1)); return d; };
 // How many workdays after the MOEX date the account credits this bond's
 // coupons: what its own past coupons show most often (Alfa pays ВУШ, Медскан,
