@@ -603,7 +603,7 @@
     зелёная — та же, 1.2); меняются зоны, план и бэктест. Без галочки — как у автора индекса и на CoinGlass.</p>
   <div class="form-row"><label title="Off: AHR999's own 5.84 / -17.01, as on CoinGlass"><input type="checkbox" id="cs_fair_refit"> справедливая по всей истории BTC (<span id="cs_fair_refit_coef">5.633 / −16.32</span>)</label>
     <label title="a: today's coefficients for every past day too; b: each day its own, fitted only on the prices before it -- as one would have seen it then">коэффициенты: <select id="cs_fair_mode"><option value="b">б — на каждый день свои (по ценам до него)</option><option value="a">а — последние для всей истории</option></select></label>
-    <label title="Оригинал: 0.45 / 1.2. Текущий: с галочкой красная сдвинута на ту же долю красных дней, зелёная 1.2. Вся история а: треть дней красных, треть нейтральных, треть зелёных по всем дням с 2015-04. Вся история б: те же трети на каждый день только по дням до него (первый год — 0.45 / 1.2)">пороги зон: <select id="cs_zone_mode"><option value="orig">оригинал (0.45 / 1.2)</option><option value="cur">текущий вариант</option><option value="ter_a">вся история а — по трети дней</option><option value="ter_b">вся история б — по трети дней до каждого дня</option></select></label></div>
+    <label title="Оригинал: 0.45 / 1.2. Текущий: с галочкой красная сдвинута на ту же долю красных дней, зелёная 1.2. Вся история а: треть дней красных, треть нейтральных, треть зелёных по всем дням с 2015-04. Вся история б: те же трети на каждый день только по дням до него (первый год — 0.45 / 1.2). Четверти: четверть дней красных (ниже нижней четверти), четверть зелёных (выше верхней), нейтральные делятся сами примерно поровну на после красной и после зелёной; а и б — так же, как у третей">пороги зон: <select id="cs_zone_mode"><option value="orig">оригинал (0.45 / 1.2)</option><option value="cur">текущий вариант</option><option value="ter_a">вся история а — по трети дней</option><option value="ter_b">вся история б — по трети дней до каждого дня</option><option value="qrt_a">четверти а — по всей истории</option><option value="qrt_b">четверти б — по дням до каждого дня</option></select></label></div>
   <div id="cs_cards" class="form-row" style="gap:12px;flex-wrap:wrap"></div>
   <p class="empty-note" id="cs_status"></p>
   <div id="plot_cs_ahr" style="height:420px"></div>
@@ -7859,9 +7859,12 @@ function mpApplyAhrZones() { Object.assign(MP_AHR, MP_AHR_ZONES[mpFairRefitOn() 
 //   ter_a -- thirds: a third of the days red, a third neutral, a third green -- the index's
 //            1/3 and 2/3 quantiles over every day there is (from 2015-04, crypto_indicators);
 //   ter_b -- the same thirds on each day over the days before it only (as one would have
-//            seen it then); its first year, under 365 days to count -- 0.45 / 1.2.
+//            seen it then); its first year, under 365 days to count -- 0.45 / 1.2;
+//   qrt_a / qrt_b -- quarters (the user, 18.11.2026): the red below the lowest quarter, the
+//            green above the highest, so a quarter of the days each; the neutral half splits
+//            by itself into after-red / after-green, ~27.5% / 22.5% (index b, from 2015-04).
 function mpZoneMode() {
-  try { const v = localStorage.getItem('mp_zone_mode'); return ['orig', 'cur', 'ter_a', 'ter_b'].includes(v) ? v : 'cur'; } catch { return 'cur'; }
+  try { const v = localStorage.getItem('mp_zone_mode'); return ['orig', 'cur', 'ter_a', 'ter_b', 'qrt_a', 'qrt_b'].includes(v) ? v : 'cur'; } catch { return 'cur'; }
 }
 function mpQuantile(sorted, q) {
   const pos = q * (sorted.length - 1), lo = Math.floor(pos);
@@ -7871,15 +7874,16 @@ function mpWithZones(rows) {
   const mode = mpZoneMode();
   if (mode === 'orig') return rows.map(r => ({ ...r, red: 0.45, green: 1.2 }));
   if (mode === 'cur') return rows.map(r => ({ ...r, red: MP_AHR.red, green: MP_AHR.green }));
-  if (mode === 'ter_a') {
+  const [qLo, qHi] = mode.startsWith('qrt') ? [1 / 4, 3 / 4] : [1 / 3, 2 / 3];
+  if (mode.endsWith('_a')) {
     const s = rows.map(r => r.ahr).sort((a, b) => a - b);
-    const red = mpQuantile(s, 1 / 3), green = mpQuantile(s, 2 / 3);
+    const red = mpQuantile(s, qLo), green = mpQuantile(s, qHi);
     return rows.map(r => ({ ...r, red, green }));
   }
-  // ter_b: the days before, kept sorted as they come (a binary search and an insert a day)
+  // _b: the days before, kept sorted as they come (a binary search and an insert a day)
   const s = [];
   return rows.map(r => {
-    const out = s.length >= 365 ? { ...r, red: mpQuantile(s, 1 / 3), green: mpQuantile(s, 2 / 3) } : { ...r, red: 0.45, green: 1.2 };
+    const out = s.length >= 365 ? { ...r, red: mpQuantile(s, qLo), green: mpQuantile(s, qHi) } : { ...r, red: 0.45, green: 1.2 };
     let lo = 0, hi = s.length;
     while (lo < hi) { const m = (lo + hi) >> 1; if (s[m] < r.ahr) lo = m + 1; else hi = m; }
     s.splice(lo, 0, r.ahr);
