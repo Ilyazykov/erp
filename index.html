@@ -1424,6 +1424,13 @@ async function loadData() {
   const usErpDates = usErpRows.map(r => r.date + '-01');
   const usErpYield = usErpRows.map(r => val(r.excess_cape_yield_pct));
   const usErpZ = usErpRows.map(r => val(r.z_score));
+  // the months after Shiller's last, estimated by us_erp.py (estimated=1)
+  // until he publishes them: a dashed line on from his last month
+  const usErpEst = usErpRows.map(r => r.estimated === '1');
+  const usErpEstOnly = vals => vals.map((v, i) => (usErpEst[i] || usErpEst[i + 1] ? v : null));
+  const usErpReal = vals => vals.map((v, i) => (usErpEst[i] ? null : v));
+  const usErpEstSeries = (vals, color, width) => usErpEst.some(Boolean)
+    ? [jsSeries(usErpDates, usErpEstOnly(vals), 'estimated (Shiller not out yet)', color, { width, dash: 'dash' })] : [];
   // Default visible window is the last 10 years; the full 1871-present
   // history is loaded and reachable via the range-slider/zoom below it.
   const usErpDefaultRange = usErpDates.length
@@ -1438,12 +1445,14 @@ async function loadData() {
   const damodaranYield = usErpRows.map(r => damodaranByDate.has(r.date) ? damodaranByDate.get(r.date) : null);
 
   const usErp = [
-    jsSeries(usErpDates, usErpYield, "Shiller's Excess CAPE Yield, %", '#f0b429', { width: 2 }),
+    jsSeries(usErpDates, usErpReal(usErpYield), "Shiller's Excess CAPE Yield, %", '#f0b429', { width: 2 }),
+    ...usErpEstSeries(usErpYield, '#f0b429', 2),
     jsSeries(usErpDates, damodaranYield, "Damodaran's Implied ERP (T12m), %", '#5b9bd5', { width: 1.5, dash: 'dot' }),
   ];
 
   const usErpZChart = [
-    jsSeries(usErpDates, usErpZ, 'Z-score', '#3dd68c', { width: 2.5 }),
+    jsSeries(usErpDates, usErpReal(usErpZ), 'Z-score', '#3dd68c', { width: 2.5 }),
+    ...usErpEstSeries(usErpZ, '#3dd68c', 2.5),
     erpFill(usErpDates, usErpZ, true),
     erpFill(usErpDates, usErpZ, false),
   ];
