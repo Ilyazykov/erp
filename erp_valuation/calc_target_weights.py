@@ -62,8 +62,7 @@ import math
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from zscore_weights import (BIRTH_YEAR, Z_THRESHOLD, allocation_split, compute_target_weights, signal,
-                            stock_share_from_age)
+from zscore_weights import Z_THRESHOLD, allocation_split, compute_target_weights, signal
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = REPO_ROOT / "data"
@@ -282,9 +281,7 @@ def write_allocation_history(out_path: Path = ALLOC_HISTORY_CSV_PATH) -> int:
     formula with that month's inputs -- the CBR key rate (the month's mean;
     the month not over yet -- its latest) and composite_erp_z of that month
     (from 2019-07, where composite_valuation.csv has it; before -- the base
-    alone). The age's share (100 - (age - 10), the age growing month by
-    month from a January 1st birthday) is written alongside for the chart
-    only: this allocation doesn't use it."""
+    alone)."""
     rates: dict[str, list[float]] = {}
     with KEY_RATE_CSV_PATH.open(newline="", encoding="utf-8") as f:
         for r in csv.DictReader(f):
@@ -301,10 +298,9 @@ def write_allocation_history(out_path: Path = ALLOC_HISTORY_CSV_PATH) -> int:
             continue
         z = z_of.get(month)
         a = compute_allocation(rate_of[month], z)
-        age = int(month[:4]) - BIRTH_YEAR + (int(month[5:7]) - 1) / 12
         rows.append({
             "date": month, "key_rate": round(rate_of[month], 4), "rate_stocks": round(a["base_stocks"], 4),
-            "age_stocks": round(stock_share_from_age(age), 4), "z": round(z, 4) if z is not None else "",
+            "z": round(z, 4) if z is not None else "",
             "target_stocks": round(a["target_stocks"], 4), "target_bonds": round(a["target_bonds"], 4),
         })
     with out_path.open("w", newline="", encoding="utf-8") as f:

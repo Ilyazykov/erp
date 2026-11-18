@@ -176,9 +176,7 @@
   The stock share of the target above, month by month, with that month's own inputs: <b>by the CBR
   key rate alone</b> (violet dotted: w(r) above, which is this allocation's base; the rate itself in
   the hover) and the <b>target</b> (solid: the base with the composite ERP Z-score's correction;
-  the Z-score from 2019-07, before it the base alone). <b>By age alone</b> (grey dotted:
-  100 &minus; (age &minus; 10)) is shown for comparison with the US tab only -- this allocation
-  doesn't use the age. Bonds are the rest to 100%. From 2016.
+  the Z-score from 2019-07, before it the base alone). Bonds are the rest to 100%. From 2016.
 </p>
 <h3 class="section-title" id="mp_pie_stocksbonds_title" style="display:none">Your current portfolio — stocks vs bonds</h3>
 <div id="plot_mp_pie_stocksbonds" style="height:420px; max-width:520px; margin:8px auto 0; display:none"></div>
@@ -1354,7 +1352,6 @@ async function loadData() {
   const ruAllocHistRows = await fetchCsv(`${DATA_DIR}/ru_allocation_history.csv`).catch(() => []);
   const ruAllocHistDates = ruAllocHistRows.map(r => r.date + '-01');
   const ruAllocHistory = ruAllocHistRows.length ? [
-    jsSeries(ruAllocHistDates, ruAllocHistRows.map(r => val(r.age_stocks)), 'Stocks by age alone (not used here)', '#8b949e', { width: 1.5, dash: 'dot' }),
     Object.assign(jsSeries(ruAllocHistDates, ruAllocHistRows.map(r => val(r.rate_stocks)), 'Base: by CBR key rate alone', '#a78bfa', { width: 1.5, dash: 'dot' }), {
       customdata: ruAllocHistRows.map(r => val(r.key_rate)),
       hovertemplate: 'Base: by CBR key rate alone: <b>%{y:.1f}%</b> (rate %{customdata:.2f}%)<extra></extra>',
