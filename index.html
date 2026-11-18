@@ -595,12 +595,14 @@
     🟡 <b>Нейтральная после зелёной</b>: ничего не делать до следующей красной.
     AHR999 = (цена / средняя геометрическая 200 дневных закрытий) × (цена / 10<sup>5.84·log₁₀(дней с 03.01.2009) − 17.01</sup>),
     считается здесь каждое утро по BTC-USD с Yahoo — с CoinGlass может расходиться в сотых.
-    С галочкой «справедливая по всей истории» вместо 5.84 и −17.01 — 5.633 и −16.3235: та же прямая
-    log₁₀(цена) от log₁₀(возраст), подогнанная по каждому дню с 18.07.2010 (первая цена) по 17.11.2026
-    (CoinMetrics), — справедливая сегодня ~$146k вместо ~$185k, индекс выше в ~1.2–1.27 раза, поэтому порог красной
+    С галочкой «справедливая по всей истории» вместо 5.84 и −17.01 — та же прямая
+    log₁₀(цена) от log₁₀(возраст), подогнанная по каждому дню с 18.07.2010 (первая цена) по вчера
+    (CoinMetrics) и пересчитываемая каждое утро (коэффициенты — у галочки): «а» — вся история по последним, «б» — каждый день по своим, подогнанным
+    только по ценам до него, как было бы видно тогда (порог красной в обоих — последний), — справедливая сегодня ~$146k вместо ~$185k, индекс выше в ~1.2–1.27 раза, поэтому порог красной
     зоны сдвинут так, чтобы дней в ней было столько же, сколько по формуле автора (0.516 вместо 0.45;
     зелёная — та же, 1.2); меняются зоны, план и бэктест. Без галочки — как у автора индекса и на CoinGlass.</p>
-  <div class="form-row"><label title="Off: AHR999's own 5.84 / -17.01, as on CoinGlass"><input type="checkbox" id="cs_fair_refit"> справедливая по всей истории BTC (5.633 / −16.32)</label></div>
+  <div class="form-row"><label title="Off: AHR999's own 5.84 / -17.01, as on CoinGlass"><input type="checkbox" id="cs_fair_refit"> справедливая по всей истории BTC (<span id="cs_fair_refit_coef">5.633 / −16.32</span>)</label>
+    <label title="a: today's coefficients for every past day too; b: each day its own, fitted only on the prices before it -- as one would have seen it then">коэффициенты: <select id="cs_fair_mode"><option value="b">б — на каждый день свои (по ценам до него)</option><option value="a">а — последние для всей истории</option></select></label></div>
   <div id="cs_cards" class="form-row" style="gap:12px;flex-wrap:wrap"></div>
   <p class="empty-note" id="cs_status"></p>
   <div id="plot_cs_ahr" style="height:420px"></div>
@@ -7796,6 +7798,22 @@ async function mpLoadCryptoIndicators() {
     out.push(...data);
     if (data.length < 1000) break;
   }
+  // the daily refits (crypto_fair_fit): one a day, each fitted on the prices before its day;
+  // none yet or no table -- the constants below
+  const fits = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await sb.from('crypto_fair_fit').select('day, slope, intercept, red_threshold, days_fitted').order('day').range(from, from + 999);
+    if (error) break;
+    fits.push(...data);
+    if (data.length < 1000) break;
+  }
+  mpFairFits = fits.map(f => ({ day: f.day, slope: Number(f.slope), icpt: Number(f.intercept) }));
+  const fit = fits[fits.length - 1];
+  if (fit) {
+    Object.assign(MP_FAIR_REFIT, { slope: Number(fit.slope), icpt: Number(fit.intercept), day: fit.day, days: fit.days_fitted });
+    if (fit.red_threshold != null) MP_AHR_ZONES.refit.red = Number(fit.red_threshold);
+  }
+  mpShowFairRefit();
   mpCryptoIndRaw = out.map(r => ({ day: r.day, btc: Number(r.btc_usd), dca: Number(r.dca200), fair: Number(r.fair_usd), ahr: Number(r.ahr999) }));
   mpCryptoInd = mpCryptoWithFair(mpCryptoIndRaw);
   return mpCryptoInd;
@@ -7807,9 +7825,22 @@ async function mpLoadCryptoIndicators() {
 // these (R^2 0.962; today's fair $146k against $185k). The "refit" box (on by
 // default) swaps the fair price and, with it, AHR999 everywhere on the page --
 // the zones, the plan, the backtest; off -- the stored values, as CoinGlass's.
-const MP_FAIR_REFIT = { slope: 5.633, icpt: -16.3235 };
+// Refitted every morning since (update-crypto-indicators -> crypto_fair_fit):
+// the latest row replaces these, the whole history on its coefficients.
+const MP_FAIR_REFIT = { slope: 5.633, icpt: -16.3235, day: '2026-11-18', days: 5967 };
+function mpShowFairRefit() {
+  const el = document.getElementById('cs_fair_refit_coef');
+  if (el) el.textContent = `${MP_FAIR_REFIT.slope.toFixed(3)} / ${MP_FAIR_REFIT.icpt.toFixed(2)}, красная < ${MP_AHR_ZONES.refit.red.toFixed(3)}; подгонка ${MP_FAIR_REFIT.day} по ${MP_FAIR_REFIT.days} дням`;
+}
 const MP_GENESIS = Date.parse('2009-01-03T00:00:00Z');
 let mpCryptoIndRaw = null;
+// a: the latest coefficients for every day; b: each day its own, fitted on the prices
+// before it (the user's choice, 18.11.2026 -- an honest backtest); the red threshold is
+// the latest in both
+let mpFairFits = [];
+function mpFairMode() {
+  try { return localStorage.getItem('mp_fair_mode') === 'a' ? 'a' : 'b'; } catch { return 'b'; }
+}
 function mpFairRefitOn() {
   try { return localStorage.getItem('mp_fair_refit') !== '0'; } catch { return true; }
 }
@@ -7823,9 +7854,14 @@ function mpApplyAhrZones() { Object.assign(MP_AHR, MP_AHR_ZONES[mpFairRefitOn() 
 function mpCryptoWithFair(raw) {
   mpApplyAhrZones();
   if (!mpFairRefitOn()) return raw;
+  const perDay = mpFairMode() === 'b' && mpFairFits.length;
+  let j = 0;
   return raw.map(r => {
     const age = (Date.parse(r.day + 'T00:00:00Z') - MP_GENESIS) / 86400000;
-    const fair = 10 ** (MP_FAIR_REFIT.slope * Math.log10(age) + MP_FAIR_REFIT.icpt);
+    // b: that day's fit, or the last one before it (none before -- the first)
+    while (perDay && j + 1 < mpFairFits.length && mpFairFits[j + 1].day <= r.day) j++;
+    const c = perDay ? mpFairFits[j] : MP_FAIR_REFIT;
+    const fair = 10 ** (c.slope * Math.log10(age) + c.icpt);
     return { ...r, fair, ahr: (r.btc / r.dca) * (r.btc / fair) };
   });
 }
@@ -7887,6 +7923,12 @@ document.getElementById('cs_label').addEventListener('change', e => {
 });
 // the fair price refitted on the whole history, or AHR999's own (MP_FAIR_REFIT)
 document.getElementById('cs_fair_refit').checked = mpFairRefitOn();
+document.getElementById('cs_fair_mode').value = mpFairMode();
+document.getElementById('cs_fair_mode').addEventListener('change', e => {
+  try { localStorage.setItem('mp_fair_mode', e.target.value); } catch { /* no storage */ }
+  if (mpCryptoIndRaw) mpCryptoInd = mpCryptoWithFair(mpCryptoIndRaw);
+  mpRenderCryptoStrategy();
+});
 document.getElementById('cs_fair_refit').addEventListener('change', e => {
   try { localStorage.setItem('mp_fair_refit', e.target.checked ? '1' : '0'); } catch { /* no storage */ }
   if (mpCryptoIndRaw) mpCryptoInd = mpCryptoWithFair(mpCryptoIndRaw);
