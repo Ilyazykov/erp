@@ -594,7 +594,12 @@
     🟢 <b>Зелёная зона</b> (&gt; 1.2): продавать в месяц 1% портфеля при доле 1–10%, 2% при 10–20%, 3% при 20–30%; не ниже 1%.
     🟡 <b>Нейтральная после зелёной</b>: ничего не делать до следующей красной.
     AHR999 = (цена / средняя геометрическая 200 дневных закрытий) × (цена / 10<sup>5.84·log₁₀(дней с 03.01.2009) − 17.01</sup>),
-    считается здесь каждое утро по BTC-USD с Yahoo — с CoinGlass может расходиться в сотых.</p>
+    считается здесь каждое утро по BTC-USD с Yahoo — с CoinGlass может расходиться в сотых.
+    С галочкой «справедливая по всей истории» вместо 5.84 и −17.01 — 5.633 и −16.3235: та же прямая
+    log₁₀(цена) от log₁₀(возраст), подогнанная по каждому дню с 18.07.2010 (первая цена) по 17.11.2026
+    (CoinMetrics), — справедливая сегодня ~$146k вместо ~$185k, индекс выше в ~1.27 раза; меняются зоны,
+    план и бэктест. Без галочки — как у автора индекса и на CoinGlass.</p>
+  <div class="form-row"><label title="Off: AHR999's own 5.84 / -17.01, as on CoinGlass"><input type="checkbox" id="cs_fair_refit"> справедливая по всей истории BTC (5.633 / −16.32)</label></div>
   <div id="cs_cards" class="form-row" style="gap:12px;flex-wrap:wrap"></div>
   <p class="empty-note" id="cs_status"></p>
   <div id="plot_cs_ahr" style="height:420px"></div>
@@ -7790,8 +7795,30 @@ async function mpLoadCryptoIndicators() {
     out.push(...data);
     if (data.length < 1000) break;
   }
-  mpCryptoInd = out.map(r => ({ day: r.day, btc: Number(r.btc_usd), dca: Number(r.dca200), fair: Number(r.fair_usd), ahr: Number(r.ahr999) }));
+  mpCryptoIndRaw = out.map(r => ({ day: r.day, btc: Number(r.btc_usd), dca: Number(r.dca200), fair: Number(r.fair_usd), ahr: Number(r.ahr999) }));
+  mpCryptoInd = mpCryptoWithFair(mpCryptoIndRaw);
   return mpCryptoInd;
+}
+// The fair price refitted on BTC's whole life (the user, 18.11.2026): AHR999's own
+// 5.84 / -17.01 were fitted by its author long ago; a least-squares line of
+// log10(price) on log10(days since 03.01.2009) over every day from 18.07.2010
+// (the first price) to 17.11.2026 -- 5967 days, CoinMetrics' PriceUSD -- gives
+// these (R^2 0.962; today's fair $146k against $185k). The "refit" box (on by
+// default) swaps the fair price and, with it, AHR999 everywhere on the page --
+// the zones, the plan, the backtest; off -- the stored values, as CoinGlass's.
+const MP_FAIR_REFIT = { slope: 5.633, icpt: -16.3235 };
+const MP_GENESIS = Date.parse('2009-01-03T00:00:00Z');
+let mpCryptoIndRaw = null;
+function mpFairRefitOn() {
+  try { return localStorage.getItem('mp_fair_refit') !== '0'; } catch { return true; }
+}
+function mpCryptoWithFair(raw) {
+  if (!mpFairRefitOn()) return raw;
+  return raw.map(r => {
+    const age = (Date.parse(r.day + 'T00:00:00Z') - MP_GENESIS) / 86400000;
+    const fair = 10 ** (MP_FAIR_REFIT.slope * Math.log10(age) + MP_FAIR_REFIT.icpt);
+    return { ...r, fair, ahr: (r.btc / r.dca) * (r.btc / fair) };
+  });
 }
 const mpAhrZone = a => (a < MP_AHR.red ? 'red' : a > MP_AHR.green ? 'green' : 'neutral');
 const mpDaysBefore = (day, n) => new Date(Date.parse(day + 'T00:00:00Z') - n * 86400000).toISOString().slice(0, 10);
@@ -7847,6 +7874,13 @@ const MP_ZONE_NAME = { red: '🔴 красная', green: '🟢 зелёная',
 try { const v = localStorage.getItem('mp_cs_label'); if (v) document.getElementById('cs_label').value = v; } catch { /* no storage */ }
 document.getElementById('cs_label').addEventListener('change', e => {
   try { localStorage.setItem('mp_cs_label', e.target.value); } catch { /* no storage */ }
+  mpRenderCryptoStrategy();
+});
+// the fair price refitted on the whole history, or AHR999's own (MP_FAIR_REFIT)
+document.getElementById('cs_fair_refit').checked = mpFairRefitOn();
+document.getElementById('cs_fair_refit').addEventListener('change', e => {
+  try { localStorage.setItem('mp_fair_refit', e.target.checked ? '1' : '0'); } catch { /* no storage */ }
+  if (mpCryptoIndRaw) mpCryptoInd = mpCryptoWithFair(mpCryptoIndRaw);
   mpRenderCryptoStrategy();
 });
 async function mpRenderCryptoStrategy() {
@@ -7913,7 +7947,7 @@ async function mpRenderCryptoStrategy() {
   Plotly.newPlot('plot_cs_price', [
     { x: days, y: ind.map(r => r.btc), type: 'scatter', mode: 'lines', name: 'BTC', line: { color: '#58a6ff', width: 1.5 } },
     { x: days, y: ind.map(r => r.dca), type: 'scatter', mode: 'lines', name: 'DCA 200 дней', line: { color: '#8b949e', width: 1 } },
-    { x: days, y: ind.map(r => r.fair), type: 'scatter', mode: 'lines', name: 'справедливая (по возрасту)', line: { color: '#f2452b', width: 1, dash: 'dot' } },
+    { x: days, y: ind.map(r => r.fair), type: 'scatter', mode: 'lines', name: mpFairRefitOn() ? 'справедливая (по возрасту, вся история)' : 'справедливая (по возрасту, AHR999)', line: { color: '#f2452b', width: 1, dash: 'dot' } },
   ], { ...dark, title: 'BTC и его оценки, $', yaxis: { type: 'log', gridcolor: '#1e2830' }, xaxis: { gridcolor: '#1e2830' }, shapes,
     legend: { orientation: 'h', y: -0.15 } }, { responsive: true, displaylogo: false });
   if (shares.length) {
