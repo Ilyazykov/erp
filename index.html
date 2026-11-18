@@ -591,15 +591,15 @@
   <div class="section-title">Crypto strategy: AHR999</div>
   <p class="note">Доля всей крипты в портфеле (цель 5%) ведётся по индексу BTC AHR999, раз в месяц после зарплаты.
     🔴 <b>Красная зона</b> (&lt; 0.45; с галочкой ниже &lt; 0.516): докупать на 1% портфеля в месяц, не выше 5%; после неё в нейтральной зоне — так же, пока не 5%, потом держать 5% пополнениями.
-    🟢 <b>Зелёная зона</b> (&gt; 1.2; с галочкой &gt; 1.445): продавать в месяц 1% портфеля при доле 1–10%, 2% при 10–20%, 3% при 20–30%; не ниже 1%.
+    🟢 <b>Зелёная зона</b> (&gt; 1.2): продавать в месяц 1% портфеля при доле 1–10%, 2% при 10–20%, 3% при 20–30%; не ниже 1%.
     🟡 <b>Нейтральная после зелёной</b>: ничего не делать до следующей красной.
     AHR999 = (цена / средняя геометрическая 200 дневных закрытий) × (цена / 10<sup>5.84·log₁₀(дней с 03.01.2009) − 17.01</sup>),
     считается здесь каждое утро по BTC-USD с Yahoo — с CoinGlass может расходиться в сотых.
     С галочкой «справедливая по всей истории» вместо 5.84 и −17.01 — 5.633 и −16.3235: та же прямая
     log₁₀(цена) от log₁₀(возраст), подогнанная по каждому дню с 18.07.2010 (первая цена) по 17.11.2026
-    (CoinMetrics), — справедливая сегодня ~$146k вместо ~$185k, индекс выше в ~1.2–1.27 раза, поэтому и пороги
-    зон сдвинуты так, чтобы дней в красной и зелёной было столько же, сколько по формуле автора
-    (0.516 и 1.445 вместо 0.45 и 1.2); меняются зоны, план и бэктест. Без галочки — как у автора индекса и на CoinGlass.</p>
+    (CoinMetrics), — справедливая сегодня ~$146k вместо ~$185k, индекс выше в ~1.2–1.27 раза, поэтому порог красной
+    зоны сдвинут так, чтобы дней в ней было столько же, сколько по формуле автора (0.516 вместо 0.45;
+    зелёная — та же, 1.2); меняются зоны, план и бэктест. Без галочки — как у автора индекса и на CoinGlass.</p>
   <div class="form-row"><label title="Off: AHR999's own 5.84 / -17.01, as on CoinGlass"><input type="checkbox" id="cs_fair_refit"> справедливая по всей истории BTC (5.633 / −16.32)</label></div>
   <div id="cs_cards" class="form-row" style="gap:12px;flex-wrap:wrap"></div>
   <p class="empty-note" id="cs_status"></p>
@@ -7814,11 +7814,11 @@ function mpFairRefitOn() {
   try { return localStorage.getItem('mp_fair_refit') !== '0'; } catch { return true; }
 }
 // the zones' thresholds go with the fair price (the user, 18.11.2026): the refit index runs
-// ~1.2-1.27x higher, and 0.45 / 1.2 left it in the red on 10.5% of the days since 2015
-// instead of 15.3%, in the green on 36.5% instead of 27.7% (September 2023's red was gone);
-// 0.516 / 1.445 are the levels with the same shares of days as AHR999's own on its own
-// formula (crypto_indicators, 2015-04-05..2026-11-18)
-const MP_AHR_ZONES = { own: { red: 0.45, green: 1.2 }, refit: { red: 0.516, green: 1.445 } };
+// ~1.2-1.27x higher, and 0.45 left it in the red on 10.5% of the days since 2015 instead of
+// 15.3% (September 2023's red was gone); 0.516 is the level with the same share of days as AHR999's own on its own
+// formula (crypto_indicators, 2015-04-05..2026-11-18) -- the red one only: the green stays at
+// 1.2, the wider green zones of the refit index (summer-autumn 2025, May-June 2024) suit the user
+const MP_AHR_ZONES = { own: { red: 0.45, green: 1.2 }, refit: { red: 0.516, green: 1.2 } };
 function mpApplyAhrZones() { Object.assign(MP_AHR, MP_AHR_ZONES[mpFairRefitOn() ? 'refit' : 'own']); }
 function mpCryptoWithFair(raw) {
   mpApplyAhrZones();
