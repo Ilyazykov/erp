@@ -165,6 +165,45 @@ def write_json(alloc: dict, as_of: str, fed_rate_date: str, erp_z_date: str,
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+HISTORY_CSV_PATH = DATA_DIR / "us_allocation_history.csv"
+
+
+def write_history(out_path: Path = HISTORY_CSV_PATH) -> int:
+    """The target split month by month (the user, 18.11.2026: "a chart of
+    how the stocks/bonds shares changed over time"): the same formula as
+    today's, with that month's inputs -- the Fed funds rate (the month's
+    mean; the month not over yet -- its latest), the ERP Z-score of that
+    month (us_erp.csv) and the age that year. From July 1954, where FRED's
+    Fed funds series starts."""
+    rates: dict[str, list[float]] = {}
+    with FED_RATE_CSV_PATH.open(newline="", encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            if r["rate_pct"]:
+                rates.setdefault(r["date"][:7], []).append(float(r["rate_pct"]))
+    this_month = date.today().isoformat()[:7]
+    rate_of = {m: (vs[-1] if m == this_month else sum(vs) / len(vs)) for m, vs in rates.items()}
+    with US_ERP_CSV_PATH.open(newline="", encoding="utf-8") as f:
+        erp = list(csv.DictReader(f))
+    rows = []
+    for r in erp:
+        month = r["date"]
+        if month not in rate_of:
+            continue
+        z = float(r["z_score"]) if r["z_score"] not in (None, "") else None
+        a = compute_allocation(rate_of[month], z, int(month[:4]) - BIRTH_YEAR)
+        rows.append({
+            "date": month, "fed_rate": round(rate_of[month], 4), "age": a["age"],
+            "rate_stocks": round(a["rate_stocks"], 4), "age_stocks": round(a["age_stocks"], 4),
+            "base_stocks": round(a["base_stocks"], 4), "z": round(z, 4) if z is not None else "",
+            "target_stocks": round(a["target_stocks"], 4), "target_bonds": round(a["target_bonds"], 4),
+        })
+    with out_path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+    return len(rows)
+
+
 def main() -> int:
     fed_rate_date, fed_rate = read_latest_fed_rate()
     erp_z_date, erp_z = read_latest_us_erp_z()
@@ -173,6 +212,7 @@ def main() -> int:
 
     as_of = date.today().isoformat()
     write_json(alloc, as_of, fed_rate_date, erp_z_date)
+    print(f"History: {write_history()} months -> {HISTORY_CSV_PATH}")
 
     z_str = f"{erp_z:.2f}" if erp_z is not None else "-"
     print(f"Fed Funds Rate ({fed_rate_date}): {fed_rate:.2f}%  US ERP Z ({erp_z_date}): {z_str}  Age: {age}")

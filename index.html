@@ -722,6 +722,14 @@
   <span class="loading">Loading current allocation…</span>
 </p>
 <div id="us_alloc_target_table_wrap"></div>
+<div id="plot_us_alloc_history" style="height:420px; margin-top:16px"></div>
+<p class="note">
+  The target split above, month by month: the same formula with each month's own inputs -- the Fed
+  funds rate that month, the age that year and the US ERP Z-score that month. <b>Stocks</b> below,
+  <b>bonds</b> above; the dashed line is the base (rate + age) before the Z-score's correction, so
+  the gap between it and the stocks' edge is what the Z-score moved. Data from July 1954 (where the
+  Fed funds series starts); opens on the last 10 years.
+</p>
 </div>
 
 <!-- The accounts that sync or are checked by themselves: their keys, tokens
@@ -1219,6 +1227,16 @@ function renderChart(id) {
     });
     Plotly.newPlot('plot_damodaran_z', DATA.damodaranZChart, damodaranZLayout, CONFIG);
     Plotly.newPlot('plot_us_alloc_target', DATA.usAllocTarget, DATA.usAllocTargetLayout, CONFIG);
+    // the target split over time (calc_us_allocation.py's history); none yet -- no chart
+    if (DATA.usAllocHistory.length) {
+      Plotly.newPlot('plot_us_alloc_history', DATA.usAllocHistory, Object.assign({}, LAYOUT_BASE, {
+        xaxis: Object.assign({}, LAYOUT_BASE.xaxis, {
+          rangeslider: { visible: true, thickness: 0.08 }, range: DATA.usAllocHistoryRange,
+        }),
+        yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { title: 'share, %', range: [0, 100], ticksuffix: '%' }),
+        hovermode: 'x unified',
+      }), CONFIG);
+    }
   } else if (id === 'sigmoid') {
     const layoutAmp = Object.assign({}, LAYOUT_BASE, {
       xaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', title: 'USD/RUB rate', range: DATA.sigmoidAxisRange },
@@ -1290,6 +1308,21 @@ async function loadData() {
     fetchJson(`${DATA_DIR}/us_target_allocation.json`),
     fetchCsv(`${DATA_DIR}/damodaran_erp.csv`),
   ]);
+
+  // the US target split month by month (calc_us_allocation.py); no file yet -- no chart
+  const usAllocHistRows = await fetchCsv(`${DATA_DIR}/us_allocation_history.csv`).catch(() => []);
+  const usAllocHistDates = usAllocHistRows.map(r => r.date + '-01');
+  const usAllocHistory = usAllocHistRows.length ? [
+    { x: usAllocHistDates, y: usAllocHistRows.map(r => val(r.target_stocks)), name: 'Stocks', type: 'scatter', mode: 'lines',
+      stackgroup: 'split', line: { color: '#4da8c8', width: 1.5 }, hovertemplate: 'Stocks: <b>%{y:.1f}%</b><extra></extra>' },
+    { x: usAllocHistDates, y: usAllocHistRows.map(r => val(r.target_bonds)), name: 'Bonds', type: 'scatter', mode: 'lines',
+      stackgroup: 'split', line: { color: '#f0b429', width: 1.5 }, hovertemplate: 'Bonds: <b>%{y:.1f}%</b><extra></extra>' },
+    { x: usAllocHistDates, y: usAllocHistRows.map(r => val(r.base_stocks)), name: 'Stocks before the Z-score (base)', type: 'scatter', mode: 'lines',
+      line: { color: '#e6edf3', width: 1, dash: 'dash' }, hovertemplate: 'Base stocks: %{y:.1f}%<extra></extra>' },
+  ] : [];
+  const usAllocHistoryRange = usAllocHistDates.length
+    ? [usAllocHistDates[Math.max(0, usAllocHistDates.length - 121)], usAllocHistDates[usAllocHistDates.length - 1]]
+    : undefined;
 
   const dates = rows.map(r => r.date + '-01');
   const series = key => rows.map(r => val(r[key]));
@@ -2152,7 +2185,7 @@ async function loadData() {
   return { layer1, layer1_individual: layer1Individual, layer2_rebal: layer2Rebal,
            layer2_alloc: layer2Alloc, revYield, fcfYield, vkcoRevenueV2, usZscore,
            usTargetWeights, usTargetWeightsLayout, usErp, usErpZChart, usErpDefaultRange, damodaranZChart,
-           usAllocTarget: usAllocTargetTrace, usAllocTargetLayout,
+           usAllocTarget: usAllocTargetTrace, usAllocTargetLayout, usAllocHistory, usAllocHistoryRange,
            usAllocTargetRaw: usAllocTarget,
            sigmoidAmp, sigmoidAmpShapes, sigmoidAmpAnnotations, wCny5yCombined, wCny5yZones,
            targetWeights, targetWeightsLayout, allocTarget: allocTargetTrace, allocTargetLayout,
