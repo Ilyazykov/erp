@@ -1522,6 +1522,19 @@ async function loadData() {
   const usErpReal = vals => vals.map((v, i) => (usErpEst[i] ? null : v));
   const usErpEstSeries = (vals, color, width) => usErpEst.some(Boolean)
     ? [jsSeries(usErpDates, usErpEstOnly(vals), 'estimated (Shiller not out yet)', color, { width, dash: 'dash' })] : [];
+  // one series as drawn: solid to Shiller's last month, dashed after it -- and one invisible
+  // line over every month that alone answers the hover, so a month's hover shows that month
+  // (the solid line has nothing there past Shiller's last month, and the unified hover fell
+  // back to its last point, September's, under November's header)
+  const usErpLine = (vals, name, color, width) => [
+    Object.assign(jsSeries(usErpDates, usErpReal(vals), name, color, { width }), { hoverinfo: 'skip', hovertemplate: undefined }),
+    ...usErpEstSeries(vals, color, width).map(t => Object.assign(t, { hoverinfo: 'skip', hovertemplate: undefined, showlegend: false })),
+    Object.assign(jsSeries(usErpDates, vals, name, color, { width: 0 }), {
+      showlegend: false,
+      hovertemplate: name + ': <b>%{y:.2f}</b>' + (usErpEst.some(Boolean) ? '%{customdata}' : '') + '<extra></extra>',
+      customdata: usErpEst.map(e => (e ? ' (estimated, Shiller not out yet)' : '')),
+    }),
+  ];
   // Default visible window is the last 10 years; the full 1871-present
   // history is loaded and reachable via the range-slider/zoom below it.
   const usErpDefaultRange = usErpDates.length
@@ -1540,12 +1553,9 @@ async function loadData() {
   const usErpStocksYield = usErpRows.map(r => { const c = val(r.cape); return c ? 100 / c : null; });
   const usErpBondsYield = usErpStocksYield.map((s, i) => (s == null || usErpYield[i] == null ? null : s - usErpYield[i]));
   const usErp = [
-    jsSeries(usErpDates, usErpReal(usErpStocksYield), 'S&P 500 earnings yield (1/CAPE), %', '#4da8c8', { width: 2 }),
-    ...usErpEstSeries(usErpStocksYield, '#4da8c8', 2),
-    jsSeries(usErpDates, usErpReal(usErpBondsYield), '10Y Treasury real yield, %', '#f0b429', { width: 2 }),
-    ...usErpEstSeries(usErpBondsYield, '#f0b429', 2),
-    jsSeries(usErpDates, usErpReal(usErpYield), "Shiller's Excess CAPE Yield, %", '#3dd68c', { width: 2 }),
-    ...usErpEstSeries(usErpYield, '#3dd68c', 2),
+    ...usErpLine(usErpStocksYield, 'S&P 500 earnings yield (1/CAPE), %', '#4da8c8', 2),
+    ...usErpLine(usErpBondsYield, '10Y Treasury real yield, %', '#f0b429', 2),
+    ...usErpLine(usErpYield, "Shiller's Excess CAPE Yield, %", '#3dd68c', 2),
     jsSeries(usErpDates, damodaranYield, "Damodaran's Implied ERP (T12m), %", '#a78bfa', { width: 1.5, dash: 'dot' }),
   ];
 
@@ -1563,8 +1573,7 @@ async function loadData() {
   const usErpZChart = [
     jsSeries(usErpDates, usErpRollZ(usErpStocksYield), 'Stocks Z (1/CAPE)', '#4da8c8', { width: 1.5 }),
     jsSeries(usErpDates, usErpRollZ(usErpBondsYield), 'Bonds Z (10Y real yield)', '#f0b429', { width: 1.5 }),
-    jsSeries(usErpDates, usErpReal(usErpZ), 'ERP Z (the gap; drives the donut)', '#3dd68c', { width: 2.5 }),
-    ...usErpEstSeries(usErpZ, '#3dd68c', 2.5),
+    ...usErpLine(usErpZ, 'ERP Z (the gap; drives the donut)', '#3dd68c', 2.5),
     erpFill(usErpDates, usErpZ, true),
     erpFill(usErpDates, usErpZ, false),
   ];
