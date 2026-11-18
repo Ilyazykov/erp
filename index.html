@@ -602,7 +602,8 @@
     зоны сдвинут так, чтобы дней в ней было столько же, сколько по формуле автора (0.516 вместо 0.45;
     зелёная — та же, 1.2); меняются зоны, план и бэктест. Без галочки — как у автора индекса и на CoinGlass.</p>
   <div class="form-row"><label title="Off: AHR999's own 5.84 / -17.01, as on CoinGlass"><input type="checkbox" id="cs_fair_refit"> справедливая по всей истории BTC (<span id="cs_fair_refit_coef">5.633 / −16.32</span>)</label>
-    <label title="a: today's coefficients for every past day too; b: each day its own, fitted only on the prices before it -- as one would have seen it then">коэффициенты: <select id="cs_fair_mode"><option value="b">б — на каждый день свои (по ценам до него)</option><option value="a">а — последние для всей истории</option></select></label></div>
+    <label title="a: today's coefficients for every past day too; b: each day its own, fitted only on the prices before it -- as one would have seen it then">коэффициенты: <select id="cs_fair_mode"><option value="b">б — на каждый день свои (по ценам до него)</option><option value="a">а — последние для всей истории</option></select></label>
+    <label title="Оригинал: 0.45 / 1.2. Текущий: с галочкой красная сдвинута на ту же долю красных дней, зелёная 1.2. Вся история а: треть дней красных, треть нейтральных, треть зелёных по всем дням с 2015-04. Вся история б: те же трети на каждый день только по дням до него (первый год — 0.45 / 1.2)">пороги зон: <select id="cs_zone_mode"><option value="orig">оригинал (0.45 / 1.2)</option><option value="cur">текущий вариант</option><option value="ter_a">вся история а — по трети дней</option><option value="ter_b">вся история б — по трети дней до каждого дня</option></select></label></div>
   <div id="cs_cards" class="form-row" style="gap:12px;flex-wrap:wrap"></div>
   <p class="empty-note" id="cs_status"></p>
   <div id="plot_cs_ahr" style="height:420px"></div>
@@ -7851,21 +7852,56 @@ function mpFairRefitOn() {
 // 1.2, the wider green zones of the refit index (summer-autumn 2025, May-June 2024) suit the user
 const MP_AHR_ZONES = { own: { red: 0.45, green: 1.2 }, refit: { red: 0.516, green: 1.2 } };
 function mpApplyAhrZones() { Object.assign(MP_AHR, MP_AHR_ZONES[mpFairRefitOn() ? 'refit' : 'own']); }
+// The zones' thresholds (the user, 18.11.2026), each day's on its row (r.red, r.green):
+//   orig  -- AHR999's own, 0.45 / 1.2;
+//   cur   -- 0.45 / 1.2, or with the whole-history fair price the red one moved to the
+//            same share of red days (crypto_fair_fit's red_threshold), the green 1.2;
+//   ter_a -- thirds: a third of the days red, a third neutral, a third green -- the index's
+//            1/3 and 2/3 quantiles over every day there is (from 2015-04, crypto_indicators);
+//   ter_b -- the same thirds on each day over the days before it only (as one would have
+//            seen it then); its first year, under 365 days to count -- 0.45 / 1.2.
+function mpZoneMode() {
+  try { const v = localStorage.getItem('mp_zone_mode'); return ['orig', 'cur', 'ter_a', 'ter_b'].includes(v) ? v : 'cur'; } catch { return 'cur'; }
+}
+function mpQuantile(sorted, q) {
+  const pos = q * (sorted.length - 1), lo = Math.floor(pos);
+  return sorted[lo] + (sorted[Math.min(lo + 1, sorted.length - 1)] - sorted[lo]) * (pos - lo);
+}
+function mpWithZones(rows) {
+  const mode = mpZoneMode();
+  if (mode === 'orig') return rows.map(r => ({ ...r, red: 0.45, green: 1.2 }));
+  if (mode === 'cur') return rows.map(r => ({ ...r, red: MP_AHR.red, green: MP_AHR.green }));
+  if (mode === 'ter_a') {
+    const s = rows.map(r => r.ahr).sort((a, b) => a - b);
+    const red = mpQuantile(s, 1 / 3), green = mpQuantile(s, 2 / 3);
+    return rows.map(r => ({ ...r, red, green }));
+  }
+  // ter_b: the days before, kept sorted as they come (a binary search and an insert a day)
+  const s = [];
+  return rows.map(r => {
+    const out = s.length >= 365 ? { ...r, red: mpQuantile(s, 1 / 3), green: mpQuantile(s, 2 / 3) } : { ...r, red: 0.45, green: 1.2 };
+    let lo = 0, hi = s.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (s[m] < r.ahr) lo = m + 1; else hi = m; }
+    s.splice(lo, 0, r.ahr);
+    return out;
+  });
+}
 function mpCryptoWithFair(raw) {
   mpApplyAhrZones();
-  if (!mpFairRefitOn()) return raw;
+  if (!mpFairRefitOn()) return mpWithZones(raw);
   const perDay = mpFairMode() === 'b' && mpFairFits.length;
   let j = 0;
-  return raw.map(r => {
+  return mpWithZones(raw.map(r => {
     const age = (Date.parse(r.day + 'T00:00:00Z') - MP_GENESIS) / 86400000;
     // b: that day's fit, or the last one before it (none before -- the first)
     while (perDay && j + 1 < mpFairFits.length && mpFairFits[j + 1].day <= r.day) j++;
     const c = perDay ? mpFairFits[j] : MP_FAIR_REFIT;
     const fair = 10 ** (c.slope * Math.log10(age) + c.icpt);
     return { ...r, fair, ahr: (r.btc / r.dca) * (r.btc / fair) };
-  });
+  }));
 }
-const mpAhrZone = a => (a < MP_AHR.red ? 'red' : a > MP_AHR.green ? 'green' : 'neutral');
+// the zone of an index value -- on its row's thresholds when given (mpWithZones), else MP_AHR's
+const mpAhrZone = (a, r) => (a < (r?.red ?? MP_AHR.red) ? 'red' : a > (r?.green ?? MP_AHR.green) ? 'green' : 'neutral');
 const mpDaysBefore = (day, n) => new Date(Date.parse(day + 'T00:00:00Z') - n * 86400000).toISOString().slice(0, 10);
 // The strategy's target share on `day` for a share of `share` %, the zone that
 // day and the last red / green before it; lastBuy / lastSell: the latest
@@ -7907,9 +7943,9 @@ const mpLastBefore = (days, day) => { let v = null; for (const d of days) { if (
 function mpCryptoPlan(share, ind = mpCryptoInd) {
   if (!ind?.length) return null;
   const last = ind[ind.length - 1];
-  const zone = mpAhrZone(last.ahr);
+  const zone = mpAhrZone(last.ahr, last);
   let regime = null;
-  for (let i = ind.length - 1; i >= 0 && !regime; i--) { const z = mpAhrZone(ind[i].ahr); if (z !== 'neutral') regime = z; }
+  for (let i = ind.length - 1; i >= 0 && !regime; i--) { const z = mpAhrZone(ind[i].ahr, ind[i]); if (z !== 'neutral') regime = z; }
   const today = new Date().toISOString().slice(0, 10);
   const t = mpCryptoTarget(today, share, zone, regime, mpLastBefore(mpCryptoBuyDays, today + 'z'), mpLastBefore(mpCryptoSellDays, today + 'z'));
   const action = t.target > share + 1e-9 ? 'buy' : t.target < share - 1e-9 ? 'sell' : 'hold';
@@ -7924,6 +7960,12 @@ document.getElementById('cs_label').addEventListener('change', e => {
 // the fair price refitted on the whole history, or AHR999's own (MP_FAIR_REFIT)
 document.getElementById('cs_fair_refit').checked = mpFairRefitOn();
 document.getElementById('cs_fair_mode').value = mpFairMode();
+document.getElementById('cs_zone_mode').value = mpZoneMode();
+document.getElementById('cs_zone_mode').addEventListener('change', e => {
+  try { localStorage.setItem('mp_zone_mode', e.target.value); } catch { /* no storage */ }
+  if (mpCryptoIndRaw) mpCryptoInd = mpCryptoWithFair(mpCryptoIndRaw);
+  mpRenderCryptoStrategy();
+});
 document.getElementById('cs_fair_mode').addEventListener('change', e => {
   try { localStorage.setItem('mp_fair_mode', e.target.value); } catch { /* no storage */ }
   if (mpCryptoIndRaw) mpCryptoInd = mpCryptoWithFair(mpCryptoIndRaw);
@@ -7982,7 +8024,7 @@ async function mpRenderCryptoStrategy() {
   const shapes = [];
   let runStart = null, runZone = null;
   ind.forEach((r, i) => {
-    const z = mpAhrZone(r.ahr);
+    const z = mpAhrZone(r.ahr, r);
     if (z !== runZone) {
       if (runZone && runZone !== 'neutral') shapes.push({ type: 'rect', xref: 'x', yref: 'paper', x0: runStart, x1: r.day, y0: 0, y1: 1,
         fillcolor: runZone === 'red' ? '#e05252' : '#3dd68c', opacity: 0.12, line: { width: 0 }, layer: 'below' });
@@ -7992,9 +8034,13 @@ async function mpRenderCryptoStrategy() {
       fillcolor: runZone === 'red' ? '#e05252' : '#3dd68c', opacity: 0.12, line: { width: 0 }, layer: 'below' });
   });
   const hline = (y, color) => ({ type: 'line', xref: 'paper', x0: 0, x1: 1, y0: y, y1: y, line: { color, width: 1, dash: 'dash' } });
-  Plotly.newPlot('plot_cs_ahr', [{ x: days, y: ind.map(r => r.ahr), type: 'scatter', mode: 'lines', name: 'AHR999', line: { color: '#f5c542', width: 1.5 }, hovertemplate: '%{y:.3f}' }],
-    { ...dark, title: 'AHR999', yaxis: { type: 'log', gridcolor: '#1e2830' }, xaxis: { gridcolor: '#1e2830' },
-      shapes: [...shapes, hline(MP_AHR.red, '#e05252'), hline(MP_AHR.green, '#3dd68c')] }, { responsive: true, displaylogo: false });
+  // the thresholds as lines over the days: flat, or moving day by day (ter_b)
+  const thr = (key, name, color) => ({ x: days, y: ind.map(r => r[key]), type: 'scatter', mode: 'lines', name,
+    line: { color, width: 1, dash: 'dash', shape: 'hv' }, hovertemplate: '%{y:.3f}' });
+  Plotly.newPlot('plot_cs_ahr', [{ x: days, y: ind.map(r => r.ahr), type: 'scatter', mode: 'lines', name: 'AHR999', line: { color: '#f5c542', width: 1.5 }, hovertemplate: '%{y:.3f}' },
+    thr('red', 'порог красной', '#e05252'), thr('green', 'порог зелёной', '#3dd68c')],
+    { ...dark, title: 'AHR999', yaxis: { type: 'log', gridcolor: '#1e2830' }, xaxis: { gridcolor: '#1e2830' }, showlegend: false,
+      shapes }, { responsive: true, displaylogo: false });
   Plotly.newPlot('plot_cs_price', [
     { x: days, y: ind.map(r => r.btc), type: 'scatter', mode: 'lines', name: 'BTC', line: { color: '#58a6ff', width: 1.5 } },
     { x: days, y: ind.map(r => r.dca), type: 'scatter', mode: 'lines', name: 'DCA 200 дней', line: { color: '#8b949e', width: 1 } },
@@ -8040,7 +8086,7 @@ async function mpRenderCryptoStrategy() {
     const zoneColor = { red: '#e05252', green: '#3dd68c' };
     const span = ind.filter(r => r.day >= start);
     span.forEach((r, i) => {
-      const z = mpAhrZone(r.ahr);
+      const z = mpAhrZone(r.ahr, r);
       const close = end => zZone !== 'neutral' && zoneShapes.push({ type: 'rect', xref: 'x', yref: 'paper', x0: zStart, x1: end, y0: 0, y1: 1,
         fillcolor: zoneColor[zZone], opacity: 0.15, line: { width: 0 }, layer: 'below' });
       if (z !== zZone) { if (zZone) close(r.day); zStart = r.day; zZone = z; }
@@ -8049,13 +8095,13 @@ async function mpRenderCryptoStrategy() {
       if (i === span.length - 1) close(shown.length && shown[shown.length - 1].day > r.day ? shown[shown.length - 1].day : r.day);
     });
     // the strategy's target day by day (mpCryptoTarget, as the card has it)
-    const ahrOn = new Map(ind.map(r => [r.day, r.ahr]));
+    const ahrOn = new Map(ind.map(r => [r.day, r]));
     let regime = null;
-    for (const r of ind) { if (r.day >= start) break; const z = mpAhrZone(r.ahr); if (z !== 'neutral') regime = z; }
+    for (const r of ind) { if (r.day >= start) break; const z = mpAhrZone(r.ahr, r); if (z !== 'neutral') regime = z; }
     const targets = shown.map(x => {
       // (no value for the day yet -- today's: the last one there is)
-      const a = ahrOn.get(x.day) ?? [...ind].reverse().find(r => r.day <= x.day)?.ahr;
-      const z = a === undefined ? 'neutral' : mpAhrZone(a);
+      const a = ahrOn.get(x.day) ?? [...ind].reverse().find(r => r.day <= x.day);
+      const z = a === undefined ? 'neutral' : mpAhrZone(a.ahr, a);
       if (z !== 'neutral') regime = z;
       return mpCryptoTarget(x.day, x.pct, z, regime, mpLastBefore(mpCryptoBuyDays, x.day), mpLastBefore(mpCryptoSellDays, x.day)).target;
     });
