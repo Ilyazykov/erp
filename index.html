@@ -1231,6 +1231,7 @@ function renderChart(id) {
     if (DATA.usAllocHistory.length) {
       Plotly.newPlot('plot_us_alloc_history', DATA.usAllocHistory, Object.assign({}, LAYOUT_BASE, {
         xaxis: Object.assign({}, LAYOUT_BASE.xaxis, {
+          type: 'date', tickformat: '%Y-%m', dtick: 'M6',
           rangeslider: { visible: true, thickness: 0.08 }, range: DATA.usAllocHistoryRange,
         }),
         // a fixed 60-100%: the share's whole range since 2019, from a round floor (the user)
