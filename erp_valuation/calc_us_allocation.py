@@ -166,6 +166,7 @@ def write_json(alloc: dict, as_of: str, fed_rate_date: str, erp_z_date: str,
 
 
 HISTORY_CSV_PATH = DATA_DIR / "us_allocation_history.csv"
+HISTORY_START = "2019-01"
 
 
 def write_history(out_path: Path = HISTORY_CSV_PATH) -> int:
@@ -173,8 +174,8 @@ def write_history(out_path: Path = HISTORY_CSV_PATH) -> int:
     how the stocks/bonds shares changed over time"): the same formula as
     today's, with that month's inputs -- the Fed funds rate (the month's
     mean; the month not over yet -- its latest), the ERP Z-score of that
-    month (us_erp.csv) and the age that year. From July 1954, where FRED's
-    Fed funds series starts."""
+    month (us_erp.csv) and the age that year. From 2019 (the user: earlier
+    years mean nothing for his age)."""
     rates: dict[str, list[float]] = {}
     with FED_RATE_CSV_PATH.open(newline="", encoding="utf-8") as f:
         for r in csv.DictReader(f):
@@ -187,7 +188,7 @@ def write_history(out_path: Path = HISTORY_CSV_PATH) -> int:
     rows = []
     for r in erp:
         month = r["date"]
-        if month not in rate_of:
+        if month < HISTORY_START or month not in rate_of:
             continue
         z = float(r["z_score"]) if r["z_score"] not in (None, "") else None
         a = compute_allocation(rate_of[month], z, int(month[:4]) - BIRTH_YEAR)

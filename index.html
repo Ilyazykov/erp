@@ -724,11 +724,10 @@
 <div id="us_alloc_target_table_wrap"></div>
 <div id="plot_us_alloc_history" style="height:420px; margin-top:16px"></div>
 <p class="note">
-  The target split above, month by month: the same formula with each month's own inputs -- the Fed
-  funds rate that month, the age that year and the US ERP Z-score that month. <b>Stocks</b> below,
-  <b>bonds</b> above; the dashed line is the base (rate + age) before the Z-score's correction, so
-  the gap between it and the stocks' edge is what the Z-score moved. Data from July 1954 (where the
-  Fed funds series starts); opens on the last 10 years.
+  The stock share of the target above, month by month, at each step of the same formula with that
+  month's own inputs: <b>by age alone</b> (dotted: 100 &minus; (age &minus; 10)), the <b>base</b>
+  (dashed: the average of the age's share and the Fed funds rate's) and the <b>target</b> (solid:
+  the base with the ERP Z-score's correction -- all three inputs). Bonds are the rest to 100%. From 2019.
 </p>
 </div>
 
@@ -1233,9 +1232,10 @@ function renderChart(id) {
         xaxis: Object.assign({}, LAYOUT_BASE.xaxis, {
           rangeslider: { visible: true, thickness: 0.08 }, range: DATA.usAllocHistoryRange,
         }),
-        yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { title: 'share, %', range: [0, 100], ticksuffix: '%' }),
+        yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { title: 'stocks, %', autorange: true, ticksuffix: '%' }),
         hovermode: 'x unified',
       }), CONFIG);
+      autoFitYOnXChange('plot_us_alloc_history', DATA.usAllocHistory);
     }
   } else if (id === 'sigmoid') {
     const layoutAmp = Object.assign({}, LAYOUT_BASE, {
@@ -1312,17 +1312,15 @@ async function loadData() {
   // the US target split month by month (calc_us_allocation.py); no file yet -- no chart
   const usAllocHistRows = await fetchCsv(`${DATA_DIR}/us_allocation_history.csv`).catch(() => []);
   const usAllocHistDates = usAllocHistRows.map(r => r.date + '-01');
+  // the stock share at each step of the formula: age alone, age + rate (the base), and the
+  // target with the Z-score's correction -- plain lines (the user, 18.11.2026)
   const usAllocHistory = usAllocHistRows.length ? [
-    { x: usAllocHistDates, y: usAllocHistRows.map(r => val(r.target_stocks)), name: 'Stocks', type: 'scatter', mode: 'lines',
-      stackgroup: 'split', line: { color: '#4da8c8', width: 1.5 }, hovertemplate: 'Stocks: <b>%{y:.1f}%</b><extra></extra>' },
-    { x: usAllocHistDates, y: usAllocHistRows.map(r => val(r.target_bonds)), name: 'Bonds', type: 'scatter', mode: 'lines',
-      stackgroup: 'split', line: { color: '#f0b429', width: 1.5 }, hovertemplate: 'Bonds: <b>%{y:.1f}%</b><extra></extra>' },
-    { x: usAllocHistDates, y: usAllocHistRows.map(r => val(r.base_stocks)), name: 'Stocks before the Z-score (base)', type: 'scatter', mode: 'lines',
-      line: { color: '#e6edf3', width: 1, dash: 'dash' }, hovertemplate: 'Base stocks: %{y:.1f}%<extra></extra>' },
+    jsSeries(usAllocHistDates, usAllocHistRows.map(r => val(r.age_stocks)), 'Stocks by age alone', '#8b949e', { width: 1.5, dash: 'dot' }),
+    jsSeries(usAllocHistDates, usAllocHistRows.map(r => val(r.base_stocks)), 'Base: age + Fed rate', '#f0b429', { width: 1.5, dash: 'dash' }),
+    jsSeries(usAllocHistDates, usAllocHistRows.map(r => val(r.target_stocks)), 'Target: age + Fed rate + ERP Z-score', '#4da8c8', { width: 2.5 }),
   ] : [];
   const usAllocHistoryRange = usAllocHistDates.length
-    ? [usAllocHistDates[Math.max(0, usAllocHistDates.length - 121)], usAllocHistDates[usAllocHistDates.length - 1]]
-    : undefined;
+    ? [usAllocHistDates[0], usAllocHistDates[usAllocHistDates.length - 1]] : undefined;
 
   const dates = rows.map(r => r.date + '-01');
   const series = key => rows.map(r => val(r[key]));
