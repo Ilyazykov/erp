@@ -725,9 +725,10 @@
 <div id="plot_us_alloc_history" style="height:420px; margin-top:16px"></div>
 <p class="note">
   The stock share of the target above, month by month, at each step of the same formula with that
-  month's own inputs: <b>by age alone</b> (dotted: 100 &minus; (age &minus; 10)), the <b>base</b>
-  (dashed: the average of the age's share and the Fed funds rate's) and the <b>target</b> (solid:
-  the base with the ERP Z-score's correction -- all three inputs). Bonds are the rest to 100%. From 2019.
+  month's own inputs: <b>by age alone</b> (grey dotted: 100 &minus; (age &minus; 10)), <b>by the Fed
+  funds rate alone</b> (violet dotted: w(r) above; the rate itself in the hover), the <b>base</b>
+  (dashed: the average of the two) and the <b>target</b> (solid:
+  the base with the ERP Z-score's correction -- all three inputs). Bonds are the rest to 100%. From 2016.
 </p>
 </div>
 
@@ -1316,6 +1317,11 @@ async function loadData() {
   // target with the Z-score's correction -- plain lines (the user, 18.11.2026)
   const usAllocHistory = usAllocHistRows.length ? [
     jsSeries(usAllocHistDates, usAllocHistRows.map(r => val(r.age_stocks)), 'Stocks by age alone', '#8b949e', { width: 1.5, dash: 'dot' }),
+    // by the Fed funds rate alone, the rate itself in the hover
+    Object.assign(jsSeries(usAllocHistDates, usAllocHistRows.map(r => val(r.rate_stocks)), 'Stocks by Fed rate alone', '#a78bfa', { width: 1.5, dash: 'dot' }), {
+      customdata: usAllocHistRows.map(r => val(r.fed_rate)),
+      hovertemplate: 'Stocks by Fed rate alone: <b>%{y:.1f}%</b> (rate %{customdata:.2f}%)<extra></extra>',
+    }),
     jsSeries(usAllocHistDates, usAllocHistRows.map(r => val(r.base_stocks)), 'Base: age + Fed rate', '#f0b429', { width: 1.5, dash: 'dash' }),
     jsSeries(usAllocHistDates, usAllocHistRows.map(r => val(r.target_stocks)), 'Target: age + Fed rate + ERP Z-score', '#4da8c8', { width: 2.5 }),
   ] : [];
@@ -1706,7 +1712,7 @@ async function loadData() {
     as of ${usTargetAllocationData.fed_rate_date} → <span class="stat">${usTargetAllocationData.rate_stocks.toFixed(1)}%</span> stocks;
     note the formula's constants are calibrated for the CBR's 5–21% rate range, not the Fed's —
     at the Fed's much lower rate this pins the rate-based share near 100% stocks, which is expected,
-    not a bug) and an age-based glide path (bonds% = age &minus; 10, age = <span class="stat">${usTargetAllocationData.age}</span>
+    not a bug) and an age-based glide path (bonds% = age &minus; 10, age = <span class="stat">${Number(usTargetAllocationData.age).toFixed(1)}</span>
     → <span class="stat">${usTargetAllocationData.age_stocks.toFixed(1)}%</span> stocks)
     → base = <span class="stat">${usTargetAllocationData.base_stocks.toFixed(1)}%</span> stocks,
     then the same Z-gated correction applied via the <b>US ERP Z-score</b>

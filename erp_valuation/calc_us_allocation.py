@@ -104,8 +104,16 @@ def stock_share_from_rate(r: float) -> float:
     return 100 / (1 + math.exp((r - KEY_RATE_MIDPOINT) / KEY_RATE_SLOPE))
 
 
-def current_age(as_of: date) -> int:
-    return as_of.year - BIRTH_YEAR
+def age_in_month(year: int, month: int) -> float:
+    """The age growing month by month, not a step each January (the user,
+    18.11.2026: the stepped age line looked odd): only the birth year is
+    known, so a birthday on January 1st -- the whole years as before each
+    January, plus 1/12 a month."""
+    return year - BIRTH_YEAR + (month - 1) / 12
+
+
+def current_age(as_of: date) -> float:
+    return age_in_month(as_of.year, as_of.month)
 
 
 def compute_allocation(fed_rate: float, erp_z: float | None, age: float) -> dict:
@@ -150,7 +158,7 @@ def write_json(alloc: dict, as_of: str, fed_rate_date: str, erp_z_date: str,
         "fed_rate_date": fed_rate_date,
         "erp_z_date": erp_z_date,
         "birth_year": BIRTH_YEAR,
-        "age": alloc["age"],
+        "age": round(alloc["age"], 2),
         "rate_stocks": round(alloc["rate_stocks"], 4),
         "age_stocks": round(alloc["age_stocks"], 4),
         "base_stocks": round(alloc["base_stocks"], 4),
@@ -166,7 +174,7 @@ def write_json(alloc: dict, as_of: str, fed_rate_date: str, erp_z_date: str,
 
 
 HISTORY_CSV_PATH = DATA_DIR / "us_allocation_history.csv"
-HISTORY_START = "2019-01"
+HISTORY_START = "2016-01"
 
 
 def write_history(out_path: Path = HISTORY_CSV_PATH) -> int:
@@ -174,7 +182,7 @@ def write_history(out_path: Path = HISTORY_CSV_PATH) -> int:
     how the stocks/bonds shares changed over time"): the same formula as
     today's, with that month's inputs -- the Fed funds rate (the month's
     mean; the month not over yet -- its latest), the ERP Z-score of that
-    month (us_erp.csv) and the age that year. From 2019 (the user: earlier
+    month (us_erp.csv) and the age that year. From 2016 (the user: earlier
     years mean nothing for his age)."""
     rates: dict[str, list[float]] = {}
     with FED_RATE_CSV_PATH.open(newline="", encoding="utf-8") as f:
@@ -191,9 +199,9 @@ def write_history(out_path: Path = HISTORY_CSV_PATH) -> int:
         if month < HISTORY_START or month not in rate_of:
             continue
         z = float(r["z_score"]) if r["z_score"] not in (None, "") else None
-        a = compute_allocation(rate_of[month], z, int(month[:4]) - BIRTH_YEAR)
+        a = compute_allocation(rate_of[month], z, age_in_month(int(month[:4]), int(month[5:7])))
         rows.append({
-            "date": month, "fed_rate": round(rate_of[month], 4), "age": a["age"],
+            "date": month, "fed_rate": round(rate_of[month], 4), "age": round(a["age"], 2),
             "rate_stocks": round(a["rate_stocks"], 4), "age_stocks": round(a["age_stocks"], 4),
             "base_stocks": round(a["base_stocks"], 4), "z": round(z, 4) if z is not None else "",
             "target_stocks": round(a["target_stocks"], 4), "target_bonds": round(a["target_bonds"], 4),
@@ -216,7 +224,7 @@ def main() -> int:
     print(f"History: {write_history()} months -> {HISTORY_CSV_PATH}")
 
     z_str = f"{erp_z:.2f}" if erp_z is not None else "-"
-    print(f"Fed Funds Rate ({fed_rate_date}): {fed_rate:.2f}%  US ERP Z ({erp_z_date}): {z_str}  Age: {age}")
+    print(f"Fed Funds Rate ({fed_rate_date}): {fed_rate:.2f}%  US ERP Z ({erp_z_date}): {z_str}  Age: {age:.2f}")
     print(f"Rate-based stocks: {alloc['rate_stocks']:.2f}%  Age-based stocks: {alloc['age_stocks']:.2f}%  "
           f"Base stocks: {alloc['base_stocks']:.2f}%")
     print(f"Target stocks: {alloc['target_stocks']:.2f}%  "
