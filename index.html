@@ -720,6 +720,7 @@
   full 1871–present series). <b>Above +1.5</b> → stocks unusually cheap vs
   (real) rates → historically a buy signal. <b>Below −1.5</b> → stocks unusually expensive vs
   rates → historically a trim signal. This is the Z-score that drives the allocation donut below.
+  <b>Blue</b> and <b>orange</b> — each side's own Z-score (the stocks' 1/CAPE, the real 10-year rate), on the same 36-month window, as Portfolio Z / OFZ Z on the RU ERP tab; shown only. Unlike there, the green is the Z-score of the gap itself, not blue minus orange.
 </p>
 <div id="plot_damodaran_z" style="height:340px; margin-top:8px"></div>
 <p class="note">
@@ -1548,8 +1549,21 @@ async function loadData() {
     jsSeries(usErpDates, damodaranYield, "Damodaran's Implied ERP (T12m), %", '#a78bfa', { width: 1.5, dash: 'dot' }),
   ];
 
+  // each side's own Z-score, as RU ERP's Portfolio Z / OFZ Z (the user, 18.11.2026): the same
+  // rolling 36 months as us_erp.py's rolling_zscore (the 36 before, population std, 6+ needed),
+  // on the whole history; shown only -- the donut stays on the gap's Z-score
+  const usErpRollZ = vals => vals.map((v, i) => {
+    if (v == null) return null;
+    const h = vals.slice(Math.max(0, i - 36), i).filter(x => x != null);
+    if (h.length < 6) return null;
+    const m = h.reduce((s, x) => s + x, 0) / h.length;
+    const sd = Math.sqrt(h.reduce((s, x) => s + (x - m) ** 2, 0) / h.length);
+    return sd < 1e-9 ? 0 : (v - m) / sd;
+  });
   const usErpZChart = [
-    jsSeries(usErpDates, usErpReal(usErpZ), 'Z-score', '#3dd68c', { width: 2.5 }),
+    jsSeries(usErpDates, usErpRollZ(usErpStocksYield), 'Stocks Z (1/CAPE)', '#4da8c8', { width: 1.5 }),
+    jsSeries(usErpDates, usErpRollZ(usErpBondsYield), 'Bonds Z (10Y real yield)', '#f0b429', { width: 1.5 }),
+    jsSeries(usErpDates, usErpReal(usErpZ), 'ERP Z (the gap; drives the donut)', '#3dd68c', { width: 2.5 }),
     ...usErpEstSeries(usErpZ, '#3dd68c', 2.5),
     erpFill(usErpDates, usErpZ, true),
     erpFill(usErpDates, usErpZ, false),
