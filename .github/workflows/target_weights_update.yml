@@ -30,6 +30,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/target_weights.json data/target_weights.csv data/target_allocation.json data/target_allocation.csv data/key_rate.csv
+          git add data/target_weights.json data/target_weights.csv data/target_allocation.json data/target_allocation.csv data/key_rate.csv data/ru_allocation_history.csv
           git commit -m "chore: update target portfolio weights and allocation" || echo "No changes to commit"
           git push || echo "No changes to push"

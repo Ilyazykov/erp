@@ -62,7 +62,8 @@ import math
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from zscore_weights import Z_THRESHOLD, allocation_split, compute_target_weights, signal
+from zscore_weights import (BIRTH_YEAR, Z_THRESHOLD, allocation_split, compute_target_weights, signal,
+                            stock_share_from_age)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = REPO_ROOT / "data"
@@ -271,6 +272,48 @@ def append_allocation_csv(alloc: dict, as_of: str, out_path: Path = ALLOC_OUT_CS
         writer.writerows(existing_rows)
 
 
+ALLOC_HISTORY_CSV_PATH = DATA_DIR / "ru_allocation_history.csv"
+ALLOC_HISTORY_START = "2016-01"
+
+
+def write_allocation_history(out_path: Path = ALLOC_HISTORY_CSV_PATH) -> int:
+    """The stocks/bonds target month by month, as the US ERP tab's chart
+    (calc_us_allocation.write_history; the user, 18.11.2026): the same
+    formula with that month's inputs -- the CBR key rate (the month's mean;
+    the month not over yet -- its latest) and composite_erp_z of that month
+    (from 2019-07, where composite_valuation.csv has it; before -- the base
+    alone). The age's share (100 - (age - 10), the age growing month by
+    month from a January 1st birthday) is written alongside for the chart
+    only: this allocation doesn't use it."""
+    rates: dict[str, list[float]] = {}
+    with KEY_RATE_CSV_PATH.open(newline="", encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            if r["rate_pct"]:
+                rates.setdefault(r["date"][:7], []).append(float(r["rate_pct"]))
+    this_month = date.today().isoformat()[:7]
+    rate_of = {m: (vs[-1] if m == this_month else sum(vs) / len(vs)) for m, vs in rates.items()}
+    with COMPOSITE_CSV_PATH.open(newline="", encoding="utf-8") as f:
+        z_of = {r["date"]: float(r[COMPOSITE_Z_COLUMN]) for r in csv.DictReader(f)
+                if (r.get(COMPOSITE_Z_COLUMN) or "").strip()}
+    rows = []
+    for month in sorted(rate_of):
+        if month < ALLOC_HISTORY_START:
+            continue
+        z = z_of.get(month)
+        a = compute_allocation(rate_of[month], z)
+        age = int(month[:4]) - BIRTH_YEAR + (int(month[5:7]) - 1) / 12
+        rows.append({
+            "date": month, "key_rate": round(rate_of[month], 4), "rate_stocks": round(a["base_stocks"], 4),
+            "age_stocks": round(stock_share_from_age(age), 4), "z": round(z, 4) if z is not None else "",
+            "target_stocks": round(a["target_stocks"], 4), "target_bonds": round(a["target_bonds"], 4),
+        })
+    with out_path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+    return len(rows)
+
+
 def main() -> int:
     base_weights = read_base_weights()
     zscores = read_latest_zscores()
@@ -301,6 +344,7 @@ def main() -> int:
           f"Target bonds: {alloc['target_bonds']:.2f}%  Signal: {alloc['signal']}")
     print(f"Saved {ALLOC_OUT_JSON_PATH}")
     print(f"Saved {ALLOC_OUT_CSV_PATH}")
+    print(f"History: {write_allocation_history()} months -> {ALLOC_HISTORY_CSV_PATH}")
     return 0
 
 
