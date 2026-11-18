@@ -603,7 +603,7 @@
     зелёная — та же, 1.2); меняются зоны, план и бэктест. Без галочки — как у автора индекса и на CoinGlass.</p>
   <div class="form-row"><label title="Off: AHR999's own 5.84 / -17.01, as on CoinGlass"><input type="checkbox" id="cs_fair_refit"> справедливая по всей истории BTC (<span id="cs_fair_refit_coef">5.633 / −16.32</span>)</label>
     <label title="a: today's coefficients for every past day too; b: each day its own, fitted only on the prices before it -- as one would have seen it then">коэффициенты: <select id="cs_fair_mode"><option value="b">б — на каждый день свои (по ценам до него)</option><option value="a">а — последние для всей истории</option></select></label>
-    <label title="Оригинал: 0.45 / 1.2. Текущий: с галочкой красная сдвинута на ту же долю красных дней, зелёная 1.2. Вся история а: треть дней красных, треть нейтральных, треть зелёных по всем дням с 2015-04. Вся история б: те же трети на каждый день только по дням до него (первый год — 0.45 / 1.2). Четверти: четверть дней красных (ниже нижней четверти), четверть зелёных (выше верхней), нейтральные делятся сами примерно поровну на после красной и после зелёной; а и б — так же, как у третей">пороги зон: <select id="cs_zone_mode"><option value="orig">оригинал (0.45 / 1.2)</option><option value="cur">текущий вариант</option><option value="ter_a">вся история а — по трети дней</option><option value="ter_b">вся история б — по трети дней до каждого дня</option><option value="qrt_a">четверти а — по всей истории</option><option value="qrt_b">четверти б — по дням до каждого дня</option></select></label></div>
+    <label title="Оригинал: 0.45 / 1.2. Текущий: с галочкой красная сдвинута на ту же долю красных дней, зелёная 1.2. Вся история а: треть дней красных, треть нейтральных, треть зелёных по всем дням с 2015-04. Вся история б: те же трети на каждый день только по дням до него (первый год — 0.45 / 1.2). Четверти: четверть дней красных (ниже нижней четверти), четверть зелёных (выше верхней), нейтральные делятся сами примерно поровну на после красной и после зелёной; а и б — так же, как у третей. Микс: на каждый день медиана порогов оригинала, текущего, третей б и четвертей б">пороги зон: <select id="cs_zone_mode"><option value="orig">оригинал (0.45 / 1.2)</option><option value="cur">текущий вариант</option><option value="ter_a">вся история а — по трети дней</option><option value="ter_b">вся история б — по трети дней до каждого дня</option><option value="qrt_a">четверти а — по всей истории</option><option value="qrt_b">четверти б — по дням до каждого дня</option><option value="mix">микс — медиана: оригинал, текущий, трети б, четверти б</option></select></label></div>
   <div id="cs_cards" class="form-row" style="gap:12px;flex-wrap:wrap"></div>
   <p class="empty-note" id="cs_status"></p>
   <div id="plot_cs_ahr" style="height:420px"></div>
@@ -7864,14 +7864,22 @@ function mpApplyAhrZones() { Object.assign(MP_AHR, MP_AHR_ZONES[mpFairRefitOn() 
 //            green above the highest, so a quarter of the days each; the neutral half splits
 //            by itself into after-red / after-green, ~27.5% / 22.5% (index b, from 2015-04).
 function mpZoneMode() {
-  try { const v = localStorage.getItem('mp_zone_mode'); return ['orig', 'cur', 'ter_a', 'ter_b', 'qrt_a', 'qrt_b'].includes(v) ? v : 'cur'; } catch { return 'cur'; }
+  try { const v = localStorage.getItem('mp_zone_mode'); return ['orig', 'cur', 'ter_a', 'ter_b', 'qrt_a', 'qrt_b', 'mix'].includes(v) ? v : 'cur'; } catch { return 'cur'; }
 }
 function mpQuantile(sorted, q) {
   const pos = q * (sorted.length - 1), lo = Math.floor(pos);
   return sorted[lo] + (sorted[Math.min(lo + 1, sorted.length - 1)] - sorted[lo]) * (pos - lo);
 }
-function mpWithZones(rows) {
-  const mode = mpZoneMode();
+//   mix   -- each day's thresholds the median of the honest ones -- orig, cur, ter_b,
+//            qrt_b (the _a ones know the future): of four, the mean of the middle two
+//            (the user, 18.11.2026: quarters missed the sale at $110k, thirds bought too
+//            much in 2026, the original missed August 2023)
+function mpWithZones(rows, mode = mpZoneMode()) {
+  if (mode === 'mix') {
+    const sets = ['orig', 'cur', 'ter_b', 'qrt_b'].map(m => mpWithZones(rows, m));
+    const med = vs => { const s = [...vs].sort((a, b) => a - b); return (s[1] + s[2]) / 2; };
+    return rows.map((r, i) => ({ ...r, red: med(sets.map(z => z[i].red)), green: med(sets.map(z => z[i].green)) }));
+  }
   if (mode === 'orig') return rows.map(r => ({ ...r, red: 0.45, green: 1.2 }));
   if (mode === 'cur') return rows.map(r => ({ ...r, red: MP_AHR.red, green: MP_AHR.green }));
   const [qLo, qHi] = mode.startsWith('qrt') ? [1 / 4, 3 / 4] : [1 / 3, 2 / 3];
