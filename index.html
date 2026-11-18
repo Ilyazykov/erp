@@ -7864,7 +7864,7 @@ function mpApplyAhrZones() { Object.assign(MP_AHR, MP_AHR_ZONES[mpFairRefitOn() 
 //            green above the highest, so a quarter of the days each; the neutral half splits
 //            by itself into after-red / after-green, ~27.5% / 22.5% (index b, from 2015-04).
 function mpZoneMode() {
-  try { const v = localStorage.getItem('mp_zone_mode'); return ['orig', 'cur', 'ter_a', 'ter_b', 'qrt_a', 'qrt_b', 'mix'].includes(v) ? v : 'cur'; } catch { return 'cur'; }
+  try { const v = localStorage.getItem('mp_zone_mode'); return ['orig', 'cur', 'ter_a', 'ter_b', 'qrt_a', 'qrt_b', 'mix'].includes(v) ? v : 'mix'; } catch { return 'mix'; }
 }
 function mpQuantile(sorted, q) {
   const pos = q * (sorted.length - 1), lo = Math.floor(pos);
