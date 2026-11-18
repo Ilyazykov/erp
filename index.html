@@ -1232,10 +1232,10 @@ function renderChart(id) {
         xaxis: Object.assign({}, LAYOUT_BASE.xaxis, {
           rangeslider: { visible: true, thickness: 0.08 }, range: DATA.usAllocHistoryRange,
         }),
-        yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { title: 'stocks, %', autorange: true, ticksuffix: '%' }),
+        // a fixed 60-100%: the share's whole range since 2019, from a round floor (the user)
+        yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { title: 'stocks, %', range: [60, 100], dtick: 5, ticksuffix: '%' }),
         hovermode: 'x unified',
       }), CONFIG);
-      autoFitYOnXChange('plot_us_alloc_history', DATA.usAllocHistory);
     }
   } else if (id === 'sigmoid') {
     const layoutAmp = Object.assign({}, LAYOUT_BASE, {
