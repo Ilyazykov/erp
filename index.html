@@ -693,10 +693,15 @@
   </div>
 </div>
 
-<div id="userp" class="chart-wrap"><div id="plot_us_erp" style="height:420px"></div>
+<div id="userp" class="chart-wrap">
+<div class="form-row"><label title="Off: the whole history, from 1881 (Damodaran's from 2008); the Z-scores are computed on the whole history either way"><input type="checkbox" id="us_erp_from2016" checked> from 2016</label></div>
+<div id="plot_us_erp" style="height:420px"></div>
 <p class="note">
+  <b>Blue</b> — the S&amp;P 500's cyclically-adjusted earnings yield (1 / CAPE).
+  <b>Orange</b> — the real 10-year Treasury rate (the 10-year yield less the last 10 years' inflation).
+  <b>Green</b> — the gap between them, Shiller's Excess CAPE Yield.<br>
   <b>EXPERIMENTAL</b> — US market-wide Equity Risk Premium, using Robert Shiller's own
-  published <b>Excess CAPE Yield</b> (solid, monthly, 1871–present, updated directly from his
+  published <b>Excess CAPE Yield</b> (green, monthly, 1871–present, updated directly from his
   maintained spreadsheet — not recomputed from this site's 37-ticker basket).
   Excess CAPE Yield = (1 / CAPE) − real long-term interest rate, i.e. the S&amp;P 500's
   cyclically-adjusted earnings yield minus the real 10-year rate — conceptually the same idea
@@ -705,9 +710,9 @@
   different, DCF-based methodology): a genuine monthly series Damodaran has recomputed and
   published every month since September 2008, using trailing-12-month dividends + buybacks
   against the current S&amp;P 500 level and Treasury rate (i.e. NOT his once-a-year headline
-  figure held flat — it moves every month on its own data). Full Shiller history (1871–present)
-  is loaded; drag the range slider below the chart, or the box below it, to zoom into any
-  period — it opens on the last 10 years (Damodaran's series only goes back to 2008-09).
+  figure held flat — it moves every month on its own data). Shown from 2016; with "from 2016"
+  off, the full Shiller history (1871–present) — drag the range slider below the chart to zoom
+  into any period, it opens on the last 10 years (Damodaran's series only goes back to 2008-09).
 </p>
 <div id="plot_us_erp_z" style="height:420px; margin-top:8px"></div>
 <p class="note">
@@ -1119,6 +1124,10 @@ let DATA = null;
 let mpIsSignedIn = false;
 let mpIncOpen = new Set();
 let rendered = {};
+// US ERP's "from 2016": redraw the tab's charts with the period it sets
+document.getElementById('us_erp_from2016').addEventListener('change', () => {
+  if (DATA && rendered.userp) renderChart('userp');
+});
 
 function showTab(id) {
   // counted in the database for the user (tab_opens, migration ...184); a failed count doesn't matter
@@ -1209,10 +1218,21 @@ function renderChart(id) {
       ]), CONFIG);
     Plotly.newPlot('plot_us_targetweights', DATA.usTargetWeights, DATA.usTargetWeightsLayout, CONFIG);
   } else if (id === 'userp') {
+    // "from 2016" (on by default): the charts get only the months from 2016 -- the
+    // years before are neither drawn nor in the range slider; off -- the whole history
+    const usErpFrom = document.getElementById('us_erp_from2016').checked ? '2016-01-01' : null;
+    const usErpCut = traces => (usErpFrom ? traces.map(t => {
+      const keep = (t.x || []).map(x => x >= usErpFrom);
+      return Object.assign({}, t, { x: t.x.filter((_, i) => keep[i]), y: t.y.filter((_, i) => keep[i]),
+        ...(Array.isArray(t.customdata) ? { customdata: t.customdata.filter((_, i) => keep[i]) } : {}) });
+    }) : traces);
+    const usErpTraces = usErpCut(DATA.usErp), usErpZTraces = usErpCut(DATA.usErpZChart);
+    const usErpRange = usErpFrom ? [usErpFrom, DATA.usErpDefaultRange[1]] : DATA.usErpDefaultRange;
+    for (const div of ['plot_us_erp', 'plot_us_erp_z', 'plot_damodaran_z']) Plotly.purge(div);
     const usErpLayout = Object.assign({}, layoutWith('%', [HLINE(0, '#6a7381', 'dot')]), {
       xaxis: Object.assign({}, LAYOUT_BASE.xaxis, {
         rangeslider: { visible: true, thickness: 0.08 },
-        range: DATA.usErpDefaultRange,
+        range: usErpRange,
       }),
       yaxis: Object.assign({}, LAYOUT_BASE.yaxis, {
         title: '%', autorange: true, rangemode: 'normal',
@@ -1225,16 +1245,16 @@ function renderChart(id) {
       ]), {
       xaxis: Object.assign({}, LAYOUT_BASE.xaxis, {
         rangeslider: { visible: true, thickness: 0.08 },
-        range: DATA.usErpDefaultRange,
+        range: usErpRange,
       }),
       yaxis: Object.assign({}, LAYOUT_BASE.yaxis, {
         title: 'Z-score', autorange: true, rangemode: 'normal',
       }),
     });
-    Plotly.newPlot('plot_us_erp', DATA.usErp, usErpLayout, CONFIG);
-    Plotly.newPlot('plot_us_erp_z', DATA.usErpZChart, usErpZLayout, CONFIG);
-    autoFitYOnXChange('plot_us_erp', DATA.usErp);
-    autoFitYOnXChange('plot_us_erp_z', DATA.usErpZChart);
+    Plotly.newPlot('plot_us_erp', usErpTraces, usErpLayout, CONFIG);
+    Plotly.newPlot('plot_us_erp_z', usErpZTraces, usErpZLayout, CONFIG);
+    autoFitYOnXChange('plot_us_erp', usErpTraces);
+    autoFitYOnXChange('plot_us_erp_z', usErpZTraces);
     const damodaranZLayout = Object.assign({}, layoutWith('Z-score', [
         HLINE(0, '#6a7381', 'dot'),
         HLINE(1.5, '#3dd68c', 'dot'),
@@ -1244,7 +1264,7 @@ function renderChart(id) {
         title: 'Z-score', autorange: true, rangemode: 'normal',
       }),
     });
-    Plotly.newPlot('plot_damodaran_z', DATA.damodaranZChart, damodaranZLayout, CONFIG);
+    Plotly.newPlot('plot_damodaran_z', usErpCut(DATA.damodaranZChart), damodaranZLayout, CONFIG);
     Plotly.newPlot('plot_us_alloc_target', DATA.usAllocTarget, DATA.usAllocTargetLayout, CONFIG);
     // the target split over time (calc_us_allocation.py's history); none yet -- no chart
     if (DATA.usAllocHistory.length) {
@@ -1514,10 +1534,18 @@ async function loadData() {
   const damodaranByDate = new Map(damodaranErpRows.map(r => [r.date, val(r.implied_erp_t12m_pct)]));
   const damodaranYield = usErpRows.map(r => damodaranByDate.has(r.date) ? damodaranByDate.get(r.date) : null);
 
+  // the two sides of the gap, as on the RU ERP tab (the user, 18.11.2026): the stocks' yield
+  // 1/CAPE and the real 10-year rate, 1/CAPE less the excess yield
+  const usErpStocksYield = usErpRows.map(r => { const c = val(r.cape); return c ? 100 / c : null; });
+  const usErpBondsYield = usErpStocksYield.map((s, i) => (s == null || usErpYield[i] == null ? null : s - usErpYield[i]));
   const usErp = [
-    jsSeries(usErpDates, usErpReal(usErpYield), "Shiller's Excess CAPE Yield, %", '#f0b429', { width: 2 }),
-    ...usErpEstSeries(usErpYield, '#f0b429', 2),
-    jsSeries(usErpDates, damodaranYield, "Damodaran's Implied ERP (T12m), %", '#5b9bd5', { width: 1.5, dash: 'dot' }),
+    jsSeries(usErpDates, usErpReal(usErpStocksYield), 'S&P 500 earnings yield (1/CAPE), %', '#4da8c8', { width: 2 }),
+    ...usErpEstSeries(usErpStocksYield, '#4da8c8', 2),
+    jsSeries(usErpDates, usErpReal(usErpBondsYield), '10Y Treasury real yield, %', '#f0b429', { width: 2 }),
+    ...usErpEstSeries(usErpBondsYield, '#f0b429', 2),
+    jsSeries(usErpDates, usErpReal(usErpYield), "Shiller's Excess CAPE Yield, %", '#3dd68c', { width: 2 }),
+    ...usErpEstSeries(usErpYield, '#3dd68c', 2),
+    jsSeries(usErpDates, damodaranYield, "Damodaran's Implied ERP (T12m), %", '#a78bfa', { width: 1.5, dash: 'dot' }),
   ];
 
   const usErpZChart = [
