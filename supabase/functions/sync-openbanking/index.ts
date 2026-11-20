@@ -259,6 +259,13 @@ async function revolutStandIns(db: any, userId: string, write: Tx[]): Promise<{ 
     if (fcf && (day <= fundEnd || !fundOf.has(x.currency))) continue;
     if (ias && x.day <= savingsEnd) continue;
     const buy = /^to$/i.test((fcf ?? ias)![1]);
+    // ...nor one the fund statement already has: a deal of the same side and amount in that
+    // currency from the move's day to the next working day. A move made in the afternoon is
+    // dealt the same day too (20.11.2026: "From Flexible Cash Funds" 220 EUR at 15:29, the
+    // statement's SELL 220 of that day) -- its stand-in, put on the Monday after the
+    // statement's end, counted the 220 twice.
+    if (fcf && fundRows.some(f => f.currency === x.currency && f.side === (buy ? 'buy' : 'sell')
+      && Math.abs(f.quantity - Math.abs(x.amount)) < 0.005 && f.trade_date >= x.day && f.trade_date <= day)) continue;
     const base = `revolut:${x.ref || `${x.day}:${x.currency}:${x.amount}`}`;
     const n = seen.get(base) ?? 0; seen.set(base, n + 1);
     rows.push({
