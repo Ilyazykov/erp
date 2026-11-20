@@ -9193,7 +9193,7 @@ async function mpRenderLookThrough() {
       <th>#</th><th>Security</th><th>Sector</th><th>Country</th><th>Currency</th><th>Value (USD)</th><th>Share</th><th>Direct</th><th>Via funds</th>
     </tr></thead><tbody>${rows.map((r, i) => `<tr${r.tickers.length ? ` data-ticker="${mpEscapeHtml(r.tickers[0])}" data-also="${mpEscapeHtml(r.tickers.slice(1).join(','))}" data-name="${mpEscapeHtml(r.name || r.tickers[0])}" style="cursor:pointer" title="Price chart"` : ''}>
       <td>${i + 1}</td>
-      <td class="ticker">${mpEscapeHtml(r.name)}${r.tickers.some(t => !/^\d+[A-Z]?$/.test(t)) ? ` <span class="note">${mpEscapeHtml(r.tickers.filter(t => !/^\d+[A-Z]?$/.test(t)).join(' + '))}</span>` : ''}</td>
+      <td class="ticker">${mpEscapeHtml(r.name)}${r.tickers.some(t => !mpCodeLike(t)) ? ` <span class="note">${mpEscapeHtml(r.tickers.filter(t => !mpCodeLike(t)).join(' + '))}</span>` : ''}</td>
       <td>${mpEscapeHtml(r.sector || '')}</td><td${flagOf[r.security_id] ? ` title="${mpEscapeHtml(r.country || '')}" style="text-align:center;font-size:1.2em"` : ''}>${flagOf[r.security_id] || mpEscapeHtml(r.country || '')}</td><td>${mpEscapeHtml(r.currency || '')}</td>
       <td>${mpFormatUsd(Number(r.value_usd))}</td><td>${pct(r.value_usd)}</td>
       <td>${r.direct_usd ? mpFormatUsd(Number(r.direct_usd)) : ''}</td><td>${via(r)}</td>
@@ -14164,11 +14164,21 @@ const MP_SHORT_NAMES = {
 };
 // A ticker as people know it: the short name of a numbered share (its company's name, trimmed, when
 // not in MP_SHORT_NAMES); any other ticker as it is
+// a code that tells nothing: a number (2330) or an ISIN (FR0014013RC7)
+const mpCodeLike = t => /^\d+[A-Z]?$/.test(String(t)) || /^[A-Z]{2}[A-Z0-9]{9}\d$/.test(String(t));
 function mpShortName(ticker, name) {
   const t = String(ticker ?? '');
   if (MP_SHORT_NAMES[t]) return MP_SHORT_NAMES[t];
-  if (!/^\d+[A-Z]?$/.test(t) || !name) return t;
-  const trimmed = String(name).replace(/[,.]/g, ' ').replace(/\b(Co|Ltd|Inc|Corp|Corporation|Holdings?|Group|PLC|Limited|Company|Kabushiki Kaisha|KK)\b/gi, '')
+  if (!mpCodeLike(t) || !name) return t;
+  // France's registered loyalty shares ("L'OREAL SA - PF - 2028", "SODEXO EUR4 (PRIM FIDELITE)(REGD)"):
+  // the company, "(loyalty 2028)"; a name in capitals in ordinary case
+  let n = String(name);
+  const pf = n.match(/\s-\sPF\s-\s(\d{4})\s*$/) || (/PRIM FIDELITE/i.test(n) ? [null, ''] : null);
+  n = n.replace(/\s-\sPF\s-\s\d{4}\s*$/, '').replace(/\s+EUR[\d.]+.*$/i, '').replace(/\s*\(.*$/, '');
+  if (n === n.toUpperCase()) n = n.toLowerCase().replace(/(^|[\s'-])\p{L}/gu, c => c.toUpperCase());
+  n = n.replace(/\s+(SA|SE|NV|AG|PLC)$/i, '');
+  if (pf) return `${n} (loyalty${pf[1] ? ` ${pf[1]}` : ''})`;
+  const trimmed = String(n).replace(/[,.]/g, ' ').replace(/\b(Co|Ltd|Inc|Corp|Corporation|Holdings?|Group|PLC|Limited|Company|Kabushiki Kaisha|KK)\b/gi, '')
     .replace(/\s+/g, ' ').trim();
   return trimmed.length > 26 ? trimmed.slice(0, 26).replace(/\s\S*$/, '') : trimmed || t;
 }
@@ -14179,7 +14189,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   const dealTickers = [asset, ...(opts.also || [])];
   const dlg = document.createElement('dialog');
   dlg.style.cssText = 'background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:16px 18px;min-width:320px;width:min(94vw,960px)';
-  const numbered = /^\d+[A-Z]?$/.test(String(asset));
+  const numbered = mpCodeLike(asset);   // a number or an ISIN: its name instead
   if (numbered && MP_SHORT_NAMES[asset]) title = MP_SHORT_NAMES[asset];
   dlg.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><b><span id="mp_price_title">${mpEscapeHtml(title)}</span> <span id="mp_price_meta" style="color:#8b949e;font-weight:normal">${title !== asset && !numbered ? `· ${mpEscapeHtml(dealTickers.join(' + '))}` : ''}</span></b><button type="button" data-act="close">✕</button></div>
@@ -14948,13 +14958,13 @@ sb.auth.getSession().then(({ data: { session } }) => mpOnAuth(session));
 sb.auth.onAuthStateChange((_event, session) => mpOnAuth(session));
 </script>
 <script type="module">
-import { RU_ACCOUNTS, isRuInfra, netCreditIntoLiquid, periodIrr, portfolioCapital } from './js/lookthrough_treemap.js?v=20261121i';
+import { RU_ACCOUNTS, isRuInfra, netCreditIntoLiquid, periodIrr, portfolioCapital } from './js/lookthrough_treemap.js?v=20261121j';
 window.MP_RU_ACCOUNTS = RU_ACCOUNTS;
 window.mpPeriodIrr = periodIrr;
 window.mpPortfolioCapital = portfolioCapital;
 window.mpIsRuInfra = isRuInfra;
 window.mpNetCreditIntoLiquid = netCreditIntoLiquid;
 </script>
-<script type="module" src="./js/lookthrough_treemap.js?v=20261121i"></script>
+<script type="module" src="./js/lookthrough_treemap.js?v=20261121j"></script>
 </body>
 </html>

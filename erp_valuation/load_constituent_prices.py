@@ -70,6 +70,12 @@ OVERRIDE = {
     "CPG": "CPG.L", "ERF": "ERF.PA", "TEN": "TEN.MI", "QIA": "QIA.DE",
     # the US: a class after a space
     "BRK B": "BRK-B",
+    # France: shares listed by their ISIN, the registered "loyalty" ones among them ("L'OREAL SA - PF - 2028":
+    # prime de fidelite, not traded on their own) -- the ordinary share's price
+    "FR0014013RC7": "OR.PA", "FR0011149590": "OR.PA", "FR001400UH43": "OR.PA",
+    "FR0014010OO5": "AI.PA", "FR001400T5U9": "AI.PA",
+    "FR001400U6U4": "ENGI.PA", "FR0014012X74": "ENGI.PA", "FR0013215407": "ENGI.PA",
+    "FR0011532431": "SW.PA", "FR001400C460": "SW.PA", "FR0014004UW8": "SW.PA", "FR001400K6E0": "SW.PA", "FR001400S2Z6": "SW.PA",
 }
 # fallbacks when the first symbol has no data
 ALT_SUFFIX = {".TW": [".TWO"], ".KS": [".KQ"], ".SS": [".SZ"], ".NS": [".BO"]}

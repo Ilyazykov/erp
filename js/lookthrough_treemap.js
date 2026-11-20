@@ -743,7 +743,7 @@ const usd = v => `$${Math.round(v).toLocaleString('en-US')}`;
 // held. A tile with no data says only that.
 function tooltipLines(tile, e, name = tile.ticker, money = { ccy: 'usd', rate: 1 }) {
   // a numbered share (2330): its name only, the number tells nothing
-  const head = name === tile.ticker || /^\d+[A-Z]?$/.test(String(tile.ticker)) ? [name] : [name, tile.ticker];
+  const head = name === tile.ticker || /^\d+[A-Z]?$|^[A-Z]{2}[A-Z0-9]{9}\d$/.test(String(tile.ticker)) ? [name] : [name, tile.ticker];
   const fmt = x => (x.state === 'nodata' || x.change == null ? '—' : formatChange(x.change, x.unit));
   // e.all: the tile by every method, the one shown marked
   if (e.all) {
@@ -988,7 +988,8 @@ function wireTreemap() {
       for (const r of s) {
         sec.set(r.id, r.market_ticker || r.ticker);
         if (r.name) {
-          companyOf.set(r.market_ticker || r.ticker, String(r.name).trim().toLowerCase());
+          // the company: France's loyalty shares ("L'OREAL SA - PF - 2028") are its ordinary ones
+          companyOf.set(r.market_ticker || r.ticker, String(r.name).trim().toLowerCase().replace(/\s-\spf\s-\s\d{4}$/, '').replace(/\s+eur[\d.]+.*$/, '').replace(/\s*\(.*$/, ''));
           nameOf.set(r.market_ticker || r.ticker, String(r.name).trim());
         }
       }
@@ -1169,7 +1170,7 @@ function wireTreemap() {
       };
       // a numbered share (Taiwan's 2330, Seoul's 005930, Tokyo's 8306): its name (TSMC, Samsung Electronics, MUFG), never the number
       const shortNames = {};
-      if (g('mpShortName')) for (const t of tiles) if (/^\d+[A-Z]?$/.test(String(t.ticker))) shortNames[t.ticker] = window.mpShortName(t.ticker, data.nameOf?.get(t.ticker));
+      if (g('mpShortName')) for (const t of tiles) if (/^\d+[A-Z]?$|^[A-Z]{2}[A-Z0-9]{9}\d$/.test(String(t.ticker))) shortNames[t.ticker] = window.mpShortName(t.ticker, data.nameOf?.get(t.ticker));
       last = [tiles, colour, { tip, group: $('lt_small').checked, scale, names: { ...bondNames, ...FUND_NAMES, ...shortNames }, money, onTileClick }];
       drawTreemap(box, ...last);
       drawLegend($('lt_legend'), scale, method === 'contrib' ? 'pp' : '%');
