@@ -14437,8 +14437,9 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       for (const [side, color, sym] of [['buy', '#3fb950', 'triangle-up'], ['sell', '#f85149', 'triangle-down']]) {
         const ds = shown.filter(d => d.side === side && !!d.via === via);
         if (ds.length) traces.push({ x: ds.map(d => d.trade_date), y: ds.map(d => priceOn(d.trade_date)), type: 'scatter', mode: 'markers', name: `${side}${via ? ' via a fund' : ''}`,
-          // solid, no outline, no transparency (outlines and faded ones looked bad): through a fund just smaller
-          marker: { color, size: via ? 9 : 13, symbol: sym },
+          // solid, no outline, no transparency (outlines and faded ones looked bad): through a fund smaller and
+          // the usual colour, one's own bigger and a brighter one (the size alone didn't tell them apart)
+          marker: { color: via ? color : side === 'buy' ? '#39ff5a' : '#ff2d2d', size: via ? 9 : 13, symbol: sym },
           text: ds.map(d => `${side} ${Number(d.quantity)}${dealTickers.length > 1 ? ` ${d.ticker}` : ''} at ${d.account}`), hovertemplate: '%{x}: %{text}<extra></extra>' });
       }
     }
