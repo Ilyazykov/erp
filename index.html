@@ -14194,7 +14194,8 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   dlg.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><b><span id="mp_price_title">${mpEscapeHtml(title)}</span> <span id="mp_price_meta" style="color:#8b949e;font-weight:normal">${title !== asset && !numbered ? `· ${mpEscapeHtml(dealTickers.join(' + '))}` : ''}</span></b><button type="button" data-act="close">✕</button></div>
     <div class="form-row" style="gap:6px;align-items:center">${MP_PRICE_PERIODS.map(([l]) => `<button class="btn${l === '1y' ? ' primary' : ''}" type="button" data-p="${l}">${l}</button>`).join('')}
-      <label style="margin-left:12px" id="mp_price_ccy_box"><input type="checkbox" id="mp_price_usd"> in USD</label></div>
+      <label style="margin-left:12px" id="mp_price_ccy_box"><input type="checkbox" id="mp_price_usd"> in USD</label>
+      <label style="margin-left:12px;display:none" id="mp_price_via_box"><input type="checkbox" id="mp_price_via" checked> buys through funds</label></div>
     <div id="mp_price_chart" style="height:420px"></div>
     <p class="note" style="margin:0" id="mp_price_note">Loading…</p>
   </div>`;
@@ -14355,7 +14356,8 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     const priceOn = day => { const p = [...pts].reverse().find(x => x.day <= day) ?? pts[0]; return p?.v ?? null; };
     // a money-market fund's or a deposit's "buys" and "sales" are the money moved in and out of it
     // (a withdrawal to the account is no sale): none on its currency's rate
-    const shown = rateNote ? [] : deals.filter(d => d.trade_date >= from);
+    const viaOn = dlg.querySelector('#mp_price_via').checked;
+    const shown = rateNote ? [] : deals.filter(d => d.trade_date >= from && (viaOn || !d.via));
     const fmt = v => (unit === 'USD' ? `$${v.toLocaleString('en-US', { maximumFractionDigits: v < 10 ? 4 : 2 })}` : `${v.toLocaleString('en-US', { maximumFractionDigits: v < 10 ? 4 : 2 })} ${unit}`);
     const traces = [{ x: pts.map(p => p.day), y: pts.map(p => p.v), type: 'scatter', mode: 'lines', line: { color: '#4c8bf5', width: 2 },
       name: 'price', hovertemplate: `%{x}: %{y:,.4~f} ${unit}<extra></extra>` }];
@@ -14364,9 +14366,9 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       for (const [side, color, sym] of [['buy', '#3fb950', 'triangle-up'], ['sell', '#f85149', 'triangle-down']]) {
         const ds = shown.filter(d => d.side === side && !!d.via === via);
         if (ds.length) traces.push({ x: ds.map(d => d.trade_date), y: ds.map(d => priceOn(d.trade_date)), type: 'scatter', mode: 'markers', name: `${side}${via ? ' via a fund' : ''}`,
-          // through a fund: as they were (solid, the usual colour); one's own: bigger, brighter, a thin white outline
+          // through a fund: as they were (solid, the usual colour); one's own: bigger, a deeper green, a dark outline
           marker: via ? { color, size: 11, symbol: sym }
-            : { color: side === 'buy' ? '#56f06e' : '#ff5c55', size: 14, symbol: sym, line: { color: '#ffffff', width: 0.8 } },
+            : { color: side === 'buy' ? '#2ea043' : '#f85149', size: 15, symbol: sym, line: { color: '#0d1117', width: 1.5 } },
           text: ds.map(d => `${side} ${Number(d.quantity)}${dealTickers.length > 1 ? ` ${d.ticker}` : ''} at ${d.account}`), hovertemplate: '%{x}: %{text}<extra></extra>' });
       }
     }
@@ -14386,6 +14388,11 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     draw();
   });
   usdBox.onchange = draw;
+  // the funds' deals marked as this paper's: shown or not (remembered); the box only when there are any
+  const viaBox = dlg.querySelector('#mp_price_via');
+  try { viaBox.checked = localStorage.getItem('mp_price_via') !== '0'; } catch { /* no storage */ }
+  if (!rateNote && deals.some(d => d.via)) dlg.querySelector('#mp_price_via_box').style.display = '';
+  viaBox.onchange = () => { try { localStorage.setItem('mp_price_via', viaBox.checked ? '1' : '0'); } catch { /* no storage */ } draw(); };
   draw();
 }
 try { const v = localStorage.getItem('mp_invested_by_mode'); if (v) document.getElementById('invested_by_mode').value = v; } catch { /* no storage */ }
