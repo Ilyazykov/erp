@@ -442,6 +442,7 @@
       put-in and taken-out weighted by how much of the asset's own time was left after it (from the period start, or its first
       buy, to the period end, or its last sale) -- money back early (amortisation, a sale) counts for less. An asset is its ticker across accounts; crypto goes
       coin by coin (a trade on an exchange moves money from one coin to another), stablecoins (USDT, USDC, DAI...) are dollars: one row, USD, with an exchange's USD Earn.</p>
+    <div class="form-row" id="invested_periods" style="gap:6px"><button class="btn" type="button" data-period="1d">1d</button><button class="btn" type="button" data-period="2d">2d</button><button class="btn" type="button" data-period="3d">3d</button><button class="btn" type="button" data-period="4d">4d</button><button class="btn" type="button" data-period="7d">7d</button><button class="btn" type="button" data-period="1m">1m</button><button class="btn" type="button" data-period="3m">3m</button><button class="btn" type="button" data-period="6m">6m</button><button class="btn" type="button" data-period="ytd">YTD</button><button class="btn" type="button" data-period="1y">1y</button><button class="btn" type="button" data-period="5y">5y</button><button class="btn" type="button" data-period="all">all</button><button class="btn" type="button" data-period="snowball" title="From the Snowball portfolio's first deal (2025-08-28)">Snowball</button></div>
     <div class="form-row" style="gap:16px">
       <label>by <select id="invested_by_group"><option value="asset">asset</option><option value="type">type</option></select></label>
       <label>show <select id="invested_by_mode"><option value="contrib">contribution (pp)</option><option value="xirrp">MWR</option><option value="pct">dividends kept (%)</option><option value="xirr">XIRR (a year)</option><option value="money">money</option></select></label>
@@ -14125,6 +14126,46 @@ document.getElementById('invested_from_snowball').addEventListener('click', () =
   try { localStorage.setItem('mp_invested_from', MP_SNOWBALL_START); } catch { /* no storage */ }
   if (mpIsSignedIn) mpRenderInvested();
 });
+// The period buttons over "Earned by asset", as the Look-through's: the day
+// counted from set to the period's start (as js/lookthrough_treemap.js's
+// periodStart: the same day N days / months back, YTD from the last day of
+// the year before), the end back to the latest day.
+function mpInvestedPeriodStart(period, today) {
+  const dt = new Date(`${today}T00:00:00Z`);
+  const back = days => { const d = new Date(dt); d.setUTCDate(d.getUTCDate() - days); return d.toISOString().slice(0, 10); };
+  const months = n => {
+    const y = dt.getUTCFullYear(), m = dt.getUTCMonth() - n, last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    return new Date(Date.UTC(y, m, Math.min(dt.getUTCDate(), last))).toISOString().slice(0, 10);
+  };
+  return { '1d': back(1), '2d': back(2), '3d': back(3), '4d': back(4), '7d': back(7), '1m': months(1), '3m': months(3), '6m': months(6),
+    '1y': months(12), '5y': months(60), ytd: `${today.slice(0, 4) - 1}-12-31`, snowball: MP_SNOWBALL_START }[period] ?? null;
+}
+function mpMarkInvestedPeriod(period) {
+  document.querySelectorAll('#invested_periods [data-period]').forEach(b => b.classList.toggle('primary', b.dataset.period === period));
+  try { if (period) localStorage.setItem('mp_invested_period', period); else localStorage.removeItem('mp_invested_period'); } catch { /* no storage */ }
+}
+for (const b of document.querySelectorAll('#invested_periods [data-period]')) {
+  b.addEventListener('click', async () => {
+    const period = b.dataset.period;
+    document.getElementById('invested_to').value = '';
+    try { localStorage.removeItem('mp_invested_to'); } catch { /* no storage */ }
+    if (period === 'all') {
+      // the first transaction, as "from the period start"
+      document.getElementById('invested_from_first').click();
+    } else {
+      const from = mpInvestedPeriodStart(period, new Date().toISOString().slice(0, 10));
+      document.getElementById('invested_from').value = from;
+      try { localStorage.setItem('mp_invested_from', from); } catch { /* no storage */ }
+      if (mpIsSignedIn) mpRenderInvested();
+    }
+    mpMarkInvestedPeriod(period);
+  });
+}
+// a day set by hand, or one of the other buttons: no period button stays lit
+for (const id of ['invested_from', 'invested_to']) document.getElementById(id).addEventListener('change', () => mpMarkInvestedPeriod(null));
+for (const id of ['invested_from_clear', 'invested_from_first', 'invested_from_snowball'])
+  document.getElementById(id).addEventListener('click', () => mpMarkInvestedPeriod(id === 'invested_from_snowball' ? 'snowball' : null));
+try { const v = localStorage.getItem('mp_invested_period'); if (v) mpMarkInvestedPeriod(v); } catch { /* no storage */ }
 try { const v = localStorage.getItem('mp_invested_ccy'); if (v) document.getElementById('invested_ccy').value = v; } catch { /* no storage */ }
 document.getElementById('invested_ccy').addEventListener('change', e => {
   try { localStorage.setItem('mp_invested_ccy', e.target.value); } catch { /* no storage */ }
