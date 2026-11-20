@@ -178,12 +178,17 @@ def load(db, todo, start: str, dry_run: bool) -> int:
         # the symbols, round by round: a constituent's next candidate only when the previous gave nothing
         found: dict[str, tuple[str, pd.Series]] = {}
         for rnd in range(4):
-            want = {x[4][rnd]: x[0] for x in todo if x[0] not in found and len(x[4]) > rnd}
+            # one symbol can stand for several tickers (L'Oreal's ordinary and loyalty shares: OR.PA)
+            want: dict[str, list[str]] = {}
+            for x in todo:
+                if x[0] not in found and len(x[4]) > rnd:
+                    want.setdefault(x[4][rnd], []).append(x[0])
             if not want:
                 break
             got = download(list(want), start)
             for sym, series in got.items():
-                found.setdefault(want[sym], (sym, series))
+                for ticker in want[sym]:
+                    found.setdefault(ticker, (sym, series))
             print(f"round {rnd + 1}: {len(want)} tried, {len(got)} found")
 
         # the rates: the currency's USD price per day ("JPYUSD=X")
