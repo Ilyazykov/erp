@@ -991,7 +991,8 @@ function wireTreemap() {
       const onTileClick = (tile, name, check = false) => {
         const t = String(tile.ticker);
         if (!g('mpOpenPriceDialog') || /^(CASH|CUSHION|REAL_ESTATE)/.test(t)) return false;
-        if (!check) window.mpOpenPriceDialog(t === 'GOLD' ? 'XAU' : t, name);
+        // merged gold: XAU's price, the deals of both (Revolut's XAU and the exchanges' XAUT)
+        if (!check) window.mpOpenPriceDialog(t === 'GOLD' ? 'XAU' : t, name, t === 'GOLD' ? { also: ['XAUT'] } : {});
         return true;
       };
       last = [tiles, colour, { tip, group: $('lt_small').checked, scale, names: { ...bondNames, ...FUND_NAMES }, money, onTileClick }];

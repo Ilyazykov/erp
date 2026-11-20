@@ -14092,7 +14092,10 @@ async function mpRenderInvestedAssets() {
 // An asset's price through time (price_history, in dollars; in the paper's own
 // currency at each day's rate), a year by default, with the deals in it marked.
 const MP_PRICE_PERIODS = [['1m', 1], ['3m', 3], ['6m', 6], ['YTD', 'ytd'], ['1y', 12], ['2y', 24], ['3y', 36], ['4y', 48], ['5y', 60], ['all', null]];
-async function mpOpenPriceDialog(asset, title) {
+// opts.also: other tickers of the same thing whose deals are marked too (the
+// portfolio map's merged gold: XAU's price, the deals of XAU and XAUT)
+async function mpOpenPriceDialog(asset, title, opts = {}) {
+  const dealTickers = [asset, ...(opts.also || [])];
   const dlg = document.createElement('dialog');
   dlg.style.cssText = 'background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:16px 18px;min-width:320px;width:min(94vw,960px)';
   dlg.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px">
@@ -14113,10 +14116,10 @@ async function mpOpenPriceDialog(asset, title) {
     let wallet;
     [prices, deals, wallet] = await Promise.all([
       mpXlsxFetchAll(() => sb.from('price_history').select('day, price_usd').eq('ticker', asset).order('day')),
-      mpXlsxFetchAll(() => sb.from('trades').select('trade_date, side, quantity, price, currency, account, external_source').eq('ticker', asset).in('side', ['buy', 'sell']).order('trade_date')),
+      mpXlsxFetchAll(() => sb.from('trades').select('ticker, trade_date, side, quantity, price, currency, account, external_source').in('ticker', dealTickers).in('side', ['buy', 'sell']).order('trade_date')),
       // a coin's deals are its exchanges' and wallets' own rows: a buy (by card or for
       // another coin) and a sale; transfers, fees, interest and Earn moves aren't deals
-      mpXlsxFetchAll(() => sb.from('wallet_transactions').select('tx_time, kind, amount, chain').ilike('symbol', asset)
+      mpXlsxFetchAll(() => sb.from('wallet_transactions').select('symbol, tx_time, kind, amount, chain').or(dealTickers.map(t => `symbol.ilike.${t}`).join(','))
         .in('kind', ['trade', 'purchase', 'trade_out']).order('tx_time')),
     ]);
     ccy = (deals.find(d => d.currency)?.currency || 'USD').toUpperCase();
@@ -14125,7 +14128,7 @@ async function mpOpenPriceDialog(asset, title) {
       const CHAIN = { cryptocom: 'Crypto.com', bybit: 'Bybit', binance: 'Binance', telegram: 'Telegram Wallet' };
       deals = [...deals.filter(d => d.external_source !== 'snowball_csv'),
         ...wallet.filter(w => Number(w.amount) !== 0).map(w => ({ trade_date: String(w.tx_time).slice(0, 10), side: Number(w.amount) > 0 ? 'buy' : 'sell',
-          quantity: Math.abs(Number(w.amount)), account: CHAIN[w.chain] || w.chain }))]
+          quantity: Math.abs(Number(w.amount)), account: CHAIN[w.chain] || w.chain, ticker: String(w.symbol).toUpperCase() }))]
         .sort((a, b) => a.trade_date.localeCompare(b.trade_date));
     }
     // a movement without a deal (a broker report's transfer between its agreements, a code
@@ -14180,7 +14183,7 @@ async function mpOpenPriceDialog(asset, title) {
     for (const [side, color, sym] of [['buy', '#3fb950', 'triangle-up'], ['sell', '#f85149', 'triangle-down']]) {
       const ds = shown.filter(d => d.side === side);
       if (ds.length) traces.push({ x: ds.map(d => d.trade_date), y: ds.map(d => priceOn(d.trade_date)), type: 'scatter', mode: 'markers', name: side,
-        marker: { color, size: 11, symbol: sym }, text: ds.map(d => `${side} ${Number(d.quantity)} at ${d.account}`), hovertemplate: '%{x}: %{text}<extra></extra>' });
+        marker: { color, size: 11, symbol: sym }, text: ds.map(d => `${side} ${Number(d.quantity)}${dealTickers.length > 1 ? ` ${d.ticker}` : ''} at ${d.account}`), hovertemplate: '%{x}: %{text}<extra></extra>' });
     }
     Plotly.react(dlg.querySelector('#mp_price_chart'), traces, Object.assign({}, LAYOUT_BASE, {
       margin: { l: 60, r: 20, t: 10, b: 40 }, showlegend: false, hovermode: 'closest',
