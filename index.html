@@ -14238,6 +14238,36 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     for (const d of deals) d.account = d.account || d.external_source || '—';
     fx = ccy === 'USD' ? [] : await mpXlsxFetchAll(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', ccy).order('day'));
   } catch (err) { note.textContent = String(err.message || err); return; }
+  // Revolut's money-market funds: a unit is always about one of their currency, so what moves their
+  // value in dollars is that currency -- its rate to the dollar instead (GBP/USD, EUR/USD), the
+  // money in and out marked on it; the dollar fund's is always 1
+  // The same for a deposit or a savings account (a unit is one rouble, euro...): its currency's rate.
+  // A currency worth little against the dollar (the rouble) the other way round, USD/RUB: roubles a dollar.
+  const MONEY_FUND_CCY = { IE0002RUHW32: 'GBP', IE000AZVL3K0: 'EUR', IE000H9J0QX4: 'USD' };
+  const moneyCcy = MONEY_FUND_CCY[String(asset).toUpperCase()] || (/^(DEPOSIT|SAVINGS|ВКЛАД):/i.test(String(asset)) ? ccy : null);
+  let rateNote = '';
+  if (moneyCcy === 'USD') {
+    note.textContent = 'Dollars: a unit is always $1, the value moves only by the interest earned.';
+    return;
+  }
+  if (moneyCcy) {
+    const rates = fx.length && ccy === moneyCcy ? fx : await mpXlsxFetchAll(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', moneyCcy).order('day'));
+    const cheap = rates.length && Number(rates[rates.length - 1].usd_per_unit) < 0.2;
+    if (cheap) {
+      // one dollar, shown in the currency at each day's rate: the currency per dollar
+      prices = rates.map(r => ({ day: r.day, price_usd: 1 }));
+      ccy = moneyCcy;
+      fx = rates;
+      rateNote = `USD/${moneyCcy} rate`;
+      dlg.querySelector('#mp_price_title').textContent = `${title} — USD/${moneyCcy}`;
+    } else {
+      prices = rates.map(r => ({ day: r.day, price_usd: Number(r.usd_per_unit) }));
+      ccy = 'USD';
+      fx = [];
+      rateNote = `${moneyCcy}/USD rate`;
+      dlg.querySelector('#mp_price_title').textContent = `${title} — ${moneyCcy}/USD`;
+    }
+  }
   if (!prices.length) { note.textContent = 'No price history for this asset (a deposit, a savings account or cash has none).'; return; }
   // Splits: price_history keeps each day's price as it was (GOOGL 2 255 -> 112 on
   // 18.07.2022, its 20-for-1) -- a day's move of almost exactly a whole number of
@@ -14250,15 +14280,39 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     const r = raw[i - 1] / raw[i];
     if (!Number.isFinite(r) || r <= 0) { prices[i - 1] = { ...prices[i - 1], price_usd: raw[i - 1] / factor }; continue; }
     const k = r >= 1 ? r : 1 / r;
-    // the nearest whole ratio from 2 (20.01 is 20, not 19), within 4% (PLZL 10-for-1 on 27.03.2025 came out 10.18: the day moved too) -- a crash
-    // of a bond (98 -> 64) is no split; a 3-for-2 can't be told from one, so none
-    const n = Math.round(k);
-    if (n < 2 || n > 50 || Math.abs(k / n - 1) >= 0.04) { prices[i - 1] = { ...prices[i - 1], price_usd: raw[i - 1] / factor }; continue; }
+    // the nearest of the ratios splits are made in, within 6%: the day moves too (PLZL's 10-for-1 on
+    // 27.03.2025 came out 10.18, GOOGL's 20-for-1 on 18.07.2022 20.9 -- taken for 21 by the nearest
+    // whole number); a crash of a bond (98 -> 64) is no split; a 3-for-2 can't be told from one, so none
+    const n = [2, 3, 4, 5, 6, 8, 10, 15, 20, 25, 30, 40, 50].reduce((b, x) => (Math.abs(k / x - 1) < Math.abs(k / b - 1) ? x : b), 2);
+    if (Math.abs(k / n - 1) >= 0.06) { prices[i - 1] = { ...prices[i - 1], price_usd: raw[i - 1] / factor }; continue; }
     if (n && k >= 1.45) { factor *= r >= 1 ? n : 1 / n; splits.push(`${prices[i].day} ${r >= 1 ? `${n}-for-1` : `1-for-${n}`}`); }
     prices[i - 1] = { ...prices[i - 1], price_usd: raw[i - 1] / factor };
   }
+  // A fund's constituent (opened from the map's expanded funds, opts.via: [{ fund, weight }]): each
+  // buy / sale of the fund is one of this paper -- the money (the fund's USD price that day x its
+  // units) x the paper's weight in the fund, over the paper's USD price that day
+  if (opts.via?.length) {
+    try {
+      const funds = opts.via.map(v => v.fund);
+      const [fundDeals, fundPx] = await Promise.all([
+        mpXlsxFetchAll(() => sb.from('trades').select('ticker, trade_date, side, quantity, price, account').in('ticker', funds).in('side', ['buy', 'sell']).gt('price', 0).order('trade_date')),
+        mpXlsxFetchAll(() => sb.from('price_history').select('ticker, day, price_usd').in('ticker', funds).order('day')),
+      ]);
+      const lastOn = (rows, day) => { let v = null; for (const r of rows) { if (r.day > day) break; v = Number(r.price_usd); } return v; };
+      const pxOf = new Map(funds.map(f => [f, fundPx.filter(r => r.ticker === f)]));
+      for (const d of fundDeals) {
+        const w = opts.via.find(v => v.fund === d.ticker)?.weight;
+        const fUsd = lastOn(pxOf.get(d.ticker) || [], d.trade_date), pUsd = lastOn(prices, d.trade_date);
+        if (!(w > 0) || !(fUsd > 0) || !(pUsd > 0)) continue;
+        const money = Number(d.quantity) * fUsd * w;
+        deals.push({ trade_date: d.trade_date, side: d.side, quantity: Math.round(money / pUsd * 1e6) / 1e6, ticker: asset,
+          account: `${d.account || '—'}, via ${d.ticker} ($${money.toFixed(money < 10 ? 2 : 0)})` });
+      }
+      deals.sort((a, b) => a.trade_date.localeCompare(b.trade_date));
+    } catch (err) { console.warn('fund deals:', err); }
+  }
   const usdBox = dlg.querySelector('#mp_price_usd');
-  if (ccy === 'USD') dlg.querySelector('#mp_price_ccy_box').style.display = 'none';
+  if (ccy === 'USD' || rateNote) dlg.querySelector('#mp_price_ccy_box').style.display = 'none';   // a rate: nothing to switch
   // the rate of a day: the last one on or before it
   const rateOn = day => { let lo = 0, hi = fx.length - 1, r = null; while (lo <= hi) { const m = (lo + hi) >> 1; if (fx[m].day <= day) { r = Number(fx[m].usd_per_unit); lo = m + 1; } else hi = m - 1; } return r; };
   const today = prices[prices.length - 1].day;
@@ -14292,7 +14346,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     }), CONFIG);
     const first = pts[0], last = pts[pts.length - 1];
     const ch = first && last && first.v ? (last.v / first.v - 1) * 100 : null;
-    note.textContent = first ? `${first.day} ${fmt(first.v)} → ${last.day} ${fmt(last.v)}${ch == null ? '' : ` (${ch >= 0 ? '+' : ''}${ch.toFixed(1)}%)`}`
+    note.textContent = first ? `${rateNote ? `${rateNote}: ` : ''}${first.day} ${fmt(first.v)} → ${last.day} ${fmt(last.v)}${ch == null ? '' : ` (${ch >= 0 ? '+' : ''}${ch.toFixed(1)}%)`}`
       + `${shown.length ? ` · deals marked: ${shown.length}` : ''}${splits.length ? ` · split-adjusted: ${splits.join(', ')}` : ''}` : 'No prices in this period.';
   };
   dlg.querySelectorAll('[data-p]').forEach(b => b.onclick = () => {
@@ -14873,13 +14927,13 @@ sb.auth.getSession().then(({ data: { session } }) => mpOnAuth(session));
 sb.auth.onAuthStateChange((_event, session) => mpOnAuth(session));
 </script>
 <script type="module">
-import { RU_ACCOUNTS, isRuInfra, netCreditIntoLiquid, periodIrr, portfolioCapital } from './js/lookthrough_treemap.js?v=20261121f';
+import { RU_ACCOUNTS, isRuInfra, netCreditIntoLiquid, periodIrr, portfolioCapital } from './js/lookthrough_treemap.js?v=20261121h';
 window.MP_RU_ACCOUNTS = RU_ACCOUNTS;
 window.mpPeriodIrr = periodIrr;
 window.mpPortfolioCapital = portfolioCapital;
 window.mpIsRuInfra = isRuInfra;
 window.mpNetCreditIntoLiquid = netCreditIntoLiquid;
 </script>
-<script type="module" src="./js/lookthrough_treemap.js?v=20261121f"></script>
+<script type="module" src="./js/lookthrough_treemap.js?v=20261121h"></script>
 </body>
 </html>

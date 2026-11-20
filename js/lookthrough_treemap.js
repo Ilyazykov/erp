@@ -1152,9 +1152,16 @@ function wireTreemap() {
         // merged gold: XAU's price, the deals of both (Revolut's XAU and the exchanges' XAUT); merged
         // funds of one index: the biggest one's price, the deals of all of them
         if (check) return true;
+        // a constituent of an expanded fund: the funds' buys and sales marked as its own (via: each
+        // fund and the paper's weight in it -- one company's classes' weights together)
+        const via = tile.isFund ? [] : (tile.sources || []).filter(s => s.from !== 'direct' && data.fundHoldings?.[s.from]?.length).map(s => ({
+          fund: s.from,
+          weight: data.fundHoldings[s.from].filter(c => [t, ...(tile.parts || []).map(p => p.ticker)].includes(c.ticker)).reduce((a, c) => a + (Number(c.weight) || 0), 0),
+        })).filter(v => v.weight > 0);
         if (t === 'GOLD') window.mpOpenPriceDialog('XAU', name, { also: ['XAUT'] });
-        else if (tile.parts) window.mpOpenPriceDialog(tile.parts[0].ticker, name, { also: tile.parts.slice(1).map(p => p.ticker) });
-        else window.mpOpenPriceDialog(t, name);
+        else if (tile.parts && tile.isFund) window.mpOpenPriceDialog(tile.parts[0].ticker, name, { also: tile.parts.slice(1).map(p => p.ticker) });
+        else if (tile.parts) window.mpOpenPriceDialog(tile.parts[0].ticker, name, { also: tile.parts.slice(1).map(p => p.ticker), via });
+        else window.mpOpenPriceDialog(t, name, { via });
         return true;
       };
       // a numbered share (Taiwan's 2330, Seoul's 005930, Tokyo's 8306): its name (TSMC, Samsung Electronics, MUFG), never the number
@@ -1179,9 +1186,10 @@ function wireTreemap() {
       redraw();
     });
   }
-  // funds: as held, one tile per index, or expanded into what they hold (remembered)
-  try { const v = localStorage.getItem('lt_funds'); if (['separate', 'merge', 'expand', 'expand_classes'].includes(v)) $('lt_funds').value = v; } catch { /* no storage */ }
-  $('lt_funds').addEventListener('change', e => { try { localStorage.setItem('lt_funds', e.target.value); } catch { /* no storage */ } });
+  // funds: as held, one tile per index, or expanded into what they hold -- not remembered: every
+  // load starts at "merged" (the user, 21.11.2026); the old remembered choice is dropped
+  try { localStorage.removeItem('lt_funds'); } catch { /* no storage */ }
+  $('lt_funds').value = 'merge';
   for (const id of ['lt_funds', 'lt_cushion', 'lt_gold', 'lt_savings', 'lt_re', 'lt_small']) $(id).addEventListener('change', redraw);
   $('lt_show')?.addEventListener('change', e => {
     showIn = SHOW_UNITS.includes(e.target.value) ? e.target.value : '%';
