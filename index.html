@@ -96,6 +96,7 @@
   .card-reminder.faint { border-color: #8b949e; border-left-width: 3px; background: transparent; color: #8b949e; padding: 6px 12px; font-size: 0.85rem; }
   /* the donut's hover label next to a slice at the edge: past the plot, not cut by it */
   #plot_exp_donut .main-svg { overflow: visible !important; }
+  [data-chart] { cursor: pointer; }
 </style>
 </head>
 <body>
@@ -1690,7 +1691,7 @@ async function loadData() {
           const deltaCls = delta > 0.05 ? 'pos' : (delta < -0.05 ? 'neg' : 'muted');
           const adjCls = adj === null ? 'muted' : (adj > 0 ? 'pos' : (adj < 0 ? 'neg' : 'muted'));
           return `<tr>
-            <td class="ticker" style="color:${usTickerColor[r.ticker] || '#8b949e'}">${r.ticker}</td>
+            <td class="ticker" data-chart="${r.ticker}" style="color:${usTickerColor[r.ticker] || '#8b949e'}">${r.ticker}</td>
             <td>${r.base.toFixed(2)}%</td>
             <td class="${zCls}">${zStr}</td>
             <td class="${adjCls}">${adjStr}</td>
@@ -2123,7 +2124,7 @@ async function loadData() {
           const deltaCls = delta > 0.05 ? 'pos' : (delta < -0.05 ? 'neg' : 'muted');
           const adjCls = adj === null ? 'muted' : (adj > 0 ? 'pos' : (adj < 0 ? 'neg' : 'muted'));
           return `<tr>
-            <td class="ticker" style="color:${TICKER_COLORS[r.ticker] || '#8b949e'}">${r.ticker}</td>
+            <td class="ticker" data-chart="${r.ticker}" style="color:${TICKER_COLORS[r.ticker] || '#8b949e'}">${r.ticker}</td>
             <td>${r.base.toFixed(2)}%</td>
             <td class="${zCls}">${zStr}</td>
             <td class="${adjCls}">${adjStr}</td>
@@ -7126,9 +7127,12 @@ async function mpRenderMaturities() {
     // 3. the rouble fixed coupons by ladder year; what's outside the ladder -- one grey slice, target 0
     {
       const fx = y => fixedMV(y) + aFixed(y);
-      const outside = [...new Set([...mvFixedBy.keys(), ...(add ? add.fixed.keys() : [])])].filter(y => !rungs.includes(y)).reduce((t, y) => t + fx(y), 0);
+      // this year's (a deposit closing in days, a bond redeemed): its own slice "2026", target 0 -- the money
+      // goes into the rungs short of their target when it comes back; only earlier / later years are outside
+      const nowY = String(new Date().getFullYear()), thisYear = fx(nowY);
+      const outside = [...new Set([...mvFixedBy.keys(), ...(add ? add.fixed.keys() : [])])].filter(y => !rungs.includes(y) && y !== nowY).reduce((t, y) => t + fx(y), 0);
       const tw = rungs.reduce((t, y) => t + targetMV(y), 0) || 1;
-      const total = rungs.reduce((t, y) => t + fx(y), 0) + outside;
+      const total = rungs.reduce((t, y) => t + fx(y), 0) + outside + thisYear;
       const ofz0 = ofzAll.filter(b => b.pd && (b.turnover || 0) > 1e6 && b.yield > 0);
       const buyLine = y => {
         const short = total * targetMV(y) / tw - fx(y);
@@ -7140,9 +7144,10 @@ async function mpRenderMaturities() {
       };
       const shade = shadeOf(rungs.length, [168, 208, 255], [31, 86, 160]);
       mpTargetPie(pies, `Рублёвые с постоянным купоном: по годам лесенки (по рыночной цене)${withBuys}`, [
+        ...(thisYear > 0 ? [{ label: nowY, usd: thisYear, target: 0, color: '#d0e4ff', hover: 'погашается в этом году: деньги пойдут в ступени с недобором' }] : []),
         ...rungs.map((y, i) => ({ label: y, usd: fx(y), target: targetMV(y) / tw * 100, color: shade(i), hover: buyLine(y) })),
         ...(outside > 0 ? [{ label: 'вне лесенки', usd: outside, target: 0, color: '#6e7681' }] : []),
-      ], `Цель — веса лесенки ${from}–${to} по вероятностям ЦБ; «вне лесенки» — погашения раньше и позже, их деньги идут в ступени с недобором.`,
+      ], `Цель — веса лесенки ${from}–${to} по вероятностям ЦБ; ${nowY} — что погашается в этом году (вклады, облигации), «вне лесенки» — погашения позже; их деньги идут в ступени с недобором.`,
         null, false, null, rubPie);
     }
     // 4. the yuan ones by ladder year
@@ -7601,7 +7606,7 @@ async function mpRenderMaturities() {
             const each = costOf(p);
             if (mine) { mine.n = p.n; mine.sum = p.spent; mine.each = each; mine.rec = true; mine.sub = [mine.sub, 'рекомендация'].filter(Boolean).join(' · '); }
             else items.push({ name: p.b.name, sub: (kind === 'cny' && p.b.offer ? `оферта ${p.b.offer.slice(5, 7)}.${p.b.offer.slice(0, 4)} · ` : '') + 'рекомендация',
-              yld: p.b.yield || null, qty: 0, each, value: 0, n: p.n, sum: p.spent, rec: true });
+              yld: p.b.yield || null, qty: 0, each, value: 0, n: p.n, sum: p.spent, rec: true, secid: p.b.secid });
           }
           const cur = kind === 'fixed' ? fixedMV(y) : kind === 'cny' ? (mvCnyBy.get(y) || 0) : null;
           const t = kind === 'fixed' || kind === 'cny' ? (p ? p.t : 0) : null;
@@ -7620,7 +7625,7 @@ async function mpRenderMaturities() {
           cells.push(`<td ${td}>${firstOfGroup ? label : ''}</td>`);
           cells.push(`<td ${td}>${k === 0 ? g.y : ''}</td>`);
           cells.push(i.empty ? `<td ${td} colspan="6" style="color:#8b949e">${i.name}</td>`
-            : `<td ${td}>${mpEscapeHtml(i.name)}${i.sub ? ` <span style="color:${i.rec ? '#3dd68c' : '#8b949e'}">${i.sub}</span>` : ''}</td>`
+            : `<td ${td}${i.secid && i.qty != null && !/^(DEPOSIT|SAVINGS|ВКЛАД):/.test(i.secid) ? ` data-chart="${mpEscapeHtml(i.secid)}" data-chart-title="${mpEscapeHtml(i.name)}"` : ''}>${mpEscapeHtml(i.name)}${i.sub ? ` <span style="color:${i.rec ? '#3dd68c' : '#8b949e'}">${i.sub}</span>` : ''}</td>`
               + `<td ${tdr}>${i.yld ? i.yld.toFixed(1) + '%' : '—'}</td><td ${tdr}>${i.each ? rub(i.each) : '—'}</td>`
               + `<td ${tdr}>${i.qty == null ? 'вклад' : i.qty || '—'}</td><td ${tdr}>${i.value ? rub(i.value) : '—'}</td>`
               + `<td ${tdr}>${i.close ? '<b style="color:#f85149">закрыть</b>' : i.n ? `<b style="color:#3dd68c">+${whole ? i.n : i.n.toFixed(1)}</b>` : i.rec ? '<span style="color:#8b949e">+0</span>' : ''}</td>`);
@@ -9744,7 +9749,7 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
         }
       }
       return `<tr>
-        <td class="ticker" style="color:${it.color}">${mpEscapeHtml(it.label)}</td>
+        <td class="ticker"${/^[A-Z0-9][A-Z0-9.\-]{0,9}$/.test(it.label) ? ` data-chart="${mpEscapeHtml(it.label)}"` : ''} style="color:${it.color}">${mpEscapeHtml(it.label)}</td>
         <td>${currentStr}</td>
         <td>${priceStr}</td>
         <td>${it.current.toFixed(2)}%</td>
@@ -9832,7 +9837,7 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
         }
       }
       return `<tr>
-        <td class="ticker" style="color:${it.color}">${mpEscapeHtml(it.label)}</td>
+        <td class="ticker"${/^[A-Z0-9][A-Z0-9.\-]{0,9}$/.test(it.label) ? ` data-chart="${mpEscapeHtml(it.label)}"` : ''} style="color:${it.color}">${mpEscapeHtml(it.label)}</td>
         <td>${currentRubStr}</td>
         <td>${it.current.toFixed(2)}%</td>
         <td>${targetPct.toFixed(2)}%</td>
@@ -14216,6 +14221,11 @@ function mpShortName(ticker, name) {
 const MP_PRICE_PERIODS = [['1m', 1], ['3m', 3], ['6m', 6], ['YTD', 'ytd'], ['1y', 12], ['2y', 24], ['3y', 36], ['4y', 48], ['5y', 60], ['all', null]];
 // opts.also: other tickers of the same thing whose deals are marked too (the
 // portfolio map's merged gold: XAU's price, the deals of XAU and XAUT)
+// a ticker in any table marked data-chart (the target weights, the money to allocate): its price chart
+document.addEventListener('click', ev => {
+  const td = ev.target.closest?.('[data-chart]');
+  if (td && td.dataset.chart) mpOpenPriceDialog(td.dataset.chart, td.dataset.chartTitle || td.dataset.chart);
+});
 async function mpOpenPriceDialog(asset, title, opts = {}) {
   const dealTickers = [asset, ...(opts.also || [])];
   const dlg = document.createElement('dialog');
