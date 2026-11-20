@@ -14556,7 +14556,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     if (!rateNote) {
       const chartOn = day => { let v = null; for (const p of prices) { if (p.day > day) break; v = p.price_usd; } return v == null ? null : val(day, v); };
       const pos = { qty: 0, cost: 0 };
-      for (const d of deals.filter(x => !x.via)) {
+      for (const d of deals.filter(x => viaOn || !x.via)) {   // the funds' buys too when they're shown (the box)
         const q = Number(d.quantity); if (!(q > 0)) continue;
         if (d.side === 'buy') {
           const at = chartOn(d.trade_date);
