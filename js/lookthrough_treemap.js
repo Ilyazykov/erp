@@ -440,7 +440,8 @@ const earnedOf = r => (Number(r.value_end) || 0) - (Number(r.value_start) || 0) 
 // money x T's weight in F, at T's own price that day; F's value at the period start x the
 // weight, at T's price then, is the position it starts with. The end value is those shares
 // at T's price at the end. A constituent held directly too: its own row merged in. No price
-// on a day needed: T is F's row x the weight (the fund's own return). A fund's residual tile
+// of its own on a day needed: T is unknown (no row) -- never the fund's return in its place,
+// nor its direct part alone (the user, 21.11.2026). A fund's residual tile
 // (what its list doesn't cover) gets F's row x its share, so nothing is counted twice.
 // tiles: aggregate's (expanded); prices: ticker -> [price on days[i]] (USD); returns
 // investment_by_asset-like rows (asset, value_start, value_end, put_in, taken_out, income,
@@ -460,6 +461,7 @@ export function constituentRows({ tiles, earnedRows, fundHoldings, prices, days,
   const funds = new Set();
   for (const t of tiles) for (const s of t.sources || []) if (s.from !== 'direct' && (fundHoldings?.[s.from] || []).length) funds.add(s.from);
   const synth = new Map();   // constituent ticker -> rows
+  const unknown = new Set();  // constituents without a price of their own on a day needed
   const constituent = (T, F, w) => {
     const R = rowOf(F);
     if (!R || !(w > 0)) return;
@@ -479,13 +481,14 @@ export function constituentRows({ tiles, earnedRows, fundHoldings, prices, days,
         if (v > 0) putIn += v * w; else takenOut -= v * w;
       }
       row = { value_start: v0, value_end: q * at(to), put_in: putIn, taken_out: takenOut, income: 0, cash };
-    } else row = scaled(R, w);
+    } else { unknown.add(String(assetOf(T)).toUpperCase()); return; }
     if (!synth.has(T)) synth.set(T, []);
     synth.get(T).push(row);
   };
   for (const F of funds) for (const c of fundHoldings[F]) constituent(c.ticker, F, Number(c.weight) || 0);
   const out = new Map();
   for (const [T, rows] of synth) {
+    if (unknown.has(String(assetOf(T)).toUpperCase())) continue;
     const direct = rowOf(T);
     out.set(String(assetOf(T)).toUpperCase(), finish(assetOf(T), mergeRows(direct ? [direct, ...rows] : rows)));
   }
@@ -498,7 +501,7 @@ export function constituentRows({ tiles, earnedRows, fundHoldings, prices, days,
     const k = whole > 0 ? rest / whole : 1;
     out.set(String(assetOf(F)).toUpperCase(), finish(assetOf(F), scaled(R, k)));
   }
-  return [...(earnedRows || []).filter(r => !out.has(String(r.asset).toUpperCase())), ...out.values()];
+  return [...(earnedRows || []).filter(r => !out.has(String(r.asset).toUpperCase()) && !unknown.has(String(r.asset).toUpperCase())), ...out.values()];
 }
 
 export function mergeRows(rows) {

@@ -41,14 +41,44 @@ SUFFIX = {"USD": "", "GBP": ".L", "JPY": ".T", "CHF": ".SW", "TWD": ".TW", "CAD"
           "SGD": ".SI", "PLN": ".WA", "ZAR": ".JO", "BRL": ".SA", "MXN": ".MX", "CNY": ".SS", "NZD": ".NZ"}
 EUR_SUFFIX = {"FR": ".PA", "DE": ".DE", "NL": ".AS", "ES": ".MC", "IT": ".MI", "FI": ".HE", "BE": ".BR",
               "IE": ".IR", "PT": ".LS", "AT": ".VI", "LU": ".AS"}
-# quoted in a hundredth of the currency
-MINOR = {".L", ".JO", ".TA"}
+# quoted in a fraction of the currency: pence, cents, agorot; Kuwait's fils
+MINOR = {".L": 0.01, ".JO": 0.01, ".TA": 0.01, ".KW": 0.001}
+# The funds' lists name some securities by their Bloomberg code, not the
+# exchange's (Vanguard: HDFCB for HDFC Bank, DBS, OCBC...), or on exchanges
+# the currency table doesn't know (Riyadh, Abu Dhabi, Doha, Kuwait, Kuala
+# Lumpur, Bangkok, Jakarta, Athens, Budapest, Manila): their Yahoo symbols.
+OVERRIDE = {
+    # India (NSE)
+    "HDFCB": "HDFCBANK.NS", "ICICIBC": "ICICIBANK.NS", "BHARTI": "BHARTIARTL.NS", "INFO": "INFY.NS",
+    "MM": "M&M.NS", "BAF": "BAJFINANCE.NS", "AXSB": "AXISBANK.NS", "SUNP": "SUNPHARMA.NS", "TTAN": "TITAN.NS",
+    "MSIL": "MARUTI.NS", "HUVR": "HINDUNILVR.NS", "SHFL": "SHRIRAMFIN.NS", "BHE": "BEL.NS", "UTCEM": "ULTRACEMCO.NS",
+    "HNDL": "HINDALCO.NS", "TATA": "TATASTEEL.NS", "PWGR": "POWERGRID.NS",
+    # Singapore
+    "DBS": "D05.SI", "OCBC": "O39.SI", "UOB": "U11.SI", "ST": "Z74.SI", "SGX": "S68.SI", "KEP": "BN4.SI",
+    # Saudi Arabia, the Emirates, Qatar, Kuwait
+    "RJHI": "1120.SR", "ARAMCO": "2222.SR", "SNB": "1180.SR", "MAADEN": "1211.SR", "STC": "7010.SR",
+    "FAB": "FAB.AD", "EAND": "EAND.AD", "EMAAR": "EMAAR.AE", "EMIRATES": "EMIRATESNBD.AE",
+    "QNBK": "QNBK.QA", "QIBK": "QIBK.QA", "KFH": "KFH.KW", "NBK": "NBK.KW",
+    # Malaysia, Thailand, Indonesia, the Philippines
+    "MAY": "1155.KL", "TNB": "5347.KL", "PBK": "1295.KL", "CIMB": "1023.KL",
+    "DELTA/F": "DELTA.BK", "PTT/F": "PTT.BK", "BBCA": "BBCA.JK", "ICT": "ICT.PS",
+    # Greece, Hungary
+    "ETE": "ETE.AT", "EUROB": "EUROB.AT", "TPEIR": "TPEIR.AT", "ALPHA": "ALPHA.AT", "PPC": "PPC.AT", "OTP": "OTP.BD",
+    # Europe: another exchange than the country's, or another symbol
+    "NDA": "NDA-FI.HE", "NOKIA": "NOKIA.HE", "ARGX": "ARGX.BR", "ENX": "ENX.PA", "STLAM": "STLAM.MI",
+    "STMMI": "STMMI.MI", "KYGA": "KRZ.IR", "AIBG": "A5G.IR", "KSP": "KRX.IR", "DSFIR": "DSFIR.AS", "PRX": "PRX.AS",
+    "CPG": "CPG.L", "ERF": "ERF.PA", "TEN": "TEN.MI", "QIA": "QIA.DE",
+    # the US: a class after a space
+    "BRK B": "BRK-B",
+}
 # fallbacks when the first symbol has no data
 ALT_SUFFIX = {".TW": [".TWO"], ".KS": [".KQ"], ".SS": [".SZ"], ".NS": [".BO"]}
 
 
 def candidates(ticker: str, ccy: str | None, country: str | None) -> list[str]:
     t = (ticker or "").strip().upper()
+    if t in OVERRIDE:
+        return [OVERRIDE[t]]
     if not t or t == "OTHER" or re.match(r"^[A-Z]{2}[A-Z0-9]{9}\d$", t):   # no ticker, or an ISIN
         return []
     ccy = (ccy or "").upper()
@@ -60,7 +90,7 @@ def candidates(ticker: str, ccy: str | None, country: str | None) -> list[str]:
     if suf in (".HK",) and base.isdigit():
         forms = [base.zfill(4)]
     if suf in (".ST", ".CO", ".OL", ".HE") and re.match(r"^[A-Z0-9]+[ABC]$", base) and "-" not in base:
-        forms = [f"{base[:-1]}-{base[-1]}", base]   # INVEB -> INVE-B, NOVOB -> NOVO-B
+        forms = [f"{base[:-1]}-{base[-1]}", base]   # INVEB -> INVE-B, NOVOB -> NOVO-B (NOKIA: OVERRIDE)
     out = []
     for s in [suf, *ALT_SUFFIX.get(suf, [])]:
         for f in forms:
@@ -144,7 +174,7 @@ def main() -> int:
             if ticker not in found:
                 continue
             sym, series = found[ticker]
-            k = 0.01 if any(sym.endswith(m) for m in MINOR) else 1.0
+            k = next((f for m, f in MINOR.items() if sym.endswith(m)), 1.0)
             c = (ccy or "USD").upper()
             if c != "USD":
                 if c not in fx:
