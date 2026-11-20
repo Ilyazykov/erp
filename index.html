@@ -445,6 +445,7 @@
     <div class="form-row" id="invested_periods" style="gap:6px"><button class="btn" type="button" data-period="1d">1d</button><button class="btn" type="button" data-period="2d">2d</button><button class="btn" type="button" data-period="3d">3d</button><button class="btn" type="button" data-period="4d">4d</button><button class="btn" type="button" data-period="7d">7d</button><button class="btn" type="button" data-period="1m">1m</button><button class="btn" type="button" data-period="3m">3m</button><button class="btn" type="button" data-period="6m">6m</button><button class="btn" type="button" data-period="ytd">YTD</button><button class="btn" type="button" data-period="1y">1y</button><button class="btn" type="button" data-period="5y">5y</button><button class="btn" type="button" data-period="all">all</button><button class="btn" type="button" data-period="snowball" title="From the Snowball portfolio's first deal (2025-08-28)">Snowball</button></div>
     <div class="form-row" style="gap:16px">
       <label>by <select id="invested_by_group"><option value="asset">asset</option><option value="type">type</option></select></label>
+      <label title="The funds of one index as one row (VWRA and VWCE: FTSE All-World; CSPX and VUAA: S&amp;P 500)"><input type="checkbox" id="invested_merge_funds" checked> merge funds</label>
       <label>show <select id="invested_by_mode"><option value="contrib">contribution (pp)</option><option value="xirrp">MWR</option><option value="pct">dividends kept (%)</option><option value="xirr">XIRR (a year)</option><option value="money">money</option></select></label>
       <label title="The period's last day (empty: the zoom's end); moves the zoom of the charts above too">to <input type="date" id="invested_to"></label>
       <span id="invested_by_period" class="note" style="margin:0"></span>
@@ -14010,12 +14011,13 @@ function mpKindKey(r) {
   if (k === 'liquid') return `liquid|${r.region === 'crypto' ? 'crypto' : r.region === 'foreign' ? 'foreign' : 'ru'}`;
   return k;
 }
-function mpGroupAssetsByKind(rows, from, to) {
+function mpGroupAssetsByKind(rows, from, to, keyOf = mpKindKey) {
   const groups = new Map();
   for (const r of rows) {
-    const k = mpKindKey(r);
-    const g = groups.get(k) || { kind: k, assets: [], value_start: 0, value_end: 0, put_in: 0, taken_out: 0, income: 0, earned: 0, flows: new Map() };
+    const k = keyOf(r);
+    const g = groups.get(k) || { kind: k, assets: [], accts: new Set(), value_start: 0, value_end: 0, put_in: 0, taken_out: 0, income: 0, earned: 0, flows: new Map() };
     g.assets.push(r.asset);
+    for (const a of String(r.accounts || '').split(/,\s*/).filter(Boolean)) g.accts.add(a);
     for (const c of ['value_start', 'value_end', 'put_in', 'taken_out', 'income', 'earned']) g[c] += Number(r[c]) || 0;
     for (const [d, v] of r.cash || []) { const day = String(d).slice(0, 10); g.flows.set(day, (g.flows.get(day) || 0) + Number(v)); }
     groups.set(k, g);
@@ -14038,7 +14040,8 @@ function mpGroupAssetsByKind(rows, from, to) {
     const finalIn = g.value_start + cash.reduce((t, [, v]) => t + v, 0);
     const base = Math.max(len > 0 ? w / len : putIn, finalIn);
     return {
-      asset: MP_KIND_REGION_LABELS[g.kind] || MP_ASSET_CLASS_LABELS[g.kind] || g.kind, accounts: `${g.assets.length} assets`,
+      asset: MP_KIND_REGION_LABELS[g.kind] || MP_ASSET_CLASS_LABELS[g.kind] || g.kind, accounts: keyOf === mpKindKey ? `${g.assets.length} assets` : [...g.accts].join(', '),
+      members: g.assets,
       value_start: g.value_start, value_end: g.value_end, put_in: g.put_in, taken_out: g.taken_out, income: g.income,
       earned: g.earned, pct: base > 0 ? g.earned / base * 100 : null, cash, kind: g.kind.split('|')[0],
     };
@@ -14082,7 +14085,22 @@ async function mpRenderInvestedAssets() {
   const fmtMoney = v => (ccy === 'RUB' ? `${Math.round(v).toLocaleString('en-US')} ₽` : `$${Math.round(v).toLocaleString('en-US')}`);
   const signed = (v, f) => (v > 0 ? '+' : v < 0 ? '−' : '') + f(Math.abs(v));
   const irr = r => { const g = window.mpPeriodIrr ? window.mpPeriodIrr(r, from, to) : null; return g == null ? null : g * 100; };
-  const rows = (group === 'type' ? mpGroupAssetsByKind(mpInvestedAssetsRows, from, to) : mpInvestedAssetsRows)
+  // merge funds (the box, on by default): the funds of one index as one row -- VWRA and VWCE, one fund in
+  // dollars and in euros, are "FTSE All-World funds" -- their money summed and their flows merged by day
+  const mergeFunds = document.getElementById('invested_merge_funds').checked;
+  const fundGroupOf = new Map(Object.entries(window.mpFundIndexGroups || {}).flatMap(([g, ts]) => ts.map(t => [t, g])));
+  const byAsset = () => {
+    if (!mergeFunds) return mpInvestedAssetsRows;
+    const merged = mpInvestedAssetsRows.filter(r => fundGroupOf.has(String(r.asset).toUpperCase()));
+    const counts = new Map(); for (const r of merged) { const g = fundGroupOf.get(String(r.asset).toUpperCase()); counts.set(g, (counts.get(g) || 0) + 1); }
+    const many = merged.filter(r => counts.get(fundGroupOf.get(String(r.asset).toUpperCase())) > 1);
+    if (!many.length) return mpInvestedAssetsRows;
+    const groups = mpGroupAssetsByKind(many, from, to, r => fundGroupOf.get(String(r.asset).toUpperCase()));
+    // the group's name, its biggest fund first (the price chart's ticker, the others with it)
+    for (const g of groups) { g.name = g.asset = g.kind; g.members = [...g.members].sort((a, b) => Number(many.find(r => r.asset === b).value_end) - Number(many.find(r => r.asset === a).value_end)); }
+    return [...mpInvestedAssetsRows.filter(r => !many.includes(r)), ...groups];
+  };
+  const rows = (group === 'type' ? mpGroupAssetsByKind(mpInvestedAssetsRows, from, to) : byAsset())
     .map(r => ({ ...r, money: conv(to, Number(r.earned)), pctv: r.pct == null ? null : Number(r.pct), xirr: mpAssetXirr(r, from, to),
       contrib: cap > 0 ? Number(r.earned) / cap * 100 : null, xirrp: irr(r) }))
     .map(r => ({ ...r, v: mode === 'money' ? r.money : mode === 'pct' ? r.pctv : r[mode] }))
@@ -14092,7 +14110,9 @@ async function mpRenderInvestedAssets() {
   const names = { ...MP_ASSET_NAMES, ...await mpBondNames(rows.map(r => r.asset)) };
   const frozen = await mpLoadFrozen();
   // the mark after the name: the labels are right-aligned, so the marks line up by the bars
-  const label = r => `${names[r.asset] || r.asset}${frozen.has(r.asset) ? ' (blocked)' : ''}${MP_ASSET_MARKS[r.asset] ? ' ' + MP_ASSET_MARKS[r.asset] : ''}`;
+  // funds not merged: by their tickers (VWRA, VWCE -- their names would differ only by the currency)
+  const nameOf = r => (!mergeFunds && fundGroupOf.has(String(r.asset).toUpperCase()) ? null : names[r.asset]);
+  const label = r => `${nameOf(r) || r.asset}${frozen.has(r.asset) ? ' (blocked)' : ''}${MP_ASSET_MARKS[r.asset] ? ' ' + MP_ASSET_MARKS[r.asset] : ''}`;
   const x = rows.map(r => r.v);
   // every asset, also one with no % (nothing at the start, nothing put in)
   const total = mpInvestedAssetsRows.reduce((t, r) => t + conv(to, Number(r.earned)), 0);
@@ -14106,7 +14126,7 @@ async function mpRenderInvestedAssets() {
     customdata: rows.map(r => [r.accounts, signed(r.money, fmtMoney), r.pctv == null ? '—' : pctText(r.pctv),
       fmtMoney(conv(from, Number(r.value_start))), fmtMoney(conv(to, Number(r.value_end))),
       fmtMoney(conv(to, Number(r.put_in))), fmtMoney(conv(to, Number(r.taken_out))), fmtMoney(conv(to, Number(r.income))),
-      names[r.asset] ? ` · ${r.asset}` : '', r.xirr == null ? '—' : `${pctText(r.xirr)} a year`,
+      nameOf(r) ? ` · ${r.asset}` : '', r.xirr == null ? '—' : `${pctText(r.xirr)} a year`,
       r.pctv ? fmtMoney(r.money / (r.pctv / 100)) : '—', orDash(r.contrib, ' pp'), orDash(r.xirrp)]),
     hovertemplate: '<b>%{y}</b>%{customdata[8]} (%{customdata[0]})<br>earned %{customdata[1]}<br>'
       + 'contribution %{customdata[11]} · MWR %{customdata[12]} · XIRR %{customdata[9]}<br>dividends kept %{customdata[2]}<br>'
@@ -14125,15 +14145,17 @@ async function mpRenderInvestedAssets() {
   }), CONFIG);
   // an asset's name or bar: its price chart (not the groups of the "type" view)
   if (group === 'asset') {
-    const byLabel = new Map(rows.map(r => [label(r), r.asset]));
+    // a merged fund group: its biggest fund's price, the deals of all of them
+    const byLabel = new Map(rows.map(r => [label(r), r.members ? { a: r.members[0], also: r.members.slice(1) } : { a: r.asset, also: [] }]));
+    const open = (x, title) => mpOpenPriceDialog(x.a, title, { also: x.also });
     el.removeAllListeners?.('plotly_click');
-    el.on('plotly_click', ev => { const a = byLabel.get(ev.points?.[0]?.y); if (a) mpOpenPriceDialog(a, ev.points[0].y); });
+    el.on('plotly_click', ev => { const x = byLabel.get(ev.points?.[0]?.y); if (x) open(x, ev.points[0].y); });
     el.querySelectorAll('.yaxislayer-above .ytick text').forEach(t => {
-      const a = byLabel.get(t.textContent);
-      if (!a) return;
+      const x = byLabel.get(t.textContent);
+      if (!x) return;
       t.style.cursor = 'pointer';
       t.style.pointerEvents = 'all';
-      t.onclick = () => mpOpenPriceDialog(a, t.textContent);
+      t.onclick = () => open(x, t.textContent);
     });
   }
 }
@@ -14628,6 +14650,11 @@ try { const v = localStorage.getItem('mp_invested_by_mode'); if (v) document.get
 // a mode no longer offered (TWR, taken out): the first one
 if (document.getElementById('invested_by_mode').selectedIndex < 0) document.getElementById('invested_by_mode').selectedIndex = 0;
 try { const v = localStorage.getItem('mp_invested_by_group'); if (v) document.getElementById('invested_by_group').value = v; } catch { /* no storage */ }
+try { const v = localStorage.getItem('mp_invested_merge_funds'); if (v) document.getElementById('invested_merge_funds').checked = v !== '0'; } catch { /* no storage */ }
+document.getElementById('invested_merge_funds').addEventListener('change', e => {
+  try { localStorage.setItem('mp_invested_merge_funds', e.target.checked ? '1' : '0'); } catch { /* no storage */ }
+  if (mpIsSignedIn) mpRenderInvestedAssets();
+});
 document.getElementById('invested_by_group').addEventListener('change', e => {
   try { localStorage.setItem('mp_invested_by_group', e.target.value); } catch { /* no storage */ }
   if (mpIsSignedIn) mpRenderInvestedAssets();
@@ -15194,7 +15221,8 @@ sb.auth.getSession().then(({ data: { session } }) => mpOnAuth(session));
 sb.auth.onAuthStateChange((_event, session) => mpOnAuth(session));
 </script>
 <script type="module">
-import { RU_ACCOUNTS, isRuInfra, netCreditIntoLiquid, periodIrr, portfolioCapital } from './js/lookthrough_treemap.js?v=20261121p';
+import { RU_ACCOUNTS, FUND_INDEX_GROUPS, isRuInfra, netCreditIntoLiquid, periodIrr, portfolioCapital } from './js/lookthrough_treemap.js?v=20261121p';
+window.mpFundIndexGroups = FUND_INDEX_GROUPS;
 window.MP_RU_ACCOUNTS = RU_ACCOUNTS;
 window.mpPeriodIrr = periodIrr;
 window.mpPortfolioCapital = portfolioCapital;
