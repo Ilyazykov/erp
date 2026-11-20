@@ -14074,6 +14074,95 @@ async function mpRenderInvestedAssets() {
       ticksuffix: mode === 'money' ? '' : mode === 'contrib' ? ' pp' : '%', tickprefix: mode === 'money' && ccy === 'USD' ? '$' : '' }),
     yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { type: 'category', automargin: true, tickfont: { size: 11 }, dtick: 1 }),
   }), CONFIG);
+  // an asset's name or bar: its price chart (not the groups of the "type" view)
+  if (group === 'asset') {
+    const byLabel = new Map(rows.map(r => [label(r), r.asset]));
+    el.removeAllListeners?.('plotly_click');
+    el.on('plotly_click', ev => { const a = byLabel.get(ev.points?.[0]?.y); if (a) mpOpenPriceDialog(a, ev.points[0].y); });
+    el.querySelectorAll('.yaxislayer-above .ytick text').forEach(t => {
+      const a = byLabel.get(t.textContent);
+      if (!a) return;
+      t.style.cursor = 'pointer';
+      t.style.pointerEvents = 'all';
+      t.onclick = () => mpOpenPriceDialog(a, t.textContent);
+    });
+  }
+}
+
+// An asset's price through time (price_history, in dollars; in the paper's own
+// currency at each day's rate), a year by default, with the deals in it marked.
+const MP_PRICE_PERIODS = [['1m', 1], ['3m', 3], ['6m', 6], ['YTD', 'ytd'], ['1y', 12], ['5y', 60], ['all', null]];
+async function mpOpenPriceDialog(asset, title) {
+  const dlg = document.createElement('dialog');
+  dlg.style.cssText = 'background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:16px 18px;min-width:320px;width:min(94vw,960px)';
+  dlg.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><b>${mpEscapeHtml(title)} <span style="color:#8b949e;font-weight:normal">· ${mpEscapeHtml(asset)}</span></b><button type="button" data-act="close">✕</button></div>
+    <div class="form-row" style="gap:6px;align-items:center">${MP_PRICE_PERIODS.map(([l]) => `<button class="btn${l === '1y' ? ' primary' : ''}" type="button" data-p="${l}">${l}</button>`).join('')}
+      <label style="margin-left:12px" id="mp_price_ccy_box"><input type="checkbox" id="mp_price_usd"> in USD</label></div>
+    <div id="mp_price_chart" style="height:420px"></div>
+    <p class="note" style="margin:0" id="mp_price_note">Loading…</p>
+  </div>`;
+  document.body.appendChild(dlg);
+  // opened before the chart is drawn (Plotly measures a closed dialog as empty); removed however it's closed
+  dlg.addEventListener('close', () => dlg.remove());
+  dlg.showModal();
+  dlg.querySelector('[data-act=close]').onclick = () => dlg.close();
+  const note = dlg.querySelector('#mp_price_note');
+  let prices, deals, ccy, fx;
+  try {
+    [prices, deals] = await Promise.all([
+      mpXlsxFetchAll(() => sb.from('price_history').select('day, price_usd').eq('ticker', asset).order('day')),
+      mpXlsxFetchAll(() => sb.from('trades').select('trade_date, side, quantity, price, currency, account').eq('ticker', asset).in('side', ['buy', 'sell']).order('trade_date')),
+    ]);
+    ccy = (deals.find(d => d.currency)?.currency || 'USD').toUpperCase();
+    fx = ccy === 'USD' ? [] : await mpXlsxFetchAll(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', ccy).order('day'));
+  } catch (err) { note.textContent = String(err.message || err); return; }
+  if (!prices.length) { note.textContent = 'No price history for this asset (a deposit, a savings account or cash has none).'; return; }
+  const usdBox = dlg.querySelector('#mp_price_usd');
+  if (ccy === 'USD') dlg.querySelector('#mp_price_ccy_box').style.display = 'none';
+  // the rate of a day: the last one on or before it
+  const rateOn = day => { let lo = 0, hi = fx.length - 1, r = null; while (lo <= hi) { const m = (lo + hi) >> 1; if (fx[m].day <= day) { r = Number(fx[m].usd_per_unit); lo = m + 1; } else hi = m - 1; } return r; };
+  const today = prices[prices.length - 1].day;
+  const startOf = p => {
+    const spec = MP_PRICE_PERIODS.find(([l]) => l === p)?.[1];
+    if (spec === null) return prices[0].day;
+    if (spec === 'ytd') return `${today.slice(0, 4) - 1}-12-31`;
+    const d = new Date(`${today}T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() - spec); return d.toISOString().slice(0, 10);
+  };
+  let period = '1y';
+  const draw = () => {
+    const usd = ccy === 'USD' || usdBox.checked;
+    const unit = usd ? 'USD' : ccy;
+    const val = (day, v) => (usd ? Number(v) : (rateOn(day) ? Number(v) / rateOn(day) : null));
+    const from = startOf(period);
+    const pts = prices.filter(p => p.day >= from).map(p => ({ day: p.day, v: val(p.day, p.price_usd) })).filter(p => p.v != null);
+    const priceOn = day => { const p = [...pts].reverse().find(x => x.day <= day) ?? pts[0]; return p?.v ?? null; };
+    const shown = deals.filter(d => d.trade_date >= from);
+    const fmt = v => (unit === 'USD' ? `$${v.toLocaleString('en-US', { maximumFractionDigits: v < 10 ? 4 : 2 })}` : `${v.toLocaleString('en-US', { maximumFractionDigits: v < 10 ? 4 : 2 })} ${unit}`);
+    const traces = [{ x: pts.map(p => p.day), y: pts.map(p => p.v), type: 'scatter', mode: 'lines', line: { color: '#4c8bf5', width: 2 },
+      name: 'price', hovertemplate: `%{x}: %{y:,.4~f} ${unit}<extra></extra>` }];
+    for (const [side, color, sym] of [['buy', '#3fb950', 'triangle-up'], ['sell', '#f85149', 'triangle-down']]) {
+      const ds = shown.filter(d => d.side === side);
+      if (ds.length) traces.push({ x: ds.map(d => d.trade_date), y: ds.map(d => priceOn(d.trade_date)), type: 'scatter', mode: 'markers', name: side,
+        marker: { color, size: 11, symbol: sym }, text: ds.map(d => `${side} ${Number(d.quantity)} at ${d.account}`), hovertemplate: '%{x}: %{text}<extra></extra>' });
+    }
+    Plotly.react(dlg.querySelector('#mp_price_chart'), traces, Object.assign({}, LAYOUT_BASE, {
+      margin: { l: 60, r: 20, t: 10, b: 40 }, showlegend: false, hovermode: 'closest',
+      xaxis: Object.assign({}, LAYOUT_BASE.xaxis, { type: 'date', dtick: undefined, tickformat: undefined, range: [from, today] }),
+      yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { type: 'linear', tickformat: undefined, ticksuffix: unit === 'USD' ? '' : ` ${unit}`, tickprefix: unit === 'USD' ? '$' : '' }),
+    }), CONFIG);
+    const first = pts[0], last = pts[pts.length - 1];
+    const ch = first && last && first.v ? (last.v / first.v - 1) * 100 : null;
+    note.textContent = first ? `${first.day} ${fmt(first.v)} → ${last.day} ${fmt(last.v)}${ch == null ? '' : ` (${ch >= 0 ? '+' : ''}${ch.toFixed(1)}%)`}`
+      + `${shown.length ? ` · deals marked: ${shown.length}` : ''}` : 'No prices in this period.';
+  };
+  dlg.querySelectorAll('[data-p]').forEach(b => b.onclick = () => {
+    period = b.dataset.p;
+    dlg.querySelectorAll('[data-p]').forEach(x => x.classList.toggle('primary', x === b));
+    draw();
+  });
+  usdBox.onchange = draw;
+  draw();
 }
 try { const v = localStorage.getItem('mp_invested_by_mode'); if (v) document.getElementById('invested_by_mode').value = v; } catch { /* no storage */ }
 // a mode no longer offered (TWR, taken out): the first one
