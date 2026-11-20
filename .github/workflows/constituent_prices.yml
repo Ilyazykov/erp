@@ -5,6 +5,9 @@ name: Load fund constituents' prices
 # the Actions tab or `gh workflow run constituent_prices.yml`. From GitHub's
 # runners Yahoo answers; from Supabase's servers it often doesn't.
 on:
+  # every weekday after New York's close: the last days of the constituents priced, the new ones in full
+  schedule:
+    - cron: "15 23 * * 1-5"
   workflow_dispatch:
     inputs:
       top:
@@ -31,7 +34,11 @@ jobs:
         run: |
           ENCODED_PASSWORD=$(python -c "import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=''))" "$SUPABASE_DB_PASSWORD")
           export DATABASE_URL="postgresql://postgres.${SUPABASE_PROJECT_REF}:${ENCODED_PASSWORD}@aws-1-eu-west-1.pooler.supabase.com:6543/postgres"
-          python erp_valuation/load_constituent_prices.py --top "${{ inputs.top }}" ${{ inputs.from && format('--from {0}', inputs.from) || '' }} ${{ inputs.symbols && format('--symbols "{0}"', inputs.symbols) || '' }}
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            python erp_valuation/load_constituent_prices.py --daily --top 1
+          else
+            python erp_valuation/load_constituent_prices.py --top "${{ inputs.top }}" ${{ inputs.from && format('--from {0}', inputs.from) || '' }} ${{ inputs.symbols && format('--symbols "{0}"', inputs.symbols) || '' }}
+          fi
         env:
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}

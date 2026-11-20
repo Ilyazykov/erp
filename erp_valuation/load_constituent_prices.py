@@ -26,7 +26,7 @@ import argparse
 import os
 import re
 import sys
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 import psycopg
@@ -138,6 +138,9 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     # given tickers instead (the funds held, whose history starts only when bought): "VWRA=VWRA.L:USD,VWCE=VWCE.DE:EUR"
     ap.add_argument("--symbols", default="")
+    # every day (the workflow's schedule): the constituents priced before, their last days again (a day loaded
+    # while its market was open gets its close), and the ones not priced yet in full
+    ap.add_argument("--daily", action="store_true")
     args = ap.parse_args()
 
     with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True, prepare_threshold=None) as db:
@@ -153,6 +156,24 @@ def main() -> int:
             start = args.start or "2019-01-01"
             print(f"{len(todo)} given tickers from {start}")
             return load(db, todo, start, args.dry_run)
+        if args.daily:
+            recent = (date.today() - timedelta(days=10)).isoformat()
+            priced = db.execute("""
+                with t as (select ticker, value_usd, sum(value_usd) over (order by value_usd desc) cum,
+                                  sum(value_usd) over () tot from portfolio_look_through_totals)
+                select t.ticker, s.currency, s.country_code, t.value_usd
+                from t left join lateral (select currency, country_code from securities s
+                                          where coalesce(s.market_ticker, s.ticker) = t.ticker limit 1) s on true
+                where t.cum - t.value_usd < %s * t.tot
+                  and exists (select 1 from price_history p where p.ticker = t.ticker and p.source = %s)
+                order by t.value_usd desc""", (args.top, SOURCE)).fetchall()
+            seen, todo = set(), []
+            for ticker, ccy, country, usd in priced:
+                if ticker not in seen:
+                    seen.add(ticker)
+                    todo.append((ticker, ccy, country, float(usd), candidates(ticker, ccy, country)))
+            print(f"{len(todo)} priced constituents, their days from {recent}")
+            load(db, todo, recent, args.dry_run, refresh=True)
         rows = db.execute("""
             with t as (select ticker, value_usd, sum(value_usd) over (order by value_usd desc) cum,
                               sum(value_usd) over () tot from portfolio_look_through_totals)
@@ -174,7 +195,7 @@ def main() -> int:
         return load(db, todo, start, args.dry_run)
 
 
-def load(db, todo, start: str, dry_run: bool) -> int:
+def load(db, todo, start: str, dry_run: bool, refresh: bool = False) -> int:
     if True:
 
         # the symbols, round by round: a constituent's next candidate only when the previous gave nothing
@@ -219,9 +240,13 @@ def load(db, todo, start: str, dry_run: bool) -> int:
             return 0
         with db.cursor() as cur:
             for i in range(0, len(out), 5000):
+                # refresh: a day of this loader's own rewritten (its close in place of a price taken while
+                # the market was open); another source's day is never touched
                 cur.executemany("insert into price_history (ticker, day, price_usd, source) values (%s, %s, %s, %s)"
-                                " on conflict (ticker, day) do nothing", [(*r, SOURCE) for r in out[i:i + 5000]])
-        print(f"written up to {len(out)} rows (existing days kept)")
+                                + (" on conflict (ticker, day) do update set price_usd = excluded.price_usd"
+                                   " where price_history.source = excluded.source" if refresh else
+                                   " on conflict (ticker, day) do nothing"), [(*r, SOURCE) for r in out[i:i + 5000]])
+        print(f"written up to {len(out)} rows ({'own days refreshed' if refresh else 'existing days kept'})")
     return 0
 
 
