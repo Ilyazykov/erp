@@ -748,6 +748,11 @@ export function drawTreemap(container, tiles, earned, opts = {}) {
       }
     }
     if (el.childNodes.length) el.style.padding = `${MIN_PAD - 1}px`;
+    // a tile's click: its price chart (the page's; not a group of small ones)
+    if (opts.onTileClick && !tile.isGroup && opts.onTileClick(tile, name, true)) {
+      el.style.cursor = 'pointer';
+      el.addEventListener('click', () => { if (tip) tip.style.display = 'none'; opts.onTileClick(tile, name); });
+    }
     if (tip) {
       const lines = tile.isGroup ? [`${tile.members.length} small positions`, ...tile.members.map(m => `${m.ticker} ${(m.share * 100).toFixed(2)}%`)] : tooltipLines(tile, e, name, money);
       el.addEventListener('mousemove', ev => {
@@ -981,7 +986,15 @@ function wireTreemap() {
       const rub = data.fx.get('RUB');
       const rubPerUsd = rub?.length && rub[rub.length - 1][1] > 0 ? 1 / rub[rub.length - 1][1] : null;
       const money = { ccy: showIn === 'rub' && rubPerUsd ? 'rub' : 'usd', rate: showIn === 'rub' && rubPerUsd ? rubPerUsd : 1, label: showIn !== '%' };
-      last = [tiles, colour, { tip, group: $('lt_small').checked, scale, names: { ...bondNames, ...FUND_NAMES }, money }];
+      // a tile's click: its price chart (index.html's mpOpenPriceDialog) -- merged gold as XAU;
+      // cash, the cushion and real estate have no price history ("check" asks only whether it opens)
+      const onTileClick = (tile, name, check = false) => {
+        const t = String(tile.ticker);
+        if (!g('mpOpenPriceDialog') || /^(CASH|CUSHION|REAL_ESTATE)/.test(t)) return false;
+        if (!check) window.mpOpenPriceDialog(t === 'GOLD' ? 'XAU' : t, name);
+        return true;
+      };
+      last = [tiles, colour, { tip, group: $('lt_small').checked, scale, names: { ...bondNames, ...FUND_NAMES }, money, onTileClick }];
       drawTreemap(box, ...last);
       drawLegend($('lt_legend'), scale, method === 'contrib' ? 'pp' : '%');
       const earnedAll = earnedRows.reduce((s, r) => s + earnedOf(r), 0);
