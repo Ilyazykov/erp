@@ -276,8 +276,11 @@ async function revolutStandIns(db: any, userId: string, write: Tx[]): Promise<{ 
     const base = `revolut:${x.ref || `${x.day}:${x.currency}:${x.amount}`}`;
     const n = seen.get(base) ?? 0; seen.set(base, n + 1);
     rows.push({
+      // dated the day the money moved, not the fund's dealing day: the money was
+      // counted in the fund and where it went both until then (20.11.2026: EUR 1 110
+      // to VWCE and gold, the stand-in SELLs on 23.11 -- $1 460 too much for 3 days)
       user_id: userId, account: 'Revolut', ticker: fcf ? fundOf.get(x.currency) : `SAVINGS:Revolut ${x.currency}`,
-      side: buy ? 'buy' : 'sell', quantity: Math.abs(x.amount), price: 1, trade_date: day, currency: x.currency,
+      side: buy ? 'buy' : 'sell', quantity: Math.abs(x.amount), price: 1, trade_date: x.day, currency: x.currency,
       fee_tax: null, fee_currency: null, nkd: null, exchange: null, estimated: true,
       note: `ESTIMATED: ${x.desc} -- from the account's Open Banking transfer, until the ${fcf ? 'fund' : 'savings'} statement comes`,
       external_source: fcf ? OPENBANKING_TRADE_SOURCE.fund : OPENBANKING_TRADE_SOURCE.savings, external_id: n ? `${base}:dup${n}` : base,
@@ -306,7 +309,7 @@ async function revolutStandIns(db: any, userId: string, write: Tx[]): Promise<{ 
     const base = `revolut:${x.ref || `${x.day}:${x.currency}:${x.amount}`}:fund`;
     const n = seen.get(base) ?? 0; seen.set(base, n + 1);
     rows.push({
-      user_id: userId, account: 'Revolut', ticker: eurFund, side: 'sell', quantity: eur, price: 1, trade_date: day, currency: 'EUR',
+      user_id: userId, account: 'Revolut', ticker: eurFund, side: 'sell', quantity: eur, price: 1, trade_date: x.day, currency: 'EUR',
       fee_tax: null, fee_currency: null, nkd: null, exchange: null, estimated: true,
       note: `ESTIMATED: ${x.desc} ${x.amount} ${x.currency} paid from the EUR fund, at the day's rate -- until the fund statement comes`,
       external_source: OPENBANKING_TRADE_SOURCE.fund, external_id: n ? `${base}:dup${n}` : base,
