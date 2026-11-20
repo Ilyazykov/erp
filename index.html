@@ -14206,6 +14206,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       <label style="margin-left:12px" id="mp_price_ccy_box"><input type="checkbox" id="mp_price_usd"> in USD</label>
       <label style="margin-left:12px;display:none" id="mp_price_via_box"><input type="checkbox" id="mp_price_via" checked> buys through funds</label>
       <label style="margin-left:12px;display:none" id="mp_price_pay_box"><input type="checkbox" id="mp_price_pay" checked> payouts</label></div>
+    <div id="mp_price_head" style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap"></div>
     <div id="mp_price_chart" style="height:420px"></div>
     <p class="note" style="margin:0" id="mp_price_note">Loading…</p>
   </div>`;
@@ -14244,13 +14245,15 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     let wallet;
     [prices, deals, wallet] = await Promise.all([
       mpXlsxFetchAll(() => sb.from('price_history').select('ticker, day, price_usd').in('ticker', dealTickers).order('day')),
-      mpXlsxFetchAll(() => sb.from('trades').select('ticker, trade_date, side, quantity, price, currency, account, external_source').in('ticker', dealTickers).in('side', ['buy', 'sell']).order('trade_date')),
+      mpXlsxFetchAll(() => sb.from('trades').select('ticker, trade_date, side, quantity, price, currency, fee_tax, fee_currency, account, external_source').in('ticker', dealTickers).in('side', ['buy', 'sell']).order('trade_date')),
       // a coin's deals are its exchanges' and wallets' own rows: a buy (by card or for
       // another coin) and a sale; transfers, fees, interest and Earn moves aren't deals
       mpXlsxFetchAll(() => sb.from('wallet_transactions').select('symbol, tx_time, kind, amount, chain').or(dealTickers.map(t => `symbol.ilike.${t}`).join(','))
         .in('kind', ['trade', 'purchase', 'trade_out']).order('tx_time')),
     ]);
-    ccy = (deals.find(d => d.currency)?.currency || 'USD').toUpperCase();
+    // the paper's currency: the one most of its deals are in (SBBY's first buys were in yuan, the rest in roubles)
+    { const n = new Map(); for (const d of deals) if (d.currency) { const c = String(d.currency).toUpperCase(); n.set(c, (n.get(c) || 0) + 1); }
+      ccy = [...n].sort((a, b) => b[1] - a[1])[0]?.[0] || 'USD'; }
     if (wallet.length) {
       // ...and Snowball's old rows of the coin go (its "sell" of 23.09.2025 was the network fee of a move from Trust to Bybit)
       const CHAIN = { cryptocom: 'Crypto.com', bybit: 'Bybit', binance: 'Binance', telegram: 'Telegram Wallet' };
@@ -14406,11 +14409,13 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     const viaOn = dlg.querySelector('#mp_price_via').checked;
     const shown = rateNote ? [] : deals.filter(d => d.trade_date >= from && (viaOn || !d.via));
     const fmt = v => (unit === 'USD' ? `$${v.toLocaleString('en-US', { maximumFractionDigits: v < 10 ? 4 : 2 })}` : `${v.toLocaleString('en-US', { maximumFractionDigits: v < 10 ? 4 : 2 })} ${unit}`);
-    const traces = [{ x: pts.map(p => p.day), y: pts.map(p => p.v), type: 'scatter', mode: 'lines', line: { color: '#4c8bf5', width: 2 },
+    // the line green when the period ended up, red when down (a broker app's way)
+    const lineCol = pts.length > 1 && pts[pts.length - 1].v < pts[0].v ? '#f85149' : '#3fb950';
+    const traces = [{ x: pts.map(p => p.day), y: pts.map(p => p.v), type: 'scatter', mode: 'lines', line: { color: lineCol, width: 2 },
       name: 'price', hovertemplate: `%{x}: %{y:,.4~f} ${unit}<extra></extra>` }];
     // the payouts (yellow dots on the line): each, or a month's together when there are many (Revolut's
     // funds pay every day); a fund's fee taken off its return nets within the month
-    let payTrace = null, payShapes = [];
+    let payTrace = null, payShapes = [], avgNote = '';
     if (dlg.querySelector('#mp_price_pay').checked) {
       let ps = payouts.filter(p => p.day >= from);
       if (ps.length > 24) {
@@ -14432,28 +14437,91 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         text: ps.map(p => `${p.what} ${fmtAmt(p.amount, p.ccy)}${p.n > 1 ? ` (${p.day.slice(0, 7)}, ${p.n} payments)` : ''} at ${p.account}`),
         hovertemplate: '%{x}: %{text}<extra></extra>' };
     }
-    // one's own deals drawn over the ones through a fund (via), and brighter
+    // one's own deals drawn over the ones through a fund (via), and brighter. As in Sber's app: a small
+    // tag (a pentagon) just off the line -- a buy under it pointing up, a sale over it pointing down
+    const vs = pts.map(p => p.v), off = ((Math.max(...vs) - Math.min(...vs)) || Math.abs(vs[0] || 1) * 0.02) * 0.025;
     for (const via of [true, false]) {
-      for (const [side, color, sym] of [['buy', '#3fb950', 'triangle-up'], ['sell', '#f85149', 'triangle-down']]) {
+      for (const [side, color] of [['buy', '#3fb950'], ['sell', '#f85149']]) {
         const ds = shown.filter(d => d.side === side && !!d.via === via);
-        if (ds.length) traces.push({ x: ds.map(d => d.trade_date), y: ds.map(d => priceOn(d.trade_date)), type: 'scatter', mode: 'markers', name: `${side}${via ? ' via a fund' : ''}`,
-          // solid, no outline, no transparency (outlines and faded ones looked bad): through a fund smaller and
-          // the usual colour, one's own bigger and a brighter one (the size alone didn't tell them apart)
-          marker: { color: via ? color : side === 'buy' ? '#39ff5a' : '#ff2d2d', size: via ? 9 : 13, symbol: sym },
+        if (ds.length) traces.push({ x: ds.map(d => d.trade_date), y: ds.map(d => priceOn(d.trade_date) + (side === 'buy' ? -off : off)), type: 'scatter', mode: 'markers', name: `${side}${via ? ' via a fund' : ''}`,
+          // solid, a very thin black edge; through a fund smaller and the usual colour, one's own brighter
+          marker: { color: via ? color : side === 'buy' ? '#39ff5a' : '#ff2d2d', size: via ? 7 : 10, symbol: 'pentagon', angle: side === 'buy' ? 0 : 180,
+            line: { color: '#000000', width: 0.6 } },
           text: ds.map(d => `${side} ${Number(d.quantity)}${dealTickers.length > 1 ? ` ${d.ticker}` : ''} at ${d.account}`), hovertemplate: '%{x}: %{text}<extra></extra>' });
       }
     }
     if (payTrace) traces.push(payTrace);
+    // like a broker's app: the period's low and high (white dots, the price by them), a line at today's
+    // price and one at the average buy price of what one holds now
+    const lines = [], notes = [];
+    const last0 = pts[pts.length - 1];
+    if (pts.length > 1) {
+      const lo = pts.reduce((a, p) => (p.v < a.v ? p : a)), hi = pts.reduce((a, p) => (p.v > a.v ? p : a));
+      traces.push({ x: [lo.day, hi.day], y: [lo.v, hi.v], type: 'scatter', mode: 'markers', name: 'low / high', cliponaxis: false,
+        marker: { color: '#ffffff', size: 6 }, hoverinfo: 'skip' });
+      // the price by each on a dark plate (Sber's way)
+      for (const [p, up] of [[lo, false], [hi, true]]) notes.push({ x: p.day, y: p.v, xref: 'x', yref: 'y', text: fmt(p.v), showarrow: false,
+        xanchor: 'left', yanchor: up ? 'bottom' : 'top', xshift: 5, yshift: up ? 2 : -2, bgcolor: '#2d333b', font: { color: '#8b949e', size: 12 }, borderpad: 3 });
+    }
+    const label = (y, text, bg, fg) => notes.push({ xref: 'paper', x: 1, xanchor: 'left', yref: 'y', y, text, showarrow: false,
+      bgcolor: bg, font: { color: fg, size: 12 }, borderpad: 3 });
+    if (last0) {
+      lines.push({ type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: last0.v, y1: last0.v, line: { color: 'rgba(230,237,243,0.35)', width: 1 }, layer: 'below' });
+      label(last0.v, fmt(last0.v), '#e6edf3', '#0d1117');
+    }
+    // the average buy price of what's held: one's own deals over the whole history (not a fund's), as Sber
+    // counts it -- each buy adds its cost with the fee and its units, a sale takes units out at the average
+    // (checked on SBMM: 18.3767 this way against Sber's 18.3771; FIFO gave 18.41); none when nothing is held
+    if (!rateNote) {
+      const chartOn = day => { let v = null; for (const p of prices) { if (p.day > day) break; v = p.price_usd; } return v == null ? null : val(day, v); };
+      const pos = { qty: 0, cost: 0 };
+      for (const d of deals.filter(x => !x.via)) {
+        const q = Number(d.quantity); if (!(q > 0)) continue;
+        if (d.side === 'buy') {
+          const at = chartOn(d.trade_date);
+          const dc = String(d.currency || ccy).toUpperCase();
+          // the broker's fee is in the cost (Sber's 297.99 for SBER is the prices and the fees over 91 shares)
+          const fee = String(d.fee_currency || dc).toUpperCase() === dc ? Number(d.fee_tax) || 0 : 0;
+          let px = Number(d.price) > 0 ? Number(d.price) + fee / q : null;
+          if (px != null && dc !== unit) {
+            const r = fx.length ? rateOn(d.trade_date) : null;   // USD per unit of the paper's currency
+            px = unit === 'USD' && dc === ccy && r ? px * r : null;
+          }
+          // a price from before a split: to the chart's (split-adjusted) scale
+          if (px != null && at > 0) { const k = px / at; if (k > 1.45 || k < 1 / 1.45) { const n = Math.round(k >= 1 ? k : 1 / k); px = k >= 1 ? px / n : px * n; } }
+          px = px ?? at;
+          if (px == null) continue;
+          pos.qty += q; pos.cost += q * px;
+        } else if (pos.qty > 0) {
+          const avg = pos.cost / pos.qty; pos.qty = Math.max(0, pos.qty - q); pos.cost = pos.qty * avg;
+        }
+      }
+      const { qty, cost } = pos;
+      if (qty > 1e-9 && cost > 0) {
+        const avg = cost / qty;
+        lines.push({ type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: avg, y1: avg, line: { color: '#8b949e', width: 1, dash: 'dot' }, layer: 'below' });
+        label(avg, `avg ${fmt(avg)}`, '#30363d', '#e6edf3');
+        avgNote = ` · average buy price ${fmt(avg)} for ${Math.round(qty * 1e6) / 1e6} held (${last0 ? `${last0.v >= avg ? '+' : ''}${((last0.v / avg - 1) * 100).toFixed(1)}%` : ''})`;
+      }
+    }
     Plotly.react(dlg.querySelector('#mp_price_chart'), traces, Object.assign({}, LAYOUT_BASE, {
-      margin: { l: 60, r: 20, t: 10, b: 40 }, showlegend: false, hovermode: 'closest',
+      margin: { l: 60, r: 90, t: 24, b: 40 }, showlegend: false, hovermode: 'closest', annotations: notes,
       xaxis: Object.assign({}, LAYOUT_BASE.xaxis, { type: 'date', dtick: undefined, tickformat: undefined, range: [from, today] }),
       yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { type: 'linear', tickformat: undefined, ticksuffix: unit === 'USD' ? '' : ` ${unit}`, tickprefix: unit === 'USD' ? '$' : '' }),
-      yaxis2: { overlaying: 'y', range: [0, 1], visible: false, fixedrange: true }, shapes: payShapes,
+      yaxis2: { overlaying: 'y', range: [0, 1], visible: false, fixedrange: true }, shapes: [...payShapes, ...lines],
     }), CONFIG);
     const first = pts[0], last = pts[pts.length - 1];
     const ch = first && last && first.v ? (last.v / first.v - 1) * 100 : null;
     note.textContent = first ? `${rateNote ? `${rateNote}: ` : ''}${first.day} ${fmt(first.v)} → ${last.day} ${fmt(last.v)}${ch == null ? '' : ` (${ch >= 0 ? '+' : ''}${ch.toFixed(1)}%)`}`
-      + `${shown.length ? ` · deals marked: ${shown.length}` : ''}${splits.length ? ` · split-adjusted: ${splits.join(', ')}` : ''}` : 'No prices in this period.';
+      + `${shown.length ? ` · deals marked: ${shown.length}` : ''}${avgNote}${splits.length ? ` · split-adjusted: ${splits.join(', ')}` : ''}` : 'No prices in this period.';
+    // today's price, big, and the period's change under the title (a broker app's header)
+    const head = dlg.querySelector('#mp_price_head');
+    if (first && last) {
+      const up = last.v >= first.v, col = up ? '#3fb950' : '#f85149', d = last.v - first.v;
+      head.innerHTML = `<span style="font-size:2em;font-weight:700">${mpEscapeHtml(fmt(last.v))}</span>`
+        + `<span style="color:${col};font-size:1.1em">${up ? '▲' : '▼'} ${Math.abs(ch).toFixed(2)}% · ${mpEscapeHtml(fmt(Math.abs(d)))}</span>`
+        + `<span style="color:#8b949e">over ${mpEscapeHtml(period)}</span>`;
+    } else head.innerHTML = '';
   };
   dlg.querySelectorAll('[data-p]').forEach(b => b.onclick = () => {
     period = b.dataset.p;
