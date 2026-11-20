@@ -9164,7 +9164,7 @@ async function mpRenderLookThrough() {
     <tr class="total-row"><td><b>Total</b></td><td><b>${mpFormatUsd(total)}</b></td><td></td></tr></tbody></table>`;
   wrap.innerHTML = `<div style="overflow-x:auto"><table class="data-table"><thead><tr>
       <th>#</th><th>Security</th><th>Sector</th><th>Country</th><th>Currency</th><th>Value (USD)</th><th>Share</th><th>Direct</th><th>Via funds</th>
-    </tr></thead><tbody>${top.data.map((r, i) => `<tr>
+    </tr></thead><tbody>${top.data.map((r, i) => `<tr${r.ticker ? ` data-ticker="${mpEscapeHtml(r.ticker)}" data-name="${mpEscapeHtml(r.name || r.ticker)}" style="cursor:pointer" title="Price chart"` : ''}>
       <td>${i + 1}</td>
       <td class="ticker">${mpEscapeHtml(r.name)}${r.ticker ? ` <span class="note">${mpEscapeHtml(r.ticker)}</span>` : ''}</td>
       <td>${mpEscapeHtml(r.sector || '')}</td><td>${mpEscapeHtml(r.country || '')}</td><td>${mpEscapeHtml(r.currency || '')}</td>
@@ -9177,6 +9177,11 @@ async function mpRenderLookThrough() {
       <div style="flex:1 1 320px;overflow-x:auto">${small('Country', byCountry.data, 'country')}</div>
       <div style="flex:1 1 240px;overflow-x:auto">${small('Currency', byCurrency.data, 'currency')}</div>
     </div>`;
+  // a security's row: its price chart (a constituent without a price history of its own says so)
+  wrap.onclick = ev => {
+    const tr = ev.target.closest('tr[data-ticker]');
+    if (tr) mpOpenPriceDialog(tr.dataset.ticker, tr.dataset.name);
+  };
 }
 
 // What sits in Russian infrastructure -- Russian banks and brokers (and
