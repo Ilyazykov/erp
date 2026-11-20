@@ -14259,8 +14259,59 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       const CHAIN = { cryptocom: 'Crypto.com', bybit: 'Bybit', binance: 'Binance', telegram: 'Telegram Wallet' };
       deals = [...deals.filter(d => d.external_source !== 'snowball_csv'),
         ...wallet.filter(w => Number(w.amount) !== 0).map(w => ({ trade_date: String(w.tx_time).slice(0, 10), side: Number(w.amount) > 0 ? 'buy' : 'sell',
-          quantity: Math.abs(Number(w.amount)), account: CHAIN[w.chain] || w.chain, ticker: String(w.symbol).toUpperCase() }))]
+          quantity: Math.abs(Number(w.amount)), account: CHAIN[w.chain] || w.chain, ticker: String(w.symbol).toUpperCase(), time: w.tx_time, chain: w.chain }))]
         .sort((a, b) => a.trade_date.localeCompare(b.trade_date));
+    }
+    // an exchange's deal at its real price: the other side of the swap (the same place, the same moment --
+    // Bybit's 424.68 USDT for 0.00441558 BTC, Binance's RUB, Crypto.com's EUR); a Crypto.com buy with no other
+    // side was paid by card: the bank's CRYPTO.COM payment of that day whose price is the closest to the market's
+    try {
+      const coinDeals = deals.filter(d => d.chain && d.time && d.price == null);
+      if (coinDeals.length) {
+        const times = [...new Set(coinDeals.map(d => d.time))];
+        const legs = [];
+        for (let i = 0; i < times.length; i += 100) legs.push(...await mpXlsxFetchAll(() => sb.from('wallet_transactions').select('chain, tx_time, symbol, kind, amount')
+          .in('tx_time', times.slice(i, i + 100)).in('kind', ['trade', 'trade_out'])));
+        const cdcCard = coinDeals.some(d => d.chain === 'cryptocom')
+          ? await mpXlsxFetchAll(() => sb.from('bank_transactions').select('booked_at, amount, currency, description').ilike('description', '%crypto.com%').lt('amount', 0)) : [];
+        const curs = [...new Set([...legs.map(l => String(l.symbol).toUpperCase()), ...cdcCard.map(b => String(b.currency).toUpperCase())])].filter(c => /^[A-Z]{3}$/.test(c) && c !== 'USD');
+        const fxl = curs.length ? await mpXlsxFetchAll(() => sb.from('fx_history').select('currency, day, usd_per_unit').in('currency', curs).order('day')) : [];
+        const STABLE = new Set(['USDT', 'USDC', 'DAI', 'USD', 'FDUSD', 'BUSD']);
+        const usdOf = (c, day) => { c = String(c).toUpperCase(); if (STABLE.has(c)) return 1; let v = null; for (const r of fxl) if (r.currency === c && r.day <= day) v = Number(r.usd_per_unit); return v; };
+        const closeOn = day => { let v = null; for (const p of prices) { if (p.day > day) break; v = Number(p.price_usd); } return v; };
+        const used = new Set();
+        for (const d of coinDeals) {
+          const q = Number(d.quantity);
+          const leg = legs.find(l => l.chain === d.chain && l.tx_time === d.time && String(l.symbol).toUpperCase() !== d.ticker
+            && Number(l.amount) !== 0 && Math.sign(Number(l.amount)) === (d.side === 'buy' ? -1 : 1) && usdOf(l.symbol, d.trade_date));
+          if (leg) { d.price = Math.abs(Number(leg.amount)) * usdOf(leg.symbol, d.trade_date) / q; d.currency = 'USD'; d.account += ` (${Math.abs(Number(leg.amount))} ${leg.symbol})`; continue; }
+          if (d.chain !== 'cryptocom' || d.side !== 'buy') continue;
+          const mkt = closeOn(d.trade_date);
+          let best = null;
+          for (const b of cdcCard) {
+            if (used.has(b)) continue;
+            const day = (String(b.description).match(/\d{4}-\d{2}-\d{2}/) || [String(b.booked_at || '').slice(0, 10)])[0];
+            const k = usdOf(b.currency, day);
+            if (!day || !k || Math.abs(new Date(day) - new Date(d.trade_date)) > 1.5 * 864e5) continue;
+            const px = Math.abs(Number(b.amount)) * k / q, off = mkt ? Math.abs(px / mkt - 1) : 1;
+            if (off <= 0.15 && (!best || off < best.off)) best = { b, px, off };   // the day's close, not the minute's: up to 15% off on a day like 05.02.2026
+          }
+          if (best) { used.add(best.b); d.price = best.px; d.currency = 'USD'; d.account += ` (${Math.abs(Number(best.b.amount))} ${best.b.currency} by card)`; }
+        }
+      }
+    } catch (err) { console.warn('swap prices:', err); }
+    // a coin sold on one exchange and bought back on another within hours (Telegram's BTC to USDT, the USDT
+    // sent to Bybit, BTC bought there again, 15.11.2025): a move between one's own places, no sale or buy --
+    // the same coin, another place, the buy 90-102% of the sale (the fees and the spread on the way), in 6 hours
+    {
+      const t = d => new Date(d.time || `${d.trade_date}T12:00:00Z`).getTime();
+      const gone = new Set();
+      for (const sell of deals.filter(d => d.side === 'sell' && d.time)) {
+        const buy = deals.find(d => d.side === 'buy' && d.time && !gone.has(d) && d.ticker === sell.ticker && d.account !== sell.account
+          && t(d) >= t(sell) && t(d) - t(sell) <= 6 * 3600e3 && Number(d.quantity) >= Number(sell.quantity) * 0.9 && Number(d.quantity) <= Number(sell.quantity) * 1.02);
+        if (buy) { gone.add(sell); gone.add(buy); }
+      }
+      if (gone.size) deals = deals.filter(d => !gone.has(d));
     }
     // a coin bought by card (card_crypto_purchases: the bank's payment linked to the coin received -- Mercuryo
     // sending ETH to one's own wallet, a Telegram Wallet top-up): a buy at what was paid, in dollars that day;
@@ -14470,7 +14521,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       for (const [side, color] of [['buy', '#3fb950'], ['sell', '#f85149']]) {
         const ds = shown.filter(d => d.side === side && !!d.via === via);
         if (!ds.length) continue;
-        const fill = via ? color : side === 'buy' ? '#39ff5a' : '#ff2d2d';
+        const fill = via ? color : side === 'buy' ? '#b4ffc0' : '#ffa8a8';
         for (const d of ds) dealShapes.push({ type: 'path', xref: 'x', yref: 'y', xsizemode: 'pixel', ysizemode: 'pixel',
           xanchor: d.trade_date, yanchor: priceOn(d.trade_date), path: house(side === 'buy', via ? 0.75 : 1),
           fillcolor: fill, line: { color: '#000000', width: 0.6 }, layer: 'above' });
