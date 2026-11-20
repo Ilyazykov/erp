@@ -722,6 +722,9 @@ export function buildSavingsLinks(trades) {
 // Revolut's Flexible Cash Funds are known by ISIN only: a short name for a tile
 export const FUND_NAMES = {
   IE000H9J0QX4: 'Revolut USD', IE000AZVL3K0: 'Revolut EUR', IE0002RUHW32: 'Revolut GBP',
+  // the ETFs by what they hold, not their exchange codes
+  XSX6: 'STOXX Europe 600 (Xtrackers)', VWRA: 'FTSE All-World (Vanguard, $)', VWCE: 'FTSE All-World (Vanguard, €)',
+  CSPX: 'S&P 500 (iShares)', VUAA: 'S&P 500 (Vanguard)',
 };
 
 // ---- Drawing ----
