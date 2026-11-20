@@ -9158,6 +9158,16 @@ async function mpRenderLookThrough() {
   // the money summed, the funds' parts too; the ticker the bigger one's. On by default, remembered.
   let mergeClasses = true;
   try { mergeClasses = localStorage.getItem('mp_lt_merge_classes') !== '0'; } catch { /* no storage */ }
+  // the country as a flag (its name on hover): the securities' codes
+  const flagOf = {};
+  const secIds = [...new Set(top.data.map(r => r.security_id).filter(Boolean))];
+  if (secIds.length) {
+    const { data: codes } = await sb.from('securities').select('id, country_code').in('id', secIds);
+    for (const c of codes || []) {
+      const cc = String(c.country_code || '').toUpperCase();
+      if (/^[A-Z]{2}$/.test(cc) && cc !== 'XX') flagOf[c.id] = String.fromCodePoint(...[...cc].map(ch => 0x1F1E6 + ch.charCodeAt(0) - 65));
+    }
+  }
   let rows = top.data.map(r => ({ ...r, tickers: r.ticker ? [r.ticker] : [] }));
   if (mergeClasses) {
     const byName = new Map();
@@ -9188,8 +9198,8 @@ async function mpRenderLookThrough() {
       <th>#</th><th>Security</th><th>Sector</th><th>Country</th><th>Currency</th><th>Value (USD)</th><th>Share</th><th>Direct</th><th>Via funds</th>
     </tr></thead><tbody>${rows.map((r, i) => `<tr${r.tickers.length ? ` data-ticker="${mpEscapeHtml(r.tickers[0])}" data-also="${mpEscapeHtml(r.tickers.slice(1).join(','))}" data-name="${mpEscapeHtml(r.name || r.tickers[0])}" style="cursor:pointer" title="Price chart"` : ''}>
       <td>${i + 1}</td>
-      <td class="ticker">${mpEscapeHtml(r.name)}${r.tickers.length ? ` <span class="note">${mpEscapeHtml(r.tickers.join(' + '))}</span>` : ''}</td>
-      <td>${mpEscapeHtml(r.sector || '')}</td><td>${mpEscapeHtml(r.country || '')}</td><td>${mpEscapeHtml(r.currency || '')}</td>
+      <td class="ticker">${mpEscapeHtml(r.name)}${r.tickers.some(t => !/^\d+[A-Z]?$/.test(t)) ? ` <span class="note">${mpEscapeHtml(r.tickers.filter(t => !/^\d+[A-Z]?$/.test(t)).join(' + '))}</span>` : ''}</td>
+      <td>${mpEscapeHtml(r.sector || '')}</td><td${flagOf[r.security_id] ? ` title="${mpEscapeHtml(r.country || '')}" style="text-align:center;font-size:1.2em"` : ''}>${flagOf[r.security_id] || mpEscapeHtml(r.country || '')}</td><td>${mpEscapeHtml(r.currency || '')}</td>
       <td>${mpFormatUsd(Number(r.value_usd))}</td><td>${pct(r.value_usd)}</td>
       <td>${r.direct_usd ? mpFormatUsd(Number(r.direct_usd)) : ''}</td><td>${via(r)}</td>
     </tr>`).join('')}</tbody></table></div>
@@ -14122,6 +14132,49 @@ async function mpRenderInvestedAssets() {
 
 // An asset's price through time (price_history, in dollars; in the paper's own
 // currency at each day's rate), a year by default, with the deals in it marked.
+// Asian exchanges name their shares by numbers (Taiwan's 2330 is TSMC, Tokyo's 8306 MUFG, Seoul's
+// 005930 Samsung, Hong Kong's 700 Tencent): the name people know them by instead. The rest of the
+// numbered ones: their company's name without the "Co Ltd" (mpShortName).
+const MP_SHORT_NAMES = {
+  // Taiwan
+  2330: 'TSMC', 2454: 'MediaTek', 2308: 'Delta Electronics', 2317: 'Foxconn', 3711: 'ASE Technology', 2303: 'UMC',
+  2383: 'Elite Material', 1303: 'Nan Ya Plastics', 3037: 'Unimicron', 2891: 'CTBC Financial', 2882: 'Cathay Financial',
+  2881: 'Fubon Financial', 2412: 'Chunghwa Telecom', 2382: 'Quanta Computer', 3231: 'Wistron', 2345: 'Accton', 3017: 'Asia Vital',
+  2327: 'Yageo', 2357: 'Asus', 3008: 'Largan', 6669: 'Wiwynn', 2301: 'Lite-On', 2886: 'Mega Financial', 2884: 'E.Sun Financial',
+  2885: 'Yuanta Financial', 2887: 'Taishin Financial', 2892: 'First Financial', 2880: 'Hua Nan Financial', 2002: 'China Steel',
+  // Japan
+  8306: 'MUFG', 7203: 'Toyota', 8035: 'Tokyo Electron', 8316: 'SMFG', 6098: 'Recruit', 6857: 'Advantest', 6758: 'Sony',
+  6501: 'Hitachi', 8411: 'Mizuho', 9984: 'SoftBank Group', 8058: 'Mitsubishi Corp', 6861: 'Keyence', 8766: 'Tokio Marine',
+  8001: 'Itochu', 7011: 'Mitsubishi Heavy', 9983: 'Fast Retailing', 8031: 'Mitsui & Co', 6981: 'Murata', 6503: 'Mitsubishi Electric',
+  4063: 'Shin-Etsu', 6752: 'Panasonic', 7974: 'Nintendo', 4502: 'Takeda', 5803: 'Fujikura', 7741: 'Hoya', 9433: 'KDDI',
+  2914: 'Japan Tobacco', 8591: 'ORIX', 8002: 'Marubeni', 9434: 'SoftBank Corp', 6367: 'Daikin', 7267: 'Honda', 8053: 'Sumitomo Corp',
+  6701: 'NEC', 6301: 'Komatsu', 6702: 'Fujitsu', 6954: 'Fanuc', 4568: 'Daiichi Sankyo', 9432: 'NTT', 4519: 'Chugai', 4503: 'Astellas',
+  3382: 'Seven & i', 8802: 'Mitsubishi Estate', 4901: 'Fujifilm', 7269: 'Suzuki', 8801: 'Mitsui Fudosan', 9020: 'JR East', 7751: 'Canon',
+  6273: 'SMC', 6902: 'Denso', 4661: 'Oriental Land', '285A': 'Kioxia', 8725: 'MS&AD', 8630: 'Sompo', 6762: 'TDK', 6723: 'Renesas',
+  6971: 'Kyocera', 5108: 'Bridgestone', 8015: 'Toyota Tsusho', 7182: 'Japan Post Bank', 8308: 'Resona', 8309: 'Sumitomo Mitsui Trust',
+  // Korea
+  '005930': 'Samsung Electronics', '000660': 'SK Hynix', '005935': 'Samsung Electronics (pref)', 402340: 'SK Square',
+  '005380': 'Hyundai Motor', 105560: 'KB Financial', '055550': 'Shinhan Financial', '012450': 'Hanwha Aerospace', '000270': 'Kia',
+  '035420': 'Naver', '068270': 'Celltrion', '006400': 'Samsung SDI', '005490': 'POSCO', '066570': 'LG Electronics',
+  '028260': 'Samsung C&T', '009150': 'Samsung Electro-Mechanics', '034020': 'Doosan Enerbility', '086790': 'Hana Financial',
+  '012330': 'Hyundai Mobis', '032830': 'Samsung Life',
+  // Hong Kong, China
+  700: 'Tencent', 9988: 'Alibaba', 939: 'China Construction Bank', 1398: 'ICBC', 1810: 'Xiaomi', 3690: 'Meituan', 3988: 'Bank of China',
+  2318: 'Ping An', 9999: 'NetEase', 1211: 'BYD', 992: 'Lenovo', 9618: 'JD.com', 9961: 'Trip.com', 2899: 'Zijin Mining',
+  2628: 'China Life', 9888: 'Baidu', 857: 'PetroChina', 1288: 'Agricultural Bank of China', 3968: 'China Merchants Bank',
+  1299: 'AIA', 388: 'HKEX', 1: 'CK Hutchison', 16: 'Sun Hung Kai', 883: 'CNOOC', 941: 'China Mobile', 2269: 'WuXi Biologics',
+  386: 'Sinopec', 1088: 'China Shenhua', 2388: 'BOC Hong Kong', 669: 'Techtronic', 2: 'CLP', 823: 'Link REIT', 1113: 'CK Asset',
+};
+// A ticker as people know it: the short name of a numbered share (its company's name, trimmed, when
+// not in MP_SHORT_NAMES); any other ticker as it is
+function mpShortName(ticker, name) {
+  const t = String(ticker ?? '');
+  if (MP_SHORT_NAMES[t]) return MP_SHORT_NAMES[t];
+  if (!/^\d+[A-Z]?$/.test(t) || !name) return t;
+  const trimmed = String(name).replace(/[,.]/g, ' ').replace(/\b(Co|Ltd|Inc|Corp|Corporation|Holdings?|Group|PLC|Limited|Company|Kabushiki Kaisha|KK)\b/gi, '')
+    .replace(/\s+/g, ' ').trim();
+  return trimmed.length > 26 ? trimmed.slice(0, 26).replace(/\s\S*$/, '') : trimmed || t;
+}
 const MP_PRICE_PERIODS = [['1m', 1], ['3m', 3], ['6m', 6], ['YTD', 'ytd'], ['1y', 12], ['2y', 24], ['3y', 36], ['4y', 48], ['5y', 60], ['all', null]];
 // opts.also: other tickers of the same thing whose deals are marked too (the
 // portfolio map's merged gold: XAU's price, the deals of XAU and XAUT)
@@ -14129,8 +14182,10 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   const dealTickers = [asset, ...(opts.also || [])];
   const dlg = document.createElement('dialog');
   dlg.style.cssText = 'background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:16px 18px;min-width:320px;width:min(94vw,960px)';
+  const numbered = /^\d+[A-Z]?$/.test(String(asset));
+  if (numbered && MP_SHORT_NAMES[asset]) title = MP_SHORT_NAMES[asset];
   dlg.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><b>${mpEscapeHtml(title)} <span id="mp_price_meta" style="color:#8b949e;font-weight:normal">${title !== asset ? `· ${mpEscapeHtml(asset)}` : ''}</span></b><button type="button" data-act="close">✕</button></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><b><span id="mp_price_title">${mpEscapeHtml(title)}</span> <span id="mp_price_meta" style="color:#8b949e;font-weight:normal">${title !== asset && !numbered ? `· ${mpEscapeHtml(asset)}` : ''}</span></b><button type="button" data-act="close">✕</button></div>
     <div class="form-row" style="gap:6px;align-items:center">${MP_PRICE_PERIODS.map(([l]) => `<button class="btn${l === '1y' ? ' primary' : ''}" type="button" data-p="${l}">${l}</button>`).join('')}
       <label style="margin-left:12px" id="mp_price_ccy_box"><input type="checkbox" id="mp_price_usd"> in USD</label></div>
     <div id="mp_price_chart" style="height:420px"></div>
@@ -14150,9 +14205,11 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       if (!s) return;
       const cc = String(s.country_code || '').toUpperCase();
       const flag = /^[A-Z]{2}$/.test(cc) && cc !== 'XX' ? String.fromCodePoint(...[...cc].map(c => 0x1F1E6 + c.charCodeAt(0) - 65)) : '';
-      const parts = [s.name && s.name.toLowerCase() !== String(title).toLowerCase() ? s.name : '', flag ? `${flag}${s.country ? ` ${s.country}` : ''}` : s.country || '', s.sector || '']
+      const parts = [s.name && s.name.toLowerCase() !== String(title).toLowerCase() && s.name !== mpShortName(asset, s.name) ? s.name : '', flag || s.country || '', s.sector || '']   // the flag alone; the country's name only without one
         .filter(Boolean).map(mpEscapeHtml);
-      if (parts.length) dlg.querySelector('#mp_price_meta').innerHTML = `${title !== asset ? `· ${mpEscapeHtml(asset)} ` : ''}· ${parts.join(' · ')}`;
+      // a numbered share: its short name in bold, the full one after it, no number
+      if (numbered) dlg.querySelector('#mp_price_title').textContent = mpShortName(asset, s.name);
+      if (parts.length) dlg.querySelector('#mp_price_meta').innerHTML = `${title !== asset && !numbered ? `· ${mpEscapeHtml(asset)} ` : ''}· ${parts.join(' · ')}`;
     }, () => { /* the header stays as it is */ });
   let prices, deals, ccy, fx;
   try {
@@ -14816,13 +14873,13 @@ sb.auth.getSession().then(({ data: { session } }) => mpOnAuth(session));
 sb.auth.onAuthStateChange((_event, session) => mpOnAuth(session));
 </script>
 <script type="module">
-import { RU_ACCOUNTS, isRuInfra, netCreditIntoLiquid, periodIrr, portfolioCapital } from './js/lookthrough_treemap.js?v=20261121e';
+import { RU_ACCOUNTS, isRuInfra, netCreditIntoLiquid, periodIrr, portfolioCapital } from './js/lookthrough_treemap.js?v=20261121f';
 window.MP_RU_ACCOUNTS = RU_ACCOUNTS;
 window.mpPeriodIrr = periodIrr;
 window.mpPortfolioCapital = portfolioCapital;
 window.mpIsRuInfra = isRuInfra;
 window.mpNetCreditIntoLiquid = netCreditIntoLiquid;
 </script>
-<script type="module" src="./js/lookthrough_treemap.js?v=20261121e"></script>
+<script type="module" src="./js/lookthrough_treemap.js?v=20261121f"></script>
 </body>
 </html>

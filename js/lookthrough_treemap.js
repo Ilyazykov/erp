@@ -739,7 +739,8 @@ const usd = v => `$${Math.round(v).toLocaleString('en-US')}`;
 // The tooltip's lines of a tile: ticker, value, share, change, and how it is
 // held. A tile with no data says only that.
 function tooltipLines(tile, e, name = tile.ticker, money = { ccy: 'usd', rate: 1 }) {
-  const head = name === tile.ticker ? [tile.ticker] : [name, tile.ticker];
+  // a numbered share (2330): its name only, the number tells nothing
+  const head = name === tile.ticker || /^\d+[A-Z]?$/.test(String(tile.ticker)) ? [name] : [name, tile.ticker];
   const fmt = x => (x.state === 'nodata' || x.change == null ? '—' : formatChange(x.change, x.unit));
   // e.all: the tile by every method, the one shown marked
   if (e.all) {
@@ -976,13 +977,17 @@ function wireTreemap() {
     const ids = [...new Set(fh.map(r => r.security_id))].filter(id => id !== 'OTHER');
     const sec = new Map();
     const companyOf = new Map();   // a constituent's company (its name): share classes of one company merge
+    const nameOf = new Map();      // its name as written: a numbered share (2330) is shown by it (TSMC)
     for (let i = 0; i < ids.length; i += 200) {
       // eslint-disable-next-line no-undef
       const { data: s, error } = await sb.from('securities').select('id, ticker, market_ticker, name').in('id', ids.slice(i, i + 200));
       if (error) throw new Error(error.message);
       for (const r of s) {
         sec.set(r.id, r.market_ticker || r.ticker);
-        if (r.name) companyOf.set(r.market_ticker || r.ticker, String(r.name).trim().toLowerCase());
+        if (r.name) {
+          companyOf.set(r.market_ticker || r.ticker, String(r.name).trim().toLowerCase());
+          nameOf.set(r.market_ticker || r.ticker, String(r.name).trim());
+        }
       }
     }
     const fundHoldings = {};
@@ -1012,7 +1017,7 @@ function wireTreemap() {
         fx.get(r.currency).push([r.day, Number(r.usd_per_unit)]);
       }
     }
-    return { rows, frozen, fundHoldings, companyOf, savingsLinks: links, savingsPeriods: periods, firstDay: first?.[0]?.trade_date || '2000-01-01', reIndex: reIndex || [], fx };
+    return { rows, frozen, fundHoldings, companyOf, nameOf, savingsLinks: links, savingsPeriods: periods, firstDay: first?.[0]?.trade_date || '2000-01-01', reIndex: reIndex || [], fx };
   }
 
   async function earnedFor(p) {
@@ -1152,7 +1157,10 @@ function wireTreemap() {
         else window.mpOpenPriceDialog(t, name);
         return true;
       };
-      last = [tiles, colour, { tip, group: $('lt_small').checked, scale, names: { ...bondNames, ...FUND_NAMES }, money, onTileClick }];
+      // a numbered share (Taiwan's 2330, Seoul's 005930, Tokyo's 8306): its name (TSMC, Samsung Electronics, MUFG), never the number
+      const shortNames = {};
+      if (g('mpShortName')) for (const t of tiles) if (/^\d+[A-Z]?$/.test(String(t.ticker))) shortNames[t.ticker] = window.mpShortName(t.ticker, data.nameOf?.get(t.ticker));
+      last = [tiles, colour, { tip, group: $('lt_small').checked, scale, names: { ...bondNames, ...FUND_NAMES, ...shortNames }, money, onTileClick }];
       drawTreemap(box, ...last);
       drawLegend($('lt_legend'), scale, method === 'contrib' ? 'pp' : '%');
       const earnedAll = earnedRows.reduce((s, r) => s + earnedOf(r), 0);
