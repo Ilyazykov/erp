@@ -434,6 +434,73 @@ const earnedOf = r => (Number(r.value_end) || 0) - (Number(r.value_start) || 0) 
 
 // rows of investment_by_asset as one (a savings chain): money summed, the flows merged by day --
 // the transfers between the members cancel
+// ---- Expanded funds: each constituent's own position ----
+// The funds' rows of investment_by_asset as their constituents' positions: every put-in /
+// taken-out of fund F in the period (its cash flows) buys / sells constituent T for the
+// money x T's weight in F, at T's own price that day; F's value at the period start x the
+// weight, at T's price then, is the position it starts with. The end value is those shares
+// at T's price at the end. A constituent held directly too: its own row merged in. No price
+// on a day needed: T is F's row x the weight (the fund's own return). A fund's residual tile
+// (what its list doesn't cover) gets F's row x its share, so nothing is counted twice.
+// tiles: aggregate's (expanded); prices: ticker -> [price on days[i]] (USD); returns
+// investment_by_asset-like rows (asset, value_start, value_end, put_in, taken_out, income,
+// cash, earned, pct) replacing the constituents' and the funds' rows.
+export function constituentRows({ tiles, earnedRows, fundHoldings, prices, days, from, to, assetOf = assetKey }) {
+  const byAsset = new Map((earnedRows || []).map(r => [String(r.asset).toUpperCase(), r]));
+  const rowOf = t => byAsset.get(String(assetOf(t)).toUpperCase());
+  const dayIdx = new Map(days.map((d, i) => [d, i]));
+  const scaled = (r, k) => ({ value_start: (Number(r.value_start) || 0) * k, value_end: (Number(r.value_end) || 0) * k,
+    put_in: (Number(r.put_in) || 0) * k, taken_out: (Number(r.taken_out) || 0) * k, income: (Number(r.income) || 0) * k,
+    cash: cashOf(r).map(([d, v]) => [d, v * k]) });
+  const finish = (asset, r) => {
+    const earned = earnedOf(r), cap = periodCapital(r, from, to);
+    return { ...r, asset, kind: 'stock', earned, pct: cap > 0 ? earned / cap * 100 : null };
+  };
+  // the funds expanded on the map: those with a residual tile or a constituent tile fed by them
+  const funds = new Set();
+  for (const t of tiles) for (const s of t.sources || []) if (s.from !== 'direct' && (fundHoldings?.[s.from] || []).length) funds.add(s.from);
+  const synth = new Map();   // constituent ticker -> rows
+  const constituent = (T, F, w) => {
+    const R = rowOf(F);
+    if (!R || !(w > 0)) return;
+    const p = prices?.[T];
+    const at = d => (p && dayIdx.has(d) ? Number(p[dayIdx.get(d)]) : NaN);
+    const flows = cashOf(R).filter(([d]) => d > from && d <= to);
+    const v0 = (Number(R.value_start) || 0) * w;
+    const need = [...(v0 > 0 ? [from] : []), ...flows.map(([d]) => d), to];
+    let row;
+    if (need.every(d => at(d) > 0)) {
+      let q = v0 > 0 ? v0 / at(from) : 0;
+      const cash = [];
+      let putIn = 0, takenOut = 0;
+      for (const [d, v] of flows) {
+        q = Math.max(0, q + v * w / at(d));
+        cash.push([d, v * w]);
+        if (v > 0) putIn += v * w; else takenOut -= v * w;
+      }
+      row = { value_start: v0, value_end: q * at(to), put_in: putIn, taken_out: takenOut, income: 0, cash };
+    } else row = scaled(R, w);
+    if (!synth.has(T)) synth.set(T, []);
+    synth.get(T).push(row);
+  };
+  for (const F of funds) for (const c of fundHoldings[F]) constituent(c.ticker, F, Number(c.weight) || 0);
+  const out = new Map();
+  for (const [T, rows] of synth) {
+    const direct = rowOf(T);
+    out.set(String(assetOf(T)).toUpperCase(), finish(assetOf(T), mergeRows(direct ? [direct, ...rows] : rows)));
+  }
+  // a fund's own row: only its residual tile's share of it
+  for (const F of funds) {
+    const R = rowOf(F);
+    if (!R) continue;
+    const rest = tiles.filter(t => t.isFund && t.ticker === F).reduce((s, t) => s + t.value_usd, 0);
+    const whole = (fundHoldings[F] || []).length ? rest + tiles.reduce((s, t) => s + (t.sources || []).filter(x => x.from === F && !t.isFund).reduce((a, x) => a + x.value_usd, 0), 0) : 0;
+    const k = whole > 0 ? rest / whole : 1;
+    out.set(String(assetOf(F)).toUpperCase(), finish(assetOf(F), scaled(R, k)));
+  }
+  return [...(earnedRows || []).filter(r => !out.has(String(r.asset).toUpperCase())), ...out.values()];
+}
+
 export function mergeRows(rows) {
   const flows = new Map();
   const sum = k => rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
@@ -966,6 +1033,30 @@ function wireTreemap() {
   if (typeof ResizeObserver !== 'undefined') {
     new ResizeObserver(() => { if (last) drawTreemap(box, ...last); }).observe(box);
   }
+  // the constituents' prices on the days the expanded colour needs (prices_on, migration ...221), cached by the days
+  const priceCache = new Map();
+  async function expandedRows(tiles, rowsIn, from, assetOfT) {
+    const to = today();
+    const funds = new Set();
+    for (const t of tiles) for (const s of t.sources || []) if (s.from !== 'direct' && (data.fundHoldings?.[s.from] || []).length) funds.add(s.from);
+    const byAsset = new Map(rowsIn.map(r => [String(r.asset).toUpperCase(), r]));
+    const days = [...new Set([from, to, ...[...funds].flatMap(F => (byAsset.get(String(assetOfT(F)).toUpperCase())?.cash || [])
+      .map(([d]) => String(d).slice(0, 10)).filter(d => d > from && d <= to))])].sort();
+    const tickers = [...new Set([...funds].flatMap(F => data.fundHoldings[F].map(c => c.ticker)))];
+    const key = `${days.join(',')}|${tickers.length}`;
+    if (!priceCache.has(key)) {
+      const prices = {};
+      for (let i = 0; i < tickers.length; i += 400) {
+        // eslint-disable-next-line no-undef
+        const { data: rows, error } = await sb.rpc('prices_on', { p_tickers: tickers.slice(i, i + 400), p_days: days }).range(0, 999);
+        if (error) throw new Error(error.message);
+        for (const r of rows || []) prices[r.ticker] = r.prices;
+      }
+      priceCache.set(key, prices);
+    }
+    return constituentRows({ tiles, earnedRows: rowsIn, fundHoldings: data.fundHoldings, prices: priceCache.get(key), days, from, to, assetOf: assetOfT });
+  }
+
   async function redraw() {
     const my = ++run;
     status.textContent = 'Loading…';
@@ -1001,7 +1092,13 @@ function wireTreemap() {
       // a savings product of an exchange in dollars (SAVINGS:Bybit USD: its Earn) has no row of its own: it
       // is the exchanges' dollars, the 'USD' row of investment_by_asset
       const tileAsset = t => (/^SAVINGS:.* USD$/i.test(String(t)) && !tileRows.some(r => String(r.asset).toUpperCase() === assetKey(t)) ? 'USD' : assetOf(t));
-      const ctx = { earnedRows: tileRows, cap, from, to: today(), assetOf: tileAsset };
+      // expanded funds: the constituents coloured by their own positions (constituentRows), their prices on the days needed
+      let colourRows = tileRows;
+      if (fundsMode === 'expand' || fundsMode === 'expand_classes') {
+        try { colourRows = await expandedRows(tiles, tileRows, from, tileAsset); } catch (e) { console.warn('expanded funds colour:', e); }
+        if (my !== run) return;
+      }
+      const ctx = { earnedRows: colourRows, cap, from, to: today(), assetOf: tileAsset };
       // a cash tile in a currency: the currency's change against the dollar over the period; real
       // estate: its index's. By every method that change, as a contribution what it gained.
       const bare = tile => {
@@ -1017,7 +1114,7 @@ function wireTreemap() {
       const by = (m, tile) => {
         const b = bare(tile);
         if (b) return m === 'contrib' ? changeAsContribution(b, tile.value_usd, cap) : b;
-        const kept = tileEarned(tile, tileRows, { assetOf: tileAsset, realEstate });
+        const kept = tileEarned(tile, colourRows, { assetOf: tileAsset, realEstate });
         if (m === 'kept') return kept;
         // a share given for nothing has no money in to judge a method by: its 100% is the same in each method
         const v = tileMetric(m, tile, ctx);
