@@ -657,12 +657,7 @@
   <div id="lookthrough_signed_in" style="display:none">
     <div id="lt_screen" style="display:flex;flex-direction:column;height:calc(100vh - 32px);min-height:560px">
     <div class="section-title">Portfolio map</div>
-    <p class="note">Tile area is the share of the portfolio; colour is what the position earned over the period (price change, dividends,
-      coupons and interest), not the bare price change, by the method chosen. <b>Contribution</b>: what it earned over the whole
-      portfolio's capital at work, in percentage points -- the tiles add up to the portfolio's return; a dividend is the payer's, what it
-      earns after is the paper it bought.
-      <b>MWR</b> (money-weighted return): the return of the money put in and taken out (a dividend is money back) over the time held, not made yearly -- XIRR over the period.
-      <b>Dividends kept</b>: a dividend stays in the paper's capital as idle cash. The tooltip shows all three. Striped tiles have nothing to judge by.</p>
+    <p class="note" title="Contribution: what a tile earned over the whole portfolio's capital at work, in percentage points (the tiles add up to the portfolio's return). MWR: the return of the money put in and taken out over the time held (XIRR over the period). Dividends kept: a dividend stays in the paper's capital as idle cash. Striped tiles have nothing to judge by.">Size: share of the portfolio. Colour: what it earned over the period, by the method chosen.</p>
     <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
     <div class="form-row" id="lt_periods" style="gap:6px"><button class="btn primary" type="button" data-period="1d">1d</button><button class="btn" type="button" data-period="2d">2d</button><button class="btn" type="button" data-period="3d">3d</button><button class="btn" type="button" data-period="4d">4d</button><button class="btn" type="button" data-period="7d">7d</button><button class="btn" type="button" data-period="1m">1m</button><button class="btn" type="button" data-period="3m">3m</button><button class="btn" type="button" data-period="6m">6m</button><button class="btn" type="button" data-period="ytd">YTD</button><button class="btn" type="button" data-period="1y">1y</button><button class="btn" type="button" data-period="5y">5y</button><button class="btn" type="button" data-period="all">all</button><button class="btn" type="button" data-period="snowball" title="From the Snowball portfolio's first deal (2025-08-28)">Snowball</button></div>
     <div id="lt_legend" style="flex:1 1 260px;max-width:480px"></div>
@@ -14354,12 +14349,14 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     const fmt = v => (unit === 'USD' ? `$${v.toLocaleString('en-US', { maximumFractionDigits: v < 10 ? 4 : 2 })}` : `${v.toLocaleString('en-US', { maximumFractionDigits: v < 10 ? 4 : 2 })} ${unit}`);
     const traces = [{ x: pts.map(p => p.day), y: pts.map(p => p.v), type: 'scatter', mode: 'lines', line: { color: '#4c8bf5', width: 2 },
       name: 'price', hovertemplate: `%{x}: %{y:,.4~f} ${unit}<extra></extra>` }];
-    // one's own deals bright and solid; the ones through a fund (via) pale and hollow, under them
+    // one's own deals drawn over the ones through a fund (via), and brighter
     for (const via of [true, false]) {
       for (const [side, color, sym] of [['buy', '#3fb950', 'triangle-up'], ['sell', '#f85149', 'triangle-down']]) {
         const ds = shown.filter(d => d.side === side && !!d.via === via);
         if (ds.length) traces.push({ x: ds.map(d => d.trade_date), y: ds.map(d => priceOn(d.trade_date)), type: 'scatter', mode: 'markers', name: `${side}${via ? ' via a fund' : ''}`,
-          marker: via ? { color, size: 9, symbol: `${sym}-open`, opacity: 0.55, line: { width: 1.5 } } : { color, size: 12, symbol: sym, line: { color: '#e6edf3', width: 1 } },
+          // through a fund: as they were (solid, the usual colour); one's own: bigger, brighter, outlined in white
+          marker: via ? { color, size: 11, symbol: sym }
+            : { color: side === 'buy' ? '#56f06e' : '#ff5c55', size: 15, symbol: sym, line: { color: '#ffffff', width: 2 } },
           text: ds.map(d => `${side} ${Number(d.quantity)}${dealTickers.length > 1 ? ` ${d.ticker}` : ''} at ${d.account}`), hovertemplate: '%{x}: %{text}<extra></extra>' });
       }
     }
