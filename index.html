@@ -14110,11 +14110,29 @@ async function mpOpenPriceDialog(asset, title) {
   const note = dlg.querySelector('#mp_price_note');
   let prices, deals, ccy, fx;
   try {
-    [prices, deals] = await Promise.all([
+    let wallet;
+    [prices, deals, wallet] = await Promise.all([
       mpXlsxFetchAll(() => sb.from('price_history').select('day, price_usd').eq('ticker', asset).order('day')),
-      mpXlsxFetchAll(() => sb.from('trades').select('trade_date, side, quantity, price, currency, account').eq('ticker', asset).in('side', ['buy', 'sell']).order('trade_date')),
+      mpXlsxFetchAll(() => sb.from('trades').select('trade_date, side, quantity, price, currency, account, external_source').eq('ticker', asset).in('side', ['buy', 'sell']).order('trade_date')),
+      // a coin's deals are its exchanges' and wallets' own rows: a buy (by card or for
+      // another coin) and a sale; transfers, fees, interest and Earn moves aren't deals
+      mpXlsxFetchAll(() => sb.from('wallet_transactions').select('tx_time, kind, amount, chain').ilike('symbol', asset)
+        .in('kind', ['trade', 'purchase', 'trade_out']).order('tx_time')),
     ]);
     ccy = (deals.find(d => d.currency)?.currency || 'USD').toUpperCase();
+    if (wallet.length) {
+      // ...and Snowball's old rows of the coin go (its "sell" of 23.09.2025 was the network fee of a move from Trust to Bybit)
+      const CHAIN = { cryptocom: 'Crypto.com', bybit: 'Bybit', binance: 'Binance', telegram: 'Telegram Wallet' };
+      deals = [...deals.filter(d => d.external_source !== 'snowball_csv'),
+        ...wallet.filter(w => Number(w.amount) !== 0).map(w => ({ trade_date: String(w.tx_time).slice(0, 10), side: Number(w.amount) > 0 ? 'buy' : 'sell',
+          quantity: Math.abs(Number(w.amount)), account: CHAIN[w.chain] || w.chain }))]
+        .sort((a, b) => a.trade_date.localeCompare(b.trade_date));
+    }
+    // a movement without a deal (a broker report's transfer between its agreements, a code
+    // change: price 0, e.g. T-Bank's SBER 120 out of one agreement and into another,
+    // dated the report's day) is no buy or sale
+    deals = deals.filter(d => d.price == null || Number(d.price) !== 0);
+    for (const d of deals) d.account = d.account || d.external_source || '—';
     fx = ccy === 'USD' ? [] : await mpXlsxFetchAll(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', ccy).order('day'));
   } catch (err) { note.textContent = String(err.message || err); return; }
   if (!prices.length) { note.textContent = 'No price history for this asset (a deposit, a savings account or cash has none).'; return; }
@@ -14129,10 +14147,10 @@ async function mpOpenPriceDialog(asset, title) {
     const r = raw[i - 1] / raw[i];
     if (!Number.isFinite(r) || r <= 0) { prices[i - 1] = { ...prices[i - 1], price_usd: raw[i - 1] / factor }; continue; }
     const k = r >= 1 ? r : 1 / r;
-    // the nearest whole ratio from 2 (20.01 is 20, not 19), within 2% -- a crash
+    // the nearest whole ratio from 2 (20.01 is 20, not 19), within 4% (PLZL 10-for-1 on 27.03.2025 came out 10.18: the day moved too) -- a crash
     // of a bond (98 -> 64) is no split; a 3-for-2 can't be told from one, so none
     const n = Math.round(k);
-    if (n < 2 || n > 50 || Math.abs(k / n - 1) >= 0.02) { prices[i - 1] = { ...prices[i - 1], price_usd: raw[i - 1] / factor }; continue; }
+    if (n < 2 || n > 50 || Math.abs(k / n - 1) >= 0.04) { prices[i - 1] = { ...prices[i - 1], price_usd: raw[i - 1] / factor }; continue; }
     if (n && k >= 1.45) { factor *= r >= 1 ? n : 1 / n; splits.push(`${prices[i].day} ${r >= 1 ? `${n}-for-1` : `1-for-${n}`}`); }
     prices[i - 1] = { ...prices[i - 1], price_usd: raw[i - 1] / factor };
   }

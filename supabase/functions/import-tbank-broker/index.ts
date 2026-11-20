@@ -79,7 +79,7 @@ const ACCOUNT = 'T-Bank';
 // balance) a monthly report overwrote the full report's correction: -2
 // DE0007664039 against +2 VOW3.
 // deno-lint-ignore no-explicit-any
-async function reconcileHoldings(db: any, userId: string, agr: string, periodEnd: string,
+async function reconcileHoldings(db: any, userId: string, agr: string, periodStart: string, periodEnd: string,
   items: { isins: string[]; close: number; names: string[]; primary: string; tickers: string[] }[]): Promise<number> {
   const stored: { external_id: string; ticker: string; side: string; quantity: number; trade_date: string; note: string | null }[] = [];
   for (let from = 0; ; from += 1000) {
@@ -123,6 +123,20 @@ async function reconcileHoldings(db: any, userId: string, agr: string, periodEnd
         if (data?.[0] && (!redeemed || data[0].trade_date > redeemed)) redeemed = data[0].trade_date;
       }
     }
+    // Shares that came in from another agreement and were sold here before the
+    // report's end: they came before the first such sale, so on the report's
+    // first day, not its last (T-Bank's SBER 120: in from 2026068060 to
+    // 2174598686, opened 19.05.2022, sold there 01.08.2022 -- booked at the
+    // report's end, 23.09.2026, the 120 were held on both until then).
+    const soldShort = (t: string) => {
+      let q = 0;
+      for (const r of stored.filter(r => r.ticker === t && !recon.includes(r) && r.trade_date <= periodEnd)
+        .sort((p, q2) => p.trade_date.localeCompare(q2.trade_date))) {
+        q = Math.round((q + signed(r)) * 1e8) / 1e8;
+        if (q < -1e-9) return true;
+      }
+      return false;
+    };
     const keep = new Set<string>();
     for (const t of cand) {
       const need = Math.round(((t === it.primary ? it.close : 0) - (qty.get(t) ?? 0)) * 1e8) / 1e8;
@@ -132,7 +146,7 @@ async function reconcileHoldings(db: any, userId: string, agr: string, periodEnd
       rows.push({
         user_id: userId, account: ACCOUNT, external_source: SOURCE, external_id: id,
         ticker: t, side: need > 0 ? 'buy' : 'sell', quantity: Math.abs(need), price: 0,
-        trade_date: need < 0 && it.close === 0 && redeemed ? redeemed : periodEnd,
+        trade_date: need < 0 && it.close === 0 && redeemed ? redeemed : need > 0 && soldShort(t) ? periodStart : periodEnd,
         currency: 'RUB', fee_tax: null, fee_currency: null, nkd: null, exchange: null,
         note: t === it.primary && need < 0 && it.close === 0 && redeemed
           ? `Redeemed at maturity (the report's "Погашение в уст. срок" payout of ${redeemed}), holding brought to the report's closing 0`
@@ -146,6 +160,33 @@ async function reconcileHoldings(db: any, userId: string, agr: string, periodEnd
   if (rows.length) {
     const { error } = await db.from('trades').upsert(rows, { onConflict: 'user_id,external_source,external_id' });
     if (error) throw new Error(error.message);
+  }
+  // A move between two agreements is one event: its "out" on one and its "in"
+  // on the other (the same ticker and quantity, each from its own report) on
+  // one day -- the receiving agreement's start, as far as known: this report's
+  // first day when it's the receiving one, else that agreement's first deal
+  // (neither report dates the move: T-Bank moved the whole of 2026068060 to
+  // 2174598686, opened 19.05.2022, and both came out on 23.09.2026, the
+  // reports' end).
+  for (const r of rows) {
+    const { data: twins, error } = await db.from('trades').select('id, external_id, side, trade_date')
+      .eq('user_id', userId).eq('external_source', SOURCE).eq('ticker', r.ticker).eq('quantity', r.quantity).eq('price', 0)
+      .eq('side', r.side === 'buy' ? 'sell' : 'buy').like('external_id', '%:adjust:%').not('external_id', 'like', `${agr}:%`);
+    if (error) throw new Error(error.message);
+    const twin = (twins ?? []).find((x: { external_id: string }) => x.external_id.split(':adjust:')[1] === r.external_id.split(':adjust:')[1]);
+    if (!twin) continue;
+    let start = periodStart;
+    if (r.side === 'sell') {
+      const { data: first, error: fErr } = await db.from('trades').select('trade_date').eq('user_id', userId).eq('external_source', SOURCE)
+        .like('external_id', `${twin.external_id.split(':')[0]}:%`).not('external_id', 'like', '%:adjust:%').order('trade_date').limit(1);
+      if (fErr) throw new Error(fErr.message);
+      start = first?.[0]?.trade_date ?? twin.trade_date;
+    }
+    const day = [twin.trade_date, r.trade_date, start].sort()[0];
+    if (day === r.trade_date && day === twin.trade_date) continue;
+    const { error: e1 } = await db.from('trades').update({ trade_date: day }).eq('user_id', userId).eq('external_source', SOURCE)
+      .in('external_id', [r.external_id, twin.external_id]);
+    if (e1) throw new Error(e1.message);
   }
   for (let i = 0; i < drop.length; i += 200) {
     const { error } = await db.from('trades').delete().eq('user_id', userId).eq('external_source', SOURCE).in('external_id', drop.slice(i, i + 200));
@@ -420,7 +461,7 @@ Deno.serve(async (req) => {
         .eq('user_id', user.id).eq('external_source', SOURCE).in('external_id', parsed.staleAdjustIds);
       if (error) return json({ error: error.message }, 500);
     }
-    const reconciled = await reconcileHoldings(supabase, user.id, parsed.agreement, parsed.periodEnd, parsed.reconcile);
+    const reconciled = await reconcileHoldings(supabase, user.id, parsed.agreement, parsed.periodStart, parsed.periodEnd, parsed.reconcile);
     // Every row carries every column: a bulk upsert takes the union of the
     // rows' keys, and a missing one would be sent as null (synthetic is NOT
     // NULL -- only the closing-gap rows set it).
