@@ -722,7 +722,10 @@ export function buildSavingsLinks(trades) {
 // Revolut's Flexible Cash Funds are known by ISIN only: a short name for a tile
 export const FUND_NAMES = {
   IE000H9J0QX4: 'Revolut USD', IE000AZVL3K0: 'Revolut EUR', IE0002RUHW32: 'Revolut GBP',
-  // the ETFs by what they hold, not their exchange codes
+};
+// the ETFs by what they hold -- when funds are merged or expanded; "as held" shows them by ticker
+// (VWRA next to VWCE: their names would be all but the same, the user, 21.11.2026)
+export const ETF_NAMES = {
   XSX6: 'STOXX Europe 600 (Xtrackers)', VWRA: 'FTSE All-World (Vanguard, $)', VWCE: 'FTSE All-World (Vanguard, €)',
   CSPX: 'S&P 500 (iShares)', VUAA: 'S&P 500 (Vanguard)',
 };
@@ -1177,7 +1180,7 @@ function wireTreemap() {
         const n = window.mpShortName(t.ticker, data.nameOf?.get(t.ticker));
         if (n && n !== t.ticker) shortNames[t.ticker] = n;
       }
-      last = [tiles, colour, { tip, group: $('lt_small').checked, scale, names: { ...bondNames, ...shortNames, ...FUND_NAMES }, money, onTileClick }];
+      last = [tiles, colour, { tip, group: $('lt_small').checked, scale, names: { ...bondNames, ...shortNames, ...(fundsMode === 'separate' ? {} : ETF_NAMES), ...FUND_NAMES }, money, onTileClick }];
       drawTreemap(box, ...last);
       drawLegend($('lt_legend'), scale, method === 'contrib' ? 'pp' : '%');
       const earnedAll = earnedRows.reduce((s, r) => s + earnedOf(r), 0);
