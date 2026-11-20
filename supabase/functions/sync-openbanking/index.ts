@@ -40,7 +40,7 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { fromCron, notFromCron } from '../_shared/cron_auth.ts';
-import { OPENBANKING_INVEST_SOURCE, OPENBANKING_SOURCE, OPENBANKING_TRADE_SOURCE } from '../_shared/openbanking_rows.ts';
+import { OPENBANKING_INVEST_SOURCE, OPENBANKING_SOURCE, OPENBANKING_TRADE_SOURCE, removeOpenBankingCash } from '../_shared/openbanking_rows.ts';
 
 const EB = 'https://api.enablebanking.com';
 const REDIRECT = 'https://ilyazykov.github.io/erp/';
@@ -413,6 +413,16 @@ async function bocTopUpStandIns(db: any, userId: string): Promise<number> {
   return rows.length;
 }
 
+// The end of the bank's latest account statement (statement_uploads), or null.
+// deno-lint-ignore no-explicit-any
+async function latestStatementEnd(db: any, userId: string, bank: { label: string; kind: string }): Promise<string | null> {
+  const { data, error } = await db.from('statement_uploads').select('period_to')
+    .eq('user_id', userId).eq('account', bank.label).eq('kind', bank.kind).not('period_to', 'is', null)
+    .order('period_to', { ascending: false }).limit(1);
+  if (error) throw new Error(error.message);
+  return data?.[0]?.period_to ?? null;
+}
+
 // One bank's session: checked against its statements, then its rows replaced.
 // deno-lint-ignore no-explicit-any
 async function syncBank(db: any, userId: string, jwt: string, bankKey: string, sessionId: string): Promise<Record<string, unknown>> {
@@ -422,10 +432,7 @@ async function syncBank(db: any, userId: string, jwt: string, bankKey: string, s
   if (s.status !== 'AUTHORIZED') throw new Error(`The consent is ${s.status} -- connect ${bank.label} again`);
 
   // The latest statement's end.
-  const { data: ups, error: uErr } = await db.from('statement_uploads').select('period_to')
-    .eq('user_id', userId).eq('account', bank.label).eq('kind', bank.kind).order('period_to', { ascending: false }).limit(1);
-  if (uErr) throw new Error(uErr.message);
-  let lastEnd: string | null = ups?.[0]?.period_to ?? null;
+  let lastEnd: string | null = await latestStatementEnd(db, userId, bank);
   if (!lastEnd) {
     const { data: last } = await db.from('bank_transactions').select('tx_date').eq('user_id', userId)
       .eq('external_source', bank.base).order('tx_date', { ascending: false }).limit(1);
@@ -433,6 +440,11 @@ async function syncBank(db: any, userId: string, jwt: string, bankKey: string, s
   }
   if (!lastEnd) throw new Error(`No ${bank.label} statement uploaded yet -- the API's rows go on top of one`);
   const checkFrom = addDays(lastEnd, -CHECK_DAYS), edge = addDays(lastEnd, -EDGE_DAYS);
+  // The window's start has the same give of a few days as its end: a payment
+  // the API books on the window's first day and the statement a day before it
+  // (or the other way round) is on one side only -- not a difference. The
+  // sync after the statement of 19.11.2026 stopped on two such (Bolt, BTA, 20.10).
+  const start = addDays(checkFrom, EDGE_DAYS);
 
   const write: Tx[] = [];
   const diffs: string[] = [];
@@ -505,12 +517,12 @@ async function syncBank(db: any, userId: string, jwt: string, bankKey: string, s
         if (!used.has(n) && Math.abs(x.amount - Number(r.amount)) < 0.005 && gap <= EDGE_DAYS * 86400000 && gap < best) { i = n; best = gap; }
       });
       if (i >= 0) { used.add(i); matched++; continue; }
-      if (day <= edge) diffs.push(`${ccy} statement ${day} ${r.amount} "${String(r.description ?? '').slice(0, 30)}" not in the API`);
+      if (day <= edge && day >= start) diffs.push(`${ccy} statement ${day} ${r.amount} "${String(r.description ?? '').slice(0, 30)}" not in the API`);
     }
     booked.forEach((x, n) => {
       if (used.has(n) || x.day < checkFrom) return;
-      if (x.day <= edge) diffs.push(`${ccy} API ${x.day} ${x.amount} "${x.desc.slice(0, 30)}" not in the statement`);
-      else write.push(x);   // after the statement, or at its very end and not in it
+      if (x.day > edge) { write.push(x); return; }   // after the statement, or at its very end and not in it
+      if (x.day >= start) diffs.push(`${ccy} API ${x.day} ${x.amount} "${x.desc.slice(0, 30)}" not in the statement`);
     });
     const today = new Date().toISOString().slice(0, 10);
     for (const x of pending) write.push({ ...x, day: x.day || today });
@@ -529,6 +541,15 @@ async function syncBank(db: any, userId: string, jwt: string, bankKey: string, s
       diffs.push(`${ccy} balance: statement ${storedBalance} + API ${added}${bookedBal ? '' : ' + pending'} = ${expected}, the bank says ${actual} (${bal.balance_type})`);
   }
   if (diffs.length) throw new Error(`Not understood -- nothing replaced. ${diffs.length} differences (after the statement of ${lastEnd}): ${diffs.slice(0, 8).join('; ')}`);
+
+  // A statement uploaded while this ran (the page syncs after each file, and
+  // several Revolut files go one after another): its rows stand for its days,
+  // so these -- read on top of the older statement -- aren't written; the sync
+  // its own upload started does it. Without this, the sync after the fund's
+  // file wrote back 16.10-19.11 five seconds after the account's statement of
+  // 19.11 had taken those days (20.11.2026): every purchase twice.
+  if ((await latestStatementEnd(db, userId, bank)) !== lastEnd)
+    return { after_statement: lastEnd, written: 0, superseded: true, period_to: new Date().toISOString().slice(0, 10), valid_until: s.access?.valid_until ?? null };
 
   // Replace: this bank's API rows, from 0 per currency, in booking order.
   const { error: dErr } = await db.from('bank_transactions').delete().eq('user_id', userId).eq('external_source', src);
@@ -558,6 +579,9 @@ async function syncBank(db: any, userId: string, jwt: string, bankKey: string, s
     const { error } = await db.from('bank_transactions').upsert(rows.slice(i, i + 500), { onConflict: 'user_id,external_source,external_id' });
     if (error) throw new Error(error.message);
   }
+  // ...and one that came between that check and the writing: its days back, as its import does
+  const newEnd = await latestStatementEnd(db, userId, bank);
+  if (newEnd && newEnd !== lastEnd) await removeOpenBankingCash(db, userId, src, newEnd);
   const standIn = bankKey === 'revolut' ? await revolutStandIns(db, userId, write.filter(x => x.status !== 'PDNG')) : { transfers: 0, returns: 0 };
   if (rows.length || standIn.transfers || standIn.returns) {
     const { error: rq } = await db.rpc('request_capital_refresh', { p_user: userId });
