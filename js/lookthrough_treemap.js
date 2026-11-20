@@ -726,7 +726,7 @@ export const FUND_NAMES = {
 // the ETFs by what they hold -- when funds are merged or expanded; "as held" shows them by ticker
 // (VWRA next to VWCE: their names would be all but the same, the user, 21.11.2026)
 export const ETF_NAMES = {
-  XSX6: 'STOXX Europe 600 (Xtrackers)', VWRA: 'FTSE All-World (Vanguard, $)', VWCE: 'FTSE All-World (Vanguard, €)',
+  XSX6: 'STOXX Europe 600', VWRA: 'FTSE All-World (Vanguard, $)', VWCE: 'FTSE All-World (Vanguard, €)',
   CSPX: 'S&P 500 (iShares)', VUAA: 'S&P 500 (Vanguard)',
 };
 
