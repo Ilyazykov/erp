@@ -140,7 +140,7 @@ function unlistedTicker(r) {
   const kind = r.instrument_type === 'cushion' ? 'CUSHION' : r.instrument_type === 'cash' ? 'CASH' : String(r.instrument_type || 'OTHER').toUpperCase();
   return `${kind} ${r.currency || 'USD'}`;
 }
-export function aggregate({ rows, holdings, fundHoldings, expandFunds = false, mergeFunds = false, includeCushion = false, includeRealEstate = false,
+export function aggregate({ rows, holdings, fundHoldings, expandFunds = false, mergeFunds = false, classOf = null, includeCushion = false, includeRealEstate = false,
   mergeGold = true, mergeSavings = true, savingsLinks = [], savingsPeriods = {} }) {
   const isFundTicker = t => Object.prototype.hasOwnProperty.call(fundHoldings || {}, t);
   let entries, typeOf = new Map();
@@ -240,6 +240,26 @@ export function aggregate({ rows, holdings, fundHoldings, expandFunds = false, m
       const members = group.map(m => ({ ticker: m, value_usd: valueOf(m), first: savingsPeriods?.[m]?.first ?? null,
         last: savingsPeriods?.[m]?.last ?? null }));
       merge(latest, group, { isChain: true, members });
+    }
+  }
+  // classOf (ticker -> the company, e.g. its name): one company's share classes as one tile
+  // (Alphabet's GOOGL and GOOG), its parts the classes, the biggest one's ticker
+  if (classOf) {
+    const byCo = new Map();
+    for (const [k, t] of tiles) {
+      if (k.startsWith('fund:') || k.startsWith('merged:')) continue;
+      const co = classOf.get?.(k) ?? classOf[k];
+      if (!co) continue;
+      if (!byCo.has(co)) byCo.set(co, []);
+      byCo.get(co).push(k);
+    }
+    for (const members of byCo.values()) {
+      if (members.length < 2) continue;
+      const parts = members.map(m => ({ ticker: m, value_usd: tiles.get(m).value_usd })).sort((a, b) => b.value_usd - a.value_usd);
+      const t = { ticker: parts[0].ticker, value_usd: 0, share: 0, sources: [], isFund: false, isMerged: true,
+        instrument_type: tiles.get(parts[0].ticker).instrument_type, parts };
+      for (const p of parts) { for (const src of tiles.get(p.ticker).sources) addTo(t, src.from, src.value_usd); tiles.delete(p.ticker); }
+      tiles.set(`merged:class:${parts[0].ticker}`, t);
     }
   }
   // mergeFunds: the funds of one index (FUND_INDEX_GROUPS) as one tile, its parts the funds
@@ -885,11 +905,15 @@ function wireTreemap() {
     const fh = await snowballFetchAll(() => sb.from('fund_holdings').select('fund, security_id, weight').order('fund').order('security_id'));
     const ids = [...new Set(fh.map(r => r.security_id))].filter(id => id !== 'OTHER');
     const sec = new Map();
+    const companyOf = new Map();   // a constituent's company (its name): share classes of one company merge
     for (let i = 0; i < ids.length; i += 200) {
       // eslint-disable-next-line no-undef
-      const { data: s, error } = await sb.from('securities').select('id, ticker, market_ticker').in('id', ids.slice(i, i + 200));
+      const { data: s, error } = await sb.from('securities').select('id, ticker, market_ticker, name').in('id', ids.slice(i, i + 200));
       if (error) throw new Error(error.message);
-      for (const r of s) sec.set(r.id, r.market_ticker || r.ticker);
+      for (const r of s) {
+        sec.set(r.id, r.market_ticker || r.ticker);
+        if (r.name) companyOf.set(r.market_ticker || r.ticker, String(r.name).trim().toLowerCase());
+      }
     }
     const fundHoldings = {};
     for (const r of fh) {
@@ -918,7 +942,7 @@ function wireTreemap() {
         fx.get(r.currency).push([r.day, Number(r.usd_per_unit)]);
       }
     }
-    return { rows, frozen, fundHoldings, savingsLinks: links, savingsPeriods: periods, firstDay: first?.[0]?.trade_date || '2000-01-01', reIndex: reIndex || [], fx };
+    return { rows, frozen, fundHoldings, companyOf, savingsLinks: links, savingsPeriods: periods, firstDay: first?.[0]?.trade_date || '2000-01-01', reIndex: reIndex || [], fx };
   }
 
   async function earnedFor(p) {
@@ -966,7 +990,8 @@ function wireTreemap() {
       if (cushionMode === 'total') rows = rows.filter(r => r.instrument_type !== 'cash');
       const tileRows = withoutCushion(earnedRows, cushionOf);
       const fundsMode = $('lt_funds').value;
-      const tiles = aggregate({ rows, fundHoldings: data.fundHoldings, expandFunds: fundsMode === 'expand', mergeFunds: fundsMode === 'merge', includeCushion: cushion,
+      const tiles = aggregate({ rows, fundHoldings: data.fundHoldings, expandFunds: fundsMode === 'expand' || fundsMode === 'expand_classes',
+        mergeFunds: fundsMode === 'merge', classOf: fundsMode === 'expand_classes' ? data.companyOf : null, includeCushion: cushion,
         mergeGold: $('lt_gold').checked, mergeSavings: $('lt_savings').checked, savingsLinks: data.savingsLinks, savingsPeriods: data.savingsPeriods,
         includeRealEstate: $('lt_re').checked });
       // the box keeps its proportions in CSS (aspect-ratio), so the layout is always for its real size
@@ -1047,7 +1072,7 @@ function wireTreemap() {
     });
   }
   // funds: as held, one tile per index, or expanded into what they hold (remembered)
-  try { const v = localStorage.getItem('lt_funds'); if (['separate', 'merge', 'expand'].includes(v)) $('lt_funds').value = v; } catch { /* no storage */ }
+  try { const v = localStorage.getItem('lt_funds'); if (['separate', 'merge', 'expand', 'expand_classes'].includes(v)) $('lt_funds').value = v; } catch { /* no storage */ }
   $('lt_funds').addEventListener('change', e => { try { localStorage.setItem('lt_funds', e.target.value); } catch { /* no storage */ } });
   for (const id of ['lt_funds', 'lt_cushion', 'lt_gold', 'lt_savings', 'lt_re', 'lt_small']) $(id).addEventListener('change', redraw);
   $('lt_show')?.addEventListener('change', e => {
