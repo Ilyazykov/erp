@@ -1172,8 +1172,12 @@ function wireTreemap() {
       };
       // a numbered share (Taiwan's 2330, Seoul's 005930, Tokyo's 8306): its name (TSMC, Samsung Electronics, MUFG), never the number
       const shortNames = {};
-      if (g('mpShortName')) for (const t of tiles) if (/^\d+[A-Z]?$|^[A-Z]{2}[A-Z0-9]{9}\d$/.test(String(t.ticker))) shortNames[t.ticker] = window.mpShortName(t.ticker, data.nameOf?.get(t.ticker));
-      last = [tiles, colour, { tip, group: $('lt_small').checked, scale, names: { ...bondNames, ...FUND_NAMES, ...shortNames }, money, onTileClick }];
+      // (only where it found a name: a code it can't name -- Revolut's funds by ISIN -- keeps the names below)
+      if (g('mpShortName')) for (const t of tiles) if (/^\d+[A-Z]?$|^[A-Z]{2}[A-Z0-9]{9}\d$/.test(String(t.ticker))) {
+        const n = window.mpShortName(t.ticker, data.nameOf?.get(t.ticker));
+        if (n && n !== t.ticker) shortNames[t.ticker] = n;
+      }
+      last = [tiles, colour, { tip, group: $('lt_small').checked, scale, names: { ...bondNames, ...shortNames, ...FUND_NAMES }, money, onTileClick }];
       drawTreemap(box, ...last);
       drawLegend($('lt_legend'), scale, method === 'contrib' ? 'pp' : '%');
       const earnedAll = earnedRows.reduce((s, r) => s + earnedOf(r), 0);

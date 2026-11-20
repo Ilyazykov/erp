@@ -42,7 +42,9 @@ SUFFIX = {"USD": "", "GBP": ".L", "JPY": ".T", "CHF": ".SW", "TWD": ".TW", "CAD"
 EUR_SUFFIX = {"FR": ".PA", "DE": ".DE", "NL": ".AS", "ES": ".MC", "IT": ".MI", "FI": ".HE", "BE": ".BR",
               "IE": ".IR", "PT": ".LS", "AT": ".VI", "LU": ".AS"}
 # quoted in a fraction of the currency: pence, cents, agorot; Kuwait's fils
-MINOR = {".L": 0.01, ".JO": 0.01, ".TA": 0.01, ".KW": 0.001}
+# -- only for a security in that currency: London also lists in dollars (VWRA, CSPX, VUAA: their
+# history came out a hundred times too small, 21.11.2026)
+MINOR = {".L": (0.01, "GBP"), ".JO": (0.01, "ZAR"), ".TA": (0.01, "ILS"), ".KW": (0.001, "KWD")}
 # The funds' lists name some securities by their Bloomberg code, not the
 # exchange's (Vanguard: HDFCB for HDFC Bank, DBS, OCBC...), or on exchanges
 # the currency table doesn't know (Riyadh, Abu Dhabi, Doha, Kuwait, Kuala
@@ -201,8 +203,8 @@ def load(db, todo, start: str, dry_run: bool) -> int:
             if ticker not in found:
                 continue
             sym, series = found[ticker]
-            k = next((f for m, f in MINOR.items() if sym.endswith(m)), 1.0)
             c = (ccy or "USD").upper()
+            k = next((f for m, (f, cur) in MINOR.items() if sym.endswith(m) and c == cur), 1.0)
             if c != "USD":
                 if c not in fx:
                     continue

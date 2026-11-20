@@ -14364,9 +14364,9 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       for (const [side, color, sym] of [['buy', '#3fb950', 'triangle-up'], ['sell', '#f85149', 'triangle-down']]) {
         const ds = shown.filter(d => d.side === side && !!d.via === via);
         if (ds.length) traces.push({ x: ds.map(d => d.trade_date), y: ds.map(d => priceOn(d.trade_date)), type: 'scatter', mode: 'markers', name: `${side}${via ? ' via a fund' : ''}`,
-          // through a fund: as they were (solid, the usual colour); one's own: bigger, brighter, outlined in white
+          // through a fund: as they were (solid, the usual colour); one's own: bigger, brighter, a thin white outline
           marker: via ? { color, size: 11, symbol: sym }
-            : { color: side === 'buy' ? '#56f06e' : '#ff5c55', size: 15, symbol: sym, line: { color: '#ffffff', width: 2 } },
+            : { color: side === 'buy' ? '#56f06e' : '#ff5c55', size: 14, symbol: sym, line: { color: '#ffffff', width: 0.8 } },
           text: ds.map(d => `${side} ${Number(d.quantity)}${dealTickers.length > 1 ? ` ${d.ticker}` : ''} at ${d.account}`), hovertemplate: '%{x}: %{text}<extra></extra>' });
       }
     }
@@ -14958,13 +14958,13 @@ sb.auth.getSession().then(({ data: { session } }) => mpOnAuth(session));
 sb.auth.onAuthStateChange((_event, session) => mpOnAuth(session));
 </script>
 <script type="module">
-import { RU_ACCOUNTS, isRuInfra, netCreditIntoLiquid, periodIrr, portfolioCapital } from './js/lookthrough_treemap.js?v=20261121m';
+import { RU_ACCOUNTS, isRuInfra, netCreditIntoLiquid, periodIrr, portfolioCapital } from './js/lookthrough_treemap.js?v=20261121n';
 window.MP_RU_ACCOUNTS = RU_ACCOUNTS;
 window.mpPeriodIrr = periodIrr;
 window.mpPortfolioCapital = portfolioCapital;
 window.mpIsRuInfra = isRuInfra;
 window.mpNetCreditIntoLiquid = netCreditIntoLiquid;
 </script>
-<script type="module" src="./js/lookthrough_treemap.js?v=20261121m"></script>
+<script type="module" src="./js/lookthrough_treemap.js?v=20261121n"></script>
 </body>
 </html>
