@@ -13910,6 +13910,15 @@ const MP_ASSET_NAMES = {
   IE000H9J0QX4: 'Revolut Flexible Cash Funds USD (Fidelity ILF)',
   TEUR: 'TEUR (with its blocked part TEUR2)',
 };
+// Russian funds in the price chart's header (no securities row; "Earned by asset" keeps the tickers)
+const MP_FUND_NAMES_RU = {
+  TLCB: 'Т-Капитал Локальные валютные облигации', TBRU: 'Т-Капитал Российские облигации', TDIV: 'Т-Капитал Дивидендные акции',
+  TGLD: 'Т-Капитал Золото', TMON: 'Т-Капитал Денежный рынок', TMOS: 'Т-Капитал Индекс МосБиржи', TOFZ: 'Т-Капитал ОФЗ',
+  TRND: 'Т-Капитал Трендовые акции', TUSD: 'Т-Капитал Вечный портфель (USD)', TBIO: 'Т-Капитал БиоТех', TSOX: 'Т-Капитал Полупроводники',
+  TSPX: 'Т-Капитал США 50', AKFN: 'Альфа Индекс финансов', AKGP: 'Альфа Управляемые валютные облигации', AKMB: 'Альфа Управляемые облигации',
+  AKME: 'Альфа Управляемые акции', AKMM: 'Альфа Денежный рынок', AMNY: 'АТОН Накопительный в юанях',
+  SAFE: 'Сбер Консервативный', SBBY: 'Сбер Инструменты в юанях', SBMM: 'Сбер Сберегательный',
+};
 // Blocked securities (price_freezes: worth 0 from the day they froze) get a
 // "(blocked)" mark, so a -100% reads as frozen, not sold.
 let mpFrozenTickers = null;
@@ -14209,9 +14218,19 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   // the company, its country (a flag) and sector from the funds' lists (securities), instead of the
   // ticker again: "NVDA · NVIDIA Corp 🇺🇸 · Information Technology"
   sb.from('securities').select('name, country, country_code, sector').or(`market_ticker.eq.${asset},ticker.eq.${asset}`).limit(1)
-    .then(({ data }) => {
+    .then(async ({ data }) => {
       const s = data?.[0];
-      if (!s) return;
+      if (!s) {
+        // no fund's list has it: a name of ours, or the broker's from its latest deal ("Zynex-ао (сделка …)")
+        let name = MP_FUND_NAMES_RU[asset] || MP_ASSET_NAMES[asset];
+        if (!name) {
+          const { data: t } = await sb.from('trades').select('note').eq('ticker', asset).in('side', ['buy', 'sell']).or('note.ilike.*(сделка*,note.ilike.*(market order*').order('trade_date', { ascending: false }).limit(1);
+          name = String(t?.[0]?.note || '').replace(/\s*\((сделка|market order)[^)]*\)\s*$/, '').replace(/^паи\s+[БЗ]ПИФ\s+рфи\s+/i, '').replace(/-ао$/, '').trim();
+        }
+        if (name && name.toLowerCase() !== String(title).toLowerCase())
+          dlg.querySelector('#mp_price_meta').textContent = `${title !== asset && !numbered ? `· ${asset} ` : ''}· ${name}`;
+        return;
+      }
       const cc = String(s.country_code || '').toUpperCase();
       const flag = /^[A-Z]{2}$/.test(cc) && cc !== 'XX' ? String.fromCodePoint(...[...cc].map(c => 0x1F1E6 + c.charCodeAt(0) - 65)) : '';
       const parts = [s.name && s.name.toLowerCase() !== String(title).toLowerCase() && s.name !== mpShortName(asset, s.name) ? s.name : '', flag || s.country || '', s.sector || '']   // the flag alone; the country's name only without one
@@ -14414,9 +14433,8 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       for (const [side, color, sym] of [['buy', '#3fb950', 'triangle-up'], ['sell', '#f85149', 'triangle-down']]) {
         const ds = shown.filter(d => d.side === side && !!d.via === via);
         if (ds.length) traces.push({ x: ds.map(d => d.trade_date), y: ds.map(d => priceOn(d.trade_date)), type: 'scatter', mode: 'markers', name: `${side}${via ? ' via a fund' : ''}`,
-          // through a fund: as they were (solid, the usual colour); one's own: bigger, a deeper green, a dark outline
-          marker: via ? { color, size: 11, symbol: sym }
-            : { color: side === 'buy' ? '#2ea043' : '#f85149', size: 15, symbol: sym, line: { color: '#0d1117', width: 1.5 } },
+          // no outline (white, pale and dark ones all looked bad): one's own solid and bigger, through a fund smaller and faded
+          marker: via ? { color, size: 10, symbol: sym, opacity: 0.45 } : { color, size: 13, symbol: sym },
           text: ds.map(d => `${side} ${Number(d.quantity)}${dealTickers.length > 1 ? ` ${d.ticker}` : ''} at ${d.account}`), hovertemplate: '%{x}: %{text}<extra></extra>' });
       }
     }
