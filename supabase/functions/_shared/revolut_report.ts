@@ -10,7 +10,11 @@
 export type ReportRow = { day: string; desc: string; category: string; amount: number; balance: number | null };
 export type ReportAccount = { currency: string; closing: number | null; rows: ReportRow[] };
 export type ReportMetal = { at: string; metal: string; units: number; value: number; currency: string };
-export type RevolutReport = { from: string; to: string; accounts: ReportAccount[]; metals: ReportMetal[] };
+// a brokerage (Invest) deal, in the Invest statement's own columns -- the
+// report's Investment Services section, empty until the deal settles: filled
+// in by hand from the app meanwhile (20.11.2026, VWCE bought at 21:12)
+export type ReportInvest = { at: string; ticker: string; type: string; quantity: number; price: number; total: number; currency: string };
+export type RevolutReport = { from: string; to: string; accounts: ReportAccount[]; metals: ReportMetal[]; invest: ReportInvest[] };
 
 // RFC 4180: quoted cells may hold commas and doubled quotes.
 function parseCsv(text: string): string[][] {
@@ -63,13 +67,15 @@ export function parseRevolutReport(text: string): RevolutReport {
     return accounts.get(ccy)!;
   };
   const metals: ReportMetal[] = [];
+  const invest: ReportInvest[] = [];
+  let investHeader = false;
   let part = '', ccy = '', daysOwned = 0, to = '';
   let col: { amount: number; balance: number; fee: number } | null = null;
   let metalHeader = false;
   for (const r of rows) {
     const c0 = (r[0] ?? '').trim();
     if (/^(Current Accounts Summaries|Current Accounts Transaction Statements|Savings Accounts|Flexible Cash Funds|Investment Services|Crypto|Commodity)/.test(c0)
-      && !/^Flexible Cash Funds\s+\(/.test(c0)) { part = c0; ccy = ''; col = null; metalHeader = false; continue; }
+      && !/^Flexible Cash Funds\s+\(/.test(c0)) { part = c0; ccy = ''; col = null; metalHeader = false; investHeader = false; continue; }
     const head = /^Personal Account \(([A-Z]{3})\)$/.exec(c0);
     if (head) { ccy = head[1]; col = null; continue; }
     if ((r[2] ?? '').trim() === 'Days owned (in selected period)') daysOwned = Math.max(daysOwned, Number(r[3]) || 0);
@@ -91,6 +97,18 @@ export function parseRevolutReport(text: string): RevolutReport {
           amount: Number((amount - Math.abs(fee)).toFixed(8)), balance: col.balance >= 0 ? money(r[col.balance]) : null });
       }
     }
+    // Date,Ticker,Type,Quantity,Price per share,Total Amount,Currency,FX Rate
+    // 2026-11-20T17:12:00Z,VWCE,BUY - MARKET,6.28140703,EUR 159.20,EUR 1000,EUR,1.0000
+    if (part === 'Investment Services Transaction Statements') {
+      if (c0 === 'Date' && (r[1] ?? '').trim() === 'Ticker') { investHeader = true; continue; }
+      if (investHeader && /^\d{4}-\d{2}-\d{2}T/.test(c0)) {
+        const num = (x: string) => Number((x ?? '').replace(/[A-Z]{3}/g, '').replace(/,/g, '').trim());
+        const t = { at: c0, ticker: (r[1] ?? '').trim().toUpperCase(), type: (r[2] ?? '').trim().toUpperCase(), quantity: num(r[3]),
+          price: num(r[4]), total: num(r[5]), currency: (r[6] ?? '').trim().toUpperCase() };
+        if (t.ticker && /^(BUY|SELL)\b/.test(t.type) && t.quantity > 0 && t.price > 0 && t.currency) invest.push(t);
+        if (c0.slice(0, 10) > to) to = c0.slice(0, 10);
+      }
+    }
     if (part.startsWith('Commodity')) {
       if (c0 === 'on Purchase date') { metalHeader = true; continue; }
       if (metalHeader && /^\d{4}-\d{2}-\d{2}T/.test(c0)) {
@@ -102,5 +120,5 @@ export function parseRevolutReport(text: string): RevolutReport {
   }
   const from = to && daysOwned
     ? new Date(Date.parse(`${to}T00:00:00Z`) - (daysOwned - 1) * 86400000).toISOString().slice(0, 10) : '';
-  return { from, to, accounts: [...accounts.values()], metals };
+  return { from, to, accounts: [...accounts.values()], metals, invest };
 }

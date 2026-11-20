@@ -18,7 +18,12 @@ export const OPENBANKING_SOURCE: Record<string, string> = {
 // metals ("Exchanged to XAU") stand in as the metal's buys, at the market
 // price of the day: 'openbanking_revolut_metal'. A fund, savings or metal
 // pocket statement takes its period back.
-export const OPENBANKING_TRADE_SOURCE = { fund: 'openbanking_revolut_fund', savings: 'openbanking_revolut_savings', metal: 'openbanking_revolut_metal' };
+// A brokerage (Invest) deal from Revolut's combined report (filled in by hand
+// from the app until the report has it) stands in as that deal:
+// 'openbanking_revolut_invest_trade', its cash with the transfers' below; the
+// Invest statement takes its period back.
+export const OPENBANKING_TRADE_SOURCE = { fund: 'openbanking_revolut_fund', savings: 'openbanking_revolut_savings', metal: 'openbanking_revolut_metal',
+  invest: 'openbanking_revolut_invest_trade' };
 
 // Its transfers to / from the brokerage (Invest) account stand in as that
 // account's cash (bank_transactions, a running balance per currency from 0 on

@@ -325,19 +325,31 @@ async function revolutStandIns(db: any, userId: string, write: Tx[]): Promise<{ 
   // keyed by content, so the same row keeps its key from run to run (estimate_archive, migration ...114)
   const investSeen = new Map<string, number>();
   const dupKey = (k: string) => { const n = investSeen.get(k) ?? 0; investSeen.set(k, n + 1); return n ? `${k}:dup${n}` : k; };
-  const invest = moves.filter(x => /^(To|From) investment account/i.test(x.desc) && x.day > investEnd)
-    .sort((p, q) => p.day.localeCompare(q.day)).map((x, i) => {
-      const amount = -x.amount;   // the account's -X is the brokerage's +X
-      investBal[x.currency] = Math.round(((investBal[x.currency] ?? 0) + amount) * 100) / 100;
-      const at = new Date(Date.parse(`${x.day}T12:00:00Z`) + i).toISOString();
-      return {
-        user_id: userId, account: 'Revolut', tx_date: at, booked_at: at,
-        description: `ESTIMATED: ${amount > 0 ? 'CASH TOP-UP' : 'CASH WITHDRAWAL'} (${x.desc})`, counterparty: null,
-        amount, currency: x.currency, category: null, balance_after: investBal[x.currency], synthetic: false, synthetic_kind: null,
+  // ...and the deals a Revolut report stood in with (OPENBANKING_TRADE_SOURCE.invest): what they cost, out of that cash
+  const { data: deals, error: dErr } = await db.from('trades').select('ticker, side, quantity, price, trade_date, currency, external_id')
+    .eq('user_id', userId).eq('external_source', OPENBANKING_TRADE_SOURCE.invest).gt('trade_date', investEnd || '0000-00-00');
+  if (dErr) throw new Error(dErr.message);
+  const investMoves = [
+    ...moves.filter(x => /^(To|From) investment account/i.test(x.desc) && x.day > investEnd)
+      .map(x => ({ day: x.day, order: 0, amount: -x.amount,   // the account's -X is the brokerage's +X
+        currency: x.currency, desc: `ESTIMATED: ${x.amount < 0 ? 'CASH TOP-UP' : 'CASH WITHDRAWAL'} (${x.desc})`,
         note: 'ESTIMATED: from the current account\'s Open Banking transfer, until the Invest statement comes',
-        external_source: OPENBANKING_INVEST_SOURCE, external_id: dupKey(`revolut:${x.ref || `${x.day}:${x.currency}:${x.amount}`}`),
-      };
-    });
+        key: `revolut:${x.ref || `${x.day}:${x.currency}:${x.amount}`}` })),
+    ...(deals ?? []).map((d: { ticker: string; side: string; quantity: number; price: number; trade_date: string; currency: string; external_id: string }) => ({
+      day: String(d.trade_date), order: 1,   // a deal after the same day's top-up
+      amount: Math.round((d.side === 'buy' ? -1 : 1) * Number(d.quantity) * Number(d.price) * 100) / 100, currency: d.currency,
+      desc: `${d.side.toUpperCase()} ${d.ticker}`, note: 'the deal from the app (Revolut\'s combined report), until the Invest statement comes',
+      key: `deal:${d.external_id}` })),
+  ];
+  const invest = investMoves.sort((p, q) => p.day.localeCompare(q.day) || p.order - q.order).map((x, i) => {
+    investBal[x.currency] = Math.round(((investBal[x.currency] ?? 0) + x.amount) * 100) / 100;
+    const at = new Date(Date.parse(`${x.day}T12:00:00Z`) + i).toISOString();
+    return {
+      user_id: userId, account: 'Revolut', tx_date: at, booked_at: at, description: x.desc, counterparty: null,
+      amount: x.amount, currency: x.currency, category: null, balance_after: investBal[x.currency], synthetic: false, synthetic_kind: null,
+      note: x.note, external_source: OPENBANKING_INVEST_SOURCE, external_id: dupKey(x.key),
+    };
+  });
   const { error: iDel } = await db.from('bank_transactions').delete().eq('user_id', userId).eq('external_source', OPENBANKING_INVEST_SOURCE);
   if (iDel) throw new Error(iDel.message);
   if (invest.length) {
@@ -623,6 +635,26 @@ async function revolutReport(db: any, userId: string, csv: string): Promise<Reco
     timed++;
   }
 
+  // The brokerage (Invest) deals the report has, after the Invest statement's last row: stand-in trades
+  // (their cash goes with the transfers' in revolutStandIns); an upload again rewrites its own days.
+  const { data: lastInvest } = await db.from('bank_transactions').select('tx_date').eq('user_id', userId)
+    .eq('external_source', 'revolut_invest_csv').order('tx_date', { ascending: false }).limit(1);
+  const investEnd = lastInvest?.[0] ? String(lastInvest[0].tx_date).slice(0, 10) : '';
+  const { error: idErr } = await db.from('trades').delete().eq('user_id', userId).eq('external_source', OPENBANKING_TRADE_SOURCE.invest)
+    .gte('trade_date', rep.from).lte('trade_date', rep.to);
+  if (idErr) throw new Error(idErr.message);
+  const deals = rep.invest.filter(t => t.at.slice(0, 10) > investEnd).map(t => ({
+    user_id: userId, account: 'Revolut', ticker: t.ticker, side: /^SELL/.test(t.type) ? 'sell' : 'buy', quantity: t.quantity,
+    price: t.price, trade_date: t.at.slice(0, 10), currency: t.currency, fee_tax: null, fee_currency: null, nkd: null, exchange: 'XETRA',
+    // the deal as the app shows it -- exact, not an estimate; its own source only so the Invest statement replaces it
+    estimated: false, note: `${t.type} at ${t.at} -- from the app (Revolut's combined report), until the Invest statement comes`,
+    external_source: OPENBANKING_TRADE_SOURCE.invest, external_id: `report:${t.at}:${t.ticker}:${t.quantity}`,
+  }));
+  if (deals.length) {
+    const { error } = await db.from('trades').upsert(deals, { onConflict: 'user_id,external_source,external_id' });
+    if (error) throw new Error(error.message);
+  }
+
   // The stand-ins over the API's rows and the report's.
   const { data: apiRows, error: rErr } = await db.from('bank_transactions').select('tx_date, amount, currency, description')
     .eq('user_id', userId).eq('external_source', OPENBANKING_SOURCE.Revolut).not('description', 'like', 'PENDING:%');
@@ -632,7 +664,7 @@ async function revolutReport(db: any, userId: string, csv: string): Promise<Reco
   const { error: rq } = await db.rpc('request_capital_refresh', { p_user: userId });
   if (rq) throw new Error(rq.message);
   return { report: `${rep.from}..${rep.to}`, after_statement: lastEnd, checked: { window: `${win.checkFrom}..${lastEnd}`, matched },
-    balances, in_open_banking: write.length - fresh.length, written: rows.length, metal_times: timed,
+    balances, in_open_banking: write.length - fresh.length, written: rows.length, metal_times: timed, invest_deals: deals.length,
     fund_savings_trades: standIn.transfers, fund_returns_estimated: standIn.returns };
 }
 

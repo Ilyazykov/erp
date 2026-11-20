@@ -4152,7 +4152,8 @@ async function mpImportOneFile(file, statusEl, session) {
       // not logged as a statement: it doesn't move the statement's end
       statusEl.textContent = `Detected: ${label}, ${result.report}. Added ${result.written} transactions in neither the statement `
         + `(to ${result.after_statement}) nor Open Banking; ${result.in_open_banking} already in Open Banking; `
-        + `${result.metal_times} metal purchase times set; checked against the statement: ${result.checked?.matched ?? 0} matched.`;
+        + `${result.metal_times} metal purchase times set; ${result.invest_deals ?? 0} Invest deals until the Invest statement; `
+        + `checked against the statement: ${result.checked?.matched ?? 0} matched.`;
     } else if (kind === 'revolut_account') {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} transactions `
         + `and ${result.imported_metal_trades ?? 0} gold/metal trades`
