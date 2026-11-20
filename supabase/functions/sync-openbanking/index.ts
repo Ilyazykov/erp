@@ -373,7 +373,10 @@ async function revolutStandIns(db: any, userId: string, write: Tx[]): Promise<{ 
     ...(deals ?? []).map((d: { ticker: string; side: string; quantity: number; price: number; trade_date: string; currency: string; external_id: string }) => ({
       day: String(d.trade_date), order: 1,   // a deal after the same day's top-up
       amount: Math.round((d.side === 'buy' ? -1 : 1) * Number(d.quantity) * Number(d.price) * 100) / 100, currency: d.currency,
-      desc: `${d.side.toUpperCase()} ${d.ticker}`, note: 'the deal from the app (Revolut\'s combined report), until the Invest statement comes',
+      // named as the Invest statement names its deals ("BUY - MARKET 17.65196677 VWCE"): the expense
+      // rules take that for an investment, not a spending ("BUY VWCE" came out as Other, 20.11.2026)
+      desc: `${d.side.toUpperCase()} - MARKET ${Number(d.quantity)} ${d.ticker}`,
+      note: 'the deal from the app (Revolut\'s combined report), until the Invest statement comes',
       key: `deal:${d.external_id}` })),
   ];
   const invest = investMoves.sort((p, q) => p.day.localeCompare(q.day) || p.order - q.order).map((x, i) => {
