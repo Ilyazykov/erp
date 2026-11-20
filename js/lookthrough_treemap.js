@@ -989,7 +989,8 @@ function wireTreemap() {
         sec.set(r.id, r.market_ticker || r.ticker);
         if (r.name) {
           // the company: France's loyalty shares ("L'OREAL SA - PF - 2028") are its ordinary ones
-          companyOf.set(r.market_ticker || r.ticker, String(r.name).trim().toLowerCase().replace(/\s-\spf\s-\s\d{4}$/, '').replace(/\s+eur[\d.]+.*$/, '').replace(/\s*\(.*$/, ''));
+          companyOf.set(r.market_ticker || r.ticker, String(r.name).trim().toLowerCase().replace(/\s-\spf\s-\s\d{4}$/, '').replace(/\s+eur[\d.]+.*$/, '').replace(/\s*\(.*$/, '')
+            .replace(/\s+(sa|se|nv|ag|plc)$/, ''));
           nameOf.set(r.market_ticker || r.ticker, String(r.name).trim());
         }
       }

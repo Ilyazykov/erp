@@ -9167,7 +9167,9 @@ async function mpRenderLookThrough() {
   if (mergeClasses) {
     const byName = new Map();
     for (const r of rows) {
-      const key = String(r.name || r.ticker || '').trim().toLowerCase();
+      // one company: Alphabet's classes by name; France's loyalty shares ("L'OREAL SA - PF - 2028") its ordinary ones
+      const key = String(r.name || r.ticker || '').trim().toLowerCase().replace(/\s-\spf\s-\s\d{4}$/, '').replace(/\s+eur[\d.]+.*$/, '')
+        .replace(/\s*\(.*$/, '').replace(/\s+(sa|se|nv|ag|plc)$/, '');
       const m = byName.get(key);
       if (!key || !m) { byName.set(key || `#${byName.size}`, r); continue; }
       m.value_usd = Number(m.value_usd) + Number(r.value_usd);
@@ -14171,13 +14173,11 @@ function mpShortName(ticker, name) {
   if (MP_SHORT_NAMES[t]) return MP_SHORT_NAMES[t];
   if (!mpCodeLike(t) || !name) return t;
   // France's registered loyalty shares ("L'OREAL SA - PF - 2028", "SODEXO EUR4 (PRIM FIDELITE)(REGD)"):
-  // the company, "(loyalty 2028)"; a name in capitals in ordinary case
+  // just the company (they merge with its ordinary shares like Alphabet's classes); capitals in ordinary case
   let n = String(name);
-  const pf = n.match(/\s-\sPF\s-\s(\d{4})\s*$/) || (/PRIM FIDELITE/i.test(n) ? [null, ''] : null);
   n = n.replace(/\s-\sPF\s-\s\d{4}\s*$/, '').replace(/\s+EUR[\d.]+.*$/i, '').replace(/\s*\(.*$/, '');
   if (n === n.toUpperCase()) n = n.toLowerCase().replace(/(^|[\s'-])\p{L}/gu, c => c.toUpperCase());
   n = n.replace(/\s+(SA|SE|NV|AG|PLC)$/i, '');
-  if (pf) return `${n} (loyalty${pf[1] ? ` ${pf[1]}` : ''})`;
   const trimmed = String(n).replace(/[,.]/g, ' ').replace(/\b(Co|Ltd|Inc|Corp|Corporation|Holdings?|Group|PLC|Limited|Company|Kabushiki Kaisha|KK)\b/gi, '')
     .replace(/\s+/g, ' ').trim();
   return trimmed.length > 26 ? trimmed.slice(0, 26).replace(/\s\S*$/, '') : trimmed || t;
@@ -14958,13 +14958,13 @@ sb.auth.getSession().then(({ data: { session } }) => mpOnAuth(session));
 sb.auth.onAuthStateChange((_event, session) => mpOnAuth(session));
 </script>
 <script type="module">
-import { RU_ACCOUNTS, isRuInfra, netCreditIntoLiquid, periodIrr, portfolioCapital } from './js/lookthrough_treemap.js?v=20261121j';
+import { RU_ACCOUNTS, isRuInfra, netCreditIntoLiquid, periodIrr, portfolioCapital } from './js/lookthrough_treemap.js?v=20261121k';
 window.MP_RU_ACCOUNTS = RU_ACCOUNTS;
 window.mpPeriodIrr = periodIrr;
 window.mpPortfolioCapital = portfolioCapital;
 window.mpIsRuInfra = isRuInfra;
 window.mpNetCreditIntoLiquid = netCreditIntoLiquid;
 </script>
-<script type="module" src="./js/lookthrough_treemap.js?v=20261121j"></script>
+<script type="module" src="./js/lookthrough_treemap.js?v=20261121k"></script>
 </body>
 </html>
