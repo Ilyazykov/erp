@@ -14521,7 +14521,10 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       for (const [side, color] of [['buy', '#3fb950'], ['sell', '#f85149']]) {
         const ds = shown.filter(d => d.side === side && !!d.via === via);
         if (!ds.length) continue;
-        const fill = via ? color : side === 'buy' ? '#b4ffc0' : '#ffa8a8';
+        // one's own: a mark of the line's own colour goes light (a buy on a green line, a sale on a red one),
+        // of the other colour stays bright (a buy on a red line, a sale on a green one)
+        const upLine = lineCol === '#3fb950';
+        const fill = via ? color : side === 'buy' ? (upLine ? '#b4ffc0' : '#39ff5a') : (upLine ? '#ff2d2d' : '#ffa8a8');
         for (const d of ds) dealShapes.push({ type: 'path', xref: 'x', yref: 'y', xsizemode: 'pixel', ysizemode: 'pixel',
           xanchor: d.trade_date, yanchor: priceOn(d.trade_date), path: house(side === 'buy', via ? 0.75 : 1),
           fillcolor: fill, line: { color: '#000000', width: 0.6 }, layer: 'above' });
