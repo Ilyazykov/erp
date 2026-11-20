@@ -34,10 +34,20 @@ export async function removeOpenBankingTrades(db: any, userId: string, source: s
   return count ?? 0;
 }
 
+// Revolut's combined report of all accounts (_shared/revolut_report.ts,
+// sync-openbanking {"action": "revolut_report"}): the rows of it that neither
+// the statement nor the API had, kept as the API's are -- a running balance
+// per currency from 0 -- under a source of their own, so the API's daily
+// rewrite of its rows leaves them be. An API row of the same transaction
+// takes its place; a statement takes its period back from both.
+export const OPENBANKING_REPORT_SOURCE = 'openbanking_revolut_report';
+
 // deno-lint-ignore no-explicit-any
 export async function removeOpenBankingRows(db: any, userId: string, account: string, periodEnd: string): Promise<number> {
   const src = OPENBANKING_SOURCE[account];
-  return src ? await removeOpenBankingCash(db, userId, src, periodEnd) : 0;
+  if (!src) return 0;
+  return await removeOpenBankingCash(db, userId, src, periodEnd)
+    + (account === 'Revolut' ? await removeOpenBankingCash(db, userId, OPENBANKING_REPORT_SOURCE, periodEnd) : 0);
 }
 
 // What one wrote on an API row -- a note, a category, a place, a time (the
@@ -47,7 +57,7 @@ export async function removeOpenBankingRows(db: any, userId: string, account: st
 const HAND_FIELDS = 'id, tx_date, authorized_on, amount, currency, expense_note, expense_category, expense_manual, income_category, income_manual, place_id, delivery_place_id, authorized_at, authorized_approx';
 // deno-lint-ignore no-explicit-any
 async function handOver(db: any, userId: string, src: string, periodEnd: string): Promise<number> {
-  const account = Object.keys(OPENBANKING_SOURCE).find(a => OPENBANKING_SOURCE[a] === src);
+  const account = src === OPENBANKING_REPORT_SOURCE ? 'Revolut' : Object.keys(OPENBANKING_SOURCE).find(a => OPENBANKING_SOURCE[a] === src);
   const { data: api, error } = await db.from('bank_transactions').select(HAND_FIELDS)
     .eq('user_id', userId).eq('external_source', src).lte('tx_date', `${periodEnd.slice(0, 10)}T23:59:59.999Z`)
     .or('expense_note.not.is.null,expense_manual.eq.true,income_manual.eq.true,place_id.not.is.null,delivery_place_id.not.is.null,authorized_at.not.is.null');

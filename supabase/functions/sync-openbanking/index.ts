@@ -40,7 +40,8 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { fromCron, notFromCron } from '../_shared/cron_auth.ts';
-import { OPENBANKING_INVEST_SOURCE, OPENBANKING_SOURCE, OPENBANKING_TRADE_SOURCE, removeOpenBankingCash } from '../_shared/openbanking_rows.ts';
+import { OPENBANKING_INVEST_SOURCE, OPENBANKING_REPORT_SOURCE, OPENBANKING_SOURCE, OPENBANKING_TRADE_SOURCE, removeOpenBankingCash } from '../_shared/openbanking_rows.ts';
+import { isRevolutReport, parseRevolutReport } from '../_shared/revolut_report.ts';
 
 const EB = 'https://api.enablebanking.com';
 const REDIRECT = 'https://ilyazykov.github.io/erp/';
@@ -432,6 +433,209 @@ async function latestStatementEnd(db: any, userId: string, bank: { label: string
   return data?.[0]?.period_to ?? null;
 }
 
+// One currency of a bank, against its statement: the statement's rows of the
+// window and the incoming ones (the API's, or a Revolut report's) pair up --
+// same amount, the nearest day at most 3 apart (the API's booking date is the
+// statement's started date, give or take the time zone, not its completed
+// one); what's after the statement's end, or at its very end and not in it,
+// goes into `write` (the pending ones too); a row on one side only inside
+// the window, or a balance that doesn't add up, into `diffs`. `bal`: the
+// bank's own balance now (a report's: its closing balance), when known.
+// deno-lint-ignore no-explicit-any
+async function reconcileAccount(db: any, userId: string, bank: { label: string; base: string }, ccy: string,
+  booked: Tx[], pending: Tx[], bal: { amount: number; type: string; booked: boolean } | null,
+  win: { checkFrom: string; edge: string; start: string }, write: Tx[], diffs: string[], balances: Record<string, unknown>,
+  side: string): Promise<number> {
+  const { checkFrom, edge, start } = win;
+  const { data: stored, error: sErr } = await db.from('bank_transactions').select('amount, tx_date, description')
+    .eq('user_id', userId).eq('external_source', bank.base).eq('currency', ccy).is('synthetic_kind', null)
+    .gte('tx_date', `${checkFrom}T00:00:00Z`);
+  if (sErr) throw new Error(sErr.message);
+  const { data: lastRow, error: lErr } = await db.from('bank_transactions').select('balance_after')
+    .eq('user_id', userId).eq('external_source', bank.base).eq('currency', ccy)
+    .order('booked_at', { ascending: false, nullsFirst: false }).order('tx_date', { ascending: false }).limit(1);
+  if (lErr) throw new Error(lErr.message);
+  const storedBalance = Number(lastRow?.[0]?.balance_after ?? 0);
+
+  let matched = 0;
+  const used = new Set<number>();
+  for (const r of (stored ?? []).sort((p: { tx_date: string }, q: { tx_date: string }) => p.tx_date.localeCompare(q.tx_date))) {
+    const day = String(r.tx_date).slice(0, 10);
+    let i = -1, best = Infinity;
+    booked.forEach((x, n) => {
+      const gap = Math.abs(Date.parse(x.day) - Date.parse(day));
+      if (!used.has(n) && Math.abs(x.amount - Number(r.amount)) < 0.005 && gap <= EDGE_DAYS * 86400000 && gap < best) { i = n; best = gap; }
+    });
+    if (i >= 0) { used.add(i); matched++; continue; }
+    if (day <= edge && day >= start) diffs.push(`${ccy} statement ${day} ${r.amount} "${String(r.description ?? '').slice(0, 30)}" not in the ${side}`);
+  }
+  const before = write.length;
+  booked.forEach((x, n) => {
+    if (used.has(n) || x.day < checkFrom) return;
+    if (x.day > edge) { write.push(x); return; }   // after the statement, or at its very end and not in it
+    if (x.day >= start) diffs.push(`${ccy} ${side} ${x.day} ${x.amount} "${x.desc.slice(0, 30)}" not in the statement`);
+  });
+  const today = new Date().toISOString().slice(0, 10);
+  for (const x of pending) write.push({ ...x, day: x.day || today });
+
+  // The balance: the statement's plus what's written now (plus the pending, for an available balance).
+  const added = round2(write.slice(before).filter(x => x.currency === ccy && x.status !== 'PDNG').reduce((a, x) => a + x.amount, 0));
+  const expected = round2(storedBalance + added + (bal && !bal.booked ? pending.reduce((a, x) => a + x.amount, 0) : 0));
+  balances[ccy] = { statement: storedBalance, added, expected, bank: bal?.amount ?? null, type: bal?.type ?? null };
+  if (bal && Math.abs(bal.amount - expected) > 0.011)
+    diffs.push(`${ccy} balance: statement ${storedBalance} + ${side} ${added}${bal.booked ? '' : ' + pending'} = ${expected}, the bank says ${bal.amount} (${bal.type})`);
+  return matched;
+}
+
+// ---- Revolut's combined report (_shared/revolut_report.ts) ----
+
+type ReportStored = { id: number; tx_date: string; amount: number; currency: string; description: string };
+// the same transaction: the currency, the amount, at most 3 days apart
+const sameTx = (a: { day: string; amount: number; currency: string }, b: { day: string; amount: number; currency: string }) =>
+  a.currency === b.currency && Math.abs(a.amount - b.amount) < 0.005
+  && Math.abs(Date.parse(a.day) - Date.parse(b.day)) <= EDGE_DAYS * 86400000;
+
+// deno-lint-ignore no-explicit-any
+async function reportRows(db: any, userId: string): Promise<ReportStored[]> {
+  const { data, error } = await db.from('bank_transactions').select('id, tx_date, amount, currency, description')
+    .eq('user_id', userId).eq('external_source', OPENBANKING_REPORT_SOURCE).order('tx_date');
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((r: ReportStored) => ({ ...r, amount: Number(r.amount) }));
+}
+const reportTx = (r: ReportStored): Tx => ({ day: String(r.tx_date).slice(0, 10), amount: r.amount, currency: r.currency, ref: '',
+  desc: String(r.description ?? ''), status: 'BOOK', code: /^Revolut Ltd$/i.test(String(r.description ?? '')) ? 'EXCHANGE' : '' });
+
+// the report rows' running balance per currency, from 0, again
+// deno-lint-ignore no-explicit-any
+async function rebalanceReport(db: any, userId: string): Promise<void> {
+  const bal: Record<string, number> = {};
+  for (const r of await reportRows(db, userId)) {
+    bal[r.currency] = round2((bal[r.currency] ?? 0) + r.amount);
+    const { error } = await db.from('bank_transactions').update({ balance_after: bal[r.currency] }).eq('id', r.id);
+    if (error) throw new Error(error.message);
+  }
+}
+
+// The API's rows just written: a report row of the same transaction goes. The rest come back as Tx.
+// deno-lint-ignore no-explicit-any
+async function dropReportRowsFoundIn(db: any, userId: string, api: Tx[]): Promise<Tx[]> {
+  const stored = await reportRows(db, userId);
+  if (!stored.length) return [];
+  const used = new Set<number>(), gone: number[] = [];
+  for (const r of stored) {
+    const t = reportTx(r);
+    const i = api.findIndex((x, n) => !used.has(n) && sameTx(x, t));
+    if (i >= 0) { used.add(i); gone.push(r.id); }
+  }
+  if (gone.length) {
+    const { error } = await db.from('bank_transactions').delete().in('id', gone);
+    if (error) throw new Error(error.message);
+    await rebalanceReport(db, userId);
+  }
+  return stored.filter(r => !gone.includes(r.id)).map(reportTx);
+}
+
+// A report uploaded on the page: its current accounts' rows checked against
+// the statement as the API's are, then written where neither the statement
+// nor the API's rows have them (an upload again rewrites them); the metal
+// purchases' time onto the rows of them that have none; the stand-ins
+// (fund, savings, metal, Invest) rebuilt over the API's rows and these.
+// deno-lint-ignore no-explicit-any
+async function revolutReport(db: any, userId: string, csv: string): Promise<Record<string, unknown>> {
+  if (!isRevolutReport(csv)) throw new Error('Not a Revolut combined report (it starts with "Current Accounts Summaries")');
+  const rep = parseRevolutReport(csv);
+  if (!rep.to || !rep.from) throw new Error('The report\'s period not found');
+  const bank = BANKS.revolut;
+  const lastEnd = await latestStatementEnd(db, userId, bank);
+  if (!lastEnd) throw new Error('No Revolut statement uploaded yet -- the report\'s rows go on top of one');
+  // the window: the statement's last month as far as the report reaches back
+  const checkFrom = [addDays(lastEnd, -CHECK_DAYS), rep.from].sort()[1];
+  const win = { checkFrom, edge: addDays(lastEnd, -EDGE_DAYS), start: addDays(checkFrom, EDGE_DAYS) };
+
+  const write: Tx[] = [];
+  const diffs: string[] = [];
+  const balances: Record<string, unknown> = {};
+  let matched = 0;
+  for (const a of rep.accounts) {
+    const booked: Tx[] = a.rows.filter(r => r.amount !== 0).map(r => ({ day: r.day, amount: r.amount, currency: a.currency, ref: '',
+      desc: r.desc, status: 'BOOK', code: /^exchange$/i.test(r.category) ? 'EXCHANGE' : '' }));
+    // the closing balance is the report's last day's: a check only when the report reaches the statement's end
+    matched += await reconcileAccount(db, userId, bank, a.currency, booked, [],
+      a.closing !== null && rep.to >= lastEnd ? { amount: a.closing, type: 'report closing', booked: true } : null,
+      win, write, diffs, balances, 'report');
+  }
+  if (diffs.length) throw new Error(`Not understood -- nothing written. ${diffs.length} differences (the statement of ${lastEnd}): ${diffs.slice(0, 8).join('; ')}`);
+
+  // The API's rows after the statement: what they have isn't written again.
+  const { data: api, error: aErr } = await db.from('bank_transactions').select('tx_date, amount, currency, description')
+    .eq('user_id', userId).eq('external_source', OPENBANKING_SOURCE.Revolut);
+  if (aErr) throw new Error(aErr.message);
+  // ...nor what an earlier report outside this one's days has (an upload
+  // again rewrites its own days only: an older report doesn't take a newer one's rows)
+  const { error: dErr } = await db.from('bank_transactions').delete().eq('user_id', userId).eq('external_source', OPENBANKING_REPORT_SOURCE)
+    .gte('tx_date', `${rep.from}T00:00:00Z`).lte('tx_date', `${rep.to}T23:59:59.999Z`);
+  if (dErr) throw new Error(dErr.message);
+  const have = [...(api ?? []).map((r: { tx_date: string; amount: number; currency: string }) =>
+    ({ day: String(r.tx_date).slice(0, 10), amount: Number(r.amount), currency: r.currency })),
+    ...(await reportRows(db, userId)).map(r => ({ day: String(r.tx_date).slice(0, 10), amount: r.amount, currency: r.currency }))];
+  const used = new Set<number>();
+  const fresh = write.filter(x => {
+    const i = have.findIndex((t, n) => !used.has(n) && sameTx(t, x));
+    if (i >= 0) { used.add(i); return false; }
+    return true;
+  });
+
+  // The new rows; the running balance per currency from 0 is worked out over all the report's rows below.
+  const seen = new Map<string, number>();
+  const metalsLeft = [...rep.metals];
+  const rows = fresh.sort((p, q) => p.day.localeCompare(q.day)).map((x, i) => {
+    const id = `revolut:${x.day}:${x.currency}:${x.amount}:${x.desc.slice(0, 60)}`;
+    const n = seen.get(id) ?? 0; seen.set(id, n + 1);
+    // a metal purchase: its own time, from the report's commodity statement
+    const mi = x.code === 'EXCHANGE' ? metalsLeft.findIndex(m => m.at.slice(0, 10) === x.day && m.currency === x.currency && Math.abs(m.value - x.amount) < 0.005) : -1;
+    const at = mi >= 0 ? new Date(metalsLeft.splice(mi, 1)[0].at).toISOString() : new Date(Date.parse(`${x.day}T00:00:00Z`) + i).toISOString();
+    return {
+      user_id: userId, account: bank.label, tx_date: at, booked_at: at, authorized_on: null, fx_rate: null,
+      description: x.desc || '(no description)', counterparty: null, amount: x.amount, currency: x.currency, category: null,
+      balance_after: 0, synthetic: false, synthetic_kind: null,
+      note: `from Revolut's combined report (${rep.from}..${rep.to}): in neither the statement nor Open Banking`,
+      external_source: OPENBANKING_REPORT_SOURCE, external_id: n ? `${id}:dup${n}` : id,
+    };
+  });
+  if (rows.length) {
+    const { error } = await db.from('bank_transactions').insert(rows);
+    if (error) throw new Error(error.message);
+  }
+  await rebalanceReport(db, userId);
+
+  // The metal purchases' time onto the Open Banking rows of them (the API gives the day only).
+  let timed = 0;
+  for (const m of metalsLeft) {
+    const day = m.at.slice(0, 10);
+    const { data: hit, error } = await db.from('bank_transactions').select('id, tx_date')
+      .eq('user_id', userId).eq('external_source', OPENBANKING_SOURCE.Revolut).eq('currency', m.currency).eq('amount', m.value)
+      .gte('tx_date', `${day}T00:00:00Z`).lte('tx_date', `${day}T00:00:01Z`).limit(1);
+    if (error) throw new Error(error.message);
+    if (!hit?.length) continue;
+    const at = new Date(m.at).toISOString();
+    const { error: uErr } = await db.from('bank_transactions').update({ tx_date: at, booked_at: at }).eq('id', hit[0].id);
+    if (uErr) throw new Error(uErr.message);
+    timed++;
+  }
+
+  // The stand-ins over the API's rows and the report's.
+  const { data: apiRows, error: rErr } = await db.from('bank_transactions').select('tx_date, amount, currency, description')
+    .eq('user_id', userId).eq('external_source', OPENBANKING_SOURCE.Revolut).not('description', 'like', 'PENDING:%');
+  if (rErr) throw new Error(rErr.message);
+  const all: Tx[] = [...(apiRows ?? []).map((r: ReportStored) => reportTx({ ...r, id: 0, amount: Number(r.amount) })), ...(await reportRows(db, userId)).map(reportTx)];
+  const standIn = await revolutStandIns(db, userId, all);
+  const { error: rq } = await db.rpc('request_capital_refresh', { p_user: userId });
+  if (rq) throw new Error(rq.message);
+  return { report: `${rep.from}..${rep.to}`, after_statement: lastEnd, checked: { window: `${win.checkFrom}..${lastEnd}`, matched },
+    balances, in_open_banking: write.length - fresh.length, written: rows.length, metal_times: timed,
+    fund_savings_trades: standIn.transfers, fund_returns_estimated: standIn.returns };
+}
+
 // One bank's session: checked against its statements, then its rows replaced.
 // deno-lint-ignore no-explicit-any
 async function syncBank(db: any, userId: string, jwt: string, bankKey: string, sessionId: string): Promise<Record<string, unknown>> {
@@ -503,51 +707,14 @@ async function syncBank(db: any, userId: string, jwt: string, bankKey: string, s
     const pending = txs.filter(x => x.status === 'PDNG' && x.amount !== 0);
     pendingCount += pending.length;
 
-    // The statement's rows of the window, and its last balance.
-    const { data: stored, error: sErr } = await db.from('bank_transactions').select('amount, tx_date, description')
-      .eq('user_id', userId).eq('external_source', bank.base).eq('currency', ccy).is('synthetic_kind', null)
-      .gte('tx_date', `${checkFrom}T00:00:00Z`);
-    if (sErr) throw new Error(sErr.message);
-    const { data: lastRow, error: lErr } = await db.from('bank_transactions').select('balance_after')
-      .eq('user_id', userId).eq('external_source', bank.base).eq('currency', ccy)
-      .order('booked_at', { ascending: false, nullsFirst: false }).order('tx_date', { ascending: false }).limit(1);
-    if (lErr) throw new Error(lErr.message);
-    const storedBalance = Number(lastRow?.[0]?.balance_after ?? 0);
-
-    // Pair the statement's rows with the API's: same amount, the nearest day at
-    // most 3 apart -- the API's booking date is the statement's started date
-    // (give or take the time zone), not its completed one.
-    const used = new Set<number>();
-    for (const r of (stored ?? []).sort((p: { tx_date: string }, q: { tx_date: string }) => p.tx_date.localeCompare(q.tx_date))) {
-      const day = String(r.tx_date).slice(0, 10);
-      let i = -1, best = Infinity;
-      booked.forEach((x, n) => {
-        const gap = Math.abs(Date.parse(x.day) - Date.parse(day));
-        if (!used.has(n) && Math.abs(x.amount - Number(r.amount)) < 0.005 && gap <= EDGE_DAYS * 86400000 && gap < best) { i = n; best = gap; }
-      });
-      if (i >= 0) { used.add(i); matched++; continue; }
-      if (day <= edge && day >= start) diffs.push(`${ccy} statement ${day} ${r.amount} "${String(r.description ?? '').slice(0, 30)}" not in the API`);
-    }
-    booked.forEach((x, n) => {
-      if (used.has(n) || x.day < checkFrom) return;
-      if (x.day > edge) { write.push(x); return; }   // after the statement, or at its very end and not in it
-      if (x.day >= start) diffs.push(`${ccy} API ${x.day} ${x.amount} "${x.desc.slice(0, 30)}" not in the statement`);
-    });
-    const today = new Date().toISOString().slice(0, 10);
-    for (const x of pending) write.push({ ...x, day: x.day || today });
-
-    // The balance: the statement's plus what's written now (plus the pending, for an available balance).
     const b = await eb(jwt, 'GET', `/accounts/${uid}/balances`);
     // deno-lint-ignore no-explicit-any
     const pick = (types: string[]) => (b.balances ?? []).find((x: any) => types.includes(x.balance_type));
     const bookedBal = pick(['CLBD', 'ITBD', 'OPBD']);
     const bal = bookedBal ?? pick(['ITAV', 'CLAV', 'XPCD', 'OTHR']);
-    const added = round2(write.filter(x => x.currency === ccy && x.status !== 'PDNG').reduce((a, x) => a + x.amount, 0));
-    const expected = round2(storedBalance + added + (bookedBal ? 0 : pending.reduce((a, x) => a + x.amount, 0)));
-    const actual = bal ? round2(Number(bal.balance_amount?.amount)) : null;
-    balances[ccy] = { statement: storedBalance, added, expected, bank: actual, type: bal?.balance_type ?? null };
-    if (actual !== null && Math.abs(actual - expected) > 0.011)
-      diffs.push(`${ccy} balance: statement ${storedBalance} + API ${added}${bookedBal ? '' : ' + pending'} = ${expected}, the bank says ${actual} (${bal.balance_type})`);
+    matched += await reconcileAccount(db, userId, bank, ccy, booked, pending,
+      bal ? { amount: round2(Number(bal.balance_amount?.amount)), type: bal.balance_type, booked: !!bookedBal } : null,
+      { checkFrom, edge, start }, write, diffs, balances, 'API');
   }
   if (diffs.length) throw new Error(`Not understood -- nothing replaced. ${diffs.length} differences (after the statement of ${lastEnd}): ${diffs.slice(0, 8).join('; ')}`);
 
@@ -591,7 +758,10 @@ async function syncBank(db: any, userId: string, jwt: string, bankKey: string, s
   // ...and one that came between that check and the writing: its days back, as its import does
   const newEnd = await latestStatementEnd(db, userId, bank);
   if (newEnd && newEnd !== lastEnd) await removeOpenBankingCash(db, userId, src, newEnd);
-  const standIn = bankKey === 'revolut' ? await revolutStandIns(db, userId, write.filter(x => x.status !== 'PDNG')) : { transfers: 0, returns: 0 };
+  // A Revolut report's rows the API now has too go: the API's are the record
+  // (its reference, the rate, the day made); the rest stay and stand in with them.
+  const reportLeft = bankKey === 'revolut' ? await dropReportRowsFoundIn(db, userId, write) : [];
+  const standIn = bankKey === 'revolut' ? await revolutStandIns(db, userId, [...write.filter(x => x.status !== 'PDNG'), ...reportLeft]) : { transfers: 0, returns: 0 };
   if (rows.length || standIn.transfers || standIn.returns) {
     const { error: rq } = await db.rpc('request_capital_refresh', { p_user: userId });
     if (rq) throw new Error(rq.message);
@@ -621,6 +791,14 @@ Deno.serve(async (req) => {
     }
     // Without a user: only the daily job, with the cron secret.
     if (!userId && !(await fromCron(req))) return notFromCron();
+
+    // Revolut's combined report from the page (?action=revolut_report, the CSV
+    // as the body): no Enable Banking needed.
+    if (new URL(req.url).searchParams.get('action') === 'revolut_report') {
+      if (!userId) return json({ error: 'Sign in to upload a report' }, 401);
+      try { return json(await revolutReport(db, userId, await req.text())); }
+      catch (err) { return json({ error: String(err) }, 400); }
+    }
 
     let q = db.rpc('enablebanking_credentials');
     if (userId) q = q.eq('user_id', userId);

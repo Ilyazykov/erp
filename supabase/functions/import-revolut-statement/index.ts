@@ -134,6 +134,13 @@ interface StoredRow { amount: unknown; currency: string; balance_after: unknown;
 // migrations/20250101000126_revolut_fund_timezone_duplicates_again.sql). So
 // per row: one stored at no offset is the row itself; else the offset most
 // rows agree on among its own.
+// What the row moved the balance by: Amount less Revolut's Fee column
+// (metal rows carry 6 decimals -- no rounding to cents; toFixed only drops
+// the float noise of the subtraction).
+function netAmount(r: CsvRow): number {
+  return r.fee ? Number((r.amount - r.fee).toFixed(8)) : r.amount;
+}
+
 function detectShifts(rows: CsvRow[], stored: StoredRow[]): Map<CsvRow, number> {
   const byKey = new Map<string, StoredRow[]>();
   for (const s of stored) {
@@ -149,7 +156,7 @@ function detectShifts(rows: CsvRow[], stored: StoredRow[]): Map<CsvRow, number> 
     const completedIso = toIsoTimestamp(r.completedDate);
     const completed = completedIso ? Date.parse(completedIso) : null;
     if (Number.isNaN(started)) continue;
-    const key = `${r.currency}|${r.amount}|${parseFloat(r.balance.replace(/,/g, ''))}`;
+    const key = `${r.currency}|${netAmount(r)}|${parseFloat(r.balance.replace(/,/g, ''))}`;
     const offsets = new Set<number>();
     for (const s of byKey.get(key) ?? []) {
       const d = Date.parse(s.tx_date) - started;
@@ -323,7 +330,12 @@ Deno.serve(async (req) => {
         booked_at: toIsoTimestamp(r.completedDate),
         description: r.description || r.type,
         counterparty: null,
-        amount: r.amount,
+        // Revolut keeps its fee in a column of its own (the Premium plan's
+        // EUR 110 of 21.11.2025: Amount 0, Fee 110; the tax held back from
+        // interest), and the Balance moves by Amount - Fee: the fee is
+        // money gone too. (external_id keeps the bare Amount: the rows
+        // already stored keep their key and get the net amount on re-upload.)
+        amount: netAmount(r),
         currency: r.currency,
         category: categorize(r.type, r.description),
         balance_after: r.balance ? parseFloat(r.balance.replace(/,/g, '')) : null,

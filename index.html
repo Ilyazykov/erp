@@ -2385,6 +2385,9 @@ function mpDetectCsvKind(headerLine, fullText) {
   const h = headerLine.trim();
   if (/^Event,Date,Symbol/i.test(h)) return 'snowball';
   if (/^Type,Product,Started Date/i.test(h)) return 'revolut_account';
+  // Revolut's combined report of all accounts: the days after the statement,
+  // as the Open Banking rows are (sync-openbanking, _shared/revolut_report.ts)
+  if (/^﻿?"?Current Accounts Summaries"?,/.test(h)) return 'revolut_report';
   if (/^Date,Description,Interest rate/i.test(h)) return 'revolut_deposit';
   if (/^Date,Description,"?Value,/i.test(h)) return 'revolut_fund';
   if (/^Date,Description,Transaction type,/im.test(fullText)) return 'boc_account';
@@ -4058,6 +4061,7 @@ async function mpImportOneFile(file, statusEl, session) {
     const endpoints = {
       snowball: { fn: 'import-trades-csv', label: 'broker trades (Snowball)' },
       revolut_account: { fn: 'import-revolut-statement', label: 'Revolut account statement' },
+      revolut_report: { fn: 'sync-openbanking', label: 'Revolut combined report (all accounts)' },
       revolut_fund: { fn: 'import-revolut-fund-statement', label: 'Revolut Flexible Cash Funds statement' },
       revolut_deposit: { fn: 'import-revolut-deposit-statement', label: 'Revolut Instant Access Savings statement' },
       boc_account: { fn: 'import-boc-statement', label: 'Bank of Cyprus transaction history' },
@@ -4087,7 +4091,8 @@ async function mpImportOneFile(file, statusEl, session) {
     // Binance writes times in the zone named in the file name, e.g.
     // "Binance-Transaction-History-202609261140(UTC+3)-part1-of1.csv".
     // (a CSV the page made from a Raiffeisen PDF carries its statement's period: only those days are replaced)
-    const query = kind === 'binance' ? `?tz=${encodeURIComponent(file.name.match(/\(UTC([+-]\d+(?:\.\d+)?)\)/)?.[1] ?? '0')}` : (file.mpQuery || '');
+    const query = kind === 'binance' ? `?tz=${encodeURIComponent(file.name.match(/\(UTC([+-]\d+(?:\.\d+)?)\)/)?.[1] ?? '0')}`
+      : kind === 'revolut_report' ? '?action=revolut_report' : (file.mpQuery || '');
     statusEl.textContent = `Detected: ${label}. Uploading and parsing on the server…`;
     // a receipt file's rows show in the Expenses tab at once, from the file itself
     if (kind === 'receipt_csv') mpShowPendingReceipts(csvText);
@@ -4143,6 +4148,11 @@ async function mpImportOneFile(file, statusEl, session) {
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
       mpRenderBondByType();
+    } else if (kind === 'revolut_report') {
+      // not logged as a statement: it doesn't move the statement's end
+      statusEl.textContent = `Detected: ${label}, ${result.report}. Added ${result.written} transactions in neither the statement `
+        + `(to ${result.after_statement}) nor Open Banking; ${result.in_open_banking} already in Open Banking; `
+        + `${result.metal_times} metal purchase times set; checked against the statement: ${result.checked?.matched ?? 0} matched.`;
     } else if (kind === 'revolut_account') {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} transactions `
         + `and ${result.imported_metal_trades ?? 0} gold/metal trades`
