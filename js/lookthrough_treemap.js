@@ -990,7 +990,7 @@ function wireTreemap() {
         if (r.name) {
           // the company: France's loyalty shares ("L'OREAL SA - PF - 2028") are its ordinary ones
           companyOf.set(r.market_ticker || r.ticker, String(r.name).trim().toLowerCase().replace(/\s-\spf\s-\s\d{4}$/, '').replace(/\s+eur[\d.]+.*$/, '').replace(/\s*\(.*$/, '')
-            .replace(/\s+(sa|se|nv|ag|plc)$/, ''));
+            .replace(/\s+(sa|se|nv|ag|plc)$/, '').replace(/^rio tinto ltd$/, 'rio tinto'));   // a dual-listed group: plc and Ltd, one
           nameOf.set(r.market_ticker || r.ticker, String(r.name).trim());
         }
       }
@@ -1094,8 +1094,9 @@ function wireTreemap() {
       if (cushionMode === 'total') rows = rows.filter(r => r.instrument_type !== 'cash');
       const tileRows = withoutCushion(earnedRows, cushionOf);
       const fundsMode = $('lt_funds').value;
-      const tiles = aggregate({ rows, fundHoldings: data.fundHoldings, expandFunds: fundsMode === 'expand' || fundsMode === 'expand_classes',
-        mergeFunds: fundsMode === 'merge', classOf: fundsMode === 'expand_classes' ? data.companyOf : null, includeCushion: cushion,
+      // expanded: one company's classes and listings always as one tile (no expanded mode without it: the user, 21.11.2026)
+      const tiles = aggregate({ rows, fundHoldings: data.fundHoldings, expandFunds: fundsMode === 'expand',
+        mergeFunds: fundsMode === 'merge', classOf: fundsMode === 'expand' ? data.companyOf : null, includeCushion: cushion,
         mergeGold: $('lt_gold').checked, mergeSavings: $('lt_savings').checked, savingsLinks: data.savingsLinks, savingsPeriods: data.savingsPeriods,
         includeRealEstate: $('lt_re').checked });
       // the box keeps its proportions in CSS (aspect-ratio), so the layout is always for its real size
@@ -1107,7 +1108,7 @@ function wireTreemap() {
       const tileAsset = t => (/^SAVINGS:.* USD$/i.test(String(t)) && !tileRows.some(r => String(r.asset).toUpperCase() === assetKey(t)) ? 'USD' : assetOf(t));
       // expanded funds: the constituents coloured by their own positions (constituentRows), their prices on the days needed
       let colourRows = tileRows;
-      if (fundsMode === 'expand' || fundsMode === 'expand_classes') {
+      if (fundsMode === 'expand') {
         try { colourRows = await expandedRows(tiles, tileRows, from, tileAsset); } catch (e) { console.warn('expanded funds colour:', e); }
         if (my !== run) return;
       }
