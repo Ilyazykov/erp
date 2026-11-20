@@ -58,5 +58,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/ erp_valuation/charts/ erp_valuation/erp_portfolio.xlsx
-          git commit -m "chore: update ERP valuation data and charts" || echo "No changes to commit"
-          git push || echo "No changes to push"
+          git commit -m "chore: update ERP valuation data and charts" || { echo "No changes to commit"; exit 0; }
+          # the hourly US workflow (us_market_update.yml) may have pushed meanwhile
+          for i in 1 2 3; do
+            git pull --rebase -X theirs origin main && git push && exit 0
+            sleep 10
+          done
+          exit 1

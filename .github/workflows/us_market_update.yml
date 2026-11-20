@@ -1,0 +1,57 @@
+name: Update US ERP and stocks/bonds target (intraday)
+
+# The full ERP workflow runs once a day, and GitHub starts scheduled runs
+# hours late (Nov 2026: 12:20 UTC runs started at 18:00-22:00 UTC), so a
+# sell-off reached the US stocks/bonds target a day late (20.11.2026).
+# This light job reruns only the US market-wide part every hour of the
+# New York session and after the close; a late start of one run is
+# covered by the next one.
+on:
+  schedule:
+    - cron: "7 14-21 * * 1-5"   # hourly through the NY session (UTC)
+    - cron: "37 22 * * 1-5"     # after the close
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: us-market-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r erp_valuation/requirements.txt
+
+      - name: Update US market-wide ERP (Shiller's Excess CAPE Yield)
+        run: python erp_valuation/us_erp.py
+
+      - name: Update US Federal Funds Rate
+        run: python erp_valuation/fetch_fed_funds_rate.py
+
+      - name: Update US stocks/bonds allocation
+        run: python erp_valuation/calc_us_allocation.py
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/us_erp.csv data/fed_funds_rate.csv data/us_target_allocation.json data/us_allocation_history.csv
+          git commit -m "chore: update US ERP and stocks/bonds target" || { echo "No changes to commit"; exit 0; }
+          # the daily ERP workflow may have pushed meanwhile
+          for i in 1 2 3; do
+            git pull --rebase -X theirs origin main && git push && exit 0
+            sleep 10
+          done
+          exit 1
