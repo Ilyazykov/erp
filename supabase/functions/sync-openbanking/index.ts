@@ -104,7 +104,9 @@ type Tx = { day: string; made?: string; fx?: number; amount: number; currency: s
 // deno-lint-ignore no-explicit-any
 async function revolutEndOf(db: any, userId: string, kind: string): Promise<string> {
   const { data } = await db.from('statement_uploads').select('period_to').eq('user_id', userId).eq('account', 'Revolut')
-    .eq('kind', kind).order('period_to', { ascending: false }).limit(1);
+    .eq('kind', kind).not('period_to', 'is', null).order('period_to', { ascending: false }).limit(1);
+  // (an upload logged without a period sorted first -- its null end read as no
+  // statement at all, and the fund's stand-ins went on over its own rows, 20.11.2026)
   return data?.[0]?.period_to ?? '';
 }
 

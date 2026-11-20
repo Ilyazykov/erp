@@ -162,6 +162,11 @@ Deno.serve(async (req) => {
       trades: trades.filter(t => t.side !== 'dividend').length, dividends: trades.filter(t => t.side === 'dividend').length,
       cash_rows: bank.length, skipped: parsed.skipped, removed_snowball_duplicates: removedSnowball, removed_open_banking_rows: removedOpenBanking,
       holdings, cash: parsed.balance,
+      // the period it covers, for the page's log (a file named without dates had none, 20.11.2026)
+      ...(() => {
+        const days = [...trades.map(t => String(t.trade_date)), ...bank.map((b: { tx_date: string }) => String(b.tx_date))].map(d => d.slice(0, 10)).sort();
+        return { period_start: days[0] ?? null, period_end: days[days.length - 1] ?? null };
+      })(),
     });
   } catch (err) {
     return json({ error: String(err) }, 500);

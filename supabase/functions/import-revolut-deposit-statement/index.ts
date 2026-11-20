@@ -240,13 +240,17 @@ Deno.serve(async (req) => {
       }
     }
     // the statement's days back from the trades stood in from Open Banking (_shared/openbanking_rows.ts)
-    const removedOpenBanking = await removeOpenBankingTrades(supabase, user.id, OPENBANKING_TRADE_SOURCE.savings,
-      rows.reduce((m: string, r: { trade_date: string }) => (r.trade_date > m ? r.trade_date : m), ''));
+    // the period the statement covers, from its rows: the page logs it (statement_uploads), and
+    // sync-openbanking stands in for the days after it -- a file named without dates (one saved from
+    // the phone, A2B77AC7-....csv) was logged with none, 20.11.2026
+    const days = rows.map((r: { trade_date: string }) => String(r.trade_date).slice(0, 10)).sort();
+    const removedOpenBanking = await removeOpenBankingTrades(supabase, user.id, OPENBANKING_TRADE_SOURCE.savings, days[days.length - 1] ?? '');
 
     return new Response(JSON.stringify({
       imported: count ?? rows.length,
       removed_stale: stale.length,
       removed_open_banking_trades: removedOpenBanking,
+      period_start: days[0] ?? null, period_end: days[days.length - 1] ?? null,
       total_rows: depositRows.length,
       skipped_bad_date: skippedBadDate,
     }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
