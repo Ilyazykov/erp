@@ -14437,16 +14437,25 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         text: ps.map(p => `${p.what} ${fmtAmt(p.amount, p.ccy)}${p.n > 1 ? ` (${p.day.slice(0, 7)}, ${p.n} payments)` : ''} at ${p.account}`),
         hovertemplate: '%{x}: %{text}<extra></extra>' };
     }
-    // one's own deals drawn over the ones through a fund (via), and brighter. As in Sber's app: a small
-    // tag (a pentagon) just off the line -- a buy under it pointing up, a sale over it pointing down
-    const vs = pts.map(p => p.v), off = ((Math.max(...vs) - Math.min(...vs)) || Math.abs(vs[0] || 1) * 0.02) * 0.025;
+    // one's own deals drawn over the ones through a fund (via), and brighter. Sber's app's marks: a little
+    // "house" (a box with a pointed end) just off the line -- a buy under it pointing up at it, a sale over
+    // it pointing down; drawn as shapes in pixels around the deal's point, an invisible dot there for the hover
+    const dealShapes = [];
+    const house = (up, k) => {
+      const g = 3, w = 3.5 * k, sh = g + 4 * k, b = g + 11 * k, sg = up ? -1 : 1;   // gap, half-width, shoulders, base
+      const P = (x, y) => `${x.toFixed(1)},${(sg * y).toFixed(1)}`;
+      return `M ${P(0, g)} L ${P(w, sh)} L ${P(w, b)} L ${P(-w, b)} L ${P(-w, sh)} Z`;
+    };
     for (const via of [true, false]) {
       for (const [side, color] of [['buy', '#3fb950'], ['sell', '#f85149']]) {
         const ds = shown.filter(d => d.side === side && !!d.via === via);
-        if (ds.length) traces.push({ x: ds.map(d => d.trade_date), y: ds.map(d => priceOn(d.trade_date) + (side === 'buy' ? -off : off)), type: 'scatter', mode: 'markers', name: `${side}${via ? ' via a fund' : ''}`,
-          // solid, a very thin black edge; through a fund smaller and the usual colour, one's own brighter
-          marker: { color: via ? color : side === 'buy' ? '#39ff5a' : '#ff2d2d', size: via ? 7 : 10, symbol: 'pentagon', angle: side === 'buy' ? 0 : 180,
-            line: { color: '#000000', width: 0.6 } },
+        if (!ds.length) continue;
+        const fill = via ? color : side === 'buy' ? '#39ff5a' : '#ff2d2d';
+        for (const d of ds) dealShapes.push({ type: 'path', xref: 'x', yref: 'y', xsizemode: 'pixel', ysizemode: 'pixel',
+          xanchor: d.trade_date, yanchor: priceOn(d.trade_date), path: house(side === 'buy', via ? 0.75 : 1),
+          fillcolor: fill, line: { color: '#000000', width: 0.6 }, layer: 'above' });
+        traces.push({ x: ds.map(d => d.trade_date), y: ds.map(d => priceOn(d.trade_date)), type: 'scatter', mode: 'markers', name: `${side}${via ? ' via a fund' : ''}`,
+          marker: { color: fill, size: 14, opacity: 0 },
           text: ds.map(d => `${side} ${Number(d.quantity)}${dealTickers.length > 1 ? ` ${d.ticker}` : ''} at ${d.account}`), hovertemplate: '%{x}: %{text}<extra></extra>' });
       }
     }
@@ -14463,7 +14472,8 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       for (const [p, up] of [[lo, false], [hi, true]]) notes.push({ x: p.day, y: p.v, xref: 'x', yref: 'y', text: fmt(p.v), showarrow: false,
         xanchor: 'left', yanchor: up ? 'bottom' : 'top', xshift: 5, yshift: up ? 2 : -2, bgcolor: '#2d333b', font: { color: '#8b949e', size: 12 }, borderpad: 3 });
     }
-    const label = (y, text, bg, fg) => notes.push({ xref: 'paper', x: 1, xanchor: 'left', yref: 'y', y, text, showarrow: false,
+    // to the right of the plot, a gap between (they melted into the line's end)
+    const label = (y, text, bg, fg) => notes.push({ xref: 'paper', x: 1, xanchor: 'left', xshift: 10, yref: 'y', y, text, showarrow: false,
       bgcolor: bg, font: { color: fg, size: 12 }, borderpad: 3 });
     if (last0) {
       lines.push({ type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: last0.v, y1: last0.v, line: { color: 'rgba(230,237,243,0.35)', width: 1 }, layer: 'below' });
@@ -14505,10 +14515,10 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       }
     }
     Plotly.react(dlg.querySelector('#mp_price_chart'), traces, Object.assign({}, LAYOUT_BASE, {
-      margin: { l: 60, r: 90, t: 24, b: 40 }, showlegend: false, hovermode: 'closest', annotations: notes,
+      margin: { l: 60, r: 130, t: 24, b: 40 }, showlegend: false, hovermode: 'closest', annotations: notes,
       xaxis: Object.assign({}, LAYOUT_BASE.xaxis, { type: 'date', dtick: undefined, tickformat: undefined, range: [from, today] }),
       yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { type: 'linear', tickformat: undefined, ticksuffix: unit === 'USD' ? '' : ` ${unit}`, tickprefix: unit === 'USD' ? '$' : '' }),
-      yaxis2: { overlaying: 'y', range: [0, 1], visible: false, fixedrange: true }, shapes: [...payShapes, ...lines],
+      yaxis2: { overlaying: 'y', range: [0, 1], visible: false, fixedrange: true }, shapes: [...payShapes, ...lines, ...dealShapes],
     }), CONFIG);
     const first = pts[0], last = pts[pts.length - 1];
     const ch = first && last && first.v ? (last.v / first.v - 1) * 100 : null;
