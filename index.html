@@ -14348,10 +14348,14 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   // A fund's constituent (opened from the map's expanded funds, opts.via: [{ fund, weight }]): each
   // buy / sale of the fund is one of this paper -- the money (the fund's USD price that day x its
   // units) x the paper's weight in the fund, over the paper's USD price that day
-  if (!opts.via && !rateNote) {
+  // (a map tile in "as held" or merged passes an empty list: looked up here too)
+  if (!opts.via?.length && !rateNote) {
     try {
-      const { data: secs } = await sb.from('securities').select('id').or(dealTickers.map(t => `ticker.eq.${t},market_ticker.eq.${t}`).join(','));
-      const ids = (secs || []).map(r => r.id);
+      const { data: secs } = await sb.from('securities').select('id, name').or(dealTickers.map(t => `ticker.eq.${t},market_ticker.eq.${t}`).join(','));
+      // the company's other share classes too (GOOGL and GOOG: one "Alphabet Inc")
+      const names = [...new Set((secs || []).map(r => r.name).filter(Boolean))];
+      const { data: same } = names.length ? await sb.from('securities').select('id').in('name', names) : { data: [] };
+      const ids = [...new Set([...(secs || []), ...(same || [])].map(r => r.id))];
       const { data: fh } = ids.length ? await sb.from('fund_holdings').select('fund, weight').in('security_id', ids) : { data: [] };
       const w = new Map();
       for (const r of fh || []) w.set(r.fund, (w.get(r.fund) || 0) + (Number(r.weight) || 0) / 100);
