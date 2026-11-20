@@ -247,6 +247,9 @@ async function revolutStandIns(db: any, userId: string, write: Tx[]): Promise<{ 
 
   const rows = [];
   const seen = new Map<string, number>();
+  // a fund statement's deal stands for one move only (20.11.2026: two "From EUR
+  // Flexible Cash Funds" of 220, the statement's one SELL 220 took both)
+  const fundUsed = new Set<number>();
   for (const x of moves) {
     const fcf = /^(To|From)\s+(?:[A-Z]{3}\s+)?Flexible Cash Funds/i.exec(x.desc);
     const ias = /^(To|From)\s+Instant Access Savings/i.exec(x.desc);
@@ -265,8 +268,11 @@ async function revolutStandIns(db: any, userId: string, write: Tx[]): Promise<{ 
     // dealt the same day too (20.11.2026: "From Flexible Cash Funds" 220 EUR at 15:29, the
     // statement's SELL 220 of that day) -- its stand-in, put on the Monday after the
     // statement's end, counted the 220 twice.
-    if (fcf && fundRows.some(f => f.currency === x.currency && f.side === (buy ? 'buy' : 'sell')
-      && Math.abs(f.quantity - Math.abs(x.amount)) < 0.005 && f.trade_date >= x.day && f.trade_date <= day)) continue;
+    if (fcf) {
+      const fi = fundRows.findIndex((f, n) => !fundUsed.has(n) && f.currency === x.currency && f.side === (buy ? 'buy' : 'sell')
+        && Math.abs(f.quantity - Math.abs(x.amount)) < 0.005 && f.trade_date >= x.day && f.trade_date <= day);
+      if (fi >= 0) { fundUsed.add(fi); continue; }
+    }
     const base = `revolut:${x.ref || `${x.day}:${x.currency}:${x.amount}`}`;
     const n = seen.get(base) ?? 0; seen.set(base, n + 1);
     rows.push({
@@ -275,6 +281,35 @@ async function revolutStandIns(db: any, userId: string, write: Tx[]): Promise<{ 
       fee_tax: null, fee_currency: null, nkd: null, exchange: null, estimated: true,
       note: `ESTIMATED: ${x.desc} -- from the account's Open Banking transfer, until the ${fcf ? 'fund' : 'savings'} statement comes`,
       external_source: fcf ? OPENBANKING_TRADE_SOURCE.fund : OPENBANKING_TRADE_SOURCE.savings, external_id: n ? `${base}:dup${n}` : base,
+    });
+  }
+
+  // A payment in another currency paid straight from the EUR fund: "Exchanged
+  // to USD" +X with no leg of its own in another currency that day (20.11.2026:
+  // $238 for Claude) -- the fund's SELL of its euro worth on the next working
+  // day, as the fund deals the account's transfers; one the statement has
+  // (within 2% of the day's rate) stands for it.
+  const eurFund = fundOf.get('EUR');
+  for (const x of write) {
+    const ex = /^Exchanged to ([A-Z]{3})$/i.exec(x.desc);
+    if (!ex || !eurFund || x.amount <= 0 || x.currency === 'EUR') continue;
+    if (write.some(o => o !== x && o.day === x.day && o.amount < 0 && o.currency !== x.currency && /^Exchanged to /i.test(o.desc))) continue;
+    const day = nextWorkday(x.day);
+    if (day <= fundEnd) continue;
+    const rate = async (c: string) => c === 'USD' ? 1 : Number((await db.from('fx_history').select('usd_per_unit').eq('currency', c)
+      .lte('day', x.day).order('day', { ascending: false }).limit(1)).data?.[0]?.usd_per_unit);
+    const eur = Math.round(x.amount * (await rate(x.currency)) / (await rate('EUR')) * 100) / 100;
+    if (!(eur > 0)) continue;
+    const fi = fundRows.findIndex((f, n) => !fundUsed.has(n) && f.currency === 'EUR' && f.side === 'sell'
+      && Math.abs(f.quantity - eur) <= eur * 0.02 && f.trade_date >= x.day && f.trade_date <= day);
+    if (fi >= 0) { fundUsed.add(fi); continue; }
+    const base = `revolut:${x.ref || `${x.day}:${x.currency}:${x.amount}`}:fund`;
+    const n = seen.get(base) ?? 0; seen.set(base, n + 1);
+    rows.push({
+      user_id: userId, account: 'Revolut', ticker: eurFund, side: 'sell', quantity: eur, price: 1, trade_date: day, currency: 'EUR',
+      fee_tax: null, fee_currency: null, nkd: null, exchange: null, estimated: true,
+      note: `ESTIMATED: ${x.desc} ${x.amount} ${x.currency} paid from the EUR fund, at the day's rate -- until the fund statement comes`,
+      external_source: OPENBANKING_TRADE_SOURCE.fund, external_id: n ? `${base}:dup${n}` : base,
     });
   }
 
