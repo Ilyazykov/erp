@@ -128,12 +128,23 @@ def main() -> int:
     ap.add_argument("--from", dest="start", default=None)
     ap.add_argument("--top", type=float, default=TOP_SHARE)
     ap.add_argument("--dry-run", action="store_true")
+    # given tickers instead (the funds held, whose history starts only when bought): "VWRA=VWRA.L:USD,VWCE=VWCE.DE:EUR"
+    ap.add_argument("--symbols", default="")
     args = ap.parse_args()
 
     with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True, prepare_threshold=None) as db:
         start = args.start or db.execute(
             "select min(trade_date) - 7 from trades where side = 'buy' and ticker in (select distinct fund from fund_holdings)"
             " and ticker not in (select ticker from price_freezes)").fetchone()[0].isoformat()
+        if args.symbols:
+            todo = []
+            for item in filter(None, (x.strip() for x in args.symbols.split(","))):
+                ticker, rest = item.split("=", 1)
+                sym, _, ccy = rest.partition(":")
+                todo.append((ticker.strip(), (ccy or "USD").strip().upper(), None, 0.0, [sym.strip()]))
+            start = args.start or "2019-01-01"
+            print(f"{len(todo)} given tickers from {start}")
+            return load(db, todo, start, args.dry_run)
         rows = db.execute("""
             with t as (select ticker, value_usd, sum(value_usd) over (order by value_usd desc) cum,
                               sum(value_usd) over () tot from portfolio_look_through_totals)
@@ -152,6 +163,11 @@ def main() -> int:
             seen.add(ticker)
             todo.append((ticker, ccy, country, float(usd), candidates(ticker, ccy, country)))
         print(f"{len(todo)} constituents to price from {start}; {sum(1 for x in todo if not x[4])} without a Yahoo symbol")
+        return load(db, todo, start, args.dry_run)
+
+
+def load(db, todo, start: str, dry_run: bool) -> int:
+    if True:
 
         # the symbols, round by round: a constituent's next candidate only when the previous gave nothing
         found: dict[str, tuple[str, pd.Series]] = {}
@@ -186,7 +202,7 @@ def main() -> int:
             out += [(ticker, d.date().isoformat(), round(float(v), 6)) for d, v in px.items() if v > 0]
         missing = [t for t, *_ , c in todo if t not in found]
         print(f"priced {len({r[0] for r in out})} of {len(todo)} ({len(out)} rows); not found: {' '.join(missing[:80])}{' ...' if len(missing) > 80 else ''}")
-        if args.dry_run:
+        if dry_run:
             return 0
         with db.cursor() as cur:
             for i in range(0, len(out), 5000):

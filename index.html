@@ -13906,6 +13906,8 @@ const MP_ASSET_MARKS = {
   TMOS: '📈🇷🇺',
 };
 const MP_ASSET_NAMES = {
+  XSX6: 'STOXX Europe 600 (Xtrackers)', VWRA: 'FTSE All-World (Vanguard, $)', VWCE: 'FTSE All-World (Vanguard, €)',
+  CSPX: 'S&P 500 (iShares)', VUAA: 'S&P 500 (Vanguard)',
   IE0002RUHW32: 'Revolut Flexible Cash Funds GBP (Fidelity ILF)',
   IE000AZVL3K0: 'Revolut Flexible Cash Funds EUR (Fidelity ILF)',
   IE000H9J0QX4: 'Revolut Flexible Cash Funds USD (Fidelity ILF)',
@@ -14185,7 +14187,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   const numbered = /^\d+[A-Z]?$/.test(String(asset));
   if (numbered && MP_SHORT_NAMES[asset]) title = MP_SHORT_NAMES[asset];
   dlg.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><b><span id="mp_price_title">${mpEscapeHtml(title)}</span> <span id="mp_price_meta" style="color:#8b949e;font-weight:normal">${title !== asset && !numbered ? `· ${mpEscapeHtml(asset)}` : ''}</span></b><button type="button" data-act="close">✕</button></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><b><span id="mp_price_title">${mpEscapeHtml(title)}</span> <span id="mp_price_meta" style="color:#8b949e;font-weight:normal">${title !== asset && !numbered ? `· ${mpEscapeHtml(dealTickers.join(' + '))}` : ''}</span></b><button type="button" data-act="close">✕</button></div>
     <div class="form-row" style="gap:6px;align-items:center">${MP_PRICE_PERIODS.map(([l]) => `<button class="btn${l === '1y' ? ' primary' : ''}" type="button" data-p="${l}">${l}</button>`).join('')}
       <label style="margin-left:12px" id="mp_price_ccy_box"><input type="checkbox" id="mp_price_usd"> in USD</label></div>
     <div id="mp_price_chart" style="height:420px"></div>
@@ -14215,7 +14217,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   try {
     let wallet;
     [prices, deals, wallet] = await Promise.all([
-      mpXlsxFetchAll(() => sb.from('price_history').select('day, price_usd').eq('ticker', asset).order('day')),
+      mpXlsxFetchAll(() => sb.from('price_history').select('ticker, day, price_usd').in('ticker', dealTickers).order('day')),
       mpXlsxFetchAll(() => sb.from('trades').select('ticker, trade_date, side, quantity, price, currency, account, external_source').in('ticker', dealTickers).in('side', ['buy', 'sell']).order('trade_date')),
       // a coin's deals are its exchanges' and wallets' own rows: a buy (by card or for
       // another coin) and a sale; transfers, fees, interest and Earn moves aren't deals
@@ -14238,6 +14240,22 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     for (const d of deals) d.account = d.account || d.external_source || '—';
     fx = ccy === 'USD' ? [] : await mpXlsxFetchAll(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', ccy).order('day'));
   } catch (err) { note.textContent = String(err.message || err); return; }
+  // One thing under several tickers (merged funds: VWRA and VWCE are one fund, one ISIN, in dollars and
+  // in euros): the main ticker's history, and before its first day the longest other one's, scaled to
+  // meet it there (VWRA's history starts 23.03.2026, VWCE's months before)
+  {
+    const own = prices.filter(p => p.ticker === asset);
+    if (own.length && dealTickers.length > 1) {
+      const first = own[0].day;
+      const other = dealTickers.slice(1).map(t => prices.filter(p => p.ticker === t)).filter(r => r.length && r[0].day < first)
+        .sort((a, b) => a[0].day.localeCompare(b[0].day))[0];
+      const meet = other ? [...other].reverse().find(p => p.day <= first) : null;
+      if (meet && Number(meet.price_usd) > 0) {
+        const k = Number(own[0].price_usd) / Number(meet.price_usd);
+        prices = [...other.filter(p => p.day < first).map(p => ({ day: p.day, price_usd: Number(p.price_usd) * k })), ...own];
+      } else prices = own;
+    } else prices = own.length ? own : prices;
+  }
   // Revolut's money-market funds: a unit is always about one of their currency, so what moves their
   // value in dollars is that currency -- its rate to the dollar instead (GBP/USD, EUR/USD), the
   // money in and out marked on it; the dollar fund's is always 1
@@ -14305,7 +14323,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         const fUsd = lastOn(pxOf.get(d.ticker) || [], d.trade_date), pUsd = lastOn(prices, d.trade_date);
         if (!(w > 0) || !(fUsd > 0) || !(pUsd > 0)) continue;
         const money = Number(d.quantity) * fUsd * w;
-        deals.push({ trade_date: d.trade_date, side: d.side, quantity: Math.round(money / pUsd * 1e6) / 1e6, ticker: asset,
+        deals.push({ trade_date: d.trade_date, side: d.side, quantity: Math.round(money / pUsd * 1e6) / 1e6, ticker: asset, via: true,
           account: `${d.account || '—'}, via ${d.ticker} ($${money.toFixed(money < 10 ? 2 : 0)})` });
       }
       deals.sort((a, b) => a.trade_date.localeCompare(b.trade_date));
@@ -14330,14 +14348,20 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     const from = startOf(period);
     const pts = prices.filter(p => p.day >= from).map(p => ({ day: p.day, v: val(p.day, p.price_usd) })).filter(p => p.v != null);
     const priceOn = day => { const p = [...pts].reverse().find(x => x.day <= day) ?? pts[0]; return p?.v ?? null; };
-    const shown = deals.filter(d => d.trade_date >= from);
+    // a money-market fund's or a deposit's "buys" and "sales" are the money moved in and out of it
+    // (a withdrawal to the account is no sale): none on its currency's rate
+    const shown = rateNote ? [] : deals.filter(d => d.trade_date >= from);
     const fmt = v => (unit === 'USD' ? `$${v.toLocaleString('en-US', { maximumFractionDigits: v < 10 ? 4 : 2 })}` : `${v.toLocaleString('en-US', { maximumFractionDigits: v < 10 ? 4 : 2 })} ${unit}`);
     const traces = [{ x: pts.map(p => p.day), y: pts.map(p => p.v), type: 'scatter', mode: 'lines', line: { color: '#4c8bf5', width: 2 },
       name: 'price', hovertemplate: `%{x}: %{y:,.4~f} ${unit}<extra></extra>` }];
-    for (const [side, color, sym] of [['buy', '#3fb950', 'triangle-up'], ['sell', '#f85149', 'triangle-down']]) {
-      const ds = shown.filter(d => d.side === side);
-      if (ds.length) traces.push({ x: ds.map(d => d.trade_date), y: ds.map(d => priceOn(d.trade_date)), type: 'scatter', mode: 'markers', name: side,
-        marker: { color, size: 11, symbol: sym }, text: ds.map(d => `${side} ${Number(d.quantity)}${dealTickers.length > 1 ? ` ${d.ticker}` : ''} at ${d.account}`), hovertemplate: '%{x}: %{text}<extra></extra>' });
+    // one's own deals bright and solid; the ones through a fund (via) pale and hollow, under them
+    for (const via of [true, false]) {
+      for (const [side, color, sym] of [['buy', '#3fb950', 'triangle-up'], ['sell', '#f85149', 'triangle-down']]) {
+        const ds = shown.filter(d => d.side === side && !!d.via === via);
+        if (ds.length) traces.push({ x: ds.map(d => d.trade_date), y: ds.map(d => priceOn(d.trade_date)), type: 'scatter', mode: 'markers', name: `${side}${via ? ' via a fund' : ''}`,
+          marker: via ? { color, size: 9, symbol: `${sym}-open`, opacity: 0.55, line: { width: 1.5 } } : { color, size: 12, symbol: sym, line: { color: '#e6edf3', width: 1 } },
+          text: ds.map(d => `${side} ${Number(d.quantity)}${dealTickers.length > 1 ? ` ${d.ticker}` : ''} at ${d.account}`), hovertemplate: '%{x}: %{text}<extra></extra>' });
+      }
     }
     Plotly.react(dlg.querySelector('#mp_price_chart'), traces, Object.assign({}, LAYOUT_BASE, {
       margin: { l: 60, r: 20, t: 10, b: 40 }, showlegend: false, hovermode: 'closest',
@@ -14927,13 +14951,13 @@ sb.auth.getSession().then(({ data: { session } }) => mpOnAuth(session));
 sb.auth.onAuthStateChange((_event, session) => mpOnAuth(session));
 </script>
 <script type="module">
-import { RU_ACCOUNTS, isRuInfra, netCreditIntoLiquid, periodIrr, portfolioCapital } from './js/lookthrough_treemap.js?v=20261121h';
+import { RU_ACCOUNTS, isRuInfra, netCreditIntoLiquid, periodIrr, portfolioCapital } from './js/lookthrough_treemap.js?v=20261121i';
 window.MP_RU_ACCOUNTS = RU_ACCOUNTS;
 window.mpPeriodIrr = periodIrr;
 window.mpPortfolioCapital = portfolioCapital;
 window.mpIsRuInfra = isRuInfra;
 window.mpNetCreditIntoLiquid = netCreditIntoLiquid;
 </script>
-<script type="module" src="./js/lookthrough_treemap.js?v=20261121h"></script>
+<script type="module" src="./js/lookthrough_treemap.js?v=20261121i"></script>
 </body>
 </html>
