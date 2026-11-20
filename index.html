@@ -14118,6 +14118,24 @@ async function mpOpenPriceDialog(asset, title) {
     fx = ccy === 'USD' ? [] : await mpXlsxFetchAll(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', ccy).order('day'));
   } catch (err) { note.textContent = String(err.message || err); return; }
   if (!prices.length) { note.textContent = 'No price history for this asset (a deposit, a savings account or cash has none).'; return; }
+  // Splits: price_history keeps each day's price as it was (GOOGL 2 255 -> 112 on
+  // 18.07.2022, its 20-for-1) -- a day's move of almost exactly a whole number of
+  // times is taken for one, and the days before it are shown in today's
+  // shares, as charts show a split. The capital needs none: it has the shares as they were.
+  const splits = [];
+  let factor = 1;
+  const raw = prices.map(p => Number(p.price_usd));
+  for (let i = prices.length - 1; i > 0; i--) {
+    const r = raw[i - 1] / raw[i];
+    if (!Number.isFinite(r) || r <= 0) { prices[i - 1] = { ...prices[i - 1], price_usd: raw[i - 1] / factor }; continue; }
+    const k = r >= 1 ? r : 1 / r;
+    // the nearest whole ratio from 2 (20.01 is 20, not 19), within 2% -- a crash
+    // of a bond (98 -> 64) is no split; a 3-for-2 can't be told from one, so none
+    const n = Math.round(k);
+    if (n < 2 || n > 50 || Math.abs(k / n - 1) >= 0.02) { prices[i - 1] = { ...prices[i - 1], price_usd: raw[i - 1] / factor }; continue; }
+    if (n && k >= 1.45) { factor *= r >= 1 ? n : 1 / n; splits.push(`${prices[i].day} ${r >= 1 ? `${n}-for-1` : `1-for-${n}`}`); }
+    prices[i - 1] = { ...prices[i - 1], price_usd: raw[i - 1] / factor };
+  }
   const usdBox = dlg.querySelector('#mp_price_usd');
   if (ccy === 'USD') dlg.querySelector('#mp_price_ccy_box').style.display = 'none';
   // the rate of a day: the last one on or before it
@@ -14154,7 +14172,7 @@ async function mpOpenPriceDialog(asset, title) {
     const first = pts[0], last = pts[pts.length - 1];
     const ch = first && last && first.v ? (last.v / first.v - 1) * 100 : null;
     note.textContent = first ? `${first.day} ${fmt(first.v)} → ${last.day} ${fmt(last.v)}${ch == null ? '' : ` (${ch >= 0 ? '+' : ''}${ch.toFixed(1)}%)`}`
-      + `${shown.length ? ` · deals marked: ${shown.length}` : ''}` : 'No prices in this period.';
+      + `${shown.length ? ` · deals marked: ${shown.length}` : ''}${splits.length ? ` · split-adjusted: ${splits.join(', ')}` : ''}` : 'No prices in this period.';
   };
   dlg.querySelectorAll('[data-p]').forEach(b => b.onclick = () => {
     period = b.dataset.p;
