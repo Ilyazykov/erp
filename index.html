@@ -14130,7 +14130,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   const dlg = document.createElement('dialog');
   dlg.style.cssText = 'background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:16px 18px;min-width:320px;width:min(94vw,960px)';
   dlg.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><b>${mpEscapeHtml(title)} <span style="color:#8b949e;font-weight:normal">· ${mpEscapeHtml(asset)}</span></b><button type="button" data-act="close">✕</button></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><b>${mpEscapeHtml(title)} <span id="mp_price_meta" style="color:#8b949e;font-weight:normal">${title !== asset ? `· ${mpEscapeHtml(asset)}` : ''}</span></b><button type="button" data-act="close">✕</button></div>
     <div class="form-row" style="gap:6px;align-items:center">${MP_PRICE_PERIODS.map(([l]) => `<button class="btn${l === '1y' ? ' primary' : ''}" type="button" data-p="${l}">${l}</button>`).join('')}
       <label style="margin-left:12px" id="mp_price_ccy_box"><input type="checkbox" id="mp_price_usd"> in USD</label></div>
     <div id="mp_price_chart" style="height:420px"></div>
@@ -14142,6 +14142,18 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   dlg.showModal();
   dlg.querySelector('[data-act=close]').onclick = () => dlg.close();
   const note = dlg.querySelector('#mp_price_note');
+  // the company, its country (a flag) and sector from the funds' lists (securities), instead of the
+  // ticker again: "NVDA · NVIDIA Corp 🇺🇸 · Information Technology"
+  sb.from('securities').select('name, country, country_code, sector').or(`market_ticker.eq.${asset},ticker.eq.${asset}`).limit(1)
+    .then(({ data }) => {
+      const s = data?.[0];
+      if (!s) return;
+      const cc = String(s.country_code || '').toUpperCase();
+      const flag = /^[A-Z]{2}$/.test(cc) && cc !== 'XX' ? String.fromCodePoint(...[...cc].map(c => 0x1F1E6 + c.charCodeAt(0) - 65)) : '';
+      const parts = [s.name && s.name.toLowerCase() !== String(title).toLowerCase() ? s.name : '', flag ? `${flag}${s.country ? ` ${s.country}` : ''}` : s.country || '', s.sector || '']
+        .filter(Boolean).map(mpEscapeHtml);
+      if (parts.length) dlg.querySelector('#mp_price_meta').innerHTML = `${title !== asset ? `· ${mpEscapeHtml(asset)} ` : ''}· ${parts.join(' · ')}`;
+    }, () => { /* the header stays as it is */ });
   let prices, deals, ccy, fx;
   try {
     let wallet;
