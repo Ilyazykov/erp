@@ -9146,7 +9146,7 @@ async function mpSplitFundsCash(rows) {
 async function mpRenderLookThrough() {
   const wrap = document.getElementById('mp_lookthrough_wrap');
   const [top, bySector, byCountry, byCurrency] = await Promise.all([
-    sb.from('portfolio_look_through_totals').select('*').order('value_usd', { ascending: false }).limit(100),
+    sb.from('portfolio_look_through_totals').select('*').order('value_usd', { ascending: false }).limit(150),
     sb.from('portfolio_look_through_by_sector').select('*').order('value_usd', { ascending: false }),
     sb.from('portfolio_look_through_by_country').select('*').order('value_usd', { ascending: false }),
     sb.from('portfolio_look_through_by_currency').select('*').order('value_usd', { ascending: false }),
@@ -9154,6 +9154,27 @@ async function mpRenderLookThrough() {
   const err = top.error || bySector.error || byCountry.error || byCurrency.error;
   if (err) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(err.message)}</p>`; return; }
   if (!top.data.length) { wrap.innerHTML = '<p class="empty-note">No fund holdings loaded yet.</p>'; return; }
+  // One company's share classes as one row (Alphabet's GOOGL and GOOG): rows of the same name,
+  // the money summed, the funds' parts too; the ticker the bigger one's. On by default, remembered.
+  let mergeClasses = true;
+  try { mergeClasses = localStorage.getItem('mp_lt_merge_classes') !== '0'; } catch { /* no storage */ }
+  let rows = top.data.map(r => ({ ...r, tickers: r.ticker ? [r.ticker] : [] }));
+  if (mergeClasses) {
+    const byName = new Map();
+    for (const r of rows) {
+      const key = String(r.name || r.ticker || '').trim().toLowerCase();
+      const m = byName.get(key);
+      if (!key || !m) { byName.set(key || `#${byName.size}`, r); continue; }
+      m.value_usd = Number(m.value_usd) + Number(r.value_usd);
+      m.direct_usd = Number(m.direct_usd || 0) + Number(r.direct_usd || 0);
+      const via = { ...(m.via || {}) };
+      for (const [k, v] of Object.entries(r.via || {})) via[k] = Number(via[k] || 0) + Number(v);
+      m.via = via;
+      m.tickers.push(...r.tickers);
+    }
+    rows = [...byName.values()].sort((a, b) => Number(b.value_usd) - Number(a.value_usd));
+  }
+  rows = rows.slice(0, 100);
   const total = bySector.data.reduce((s, r) => s + Number(r.value_usd), 0);
   const pct = v => `${(Number(v) / total * 100).toFixed(2)}%`;
   const via = r => Object.entries(r.via || {}).filter(([k]) => k !== 'direct')
@@ -9162,11 +9183,12 @@ async function mpRenderLookThrough() {
       <th>${title}</th><th>Value (USD)</th><th>Share</th></tr></thead><tbody>${rows.map(r => `<tr>
       <td class="ticker">${mpEscapeHtml(r[key])}</td><td>${mpFormatUsd(Number(r.value_usd))}</td><td>${pct(r.value_usd)}</td></tr>`).join('')}
     <tr class="total-row"><td><b>Total</b></td><td><b>${mpFormatUsd(total)}</b></td><td></td></tr></tbody></table>`;
-  wrap.innerHTML = `<div style="overflow-x:auto"><table class="data-table"><thead><tr>
+  wrap.innerHTML = `<label class="note" style="display:inline-block;margin-bottom:6px" title="One company's share classes (Alphabet's GOOGL and GOOG) as one row"><input type="checkbox" id="mp_lt_merge_classes"${mergeClasses ? ' checked' : ''}> merge share classes of one company</label>
+    <div style="overflow-x:auto"><table class="data-table"><thead><tr>
       <th>#</th><th>Security</th><th>Sector</th><th>Country</th><th>Currency</th><th>Value (USD)</th><th>Share</th><th>Direct</th><th>Via funds</th>
-    </tr></thead><tbody>${top.data.map((r, i) => `<tr${r.ticker ? ` data-ticker="${mpEscapeHtml(r.ticker)}" data-name="${mpEscapeHtml(r.name || r.ticker)}" style="cursor:pointer" title="Price chart"` : ''}>
+    </tr></thead><tbody>${rows.map((r, i) => `<tr${r.tickers.length ? ` data-ticker="${mpEscapeHtml(r.tickers[0])}" data-also="${mpEscapeHtml(r.tickers.slice(1).join(','))}" data-name="${mpEscapeHtml(r.name || r.tickers[0])}" style="cursor:pointer" title="Price chart"` : ''}>
       <td>${i + 1}</td>
-      <td class="ticker">${mpEscapeHtml(r.name)}${r.ticker ? ` <span class="note">${mpEscapeHtml(r.ticker)}</span>` : ''}</td>
+      <td class="ticker">${mpEscapeHtml(r.name)}${r.tickers.length ? ` <span class="note">${mpEscapeHtml(r.tickers.join(' + '))}</span>` : ''}</td>
       <td>${mpEscapeHtml(r.sector || '')}</td><td>${mpEscapeHtml(r.country || '')}</td><td>${mpEscapeHtml(r.currency || '')}</td>
       <td>${mpFormatUsd(Number(r.value_usd))}</td><td>${pct(r.value_usd)}</td>
       <td>${r.direct_usd ? mpFormatUsd(Number(r.direct_usd)) : ''}</td><td>${via(r)}</td>
@@ -9180,7 +9202,11 @@ async function mpRenderLookThrough() {
   // a security's row: its price chart (a constituent without a price history of its own says so)
   wrap.onclick = ev => {
     const tr = ev.target.closest('tr[data-ticker]');
-    if (tr) mpOpenPriceDialog(tr.dataset.ticker, tr.dataset.name);
+    if (tr) mpOpenPriceDialog(tr.dataset.ticker, tr.dataset.name, { also: tr.dataset.also ? tr.dataset.also.split(',') : [] });
+  };
+  document.getElementById('mp_lt_merge_classes').onchange = e => {
+    try { localStorage.setItem('mp_lt_merge_classes', e.target.checked ? '1' : '0'); } catch { /* no storage */ }
+    mpRenderLookThrough();
   };
 }
 
