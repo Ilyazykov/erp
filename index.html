@@ -14195,7 +14195,8 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><b><span id="mp_price_title">${mpEscapeHtml(title)}</span> <span id="mp_price_meta" style="color:#8b949e;font-weight:normal">${title !== asset && !numbered ? `· ${mpEscapeHtml(dealTickers.join(' + '))}` : ''}</span></b><button type="button" data-act="close">✕</button></div>
     <div class="form-row" style="gap:6px;align-items:center">${MP_PRICE_PERIODS.map(([l]) => `<button class="btn${l === '1y' ? ' primary' : ''}" type="button" data-p="${l}">${l}</button>`).join('')}
       <label style="margin-left:12px" id="mp_price_ccy_box"><input type="checkbox" id="mp_price_usd"> in USD</label>
-      <label style="margin-left:12px;display:none" id="mp_price_via_box"><input type="checkbox" id="mp_price_via" checked> buys through funds</label></div>
+      <label style="margin-left:12px;display:none" id="mp_price_via_box"><input type="checkbox" id="mp_price_via" checked> buys through funds</label>
+      <label style="margin-left:12px;display:none" id="mp_price_pay_box"><input type="checkbox" id="mp_price_pay" checked> payouts</label></div>
     <div id="mp_price_chart" style="height:420px"></div>
     <p class="note" style="margin:0" id="mp_price_note">Loading…</p>
   </div>`;
@@ -14219,7 +14220,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       if (numbered) dlg.querySelector('#mp_price_title').textContent = mpShortName(asset, s.name);
       if (parts.length) dlg.querySelector('#mp_price_meta').innerHTML = `${title !== asset && !numbered ? `· ${mpEscapeHtml(asset)} ` : ''}· ${parts.join(' · ')}`;
     }, () => { /* the header stays as it is */ });
-  let prices, deals, ccy, fx;
+  let prices, deals, ccy, fx, payouts = [];
   try {
     let wallet;
     [prices, deals, wallet] = await Promise.all([
@@ -14244,6 +14245,19 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     // dated the report's day) is no buy or sale
     deals = deals.filter(d => d.price == null || Number(d.price) !== 0);
     for (const d of deals) d.account = d.account || d.external_source || '—';
+    // what it paid out: coupons and dividends (trades 'dividend': quantity = the amount), a deposit's or
+    // savings account's interest (its 'buy' noted as interest), an exchange's Earn on a coin
+    const [payTrades, payWallet] = await Promise.all([
+      mpXlsxFetchAll(() => sb.from('trades').select('ticker, trade_date, side, quantity, currency, account, note').in('ticker', dealTickers)
+        .or('side.eq.dividend,and(side.eq.buy,note.ilike.*interest*),and(side.eq.buy,note.ilike.*процент*),and(side.eq.buy,note.ilike.*капитализац*)').order('trade_date')),
+      mpXlsxFetchAll(() => sb.from('wallet_transactions').select('symbol, tx_time, amount, chain').or(dealTickers.map(t => `symbol.ilike.${t}`).join(','))
+        .in('kind', ['interest', 'reward']).order('tx_time')),
+    ]);
+    payouts = [
+      ...payTrades.map(t => ({ day: t.trade_date, amount: Number(t.quantity), ccy: (t.currency || '').toUpperCase(), account: t.account || '—',
+        what: t.side === 'dividend' ? (/купон|coupon/i.test(t.note || '') ? 'coupon' : 'dividend') : 'interest' })),
+      ...payWallet.map(w => ({ day: String(w.tx_time).slice(0, 10), amount: Number(w.amount), ccy: String(w.symbol).toUpperCase(), account: w.chain, what: 'interest' })),
+    ].filter(p => Number.isFinite(p.amount) && p.amount !== 0).sort((a, b) => a.day.localeCompare(b.day));
     fx = ccy === 'USD' ? [] : await mpXlsxFetchAll(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', ccy).order('day'));
   } catch (err) { note.textContent = String(err.message || err); return; }
   // One thing under several tickers (merged funds: VWRA and VWCE are one fund, one ISIN, in dollars and
@@ -14361,6 +14375,27 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     const fmt = v => (unit === 'USD' ? `$${v.toLocaleString('en-US', { maximumFractionDigits: v < 10 ? 4 : 2 })}` : `${v.toLocaleString('en-US', { maximumFractionDigits: v < 10 ? 4 : 2 })} ${unit}`);
     const traces = [{ x: pts.map(p => p.day), y: pts.map(p => p.v), type: 'scatter', mode: 'lines', line: { color: '#4c8bf5', width: 2 },
       name: 'price', hovertemplate: `%{x}: %{y:,.4~f} ${unit}<extra></extra>` }];
+    // the payouts (yellow dots on the line): each, or a month's together when there are many (Revolut's
+    // funds pay every day); a fund's fee taken off its return nets within the month
+    if (dlg.querySelector('#mp_price_pay').checked) {
+      let ps = payouts.filter(p => p.day >= from);
+      if (ps.length > 24) {
+        const byMonth = new Map();
+        for (const p of ps) {
+          const k = `${p.day.slice(0, 7)}|${p.ccy}|${p.what}`;
+          const m = byMonth.get(k) || { ...p, amount: 0, n: 0 };
+          m.amount += p.amount; m.n += 1; m.day = p.day;
+          byMonth.set(k, m);
+        }
+        ps = [...byMonth.values()].filter(p => p.amount > 0);
+      }
+      ps = ps.filter(p => p.amount > 0);
+      const fmtAmt = (a, c) => `${a.toLocaleString('en-US', { maximumFractionDigits: a < 1 ? 6 : 2 })} ${c}`;
+      if (ps.length) traces.push({ x: ps.map(p => p.day), y: ps.map(p => priceOn(p.day)), type: 'scatter', mode: 'markers', name: 'payouts',
+        marker: { color: '#d29922', size: 8, symbol: 'circle', line: { color: '#0d1117', width: 1 } },
+        text: ps.map(p => `${p.what} ${fmtAmt(p.amount, p.ccy)}${p.n > 1 ? ` (${p.day.slice(0, 7)}, ${p.n} payments)` : ''} at ${p.account}`),
+        hovertemplate: '%{x}: %{text}<extra></extra>' });
+    }
     // one's own deals drawn over the ones through a fund (via), and brighter
     for (const via of [true, false]) {
       for (const [side, color, sym] of [['buy', '#3fb950', 'triangle-up'], ['sell', '#f85149', 'triangle-down']]) {
@@ -14392,6 +14427,10 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   const viaBox = dlg.querySelector('#mp_price_via');
   try { viaBox.checked = localStorage.getItem('mp_price_via') !== '0'; } catch { /* no storage */ }
   if (!rateNote && deals.some(d => d.via)) dlg.querySelector('#mp_price_via_box').style.display = '';
+  const payBox = dlg.querySelector('#mp_price_pay');
+  try { payBox.checked = localStorage.getItem('mp_price_pay') !== '0'; } catch { /* no storage */ }
+  if (payouts.length) dlg.querySelector('#mp_price_pay_box').style.display = '';
+  payBox.onchange = () => { try { localStorage.setItem('mp_price_pay', payBox.checked ? '1' : '0'); } catch { /* no storage */ } draw(); };
   viaBox.onchange = () => { try { localStorage.setItem('mp_price_via', viaBox.checked ? '1' : '0'); } catch { /* no storage */ } draw(); };
   draw();
 }
