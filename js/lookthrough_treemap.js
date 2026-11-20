@@ -77,6 +77,15 @@ export function priceChange(ticker, period, prices, today) {
 // The tickers merged into one gold tile (mergeGold): the metal account and
 // the token are two parts of one holding of gold.
 export const GOLD_TICKERS = ['XAU', 'XAUT'];
+// Funds of one index, merged into one tile when the funds are "merged" (the
+// map's third way of showing funds): the S&P 500's (CSPX, VUAA and the like,
+// T-Bank's TSPX), and Vanguard FTSE All-World's two listings (VWRA in dollars,
+// VWCE in euros: one fund). MSCI World (IWDA, SWDA) is another index -- no
+// emerging markets -- and stays apart.
+export const FUND_INDEX_GROUPS = {
+  'S&P 500 funds': ['CSPX', 'VUAA', 'SXR8', 'VOO', 'SPY', 'IVV', 'TSPX'],
+  'FTSE All-World funds': ['VWRA', 'VWCE'],
+};
 
 // Savings chains: savings products linked by transfers between them (the
 // money moved Finuslugi -> Ozon -> Alfa for the rate) are one group, found by
@@ -131,7 +140,7 @@ function unlistedTicker(r) {
   const kind = r.instrument_type === 'cushion' ? 'CUSHION' : r.instrument_type === 'cash' ? 'CASH' : String(r.instrument_type || 'OTHER').toUpperCase();
   return `${kind} ${r.currency || 'USD'}`;
 }
-export function aggregate({ rows, holdings, fundHoldings, expandFunds = false, includeCushion = false, includeRealEstate = false,
+export function aggregate({ rows, holdings, fundHoldings, expandFunds = false, mergeFunds = false, includeCushion = false, includeRealEstate = false,
   mergeGold = true, mergeSavings = true, savingsLinks = [], savingsPeriods = {} }) {
   const isFundTicker = t => Object.prototype.hasOwnProperty.call(fundHoldings || {}, t);
   let entries, typeOf = new Map();
@@ -233,6 +242,24 @@ export function aggregate({ rows, holdings, fundHoldings, expandFunds = false, i
       merge(latest, group, { isChain: true, members });
     }
   }
+  // mergeFunds: the funds of one index (FUND_INDEX_GROUPS) as one tile, its parts the funds
+  // (as merged gold's) -- a fund's tile is under 'fund:<ticker>', one held as a plain instrument under its ticker
+  if (mergeFunds && !expandFunds) {
+    for (const [key, members] of Object.entries(FUND_INDEX_GROUPS)) {
+      const parts = members.flatMap(m => [fundKey(m), m].filter(k => tiles.has(k)).map(k => ({ ticker: m, key: k, value_usd: tiles.get(k).value_usd })));
+      if (parts.length < 2) continue;
+      const t = { ticker: key, value_usd: 0, share: 0, sources: [], isFund: true, isMerged: true, instrument_type: tiles.get(parts[0].key).instrument_type,
+        parts: [] };
+      for (const p of parts) {
+        addTo(t, p.ticker, p.value_usd);
+        const same = t.parts.find(x => x.ticker === p.ticker);
+        if (same) same.value_usd += p.value_usd; else t.parts.push({ ticker: p.ticker, value_usd: p.value_usd });
+        tiles.delete(p.key);
+      }
+      t.parts.sort((a, b) => b.value_usd - a.value_usd);
+      tiles.set(`merged:${key}`, t);
+    }
+  }
   if (mergeGold && GOLD_TICKERS.some(g => tiles.has(g))) {
     const parts = GOLD_TICKERS.filter(g => tiles.has(g)).map(g => ({ ticker: g, value_usd: tiles.get(g).value_usd }));
     merge('GOLD', GOLD_TICKERS, { isGold: true, parts });
@@ -263,7 +290,7 @@ export function goldChange(parts, period, prices, today) {
 // own price only -- never rebuilt from its constituents; the merged gold tile
 // by goldChange. (The treemap's colour is tileEarned, not this.)
 export function tileChange(tile, period, prices, today) {
-  if (tile.isGold && tile.parts) return goldChange(tile.parts, period, prices, today);
+  if (tile.parts) return goldChange(tile.parts, period, prices, today);
   return priceChange(tile.ticker, period, prices, today);
 }
 
@@ -364,7 +391,7 @@ export function tileEarned(tile, earnedRows, { assetOf = assetKey, realEstate = 
     return earnedRatio({ value_start: sum('value_start'), value_end: sum('value_end'), put_in: sum('put_in'),
       taken_out: sum('taken_out'), income: paidOut, kind: 'chain' });
   }
-  if (tile.isGold && tile.parts) {
+  if (tile.parts) {   // merged gold, merged funds of one index
     return weightedChange(tile.parts.map(p => ({ value_usd: p.value_usd, ...earnedRatio(rowOf(p.ticker)) })));
   }
   return earnedRatio(rowOf(tile.ticker));
@@ -449,8 +476,8 @@ export function tileMetric(method, tile, { earnedRows, cap = null, from, to, ass
     const g = periodIrr(rows.length === 1 ? rows[0] : mergeRows(rows), from, to);
     return g === null ? NO : known(g);
   };
-  const members = tile.isChain && tile.members ? tile.members.map(m => m.ticker) : tile.isGold && tile.parts ? null : [tile.ticker];
-  if (tile.isGold && tile.parts) {
+  const members = tile.isChain && tile.members ? tile.members.map(m => m.ticker) : tile.parts ? null : [tile.ticker];
+  if (tile.parts) {
     if (method === 'contrib') return one(tile.parts.map(p => rowOf(p.ticker)).filter(Boolean));
     return weightedChange(tile.parts.map(p => ({ value_usd: p.value_usd, ...one([rowOf(p.ticker)].filter(Boolean)) })));
   }
@@ -640,7 +667,7 @@ function tooltipLines(tile, e, name = tile.ticker, money = { ccy: 'usd', rate: 1
   return lines;
 }
 function pushSources(tile, lines) {
-  if (tile.isGold && tile.parts) lines.push(tile.parts.map(p => `${p.ticker} ${usd(p.value_usd)}`).join(', '));
+  if (tile.parts) lines.push(tile.parts.map(p => `${p.ticker} ${usd(p.value_usd)}`).join(', '));
   else if (tile.isChain && tile.members) lines.push('merged savings');
   else if (tile.sources.length > 1 || tile.sources.some(s => s.from !== 'direct')) {
     lines.push(tile.sources.map(s => `${s.from === 'direct' ? 'direct' : s.from} ${usd(s.value_usd)}`).join(', '));
@@ -938,7 +965,8 @@ function wireTreemap() {
       // 'total': the cash in the currencies is out of the total with the cushion (not drawn, not counted)
       if (cushionMode === 'total') rows = rows.filter(r => r.instrument_type !== 'cash');
       const tileRows = withoutCushion(earnedRows, cushionOf);
-      const tiles = aggregate({ rows, fundHoldings: data.fundHoldings, expandFunds: $('lt_expand').checked, includeCushion: cushion,
+      const fundsMode = $('lt_funds').value;
+      const tiles = aggregate({ rows, fundHoldings: data.fundHoldings, expandFunds: fundsMode === 'expand', mergeFunds: fundsMode === 'merge', includeCushion: cushion,
         mergeGold: $('lt_gold').checked, mergeSavings: $('lt_savings').checked, savingsLinks: data.savingsLinks, savingsPeriods: data.savingsPeriods,
         includeRealEstate: $('lt_re').checked });
       // the box keeps its proportions in CSS (aspect-ratio), so the layout is always for its real size
@@ -991,8 +1019,12 @@ function wireTreemap() {
       const onTileClick = (tile, name, check = false) => {
         const t = String(tile.ticker);
         if (!g('mpOpenPriceDialog') || /^(CASH|CUSHION|REAL_ESTATE)/.test(t)) return false;
-        // merged gold: XAU's price, the deals of both (Revolut's XAU and the exchanges' XAUT)
-        if (!check) window.mpOpenPriceDialog(t === 'GOLD' ? 'XAU' : t, name, t === 'GOLD' ? { also: ['XAUT'] } : {});
+        // merged gold: XAU's price, the deals of both (Revolut's XAU and the exchanges' XAUT); merged
+        // funds of one index: the biggest one's price, the deals of all of them
+        if (check) return true;
+        if (t === 'GOLD') window.mpOpenPriceDialog('XAU', name, { also: ['XAUT'] });
+        else if (tile.parts) window.mpOpenPriceDialog(tile.parts[0].ticker, name, { also: tile.parts.slice(1).map(p => p.ticker) });
+        else window.mpOpenPriceDialog(t, name);
         return true;
       };
       last = [tiles, colour, { tip, group: $('lt_small').checked, scale, names: { ...bondNames, ...FUND_NAMES }, money, onTileClick }];
@@ -1014,7 +1046,10 @@ function wireTreemap() {
       redraw();
     });
   }
-  for (const id of ['lt_expand', 'lt_cushion', 'lt_gold', 'lt_savings', 'lt_re', 'lt_small']) $(id).addEventListener('change', redraw);
+  // funds: as held, one tile per index, or expanded into what they hold (remembered)
+  try { const v = localStorage.getItem('lt_funds'); if (['separate', 'merge', 'expand'].includes(v)) $('lt_funds').value = v; } catch { /* no storage */ }
+  $('lt_funds').addEventListener('change', e => { try { localStorage.setItem('lt_funds', e.target.value); } catch { /* no storage */ } });
+  for (const id of ['lt_funds', 'lt_cushion', 'lt_gold', 'lt_savings', 'lt_re', 'lt_small']) $(id).addEventListener('change', redraw);
   $('lt_show')?.addEventListener('change', e => {
     showIn = SHOW_UNITS.includes(e.target.value) ? e.target.value : '%';
     try { localStorage.setItem('lt_show', showIn); } catch { /* no storage */ }
