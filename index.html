@@ -14262,6 +14262,26 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
           quantity: Math.abs(Number(w.amount)), account: CHAIN[w.chain] || w.chain, ticker: String(w.symbol).toUpperCase() }))]
         .sort((a, b) => a.trade_date.localeCompare(b.trade_date));
     }
+    // a coin bought by card (card_crypto_purchases: the bank's payment linked to the coin received -- Mercuryo
+    // sending ETH to one's own wallet, a Telegram Wallet top-up): a buy at what was paid, in dollars that day;
+    // a Telegram Wallet "purchase" already among the deals gets its price from it
+    try {
+      const card = await mpXlsxFetchAll(() => sb.from('card_crypto_purchases').select('coin, coins, paid, currency, paid_on, received_at, kind').in('coin', dealTickers).order('received_at'));
+      if (card.length) {
+        const cur = [...new Set(card.map(c => String(c.currency).toUpperCase()).filter(c => c !== 'USD'))];
+        const fxc = cur.length ? await mpXlsxFetchAll(() => sb.from('fx_history').select('currency, day, usd_per_unit').in('currency', cur).order('day')) : [];
+        const usdOn = (c, day) => { if (c === 'USD') return 1; let v = null; for (const r of fxc) if (r.currency === c && r.day <= day) v = Number(r.usd_per_unit); return v; };
+        for (const c of card) {
+          const day = String(c.received_at || c.paid_on).slice(0, 10), q = Number(c.coins), k = usdOn(String(c.currency).toUpperCase(), c.paid_on);
+          if (!(q > 0) || !k) continue;
+          const px = Number(c.paid) * k / q, coin = String(c.coin).toUpperCase();
+          const same = c.kind === 'purchase' ? deals.find(d => d.side === 'buy' && d.price == null && d.ticker === coin && d.trade_date === day && Math.abs(Number(d.quantity) - q) <= q * 0.01) : null;
+          if (same) { same.price = px; same.currency = 'USD'; same.account += ` (${c.paid} ${c.currency} by card)`; }
+          else if (c.kind !== 'purchase') deals.push({ trade_date: day, side: 'buy', quantity: q, price: px, currency: 'USD', ticker: coin, account: `${c.paid} ${c.currency} by card, to the wallet` });
+        }
+        deals.sort((a, b) => a.trade_date.localeCompare(b.trade_date));
+      }
+    } catch (err) { console.warn('card purchases:', err); }
     // a movement without a deal (a broker report's transfer between its agreements, a code
     // change: price 0, e.g. T-Bank's SBER 120 out of one agreement and into another,
     // dated the report's day) is no buy or sale
