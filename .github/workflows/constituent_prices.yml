@@ -1,0 +1,34 @@
+name: Load fund constituents' prices
+
+# The securities inside the funds held, priced for the portfolio map's
+# expanded funds (erp_valuation/load_constituent_prices.py): run by hand from
+# the Actions tab or `gh workflow run constituent_prices.yml`. From GitHub's
+# runners Yahoo answers; from Supabase's servers it often doesn't.
+on:
+  workflow_dispatch:
+    inputs:
+      top:
+        description: "Share of the funds' value to price (0.95: the biggest ~1 240 securities)"
+        default: "0.95"
+      from:
+        description: "From this day (empty: the first buy of a fund held)"
+        default: ""
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install yfinance "psycopg[binary]" pandas
+      - name: Load prices
+        run: |
+          ENCODED_PASSWORD=$(python -c "import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=''))" "$SUPABASE_DB_PASSWORD")
+          export DATABASE_URL="postgresql://postgres.${SUPABASE_PROJECT_REF}:${ENCODED_PASSWORD}@aws-1-eu-west-1.pooler.supabase.com:6543/postgres"
+          python erp_valuation/load_constituent_prices.py --top "${{ inputs.top }}" ${{ inputs.from && format('--from {0}', inputs.from) || '' }}
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
