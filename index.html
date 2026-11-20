@@ -14329,6 +14329,16 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   // A fund's constituent (opened from the map's expanded funds, opts.via: [{ fund, weight }]): each
   // buy / sale of the fund is one of this paper -- the money (the fund's USD price that day x its
   // units) x the paper's weight in the fund, over the paper's USD price that day
+  if (!opts.via && !rateNote) {
+    try {
+      const { data: secs } = await sb.from('securities').select('id').or(dealTickers.map(t => `ticker.eq.${t},market_ticker.eq.${t}`).join(','));
+      const ids = (secs || []).map(r => r.id);
+      const { data: fh } = ids.length ? await sb.from('fund_holdings').select('fund, weight').in('security_id', ids) : { data: [] };
+      const w = new Map();
+      for (const r of fh || []) w.set(r.fund, (w.get(r.fund) || 0) + (Number(r.weight) || 0) / 100);
+      opts = { ...opts, via: [...w].filter(([, v]) => v > 0).map(([fund, weight]) => ({ fund, weight })) };
+    } catch (err) { console.warn('funds holding it:', err); }
+  }
   if (opts.via?.length) {
     try {
       const funds = opts.via.map(v => v.fund);
@@ -14377,6 +14387,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       name: 'price', hovertemplate: `%{x}: %{y:,.4~f} ${unit}<extra></extra>` }];
     // the payouts (yellow dots on the line): each, or a month's together when there are many (Revolut's
     // funds pay every day); a fund's fee taken off its return nets within the month
+    let payTrace = null, payShapes = [];
     if (dlg.querySelector('#mp_price_pay').checked) {
       let ps = payouts.filter(p => p.day >= from);
       if (ps.length > 24) {
@@ -14391,10 +14402,12 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       }
       ps = ps.filter(p => p.amount > 0);
       const fmtAmt = (a, c) => `${a.toLocaleString('en-US', { maximumFractionDigits: a < 1 ? 6 : 2 })} ${c}`;
-      if (ps.length) traces.push({ x: ps.map(p => p.day), y: ps.map(p => priceOn(p.day)), type: 'scatter', mode: 'markers', name: 'payouts',
-        marker: { color: '#d29922', size: 8, symbol: 'circle', line: { color: '#0d1117', width: 1 } },
+      // a thin grey line through the whole chart, a dot on its top (the usual way: Yahoo's, TradingView's)
+      payShapes = ps.map(p => ({ type: 'line', xref: 'x', yref: 'paper', x0: p.day, x1: p.day, y0: 0, y1: 0.96, line: { color: 'rgba(139,148,158,0.45)', width: 1 }, layer: 'below' }));
+      if (ps.length) payTrace = { x: ps.map(p => p.day), y: ps.map(() => 0.96), yaxis: 'y2', type: 'scatter', mode: 'markers', name: 'payouts', cliponaxis: false,
+        marker: { color: '#8b949e', size: 7, symbol: 'circle' },
         text: ps.map(p => `${p.what} ${fmtAmt(p.amount, p.ccy)}${p.n > 1 ? ` (${p.day.slice(0, 7)}, ${p.n} payments)` : ''} at ${p.account}`),
-        hovertemplate: '%{x}: %{text}<extra></extra>' });
+        hovertemplate: '%{x}: %{text}<extra></extra>' };
     }
     // one's own deals drawn over the ones through a fund (via), and brighter
     for (const via of [true, false]) {
@@ -14407,10 +14420,12 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
           text: ds.map(d => `${side} ${Number(d.quantity)}${dealTickers.length > 1 ? ` ${d.ticker}` : ''} at ${d.account}`), hovertemplate: '%{x}: %{text}<extra></extra>' });
       }
     }
+    if (payTrace) traces.push(payTrace);
     Plotly.react(dlg.querySelector('#mp_price_chart'), traces, Object.assign({}, LAYOUT_BASE, {
       margin: { l: 60, r: 20, t: 10, b: 40 }, showlegend: false, hovermode: 'closest',
       xaxis: Object.assign({}, LAYOUT_BASE.xaxis, { type: 'date', dtick: undefined, tickformat: undefined, range: [from, today] }),
       yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { type: 'linear', tickformat: undefined, ticksuffix: unit === 'USD' ? '' : ` ${unit}`, tickprefix: unit === 'USD' ? '$' : '' }),
+      yaxis2: { overlaying: 'y', range: [0, 1], visible: false, fixedrange: true }, shapes: payShapes,
     }), CONFIG);
     const first = pts[0], last = pts[pts.length - 1];
     const ch = first && last && first.v ? (last.v / first.v - 1) * 100 : null;
