@@ -630,18 +630,58 @@ function mpSberPdfParse({ rows }) {
       chain.push(t);
     }
   }
-  // the totals: a statement read wrong is left out. A credit card's can differ from its rows
-  // (the 09.10.2021–23.09.2026 one: out 10 080 more than its rows have, its balances still
-  // following each other): its rows go in, the difference said
-  const sum = r2(txs.reduce((a, t) => a + t.amount, 0));
-  const ins = r2(txs.filter(t => t.amount > 0).reduce((a, t) => a + t.amount, 0)), outs = r2(-txs.filter(t => t.amount < 0).reduce((a, t) => a + t.amount, 0));
-  let warning = '';
-  if (Math.abs(r2(openingNow + sum) - closing) > 0.005 || Math.abs(ins - inflow) > 0.005 || Math.abs(outs - outflow) > 0.005) {
-    const msg = `in ${ins} / out ${outs} read, the statement says ${inflow} / ${outflow} (balance ${opening} -> ${closing})`;
-    if (product !== 'credit_card') return { error: `Sber statement: ${msg} -- not loaded` };
-    warning = `the statement's own totals differ from its rows: ${msg}`;
+  // Operations the statement leaves out (its credit card, 04.09–03.10.2022: the limit left fell
+  // 8 080 with no row): its balances follow the order operations were processed in, so taken in
+  // that order (a processing day's rows chained by their balances), a jump no row accounts for
+  // is one -- a row is added for it, dated the day the jump shows, its balance the one before
+  // the next row. Jumps that only come from the order (one way, then back) cancel out and are
+  // left alone: what's added is what the totals miss.
+  const hidden = [];
+  if (kind === 'card') {
+    const gaps = [];
+    let b = openingNow;
+    for (const day of [...new Set(txs.map(t => t.processed || t.date))].sort()) {
+      const left = txs.filter(t => (t.processed || t.date) === day).reverse();
+      while (left.length) {
+        let k = left.findIndex(t => Math.abs(r2(b + t.amount) - t.balance) < 0.005);
+        if (k < 0) {
+          k = 0;
+          for (let j = 1; j < left.length; j++) if (`${left[j].date} ${left[j].time}` < `${left[k].date} ${left[k].time}`) k = j;
+          gaps.push({ before: left[k], amount: r2(left[k].balance - left[k].amount - b), balance: r2(left[k].balance - left[k].amount) });
+        }
+        b = left.splice(k, 1)[0].balance;
+      }
+    }
+    // a jump and the one undoing it (the order): out of the count
+    const net = r2(gaps.reduce((a, g) => a + g.amount, 0));
+    const missing = r2(closing - openingNow - r2(txs.reduce((a, t) => a + t.amount, 0)));
+    if (Math.abs(missing) > 0.005 && Math.abs(net - missing) < 0.005) {
+      const open = [...gaps];
+      for (let i = 0; i < open.length; i++) for (let j = i + 1; j < open.length; j++) {
+        if (open[i] && open[j] && Math.abs(open[i].amount + open[j].amount) < 0.005) { open[i] = open[j] = null; break; }
+      }
+      // what's left of the jumps once the pairs are gone, kept only if it is the whole miss
+      const rest = open.filter(Boolean);
+      const sumRest = r2(rest.reduce((a, g) => a + g.amount, 0));
+      for (const g of Math.abs(sumRest - missing) < 0.005 ? rest : [{ ...gaps[gaps.length - 1], amount: missing }]) {
+        const t = g.before;
+        hidden.push({ date: t.processed || t.date, time: '', amount: g.amount, balance: g.balance, category: '', auth: '', processed: t.processed || t.date, card: '',
+          desc: `${g.amount < 0 ? 'Списание' : 'Зачисление'}, которого нет в выписке Сбера (остаток ${r2(g.balance - g.amount)} -> ${g.balance} до операции ${t.date} ${t.time} ${t.amount})`, hidden: true });
+      }
+    }
   }
-  return { kind, product, account, currency, from, to, opening, closing, inflow, outflow, limit, depositType, rate, opened, txs: chain, breaks, warning };
+  // the totals: a statement read wrong is left out
+  const all = [...txs, ...hidden];
+  const sum = r2(all.reduce((a, t) => a + t.amount, 0));
+  const ins = r2(all.filter(t => t.amount > 0).reduce((a, t) => a + t.amount, 0)), outs = r2(-all.filter(t => t.amount < 0).reduce((a, t) => a + t.amount, 0));
+  if (Math.abs(r2(openingNow + sum) - closing) > 0.005 || Math.abs(ins - inflow) > 0.005 || Math.abs(outs - outflow) > 0.005) {
+    return { error: `Sber statement: in ${ins} / out ${outs} read, the statement says ${inflow} / ${outflow} (balance ${opening} -> ${closing}) -- not loaded` };
+  }
+  for (const h of hidden) {
+    const i = chain.findIndex(t => `${t.date} ${t.time}` >= `${h.date} ${h.time}`);
+    chain.splice(i < 0 ? chain.length : i, 0, h);
+  }
+  return { kind, product, account, currency, from, to, opening, closing, inflow, outflow, limit, depositType, rate, opened, txs: chain, breaks, hidden: hidden.length };
 }
 // docs: [{ name, rows }] of Sber's statements (mpIsSberPdf) -> [{ text, file?, checked? }]: a bank
 // CSV per statement (sber_<account>_<from>_<to>.csv). A row already stored (the same account,
@@ -707,7 +747,7 @@ async function mpSberPdfCsvs(docs) {
     const closing = product === 'credit_card' ? r2(p.closing - p.limit) : p.closing;
     out.push({
       text: `${what}: ${use.length} transaction(s)${kept ? ` (${kept} under the description already stored)` : ''}, balance ${closing.toFixed(2)}`
-        + `${p.warning ? `; ${p.warning}` : ''}`
+        + `${p.hidden ? `; ${p.hidden} operation(s) the statement leaves out added from its balances` : ''}`
         + `${skipped.length ? `; left out ${skipped.join(', ')}: stored rows of those days aren't in this statement (processed outside its period) -- they stay` : ''}.`,
       file: use.length ? new File([csv], `sber_${account}_${p.from}_${p.to}.csv`, { type: 'text/csv' }) : null,
     });
