@@ -14626,8 +14626,12 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       traces.push({ x: [lo.day, hi.day], y: [lo.v, hi.v], type: 'scatter', mode: 'markers', name: 'low / high', cliponaxis: false,
         marker: { color: '#ffffff', size: 6 }, hoverinfo: 'skip' });
       // the price by each on a dark plate (Sber's way)
-      for (const [p, up] of [[lo, false], [hi, true]]) notes.push({ x: p.day, y: p.v, xref: 'x', yref: 'y', text: fmt(p.v), showarrow: false,
-        xanchor: 'left', yanchor: up ? 'bottom' : 'top', xshift: 5, yshift: up ? 2 : -2, bgcolor: '#2d333b', font: { color: '#8b949e', size: 12 }, borderpad: 3 });
+      // the last day's low or high: today's price label says it already; one near the right end: to the left of
+      // its dot (to the right it ran into today's label)
+      const lastDay = pts[pts.length - 1].day, nearEnd = d => pts.findIndex(q => q.day === d) > pts.length * 0.85;
+      for (const [p, up] of [[lo, false], [hi, true]]) if (p.day !== lastDay) notes.push({ x: p.day, y: p.v, xref: 'x', yref: 'y', text: fmt(p.v), showarrow: false,
+        xanchor: nearEnd(p.day) ? 'right' : 'left', yanchor: up ? 'bottom' : 'top', xshift: nearEnd(p.day) ? -5 : 5, yshift: up ? 2 : -2,
+        bgcolor: '#2d333b', font: { color: '#8b949e', size: 12 }, borderpad: 3 });
     }
     // to the right of the plot, a gap between (they melted into the line's end)
     const label = (y, text, bg, fg) => notes.push({ xref: 'paper', x: 1, xanchor: 'left', xshift: 10, yref: 'y', y, text, showarrow: false,
