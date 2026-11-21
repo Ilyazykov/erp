@@ -646,6 +646,7 @@
     <div class="form-row" style="gap:16px;flex-wrap:wrap">
       <label><input type="checkbox" id="mp_salary_sellyuan"> sell yuan bonds above the w_CNY target</label>
       <label><input type="checkbox" id="mp_salary_sellstocks"> sell overweight stocks with Z &lt; −1.5</label>
+      <label title="Step 4: the world fund and the US Treasuries all at IBKR -- nothing moved to Freedom24 (remembered in this browser)"><input type="checkbox" id="mp_salary_nofreedom"> nothing to Freedom</label>
       <label title="Chart 3: the $10,000 emergency fund as a slice of its own (the cash at Bank of Cyprus, Ziraat, Raiffeisen and Wise, TBC's savings account, Revolut's euro liquid assets up to the rest) -- its target the cash's $10,000"><input type="checkbox" id="mp_charts_cushion"> emergency fund 🛟</label>
     </div>
     <p class="empty-note" id="mp_charts_status"></p>
@@ -8171,7 +8172,9 @@ const RU_TARGET_PCT = 5;
 // crypto in one's own wallet; Russia -- RU_TARGET_PCT, split Sber 3 : T-Bank
 // 3 : Alfa 2; IBKR + Freedom -- the rest, Freedom FREEDOM_SHARE of it.
 // Anything else (Ziraat, Raif, Telegram, cash) -- 0.
-const MP_BROKER_TARGETS = { 'TBC Bank': 8, 'Credo Bank': 7, Revolut: 8, Trust: 10, Bybit: 1, 'Crypto.com': 1 };
+// one's own wallets 10% (21.11.2026: Telegram's wallet is now non-custodial -- its risks are Trust's, so the two
+// share the own-wallet 10% evenly; "Где хранить деньги" in the knowledge base)
+const MP_BROKER_TARGETS = { 'TBC Bank': 8, 'Credo Bank': 7, Revolut: 8, Trust: 5, Telegram: 5, Bybit: 1, 'Crypto.com': 1 };
 const MP_RU_BANK_SPLIT = { Sber: 3, 'T-Bank': 3, Alfa: 2 };
 function mpBrokerTargets() {
   const t = { ...MP_BROKER_TARGETS };
@@ -8193,7 +8196,7 @@ function mpSalaryFlags() {
   const on = id => !!document.getElementById(id).checked;
   return {
     liquid: on('mp_salary_revolut'), ruLiquid: on('mp_salary_ruliquid'), ruCash: on('mp_salary_rucash'),
-    sellYuan: on('mp_salary_sellyuan'), sellStocks: on('mp_salary_sellstocks'),
+    sellYuan: on('mp_salary_sellyuan'), sellStocks: on('mp_salary_sellstocks'), noFreedom: on('mp_salary_nofreedom'),
   };
 }
 function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
@@ -8294,8 +8297,10 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
   rows.push(['4', 'Stocks (US ERP target)', stockAdd, '']);
   parts.usBonds = take(left);
   // US Treasuries split between the two brokers at their target shares.
-  parts.usBondsFreedom = parts.usBonds * FREEDOM_SHARE;
-  rows.push(['4', `US Treasuries \u2014 IBKR ${Math.round((1 - FREEDOM_SHARE) * 100)}% / Freedom ${Math.round(FREEDOM_SHARE * 100)}%`, parts.usBonds,
+  // "nothing to Freedom" (the box): all of it at IBKR
+  const fShare = flags.noFreedom ? 0 : FREEDOM_SHARE;
+  parts.usBondsFreedom = parts.usBonds * fShare;
+  rows.push(['4', fShare ? `US Treasuries \u2014 IBKR ${Math.round((1 - fShare) * 100)}% / Freedom ${Math.round(fShare * 100)}%` : 'US Treasuries \u2014 IBKR', parts.usBonds,
     parts.usBonds ? `IBKR ${mpFormatUsd(parts.usBonds - parts.usBondsFreedom)}, Freedom ${mpFormatUsd(parts.usBondsFreedom)}` : '']);
   // 4.1 Individual companies up to 5% of the stocks (US Stocks Z-score allocator), the rest into the world fund.
   const usTotal = US_STOCK_TICKERS.reduce((s, t) => s + (c.valueByTicker[t] || 0), 0);
@@ -8307,7 +8312,7 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
   // Freedom up to 20% of IBKR + Freedom after everything else step 4 puts
   // at IBKR (individual stocks, US Treasuries).
   parts.vwce = Math.max(0, Math.min(fundAdd,
-    FREEDOM_SHARE * (c.ibkr + c.freedom + indAdd + parts.usBonds + fundAdd) - c.freedom - parts.usBondsFreedom));
+    fShare * (c.ibkr + c.freedom + indAdd + parts.usBonds + fundAdd) - c.freedom - parts.usBondsFreedom));
   parts.vwra = fundAdd - parts.vwce;
   if (parts.vwce > 0) rows.push(['4.1', 'World fund — VWCE at Freedom (up to 20% of IBKR + Freedom)', parts.vwce, '']);
   if (parts.vwra > 0) rows.push(['4.1', 'World fund — VWRA at IBKR', parts.vwra, '']);
@@ -8577,6 +8582,12 @@ function mpSalaryDeltas(c, plan) {
   for (const id of ['mp_salary_revolut', 'mp_salary_ruliquid', 'mp_salary_rucash', 'mp_salary_sellyuan', 'mp_salary_sellstocks']) {
     document.getElementById(id).addEventListener('change', () => mpDrawCharts());
   }
+  const noFreedom = document.getElementById('mp_salary_nofreedom');
+  try { noFreedom.checked = localStorage.getItem('mp_salary_nofreedom') === '1'; } catch { /* no storage */ }
+  noFreedom.addEventListener('change', () => {
+    try { localStorage.setItem('mp_salary_nofreedom', noFreedom.checked ? '1' : '0'); } catch { /* no storage */ }
+    mpDrawCharts();
+  });
   // chart 3's emergency fund switch, remembered in this browser
   const cushion = document.getElementById('mp_charts_cushion');
   try { cushion.checked = localStorage.getItem('mp_charts_cushion') === '1'; } catch { /* no storage */ }
@@ -13930,6 +13941,7 @@ const MP_FUND_NAMES_RU = {
   TSPX: 'Т-Капитал США 50', AKFN: 'Альфа Индекс финансов', AKGP: 'Альфа Управляемые валютные облигации', AKMB: 'Альфа Управляемые облигации',
   AKME: 'Альфа Управляемые акции', AKMM: 'Альфа Денежный рынок', AMNY: 'АТОН Накопительный в юанях',
   SAFE: 'Сбер Консервативный', SBBY: 'Сбер Инструменты в юанях', SBMM: 'Сбер Сберегательный',
+  T: 'Т-Технологии',   // not AT&T (the funds' lists' T): the MOEX one, bought in roubles
 };
 // Blocked securities (price_freezes: worth 0 from the day they froze) get a
 // "(blocked)" mark, so a -100% reads as frozen, not sold.
@@ -14266,15 +14278,20 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   const note = dlg.querySelector('#mp_price_note');
   // the company, its country (a flag) and sector from the funds' lists (securities), instead of the
   // ticker again: "NVDA · NVIDIA Corp 🇺🇸 · Information Technology"
-  sb.from('securities').select('name, country, country_code, sector').or(`market_ticker.eq.${asset},ticker.eq.${asset}`).limit(1)
+  let ccyReady = () => {};
+  const ccyKnown = new Promise(r => { ccyReady = r; });
+  sb.from('securities').select('name, country, country_code, sector, currency').or(`market_ticker.eq.${asset},ticker.eq.${asset}`)
     .then(async ({ data }) => {
-      const s = data?.[0];
+      // one ticker, two companies (T: AT&T in the funds' lists, T-Technologies on MOEX): the one in the
+      // currency of one's deals; none of them -- the broker's name from the deals
+      const c = await ccyKnown;
+      const s = (data || []).find(x => !c || !x.currency || String(x.currency).toUpperCase() === c);
       if (!s) {
         // no fund's list has it: a name of ours, or the broker's from its latest deal ("Zynex-ао (сделка …)")
         let name = MP_FUND_NAMES_RU[asset] || MP_ASSET_NAMES[asset];
         if (!name) {
           const { data: t } = await sb.from('trades').select('note').eq('ticker', asset).in('side', ['buy', 'sell']).or('note.ilike.*(сделка*,note.ilike.*(market order*').order('trade_date', { ascending: false }).limit(1);
-          name = String(t?.[0]?.note || '').replace(/\s*\((сделка|market order)[^)]*\)\s*$/, '').replace(/^паи\s+[БЗ]ПИФ\s+рфи\s+/i, '').replace(/-ао$/, '').trim();
+          name = String(t?.[0]?.note || '').replace(/\s*\((сделка|market order)[^)]*\)\s*$/, '').replace(/^паи\s+[БЗ]ПИФ\s+рфи\s+/i, '').replace(/(-|\s+)ао$/, '').trim();
         }
         if (name && name.toLowerCase() !== String(title).toLowerCase())
           dlg.querySelector('#mp_price_meta').textContent = `${title !== asset && !numbered ? `· ${asset} ` : ''}· ${name}`;
@@ -14302,6 +14319,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     // the paper's currency: the one most of its deals are in (SBBY's first buys were in yuan, the rest in roubles)
     { const n = new Map(); for (const d of deals) if (d.currency) { const c = String(d.currency).toUpperCase(); n.set(c, (n.get(c) || 0) + 1); }
       ccy = [...n].sort((a, b) => b[1] - a[1])[0]?.[0] || 'USD'; }
+    ccyReady(n.size ? ccy : null);
     if (wallet.length) {
       // ...and Snowball's old rows of the coin go (its "sell" of 23.09.2025 was the network fee of a move from Trust to Bybit)
       const CHAIN = { cryptocom: 'Crypto.com', bybit: 'Bybit', binance: 'Binance', telegram: 'Telegram Wallet' };
@@ -14400,7 +14418,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       ...payWallet.map(w => ({ day: String(w.tx_time).slice(0, 10), amount: Number(w.amount), ccy: String(w.symbol).toUpperCase(), account: w.chain, what: 'interest' })),
     ].filter(p => Number.isFinite(p.amount) && p.amount !== 0).sort((a, b) => a.day.localeCompare(b.day));
     fx = ccy === 'USD' ? [] : await mpXlsxFetchAll(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', ccy).order('day'));
-  } catch (err) { note.textContent = String(err.message || err); return; }
+  } catch (err) { ccyReady(null); note.textContent = String(err.message || err); return; }
   // One thing under several tickers (merged funds: VWRA and VWCE are one fund, one ISIN, in dollars and
   // in euros): the main ticker's history, and before its first day the longest other one's, scaled to
   // meet it there (VWRA's history starts 23.03.2026, VWCE's months before)
@@ -14634,6 +14652,17 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         lines.push({ type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: avg, y1: avg, line: { color: '#8b949e', width: 1, dash: 'dot' }, layer: 'below' });
         label(avg, `avg ${fmt(avg)}`, '#30363d', '#e6edf3');
         avgNote = ` · average buy price ${fmt(avg)} for ${Math.round(qty * 1e6) / 1e6} held (${last0 ? `${last0.v >= avg ? '+' : ''}${((last0.v / avg - 1) * 100).toFixed(1)}%` : ''})`;
+      }
+    }
+    // the two labels on the right (today's price, the average) apart when they'd overlap: ~22 px of the plot's
+    if (notes.length) {
+      const ys = [...vs, ...notes.filter(n => n.xref === 'paper').map(n => n.y)], span = (Math.max(...ys) - Math.min(...ys)) || 1;
+      const px = v => v / span * 350;   // the plot's ~350 px tall
+      const side = notes.filter(n => n.xref === 'paper');
+      if (side.length === 2 && px(Math.abs(side[0].y - side[1].y)) < 22) {
+        const [hi, lo] = side[0].y >= side[1].y ? side : [side[1], side[0]];
+        const gap = (22 - px(Math.abs(side[0].y - side[1].y))) / 2;
+        hi.yshift = gap; lo.yshift = -gap;
       }
     }
     Plotly.react(dlg.querySelector('#mp_price_chart'), traces, Object.assign({}, LAYOUT_BASE, {
