@@ -134,6 +134,7 @@ Deno.serve(async (req) => {
         const { error: upErr } = await supabase.from('receipts').update({
           store_printed: r.store, chain: r.chain, city: r.city, country: r.country,
           ...(r.venue ? { venue: r.venue } : {}),
+          online: r.online,
           purchased_at: r.purchasedAt, note, updated_at: new Date().toISOString(),
         }).eq('id', receiptId);
         if (upErr) throw new Error(upErr.message);
@@ -143,7 +144,7 @@ Deno.serve(async (req) => {
         const { data: ins, error: insErr } = await supabase.from('receipts').insert({
           user_id: user.id, source: 'receipt_csv', receipt_key: r.receiptKey,
           purchased_at: r.purchasedAt, purchased_on: r.date,
-          store_printed: r.store, chain: r.chain, city: r.city, country: r.country, venue: r.venue,
+          store_printed: r.store, chain: r.chain, city: r.city, country: r.country, venue: r.venue, online: r.online,
           currency: r.currency, total: r.total, note: leftoverNote || null,
         }).select('id').single();
         if (insErr) throw new Error(insErr.message);

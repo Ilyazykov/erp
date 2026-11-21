@@ -952,7 +952,8 @@ function mpMagtiReceiptsCsv(docs) {
     payments.push(p);
   }
   const q = v => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
-  const out = ['receipt,date,time,store,chain,city,country,currency,total,line,item,item_en,qty,unit,unit_price_list,unit_price_paid,line_total,barcode,note'];
+  // online: paid on the site, not at a place (import-receipts leaves it without one)
+  const out = ['receipt,date,time,store,chain,city,country,currency,total,line,item,item_en,qty,unit,unit_price_list,unit_price_paid,line_total,barcode,note,online'];
   for (const p of payments) {
     const how = p.method === 'card' ? `bank card${p.card ? ` …${p.card}` : ''}` : p.method;
     const pack = MP_MAGTI_PACKAGES[p.amount];
@@ -960,7 +961,7 @@ function mpMagtiReceiptsCsv(docs) {
     out.push([`MAGTI-${p.number}-${p.day.replace(/-/g, '')}-${p.time.replace(/:/g, '')}`, p.day, p.time.slice(0, 5), 'Magticom', 'Magticom', '', 'GE', 'GEL',
       p.amount.toFixed(2), 1, pack ? `${pack[0]} (${p.number})` : `${p.topup ? 'ბალანსის შევსება' : 'გადახდა'} ${p.number}`,
       pack ? `${pack[1]} (${p.number})` : `${p.topup ? 'Balance top-up' : 'Payment'}, number ${p.number}`,
-      1, 'pcs', p.amount.toFixed(2), p.amount.toFixed(2), p.amount.toFixed(2), '', pack ? `${paid[0].toUpperCase()}${paid.slice(1)}` : how ? `Paid by ${how}` : ''].map(q).join(','));
+      1, 'pcs', p.amount.toFixed(2), p.amount.toFixed(2), p.amount.toFixed(2), '', pack ? `${paid[0].toUpperCase()}${paid.slice(1)}` : how ? `Paid by ${how}` : '', 1].map(q).join(','));
   }
   return { csv: payments.length ? out.join('\n') + '\n' : null, payments };
 }

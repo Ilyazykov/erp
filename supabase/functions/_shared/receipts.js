@@ -117,6 +117,8 @@ export function parseReceiptCsv(text) {
       lineTotal, barcode: cell(cells, 'barcode') || null, note: cell(cells, 'note') || null,
       // optional: where a delivery service brought it from (Wolt's restaurant) -- the place
       venue: cell(cells, 'venue') || null,
+      // optional: paid online (MyMagti's top-ups) -- no place
+      online: /^(1|true|yes)$/i.test(cell(cells, 'online')),
     };
     if (!byReceipt.has(printedReceipt)) byReceipt.set(printedReceipt, []);
     byReceipt.get(printedReceipt).push(row);
@@ -158,6 +160,7 @@ export function parseReceiptCsv(text) {
       purchasedAt: first.time ? `${first.date}T${first.time}:00Z` : null,
       store: first.store, chain: first.chain || null, city: first.city, country: first.country,
       venue: rows.find(r => r.venue)?.venue || null,
+      online: rows.some(r => r.online),
       currency: first.currency, total: first.total,
       lines: lines2.map(r => ({
         lineNo: r.lineNo, namePrinted: r.item, nameEn: r.itemEn, qty: r.qty, unit: r.unit,
