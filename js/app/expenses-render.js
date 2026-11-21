@@ -30,6 +30,17 @@ async function mpExpEnsureRows(status) {
 
 // The spending in the period: the ring by category and the list, each
 // category opening onto its rows. c: mpRenderExpenses' figures
+// a row's amount with its currency's sign ("₾21.44", "€7.62", "$8.20"); a currency with no sign keeps its code
+function mpExpAmount(n, ccy) {
+  const sign = typeof MP_CURRENCY_SYMBOLS !== 'undefined' && MP_CURRENCY_SYMBOLS[ccy];
+  try {
+    const s = new Intl.NumberFormat('en-US', { style: 'currency', currency: ccy, currencyDisplay: 'narrowSymbol', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
+    if (sign) return s.replace(/^(-?)[^\d-]+/, `$1${sign}`);
+    if (!s.includes(ccy)) return s;
+  } catch { /* not a currency Intl knows (a crypto ticker) */ }
+  // no sign (RSD, BTC, ...): the number and the code, a crypto amount to its satoshi
+  return `${n.toLocaleString('en-US', { maximumFractionDigits: 8 })} ${ccy}`;
+}
 async function mpExpDrawSpent(c) {
   const { cats, ccy, conv, daysIn, esc, from, groupedTop, meta, money, perDayText, rowMoney, sym, to, total } = c;
   const donut = document.getElementById('plot_exp_donut');
@@ -60,7 +71,7 @@ async function mpExpDrawSpent(c) {
       ${r.src === 'receipt_csv'
         ? `<td class="exp-account" data-src="${esc(r.src)}" data-xid="${esc(r.xid || '')}" title="Click to set the account" style="text-align:left;cursor:pointer">${esc(r.account)}</td>`
         : `<td style="text-align:left">${esc(r.account)}</td>`}
-      <td>${r.amt.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${r.ccy}</td><td>${rowMoney(conv(r))}</td></tr>`).join('')}</tbody></table></div>`;
+      <td>${esc(mpExpAmount(r.amt, r.ccy))}</td><td>${rowMoney(conv(r))}</td></tr>`).join('')}</tbody></table></div>`;
   const catList = document.getElementById('exp_categories');
   // the list: the groups always (food, travel, housing, ...), and without "by
   // group" each one's categories under it, indented -- the same groups either way
