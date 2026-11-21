@@ -1205,6 +1205,7 @@ function renderChart(id) {
         HLINE(-1.5, '#e05252', 'dot'),
       ]), CONFIG);
     Plotly.newPlot('plot_targetweights', DATA.targetWeights, DATA.targetWeightsLayout, CONFIG);
+    mpChartOnClick('plot_targetweights');
   } else if (id === 'usstocks') {
     Plotly.newPlot('plot_us_zscore', DATA.usZscore,
       layoutWith('Z-score', [
@@ -1213,6 +1214,7 @@ function renderChart(id) {
         HLINE(-1.5, '#e05252', 'dot'),
       ]), CONFIG);
     Plotly.newPlot('plot_us_targetweights', DATA.usTargetWeights, DATA.usTargetWeightsLayout, CONFIG);
+    mpChartOnClick('plot_us_targetweights');
   } else if (id === 'userp') {
     // "from 2016" (on by default): the charts get only the months from 2016 -- the
     // years before are neither drawn nor in the range slider; off -- the whole history
@@ -1613,6 +1615,7 @@ async function loadData() {
       theta: usTwTheta,
       width: usTwWidth,
       name: 'Target (relative to Base)',
+      customdata: usTwRows.map(r => r.ticker),   // a sector's click: its price chart (mpChartOnClick)
       marker: {
         color: usTwRows.map(r => usTickerColor[r.ticker] || '#8b949e'),
         opacity: 0.85,
@@ -2045,6 +2048,7 @@ async function loadData() {
       theta: twTheta,
       width: twWidth,
       name: 'Target (relative to Base)',
+      customdata: twRows.map(r => r.ticker),   // a sector's click: its price chart (mpChartOnClick)
       marker: {
         color: twRows.map(r => TICKER_COLORS[r.ticker] || '#8b949e'),
         opacity: 0.85,
@@ -9854,6 +9858,7 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
       type: 'barpolar',
       r: radial, theta, width,
       name: 'Your portfolio (relative to target)',
+      customdata: usable.map(it => (/^[A-Z0-9][A-Z0-9.\-]{0,9}$/.test(it.label) ? it.label : null)),
       marker: {
         color: usable.map(it => it.color),
         opacity: 0.85,
@@ -9884,6 +9889,7 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
     },
   ];
   Plotly.newPlot(divId, traces, mpDonutLayout(maxR), { displayModeBar: false, responsive: true });
+  mpChartOnClick(divId);
 }
 
 async function mpRenderPortfolioPies() {
@@ -14221,6 +14227,16 @@ function mpShortName(ticker, name) {
 const MP_PRICE_PERIODS = [['1m', 1], ['3m', 3], ['6m', 6], ['YTD', 'ytd'], ['1y', 12], ['2y', 24], ['3y', 36], ['4y', 48], ['5y', 60], ['all', null]];
 // opts.also: other tickers of the same thing whose deals are marked too (the
 // portfolio map's merged gold: XAU's price, the deals of XAU and XAUT)
+// a chart's sector or bar whose point carries a ticker (customdata): its price chart
+function mpChartOnClick(id) {
+  const el = typeof id === 'string' ? document.getElementById(id) : id;
+  if (!el?.on) return;
+  el.removeAllListeners?.('plotly_click');   // newPlot again (a re-render): one handler, not two
+  el.on('plotly_click', ev => {
+    const t = ev.points?.find(p => typeof p.customdata === 'string' && p.customdata)?.customdata;
+    if (t) mpOpenPriceDialog(t, t);
+  });
+}
 // a ticker in any table marked data-chart (the target weights, the money to allocate): its price chart
 document.addEventListener('click', ev => {
   const td = ev.target.closest?.('[data-chart]');
