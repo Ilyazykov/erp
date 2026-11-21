@@ -510,6 +510,210 @@ async function mpTbankPdfCsvs(docs) {
   }
   return out;
 }
+// Sber's statements (PDF, СберБанк Онлайн -> Выписки и справки, Russian or English, 21.11.2026)
+// as this project's bank CSV (statements/sber/sber_*.csv, import-bank-csv): the debit card's
+// payment account, the credit card, the savings account and a deposit. Every row carries the
+// balance after it: each one must follow from the one before, and the period's opening and
+// closing balances and in / out totals must match -- a statement read wrong is left out.
+// A card statement lists what was processed within its period, under the day each operation was
+// made: a day at its edges can have operations that came in another statement -- such a day,
+// with stored rows this statement hasn't, is left out (else the upload took them away).
+function mpIsSberPdf(rows) {
+  const t = rows.slice(0, 8).map(r => r.cells.map(c => c.s).join(' ')).join('\n');
+  return /www\.sberbank\.ru/.test(t) && /Выписка по|statement/i.test(t);
+}
+// { kind: 'card' | 'account', product, account, currency, from, to, opening, closing, inflow,
+// outflow, limit, depositType, rate, opened, txs: [{ date, time, amount, balance, category,
+// desc, auth, processed, card }] (the oldest first, in the order of the balances) } or { error }
+function mpSberPdfParse({ rows }) {
+  const iso = d => d.replace(/^(\d{2})\.(\d{2})\.(\d{4})$/, '$3-$2-$1');
+  const num = s => { const m = String(s ?? '').replace(/[\s ₽]/g, '').match(/^([+-]?\d+(?:,\d{1,2})?)$/); return m ? Number(m[1].replace(',', '.')) : null; };
+  const DATE = /^\d{2}\.\d{2}\.\d{4}$/, TIME = /^\d{2}:\d{2}$/;
+  const lines = rows.map(r => r.cells.map(c => c.s).join(' '));
+  const txt = lines.join('\n');
+  const title = lines.slice(0, 8).find(l => /Выписка по|statement/i.test(l) && !/sberbank\.ru/.test(l)) || '';
+  const period = txt.match(/(?:За период|For the period) (\d{2}\.\d{2}\.\d{4}) — (\d{2}\.\d{2}\.\d{4})/);
+  const account = txt.match(/(?:Номер сч[её]та|Account No\.)\s+(\d{5} \d{3} \d \d{4} \d{7})/)?.[1]?.replace(/ /g, '');
+  if (!period || !account) return { error: 'Sber statement: its period or account number not found' };
+  const from = iso(period[1]), to = iso(period[2]);
+  // a header figure: the cell after its label (the header's two columns share lines)
+  const label = re => {
+    for (const { cells } of rows.slice(0, 60)) {
+      const i = cells.findIndex(c => re.test(c.s));
+      if (i >= 0 && cells[i + 1]) { const v = num(cells[i + 1].s); if (v != null) return v; }
+    }
+    return null;
+  };
+  const esc = d => d.replace(/\./g, '\\.');
+  const opening = label(new RegExp(`^(?:Остаток на|Balance as of) ${esc(period[1])}$`));
+  const closing = label(new RegExp(`^(?:Остаток на|Balance as of) ${esc(period[2])}$`));
+  const inflow = label(/^(?:Пополнение|Deposit)$/), outflow = label(/^(?:Списание|Withdrawal)$/);
+  if (opening == null || closing == null || inflow == null || outflow == null) return { error: 'Sber statement: its balances or in / out totals not found -- not loaded' };
+  const BY_CODE = { 810: 'RUB', 643: 'RUB', 840: 'USD', 978: 'EUR', 156: 'CNY' };
+  const currency = BY_CODE[account.slice(5, 8)] || 'RUB';
+  let kind, product, depositType = '';
+  if (/платёжному|платежному|Payment account/i.test(title)) { kind = 'card'; product = 'debit_card'; }
+  else if (/кредитной карты|credit card/i.test(title)) { kind = 'card'; product = 'credit_card'; }
+  else if (/«Накопительный сч[её]т»|Savings account/i.test(title)) { kind = 'account'; product = 'savings_account'; }
+  else if (/по вкладу «(.+)»/.test(title)) { kind = 'account'; product = 'term_deposit'; depositType = title.match(/по вкладу «(.+)»/)[1]; }
+  else return { error: `Sber statement "${title}": not a kind read here -- to Claude` };
+  const limit = label(/^(?:Кредитный лимит|Credit limit)$/);
+  if (product === 'credit_card' && limit == null) return { error: 'Sber statement: the credit card\'s limit not found -- not loaded' };
+  const rate = txt.match(/(?:Процентная ставка|Interest rate)\s+([\d.,]+%)/)?.[1] || '';
+  const opened = txt.match(/(?:Дата открытия сч[её]та|Дата заключения договора|Account opening date)\s+(\d{2}\.\d{2}\.\d{4})/)?.[1] || '';
+  const txs = [];
+  let cur = null, stage = 0, lastY = null;   // stage 1: the row's first line read, 2: its second
+  for (const { cells: c, y } of rows) {
+    const at = (a, b) => c.filter(x => x.x >= a && x.x < b);
+    // a line of the row before: just under its last one (not the page's foot, the next page)
+    const near = cur && lastY != null && lastY - y > 0 && lastY - y <= 16;
+    if (kind === 'card') {
+      if (c[0] && DATE.test(c[0].s) && c[0].x < 100 && c[1] && TIME.test(c[1].s) && c[1].x < 150) {
+        const amt = at(380, 495)[0]?.s, bal = at(495, 999)[0]?.s;
+        if (num(amt) == null || num(bal) == null) return { error: `Sber statement: a row of ${c[0].s} without its amount or balance -- not loaded` };
+        cur = { date: iso(c[0].s), time: c[1].s, amount: /^\+/.test(amt.trim()) ? num(amt) : -num(amt), balance: num(bal), category: at(150, 380).map(x => x.s), desc: [], auth: '', processed: '' };
+        txs.push(cur); stage = 1; lastY = y; continue;
+      }
+      if (near && stage === 1 && c[0] && DATE.test(c[0].s) && c[0].x < 100 && c[1] && c[1].x < 150) {
+        cur.processed = iso(c[0].s); cur.auth = c[1].s; cur.desc.push(...at(150, 380).map(x => x.s)); stage = 2; lastY = y; continue;
+      }
+      if (near && c.length && c.every(x => x.x >= 150 && x.x < 380)) { (stage === 1 ? cur.category : cur.desc).push(...c.map(x => x.s)); lastY = y; continue; }
+      cur = null; stage = 0;
+    } else {
+      if (c[0] && DATE.test(c[0].s) && c[0].x < 100 && c[1] && c[1].x < 248) {
+        const amt = at(430, 515)[0]?.s, bal = at(515, 999)[0]?.s;
+        if (num(amt) == null || num(bal) == null) return { error: `Sber statement: a row of ${c[0].s} without its amount or balance -- not loaded` };
+        cur = { date: iso(c[0].s), time: '', amount: num(amt), balance: num(bal), category: [], desc: at(100, 248).map(x => x.s), auth: at(248, 430).map(x => x.s).join(' '), processed: '' };
+        txs.push(cur); lastY = y; continue;
+      }
+      if (near && c.length && c.every(x => x.x >= 100 && x.x < 248)) {
+        if (!/^к\/с |^corr/i.test(c[0].s)) cur.desc.push(...c.map(x => x.s));
+        lastY = y; continue;
+      }
+      cur = null;
+    }
+  }
+  const r2 = x => Math.round(x * 100) / 100;
+  let openingNow = opening;
+  for (const t of txs) {
+    t.desc = t.desc.join(' ').replace(/\s+/g, ' ').trim();
+    t.category = t.category.join(' ').replace(/\s+/g, ' ').trim();
+    t.card = t.desc.match(/\*{4}(\d{4})/)?.[1] || '';
+  }
+  // the credit card's limit set ("-", +the limit, 09.10.2021): not money -- left out, the
+  // balance it starts at taken as the opening one
+  const limitSet = product === 'credit_card' ? txs.find(t => t.desc === '-' && Math.abs(t.amount - limit) < 0.005) : null;
+  if (limitSet) { txs.splice(txs.indexOf(limitSet), 1); openingNow = r2(opening + limitSet.amount); }
+  // the order the money moved in: the statement lists a day's rows out of it (06.10.2021: 12:11,
+  // then 14:29, 14:37 below it), so from the opening balance on, each next row is one whose
+  // amount takes the balance before it to its own -- of that day, the earliest such (by time,
+  // then the lowest on the page). None: the statement's own balances don't add up there (06.11.2020,
+  // the account's first day) -- the earliest row, its balance as the statement has it. The
+  // opening and the closing balance and the totals must still add up.
+  const chain = [];
+  let bal = openingNow, breaks = 0;
+  for (const day of [...new Set(txs.map(t => t.date))].sort()) {
+    const left = txs.filter(t => t.date === day).reverse();
+    while (left.length) {
+      let best = -1;
+      for (let k = 0; k < left.length; k++) {
+        if (Math.abs(r2(bal + left[k].amount) - left[k].balance) > 0.005) continue;
+        if (best < 0 || left[k].time < left[best].time) best = k;
+      }
+      if (best < 0) {
+        breaks++;
+        best = 0;
+        for (let k = 1; k < left.length; k++) if (left[k].time < left[best].time) best = k;
+      }
+      const [t] = left.splice(best, 1);
+      bal = t.balance;
+      chain.push(t);
+    }
+  }
+  // the totals: a statement read wrong is left out. A credit card's can differ from its rows
+  // (the 09.10.2021–23.09.2026 one: out 10 080 more than its rows have, its balances still
+  // following each other): its rows go in, the difference said
+  const sum = r2(txs.reduce((a, t) => a + t.amount, 0));
+  const ins = r2(txs.filter(t => t.amount > 0).reduce((a, t) => a + t.amount, 0)), outs = r2(-txs.filter(t => t.amount < 0).reduce((a, t) => a + t.amount, 0));
+  let warning = '';
+  if (Math.abs(r2(openingNow + sum) - closing) > 0.005 || Math.abs(ins - inflow) > 0.005 || Math.abs(outs - outflow) > 0.005) {
+    const msg = `in ${ins} / out ${outs} read, the statement says ${inflow} / ${outflow} (balance ${opening} -> ${closing})`;
+    if (product !== 'credit_card') return { error: `Sber statement: ${msg} -- not loaded` };
+    warning = `the statement's own totals differ from its rows: ${msg}`;
+  }
+  return { kind, product, account, currency, from, to, opening, closing, inflow, outflow, limit, depositType, rate, opened, txs: chain, breaks, warning };
+}
+// docs: [{ name, rows }] of Sber's statements (mpIsSberPdf) -> [{ text, file?, checked? }]: a bank
+// CSV per statement (sber_<account>_<from>_<to>.csv). A row already stored (the same account,
+// day, time and amount) keeps its stored description (the key: updated, not doubled, its labels
+// kept). An account's row is "<operation> (<the account>)", as the CSVs made by hand have it.
+// The credit card's balance is the debt (what's left of the limit minus the limit).
+async function mpSberPdfCsvs(docs) {
+  const out = [], seen = new Map();
+  const r2 = x => Math.round(x * 100) / 100;
+  const q = v => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+  for (const d of docs) {
+    const p = mpSberPdfParse(d);
+    if (p.error) { out.push({ text: `${d.name}: ${p.error}` }); continue; }
+    const key = `${p.account}|${p.from}|${p.to}|${p.txs.length}|${p.closing}`;
+    if (seen.has(key)) { out.push({ text: `${d.name}: the same statement as ${seen.get(key)} -- left out.` }); continue; }
+    seen.set(key, d.name);
+    const { account, product, currency } = p;
+    const what = `${d.name}: Sber statement, ${product} …${account.slice(-4)} ${currency}, ${p.from} – ${p.to}`;
+    const txs = p.txs.filter(t => t.amount !== 0);
+    if (!txs.length) { out.push({ text: `${what}: no transactions, balance ${p.closing} -- noted as checked to ${p.to}.`, checked: { name: d.name, from: p.from, to: p.to } }); continue; }
+    const deposit = product === 'savings_account' || product === 'term_deposit';
+    const named = product === 'savings_account' ? 'Накопительный счёт' : `вклад «${p.depositType}»`;
+    for (const t of txs) t.description = deposit ? `${t.desc} (${named})` : t.desc;
+    const days = [...new Set(txs.map(t => t.date))].sort();
+    const first = days[0], last = days[days.length - 1];
+    const stored = deposit
+      ? await mpFetchAll(() => sb.from('trades').select('external_id, trade_date').eq('external_source', `sber_deposit_csv:${account}`)
+        .gte('trade_date', first).lte('trade_date', last).order('id'))
+      : await mpFetchAll(() => sb.from('bank_transactions').select('external_id, tx_date').eq('external_source', `sber_csv:${account}`)
+        .gte('tx_date', `${first}T00:00:00Z`).lte('tx_date', `${last}T23:59:59.999Z`).eq('synthetic', false).order('id'));
+    const ids = stored.map(s => s.external_id.replace(/:dup\d+$/, ''));
+    const taken = new Set();
+    let kept = 0;
+    for (const t of txs) {
+      const head = `${account}:${t.date}:${t.time}:`, tail = `:${Number(t.amount.toFixed(2))}`;
+      const i = ids.findIndex((id, n) => !taken.has(n) && id.startsWith(head) && id.endsWith(tail) && id.length > head.length + tail.length);
+      t.matched = i >= 0;
+      if (i < 0) continue;
+      taken.add(i);
+      const desc = ids[i].slice(head.length, -tail.length);
+      if (desc !== t.description) kept++;
+      t.description = desc;
+    }
+    // the days at the statement's edges with stored rows it hasn't: left out
+    let use = txs;
+    const skipped = [];
+    {
+      const strangers = new Set(stored.filter((s, n) => !taken.has(n)).map(s => String(s.tx_date ?? s.trade_date).slice(0, 10)));
+      const lead = days.filter(x => x < p.from && strangers.has(x)).pop();
+      const trailFrom = mpDayShift(p.to, -4);
+      const trail = days.filter(x => x >= trailFrom && strangers.has(x) && txs.filter(t => t.date === x).every(t => t.matched))[0];
+      use = txs.filter(t => !(lead && t.date <= lead) && !(trail && t.date >= trail));
+      for (const x of days) if ((lead && x <= lead) || (trail && x >= trail)) skipped.push(x);
+    }
+    let depositName = '';
+    if (deposit) {
+      const { data: prev } = await sb.from('trades').select('ticker').eq('external_source', `sber_deposit_csv:${account}`).order('trade_date', { ascending: false }).limit(1);
+      depositName = prev?.[0] ? prev[0].ticker.replace(/^(?:DEPOSIT|SAVINGS):Sber [A-Z]{3}\s*/, '') : product === 'term_deposit' ? `${p.rate} ${p.opened}`.trim() : '';
+    }
+    const csv = ['bank,account_number,product,currency,date,time,card,description,amount,balance,category_bank,auth_code,processing_date,deposit_name,source_file',
+      ...use.map(t => ['Sber', account, product, currency, t.date, t.time, t.card, t.description || '(no description in statement)', t.amount.toFixed(2),
+        (product === 'credit_card' ? r2(t.balance - p.limit) : t.balance).toFixed(2), t.category, t.auth, t.processed, depositName, d.name].map(q).join(','))].join('\n') + '\n';
+    const closing = product === 'credit_card' ? r2(p.closing - p.limit) : p.closing;
+    out.push({
+      text: `${what}: ${use.length} transaction(s)${kept ? ` (${kept} under the description already stored)` : ''}, balance ${closing.toFixed(2)}`
+        + `${p.warning ? `; ${p.warning}` : ''}`
+        + `${skipped.length ? `; left out ${skipped.join(', ')}: stored rows of those days aren't in this statement (processed outside its period) -- they stay` : ''}.`,
+      file: use.length ? new File([csv], `sber_${account}_${p.from}_${p.to}.csv`, { type: 'text/csv' }) : null,
+    });
+  }
+  return out;
+}
 // Wolt's receipts (PDFs, 14.11.2026) as this project's receipt CSV: an order comes as two --
 // the venue's (the food, "Receipt #...") and Wolt's own ("Wolt delivery receipt #...": delivery,
 // service fee) -- and is paid as one (TBC: "POS - WOLT GEORGIA LTD", the sum of both). Both are
@@ -583,8 +787,8 @@ async function mpImportFiles(files) {
   const { data: { session } } = await sb.auth.getSession();
   if (!session) { listEl.textContent = 'Sign in first.'; return; }
   if (!mpImportRunning) listEl.textContent = '';
-  // PDFs, read here: Raiffeisen's, Alfa-Bank's and T-Bank's statements -- each its own CSV of
-  // the statement's days -- and Wolt's receipts (an order's two put together, one receipt CSV)
+  // PDFs, read here: Raiffeisen's, Alfa-Bank's, T-Bank's and Sber's statements -- each its own
+  // CSV of the statement's days -- and Wolt's receipts (an order's two put together, one receipt CSV)
   const pdfs = files.filter(f => /\.pdf$/i.test(f.name));
   if (pdfs.length) {
     files = files.filter(f => !pdfs.includes(f));
@@ -635,16 +839,18 @@ async function mpImportFiles(files) {
       // T-Bank's statements: a bank CSV per account, all read together ("Перевод себе" takes
       // its contract from the other statement)
       const tbank = docs.filter(d => mpIsTbankPdf(d.rows));
-      docs = docs.filter(d => !tbank.includes(d));
-      if (tbank.length) {
-        for (const r of await mpTbankPdfCsvs(tbank)) {
+      const sber = docs.filter(d => !tbank.includes(d) && mpIsSberPdf(d.rows));
+      docs = docs.filter(d => !tbank.includes(d) && !sber.includes(d));
+      if (tbank.length || sber.length) {
+        const bankWise = [['T-Bank', tbank, mpTbankPdfCsvs], ['Sber', sber, mpSberPdfCsvs]];
+        for (const r of (await Promise.all(bankWise.map(([bank, ds, f]) => (ds.length ? f(ds) : []).then(rs => rs.map(r => ({ ...r, bank })))))).flat()) {
           const rl = document.createElement('div');
           rl.textContent = r.text;
           listEl.appendChild(rl);
           if (r.file) files.push(r.file);
           if (r.checked) {
             // no movements: nothing to import, but the account's checked to the statement's end
-            await sb.from('statement_uploads').insert({ account: 'T-Bank', kind: 'bank_csv', file_name: r.checked.name, period_from: r.checked.from, period_to: r.checked.to });
+            await sb.from('statement_uploads').insert({ account: r.bank, kind: 'bank_csv', file_name: r.checked.name, period_from: r.checked.from, period_to: r.checked.to });
             mpImportedSinceRefresh = true;
           }
         }
@@ -746,7 +952,7 @@ const MP_ACCOUNT_SOURCE = {
   'Ziraat Bank': 'Ziraat internet banking → account activity (Hesap Hareketleri) → Excel (.xlsx). Upload as is.',
   Raiffeisen: 'Raiffeisen statements (PDF) → to Claude, who adds them to the combined Raiffeisen CSV.',
   'T-Bank': 'Broker and ЦФА: synced every morning through the T-Invest API (T-Bank broker automatic sync, below the uploads); or T-Investments → reports → broker report (.xlsx) / the Atomyze report, upload as is. Cards, credit card, current and savings accounts, deposit: «Справка о движении средств» (PDF, Russian or English) for each contract, uploaded as is (all together: a transfer between them is named by the other statement); metal account → to Claude.',
-  Sber: 'Broker: SberBank Online → Инвестиции → account → Отчёты и справки → broker report (.html, one per month), upload as is. Card and savings account: Выписки и справки → PDF → to Claude.',
+  Sber: 'Broker: SberBank Online → Инвестиции → account → Отчёты и справки → broker report (.html, one per month), upload as is. Cards, credit card, savings account, deposits: Выписки и справки → PDF (Russian or English), uploaded as is.',
   Alfa: 'Alfa-Online → statements of the current, salary and Alfa-Account (PDF), uploaded as is; broker account: Alfa-Investments → broker report (XML), uploaded as is.',
   'Yandex Bank': 'Yandex Bank app → statement for each contract (current account, «Сейв») (PDF) → to Claude.',
   'Ozon Bank': 'Ozon Bank app → Ещё → Получить справку → О движении средств → language → основной / накопительный / кредитная карта (PDF, one each) → to Claude.',
@@ -777,8 +983,8 @@ const MP_PART_SOURCE = {
   'T-Bank|Deposits & savings': '«Справка о движении средств» (PDF) for each deposit / savings contract, uploaded as is.',
   'T-Bank|Metals': '«Справка о движении средств» (PDF) for the metal account → to Claude.',
   'Sber|Broker': 'SberBank Online → Инвестиции → account → Отчёты и справки → broker report (.html, one per month), upload as is.',
-  'Sber|Cards & current accounts': 'SberBank Online → card → Выписки и справки → PDF → to Claude.',
-  'Sber|Deposits & savings': 'SberBank Online → savings account → Выписки и справки → PDF → to Claude.',
+  'Sber|Cards & current accounts': 'SberBank Online → card → Выписки и справки → PDF, uploaded as is (the credit card too).',
+  'Sber|Deposits & savings': 'SberBank Online → savings account → Выписки и справки → PDF, uploaded as is.',
   'Alfa|Cards & current accounts': 'Alfa-Online → statements of the current, salary and Alfa-Account (PDF). Upload as is.',
   'Alfa|Broker': 'Alfa-Investments → broker report (XML). Upload as is.',
   'Yandex Bank|Cards & current accounts': 'Yandex Bank app → statement of the current account (PDF) → to Claude.',
