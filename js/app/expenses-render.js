@@ -1,9 +1,9 @@
 // The Expenses tab drawn (mpRenderExpenses) and its controls.
 
-async function mpRenderExpenses() {
-  mpExpAskFirstDay();
-  const status = document.getElementById('exp_status');
-  if (!document.getElementById('exp_from').value) mpExpSetPeriod(document.getElementById('exp_period').value, new Date().toISOString().slice(0, 10));
+// The tab's rows in mpExpCache: the period on screen first, then the whole history
+// in the background, and a period not in yet before its figures; false on an error
+// (written into status)
+async function mpExpEnsureRows(status) {
   if (!mpExpCache) {
     // the period on screen first, then the whole history in the background
     status.textContent = 'Loading transactions…';
@@ -14,7 +14,7 @@ async function mpRenderExpenses() {
       const [cache, totals] = await Promise.all([mpExpLoad(range), mpExpLoadTotals().catch(() => [])]);
       mpExpCache = cache;
       mpExpCache.totals = totals;
-    } catch (error) { status.textContent = error.message; return; }
+    } catch (error) { status.textContent = error.message; return false; }
     mpExpFull = false;
     mpExpLoadRest();
   }
@@ -23,87 +23,15 @@ async function mpRenderExpenses() {
   const want = { from: document.getElementById('exp_from').value, to: document.getElementById('exp_to').value };
   if (!mpExpFull && !mpExpCovers(want)) {
     status.textContent = 'Loading…';
-    try { mpMergeExpCache(await mpExpLoad(want)); } catch (error) { status.textContent = error.message; return; }
+    try { mpMergeExpCache(await mpExpLoad(want)); } catch (error) { status.textContent = error.message; return false; }
   }
-  status.textContent = mpExpFull ? '' : 'Loading the rest of the history…';
-  mpExpUpdateNav();
-  const { skipped, usdPer } = mpExpCache;
-  const spreadOn = document.getElementById('exp_spread').checked;
-  // worked out rather than recorded (the cash that left no trace, ...): shown or not
-  const withExtrapolated = document.getElementById('exp_extrapolated').checked;
-  const recorded = withExtrapolated ? mpExpCache.spent : mpExpCache.spent.filter(r => !r.extrapolated);
-  const spent = spreadOn ? recorded : recorded.map(r => ({ ...r, day: r.paid_day, tx_date: r.paid_day }));
-  // a period with no end is where one still is: to today
-  const periods = mpExpCache.periods.map(p => ({ ...p, end_day: p.end_day ?? new Date().toISOString().slice(0, 10) }));
-  const lifeName = p => `${p.place}${p.company ? ' with ' + p.company : ''}`;
-  const dmy = d => d.slice(8, 10) + '.' + d.slice(5, 7) + '.' + d.slice(0, 4);
-  const lifeSel = document.getElementById('exp_life');
-  const { from, to } = mpExpRange();
-  const ccy = document.getElementById('exp_ccy').value;
-  const sym = { EUR: '€', USD: '$', RUB: '₽' }[ccy];
-  // spending a day: periods of any length side by side -- the days up to today
-  // (none to come in a period not over yet)
-  const today = new Date().toISOString().slice(0, 10);
-  const daysIn = (f, t) => Math.max(0, Math.round((Date.parse(t < today ? t : today) - Date.parse(f)) / 86400000) + 1);
-  const perDay = (f, t) => {
-    const n = daysIn(f, t);
-    if (!n) return null;
-    let sum = 0;
-    for (const r of spent) if (r.day >= f && r.day <= t && Number.isFinite(r.usd)) sum += r.usd / usdPer(ccy, r.day);
-    return sum / n;
-  };
-  const perDayText = v => v == null ? '' : (ccy === 'RUB' ? `${Math.round(v).toLocaleString('en-US')} ₽` : sym + Math.round(v).toLocaleString('en-US')) + ' a day';
-  const lifeKey = [ccy, spreadOn, withExtrapolated, spent.length].join('|');
-  if (periods.length && lifeSel.mpKey !== lifeKey) {
-    lifeSel.mpKey = lifeKey;
-    lifeSel.length = 1;
-    periods.forEach((p, i) => lifeSel.add(new Option(
-      `${dmy(p.start_day)} – ${dmy(p.end_day)}: ${lifeName(p)} · ${perDayText(perDay(p.start_day, p.end_day))}`, i)));
-  }
-  const here = periods.filter(p => p.start_day <= to && p.end_day >= from);
-  document.getElementById('exp_life_now').textContent = here.length
-    ? 'Where: ' + here.map(p => `${lifeName(p)} ${dmy(p.start_day)} – ${dmy(p.end_day)}`).join(' · ') : '';
-  lifeSel.value = String(periods.findIndex(p => p.start_day === from && p.end_day === to)).replace('-1', '');
-  const conv = r => r.usd / usdPer(ccy, r.day);
-  const money = v => {
-    const n = Math.round(v).toLocaleString('en-US');
-    return ccy === 'RUB' ? `${n} ₽` : sym + n;
-  };
-  // a single row's equivalent: to the cent (a coffee is $1.73, not $2)
-  const rowMoney = v => {
-    const n = v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    return ccy === 'RUB' ? `${n} ₽` : sym + n;
-  };
-  const esc = s => String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
-  const inPeriod = list => list.filter(r => r.day >= from && r.day <= to && Number.isFinite(r.usd));
-  const rows = inPeriod(spent);
-  const known = Object.fromEntries(MP_EXP_CATS.map(c => [c[0], { icon: c[1], color: c[2] }]));
-  // a category the page doesn't know yet (a new rule's): grey, like Other
-  const meta = new Proxy(known, { get: (t, k) => t[k] ?? MP_EXP_GROUP_META[k] ?? { icon: '•', color: '#4b5560' } });
-  // by group: the categories of one group (MP_EXP_GROUPS) as one line
-  const groupedTop = document.getElementById('exp_grouped_top').checked;
-  const group = (list, byGroup = false) => {
-    const g = new Map();
-    for (const r of list) {
-      const cat = byGroup ? MP_EXP_GROUPS[r.cat] ?? r.cat : r.cat;
-      if (!g.has(cat)) g.set(cat, { cat, total: 0, rows: [] });
-      const e = g.get(cat);
-      e.total += conv(r);
-      e.rows.push(r);
-    }
-    return [...g.values()].sort((a, b) => b.total - a.total);
-  };
-  const cats = group(rows, groupedTop);
-  // the fixed order of MP_EXP_CATS (housing, food, transport, travel, ...,
-  // transfers to people, cash, the unsorted), a group where its first
-  // category is; one the page doesn't know yet before that tail
-  const rank = cat => {
-    const i = MP_EXP_CATS.findIndex(c => c[0] === cat || MP_EXP_GROUPS[c[0]] === cat);
-    return i >= 0 ? i : MP_EXP_CATS.findIndex(c => c[0] === 'Transfers to people') - 0.5;
-  };
-  cats.sort((a, b) => rank(a.cat) - rank(b.cat) || b.total - a.total);
-  const total = cats.reduce((s, c) => s + c.total, 0);
+  return true;
+}
 
+// The spending in the period: the ring by category and the list, each
+// category opening onto its rows. c: mpRenderExpenses' figures
+async function mpExpDrawSpent(c) {
+  const { cats, ccy, conv, daysIn, esc, from, groupedTop, meta, money, perDayText, rowMoney, sym, to, total } = c;
   const donut = document.getElementById('plot_exp_donut');
   await Plotly.react(donut, [{
     type: 'pie', hole: 0.78, sort: false, direction: 'clockwise',
@@ -177,7 +105,10 @@ async function mpRenderExpenses() {
     box.innerHTML = rowsTable(c.rows);
     box.style.display = '';
   });
+}
 
+async function mpExpDrawIncome(c) {
+  const { ccy, esc, from, money, rowMoney, sym, to, total, usdPer } = c;
   // income in the period, as the spending above: a ring by kind (a salary, a
   // flat's rent, ...) and the list, each kind opening onto its transfers --
   // on the day each came in (not spread over the month it's for, as the bars do)
@@ -236,30 +167,12 @@ async function mpRenderExpenses() {
     box.innerHTML = incTable(c.rows);
     box.style.display = '';
   });
+}
 
-  // the chosen span to this month, by month / quarter / year, stacked by category --
-  // not tied to the period above, so stepping through periods leaves it as it is
-  const span = document.getElementById('exp_span').value;
-  const step = document.getElementById('exp_step').value;
-  const bars = document.getElementById('plot_exp_months');
-  const totalsRows = mpExpCache.totals || [];
-  const barsKey = [today, span, step, ccy, spent.length, totalsRows.length, mpExpCache.incomeDays.length,
-    (mpExpCache.loaded || []).length, mpExpFull, periods.length, spreadOn, withExtrapolated,
-    document.getElementById('exp_income').value, document.getElementById('exp_grouped').checked].join('|');
-  if (bars.mpExpKey !== barsKey) {
-  bars.mpExpKey = barsKey;
-  // the spending and the income by calendar month / quarter / year: the monthly
-  // sums (month_totals, migration ...190 -- the whole history at once), each row
-  // at its own day's rate in each currency, as the rows were; "spread prepaid
-  // rent" picks the months by day or by paid_day. To today (a rolling month /
-  // quarter / year) needs the days: from the rows, as they come in
-  const rolling = /_td$/.test(step);
-  const ccyCol = ccy.toLowerCase();
-  const expMonths = totalsRows.filter(r => r.kind === 'expense' && r.basis === (spreadOn ? 'day' : 'paid') && r.counted
-    && (withExtrapolated || !r.extrapolated));
-  const incMonths = totalsRows.filter(r => r.kind === 'income');
-  // the records' first day (the rows with no dollar sum too): a bar the records start in, "only from ..."
-  const first = expMonths.reduce((m, r) => (r.first_day && r.first_day < m ? r.first_day : m), today);
+// The bars over time: their labels (a calendar month / quarter / year, or
+// one ending today), the bar a day falls in and the first day counted;
+// a rolling one's days into mpExpRollingDays
+function mpExpBarBuckets(rolling, step, span, today, first) {
   const buckets = [];
   let bucket, startDay;
   if (rolling) {
@@ -300,6 +213,58 @@ async function mpRenderExpenses() {
       if (buckets[buckets.length - 1] !== b) buckets.push(b);
     }
   }
+  return { buckets, bucket, startDay };
+}
+const mpMonthEnd = m => new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7), 0)).toISOString().slice(0, 10);
+const mpNextMonth = m => new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7), 1)).toISOString().slice(0, 7);
+// the working days (Mon-Fri) of a..z
+function mpWorkDays(a, z) {
+  let n = 0;
+  for (let d = a; d <= z; d = mpDayShift(d, 1)) if (![0, 6].includes(new Date(d + 'T00:00:00Z').getUTCDay())) n++;
+  return n;
+}
+// an expectation's pay days up to `until`, each with its share of the month's
+// amount: a month paid on its last day; a first month begun after its 1st, its
+// working days' share, paid with the next month (the new job from 20.10.2026:
+// 9 of October's 22 working days on top of November's salary)
+function mpExpExpectedPays(e, until) {
+  const out = [];
+  for (let m = e.from_day.slice(0, 7); m <= until.slice(0, 7); m = mpNextMonth(m)) {
+    const a = m + '-01', z = mpMonthEnd(m);
+    if (e.to_day && a > e.to_day) break;
+    const from = e.from_day > a ? e.from_day : a, to = e.to_day && e.to_day < z ? e.to_day : z;
+    const share = mpWorkDays(from, to) / mpWorkDays(a, z);
+    out.push([from > a ? mpMonthEnd(mpNextMonth(m)) : z, share]);
+  }
+  return out;
+}
+
+async function mpExpDrawBars(c) {
+  const { ccy, conv, dmy, known, lifeName, meta, money, periods, spent, spreadOn, sym, today, withExtrapolated } = c;
+  // the chosen span to this month, by month / quarter / year, stacked by category --
+  // not tied to the period above, so stepping through periods leaves it as it is
+  const span = document.getElementById('exp_span').value;
+  const step = document.getElementById('exp_step').value;
+  const bars = document.getElementById('plot_exp_months');
+  const totalsRows = mpExpCache.totals || [];
+  const barsKey = [today, span, step, ccy, spent.length, totalsRows.length, mpExpCache.incomeDays.length,
+    (mpExpCache.loaded || []).length, mpExpFull, periods.length, spreadOn, withExtrapolated,
+    document.getElementById('exp_income').value, document.getElementById('exp_grouped').checked].join('|');
+  if (bars.mpExpKey === barsKey) return;
+  bars.mpExpKey = barsKey;
+  // the spending and the income by calendar month / quarter / year: the monthly
+  // sums (month_totals, migration ...190 -- the whole history at once), each row
+  // at its own day's rate in each currency, as the rows were; "spread prepaid
+  // rent" picks the months by day or by paid_day. To today (a rolling month /
+  // quarter / year) needs the days: from the rows, as they come in
+  const rolling = /_td$/.test(step);
+  const ccyCol = ccy.toLowerCase();
+  const expMonths = totalsRows.filter(r => r.kind === 'expense' && r.basis === (spreadOn ? 'day' : 'paid') && r.counted
+    && (withExtrapolated || !r.extrapolated));
+  const incMonths = totalsRows.filter(r => r.kind === 'income');
+  // the records' first day (the rows with no dollar sum too): a bar the records start in, "only from ..."
+  const first = expMonths.reduce((m, r) => (r.first_day && r.first_day < m ? r.first_day : m), today);
+  const { buckets, bucket, startDay } = mpExpBarBuckets(rolling, step, span, today, first);
   // by group: the shades of one colour (MP_EXP_GROUPS) as one bar part
   const catOf = document.getElementById('exp_grouped').checked ? c => MP_EXP_GROUPS[c] ?? c : c => c;
   // to today, or to this month's end (a month of rent paid ahead is in it)
@@ -371,7 +336,7 @@ async function mpRenderExpenses() {
   // two days aren't all in yet
   const lastWhole = buckets.map((x, k) => k).filter(k => !partial[k]).pop();
   const here = periods.filter(p => p.start_day <= today && p.end_day >= today).sort((x, y) => y.start_day.localeCompare(x.start_day))[0];
-  const dayShift = (d, n) => new Date(Date.parse(d + 'T00:00:00Z') + n * 86400000).toISOString().slice(0, 10);
+  const dayShift = mpDayShift;
   let paceFrom = lastWhole !== undefined ? mpExpBucketDays(buckets[lastWhole])[0] : today;
   if (here && here.start_day > paceFrom) paceFrom = here.start_day;
   // the transport's pace not from the first week at a new place: the airport,
@@ -483,29 +448,6 @@ async function mpRenderExpenses() {
   // month yet; the other kinds (interest, coupons, the flat's rent, ...) at the
   // last whole period's pace a day for the days left. Not the salaries of the
   // past: the job they came from may be over (Cyprus, 19.10.2026).
-  const monthEnd = m => new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7), 0)).toISOString().slice(0, 10);
-  const nextMonth = m => new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7), 1)).toISOString().slice(0, 7);
-  // the working days (Mon-Fri) of a..z
-  const workDays = (a, z) => {
-    let n = 0;
-    for (let d = a; d <= z; d = dayShift(d, 1)) if (![0, 6].includes(new Date(d + 'T00:00:00Z').getUTCDay())) n++;
-    return n;
-  };
-  // an expectation's pay days up to `until`, each with its share of the month's
-  // amount: a month paid on its last day; a first month begun after its 1st, its
-  // working days' share, paid with the next month (the new job from 20.10.2026:
-  // 9 of October's 22 working days on top of November's salary)
-  const expectedPays = (e, until) => {
-    const out = [];
-    for (let m = e.from_day.slice(0, 7); m <= until.slice(0, 7); m = nextMonth(m)) {
-      const a = m + '-01', z = monthEnd(m);
-      if (e.to_day && a > e.to_day) break;
-      const from = e.from_day > a ? e.from_day : a, to = e.to_day && e.to_day < z ? e.to_day : z;
-      const share = workDays(from, to) / workDays(a, z);
-      out.push([from > a ? monthEnd(nextMonth(m)) : z, share]);
-    }
-    return out;
-  };
   const expect = mpExpCache.incomeExpect || [];
   const expectKinds = new Set(['Salary', ...expect.map(e => e.category)]);
   const incomeProjected = buckets.map((b, i) => {
@@ -514,7 +456,7 @@ async function mpRenderExpenses() {
     if (!partial[i] || t <= today || incomeMode === 'off') return now;
     let extra = 0;
     for (const e of expect) {
-      for (const [pay, share] of expectedPays(e, t)) {
+      for (const [pay, share] of mpExpExpectedPays(e, t)) {
         if (pay <= today || pay > t || pay < f) continue;
         // (the month's income rows not all loaded yet: no frame yet)
         if (!covered(pay.slice(0, 7) + '-01', today)) return null;
@@ -611,8 +553,10 @@ async function mpRenderExpenses() {
     }
     mpRenderExpenses();
   });
-  }
+}
 
+function mpExpDrawExcluded(c) {
+  const { ccy, conv, esc, from, group, inPeriod, money, skipped, to, usdPer } = c;
   // Not counted: each row out with the row in it went to (a pair, migration
   // 155) under it, -out and +in -- the two net out
   const signed = (v, s = v < 0 ? '−' : '+') => s + money(Math.abs(v));
@@ -727,6 +671,97 @@ async function mpRenderExpenses() {
   if (exWrap.dataset.html !== exHtml) { exWrap.innerHTML = exHtml; exWrap.dataset.html = exHtml; }
   // the sections the user opened stay open: the background load draws this section again
   for (const b of openNow) exWrap.querySelectorAll('details > summary b').forEach(t => { if (t.textContent === b) t.closest('details').open = true; });
+}
+
+async function mpRenderExpenses() {
+  mpExpAskFirstDay();
+  const status = document.getElementById('exp_status');
+  if (!document.getElementById('exp_from').value) mpExpSetPeriod(document.getElementById('exp_period').value, new Date().toISOString().slice(0, 10));
+  if (!(await mpExpEnsureRows(status))) return;
+  status.textContent = mpExpFull ? '' : 'Loading the rest of the history…';
+  mpExpUpdateNav();
+  const { skipped, usdPer } = mpExpCache;
+  const spreadOn = document.getElementById('exp_spread').checked;
+  // worked out rather than recorded (the cash that left no trace, ...): shown or not
+  const withExtrapolated = document.getElementById('exp_extrapolated').checked;
+  const recorded = withExtrapolated ? mpExpCache.spent : mpExpCache.spent.filter(r => !r.extrapolated);
+  const spent = spreadOn ? recorded : recorded.map(r => ({ ...r, day: r.paid_day, tx_date: r.paid_day }));
+  // a period with no end is where one still is: to today
+  const periods = mpExpCache.periods.map(p => ({ ...p, end_day: p.end_day ?? new Date().toISOString().slice(0, 10) }));
+  const lifeName = p => `${p.place}${p.company ? ' with ' + p.company : ''}`;
+  const dmy = d => d.slice(8, 10) + '.' + d.slice(5, 7) + '.' + d.slice(0, 4);
+  const lifeSel = document.getElementById('exp_life');
+  const { from, to } = mpExpRange();
+  const ccy = document.getElementById('exp_ccy').value;
+  const sym = { EUR: '€', USD: '$', RUB: '₽' }[ccy];
+  // spending a day: periods of any length side by side -- the days up to today
+  // (none to come in a period not over yet)
+  const today = new Date().toISOString().slice(0, 10);
+  const daysIn = (f, t) => Math.max(0, Math.round((Date.parse(t < today ? t : today) - Date.parse(f)) / 86400000) + 1);
+  const perDay = (f, t) => {
+    const n = daysIn(f, t);
+    if (!n) return null;
+    let sum = 0;
+    for (const r of spent) if (r.day >= f && r.day <= t && Number.isFinite(r.usd)) sum += r.usd / usdPer(ccy, r.day);
+    return sum / n;
+  };
+  const perDayText = v => v == null ? '' : (ccy === 'RUB' ? `${Math.round(v).toLocaleString('en-US')} ₽` : sym + Math.round(v).toLocaleString('en-US')) + ' a day';
+  const lifeKey = [ccy, spreadOn, withExtrapolated, spent.length].join('|');
+  if (periods.length && lifeSel.mpKey !== lifeKey) {
+    lifeSel.mpKey = lifeKey;
+    lifeSel.length = 1;
+    periods.forEach((p, i) => lifeSel.add(new Option(
+      `${dmy(p.start_day)} – ${dmy(p.end_day)}: ${lifeName(p)} · ${perDayText(perDay(p.start_day, p.end_day))}`, i)));
+  }
+  const here = periods.filter(p => p.start_day <= to && p.end_day >= from);
+  document.getElementById('exp_life_now').textContent = here.length
+    ? 'Where: ' + here.map(p => `${lifeName(p)} ${dmy(p.start_day)} – ${dmy(p.end_day)}`).join(' · ') : '';
+  lifeSel.value = String(periods.findIndex(p => p.start_day === from && p.end_day === to)).replace('-1', '');
+  const conv = r => r.usd / usdPer(ccy, r.day);
+  const money = v => {
+    const n = Math.round(v).toLocaleString('en-US');
+    return ccy === 'RUB' ? `${n} ₽` : sym + n;
+  };
+  // a single row's equivalent: to the cent (a coffee is $1.73, not $2)
+  const rowMoney = v => {
+    const n = v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return ccy === 'RUB' ? `${n} ₽` : sym + n;
+  };
+  const esc = s => String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
+  const inPeriod = list => list.filter(r => r.day >= from && r.day <= to && Number.isFinite(r.usd));
+  const rows = inPeriod(spent);
+  const known = Object.fromEntries(MP_EXP_CATS.map(c => [c[0], { icon: c[1], color: c[2] }]));
+  // a category the page doesn't know yet (a new rule's): grey, like Other
+  const meta = new Proxy(known, { get: (t, k) => t[k] ?? MP_EXP_GROUP_META[k] ?? { icon: '•', color: '#4b5560' } });
+  // by group: the categories of one group (MP_EXP_GROUPS) as one line
+  const groupedTop = document.getElementById('exp_grouped_top').checked;
+  const group = (list, byGroup = false) => {
+    const g = new Map();
+    for (const r of list) {
+      const cat = byGroup ? MP_EXP_GROUPS[r.cat] ?? r.cat : r.cat;
+      if (!g.has(cat)) g.set(cat, { cat, total: 0, rows: [] });
+      const e = g.get(cat);
+      e.total += conv(r);
+      e.rows.push(r);
+    }
+    return [...g.values()].sort((a, b) => b.total - a.total);
+  };
+  const cats = group(rows, groupedTop);
+  // the fixed order of MP_EXP_CATS (housing, food, transport, travel, ...,
+  // transfers to people, cash, the unsorted), a group where its first
+  // category is; one the page doesn't know yet before that tail
+  const rank = cat => {
+    const i = MP_EXP_CATS.findIndex(c => c[0] === cat || MP_EXP_GROUPS[c[0]] === cat);
+    return i >= 0 ? i : MP_EXP_CATS.findIndex(c => c[0] === 'Transfers to people') - 0.5;
+  };
+  cats.sort((a, b) => rank(a.cat) - rank(b.cat) || b.total - a.total);
+  const total = cats.reduce((s, c) => s + c.total, 0);
+  const c = { ccy, sym, from, to, today, periods, spent, spreadOn, withExtrapolated, usdPer, skipped, lifeName, dmy, daysIn, perDayText,
+    conv, money, rowMoney, esc, inPeriod, known, meta, groupedTop, group, cats, total };
+  await mpExpDrawSpent(c);
+  await mpExpDrawIncome(c);
+  await mpExpDrawBars(c);
+  mpExpDrawExcluded(c);
 }
 for (const id of ['exp_from', 'exp_to']) {
   document.getElementById(id).addEventListener('change', e => {

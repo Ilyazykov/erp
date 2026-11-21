@@ -218,4 +218,24 @@ const RPC = {
     { broker: 'eb:revolut', session_set: true, valid_until: '2026-11-26', last_sync_at: '2026-11-20T07:00:00Z', last_sync_result: JSON.stringify({ written: 12, after_statement: '2026-11-15', pending: 2, checked: { window: '10.11-15.11', matched: 9 }, balances: { EUR: { bank: 1200 } } }) },
     { broker: 'eb:boc', session_set: true, valid_until: '2027-03-01', last_sync_at: null }],
 };
-export const FIXTURE = { T, RPC };
+// MOEX ISS (fake_moex.mjs): the bonds held, the OFZ on the main board, the yuan corporates
+const bond = (secid, name, mat, extra = {}) => ({ secid, name, mat, unit: 'RUB', face: 1000, price: 97.5, accrued: 12.3, board: 'TQOB',
+  rate: 12, floating: false, yield: 14.2, turnover: 5e6, duration: 700, ...extra });
+const MOEX = {
+  held: [
+    bond('RU000A10DT08', 'ГазКап 1Р-12', '2028-06-15', { unit: 'CNY', face: 100, board: 'TQCB', rate: 6.5, yield: 7.1 }),
+    bond('RU000A10C5L7', 'Медскан 1Р-01', '2027-09-10', { board: 'TQCB', rate: 18, yield: 19.5 }),
+    bond('SU29008RMFS8', 'ОФЗ-ПК 29008', '2029-10-03', { floating: true, rate: 17.2, yield: 0, price: 99.1 }),
+    bond('RU000A105104', 'РЖД 1Р-20R', '2030-03-01', { unit: 'CNY', face: 100, board: 'TQCB', rate: 5.9, offer: '2027-03-05', yield: 6.4 }),
+    bond('RU000A10D3S6', 'МегаФон 2Р-05', '2028-11-20', { board: 'TQCB', floating: true, details: 'Ключевая ставка + 1,9%', rate: 18.4, yield: 0, amortised: true }),
+  ],
+  ofz: [
+    ['SU25084RMFS3', '2027-10-06'], ['SU26236RMFS8', '2028-05-17'], ['SU26237RMFS6', '2029-03-14'], ['SU26228RMFS5', '2030-04-10'],
+    ['SU26239RMFS2', '2031-07-23'], ['SU26241RMFS8', '2032-11-17'], ['SU26244RMFS2', '2034-03-15'], ['SU26238RMFS4', '2041-05-15'],
+  ].map(([id, mat], i) => bond(id, 'ОФЗ ' + id.slice(2, 7), mat, { yield: 13 + i * 0.3, turnover: 2e6 + i * 1e6, rate: 7 + i }))
+    .concat([['SU29014RMFS6', '2026-03-25'], ['SU29022RMFS9', '2028-09-06'], ['SU29024RMFS5', '2029-04-11'], ['SU29025RMFS2', '2037-08-12']]
+      .map(([id, mat], i) => bond(id, 'ОФЗ-ПК ' + id.slice(2, 7), mat, { floating: true, rate: 16.5 + i * 0.4, yield: 0, turnover: 3e6 + i * 1e6, price: 98 + i * 0.5 }))),
+  cny: [['RU000A10A3Z4', 'НорНик 1Р-10-CNY', '2027-12-01'], ['RU000A10B4B9', 'Полюс ПБО-07', '2028-05-20'], ['RU000A107KR6', 'Роснфт 2Р-12', '2029-08-30'], ['RU000A10C1P1', 'Сбер Sb CNY', '2028-01-01']]
+    .map(([id, name, mat], i) => bond(id, name, mat, { unit: 'CNY', face: 100, board: 'TQCB', rate: 6 + i * 0.5, yield: 6.5 + i, turnover: 4e6 })),
+};
+export const FIXTURE = { T, RPC, MOEX };

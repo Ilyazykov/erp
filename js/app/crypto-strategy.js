@@ -214,7 +214,7 @@ function mpCryptoWithFair(raw) {
 }
 // the zone of an index value -- on its row's thresholds when given (mpWithZones), else MP_AHR's
 const mpAhrZone = (a, r) => (a < (r?.red ?? MP_AHR.red) ? 'red' : a > (r?.green ?? MP_AHR.green) ? 'green' : 'neutral');
-const mpDaysBefore = (day, n) => new Date(Date.parse(day + 'T00:00:00Z') - n * 86400000).toISOString().slice(0, 10);
+const mpDaysBefore = (day, n) => mpDayShift(day, -n);
 // The strategy's target share on `day` for a share of `share` %, the zone that
 // day and the last red / green before it; lastBuy / lastSell: the latest
 // buy / sale before that day. A month's step is done once: after a buy the

@@ -831,7 +831,7 @@ function mpCmpTicks(span, curFrom, curFull) {
   };
   return { tickmode: 'array', tickvals: at, ticktext: at.map(label) };
 }
-function mpCmpDay(day, k) { return new Date(Date.parse(`${day}T00:00:00Z`) + k * 86400000).toISOString().slice(0, 10); }
+function mpCmpDay(day, k) { return mpDayShift(day, k); }
 function mpCmpMonths(day, k) { const [y, m, d] = day.split('-').map(Number); return new Date(Date.UTC(y, m - 1 + k, d)).toISOString().slice(0, 10); }
 async function mpRenderCumulative() {
   const el = document.getElementById('plot_exp_cumulative');

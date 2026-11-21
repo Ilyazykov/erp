@@ -1105,7 +1105,7 @@ document.getElementById('mp_cash_snowball_export').addEventListener('click', asy
       series.get(key).push(r);
     }
     const day = d => String(d).slice(0, 10);
-    const addDays = (d, k) => new Date(Date.parse(`${d}T00:00:00Z`) + k * 86400000).toISOString().slice(0, 10);
+    const addDays = mpDayShift;
     const balanceChange = new Map();  // currency -> day -> change of all its accounts
     const bump = (m, cur, d, v) => {
       if (!m.has(cur)) m.set(cur, new Map());

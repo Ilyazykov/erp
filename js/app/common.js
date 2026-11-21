@@ -52,6 +52,11 @@ function mpDaysUntil(day) {
   return Math.ceil((Date.parse(`${day}T00:00:00Z`) - Date.now()) / 86400000);
 }
 
+// The day n days after `day` (YYYY-MM-DD; n < 0: before), in UTC.
+function mpDayShift(day, n) {
+  return new Date(Date.parse(day + 'T00:00:00Z') + n * 86400000).toISOString().slice(0, 10);
+}
+
 // A setting kept in the browser; nothing happens where storage is off.
 function mpSave(key, value) {
   try { localStorage.setItem(key, value); } catch { /* no storage */ }

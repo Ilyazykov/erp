@@ -9,8 +9,26 @@ import puppeteer from 'puppeteer-core';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { moexReply } from './fake_moex.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+// the libraries the page loads (pinned versions), fetched once into a cache: no network in the steps
+const LIBS = {
+  plotly: 'https://cdn.plot.ly/plotly-2.35.2.min.js',
+  jszip: 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
+};
+async function lib(name) {
+  const file = join(HERE, '../../node_modules/.cache', LIBS[name].split('/').pop());
+  if (!existsSync(file)) {
+    const res = await fetch(LIBS[name]);
+    if (!res.ok) throw new Error(`${LIBS[name]}: ${res.status}`);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, Buffer.from(await res.arrayBuffer()));
+  }
+  return readFileSync(file);
+}
+// the exports (My Portfolio): each button, the file it gives compared byte for byte
+const EXPORTS = [['mp_xlsx_export', 'mp_xlsx_status'], ['mp_full_snowball_export', null], ['mp_cash_snowball_export', null]];
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.csv': 'text/csv', '.svg': 'image/svg+xml', '.png': 'image/png' };
 // assets of every kind for the price chart window: Russian share, crypto, a fund, a yuan bond fund,
@@ -30,6 +48,11 @@ const PRELUDE = `(() => {
   let s = 42;
   Math.random = () => { s = (s * 16807) % 2147483647; return (s - 1) / 2147483646; };
   window.__log = [];
+  // every file the page hands over for download, kept
+  window.__files = [];
+  const realUrl = URL.createObjectURL.bind(URL);
+  URL.createObjectURL = b => { if (b instanceof Blob) __files.push(b); return realUrl(b); };
+  HTMLAnchorElement.prototype.click = function () { if (!this.download) return HTMLElement.prototype.click.call(this); };
   window.__errors = [];
   addEventListener('error', e => __errors.push('error: ' + (e.message || e.target?.src || e.target?.href || '?')), true);
   addEventListener('unhandledrejection', e => __errors.push('rejection: ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason)));
@@ -48,6 +71,71 @@ const PRELUDE = `(() => {
   } });
 })();`;
 
+// the tabs whose big renders get every option of their controls, each step on the last
+async function setValue(page, sel, v) {
+  await page.$eval(sel, (el, v) => {
+    if (el.tagName === 'SELECT') el.value = v; else if (el.type === 'checkbox') el.checked = v; else el.value = v;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }, v);
+  await settle(page);
+}
+async function everyOption(page, sel, step) {
+  const opts = await page.$eval(sel, el => [...el.options].map(o => o.value)).catch(() => []);
+  for (const v of opts.slice(0, 8)) { await setValue(page, sel, v); await step(`${sel.slice(1)}=${v || 'empty'}`.replace(/[^\w=.-]/g, '_')); }
+}
+async function clickEach(page, sel, step, max, label) {
+  for (let i = 0; i < max; i++) {
+    const ok = await page.$$eval(sel, (els, i) => { const el = els[i]; if (!el) return false; el.scrollIntoView(); el.click(); return true; }, i);
+    if (!ok) break;
+    await settle(page);
+    await step(`${label}${i}`);
+  }
+}
+const DEEP = {
+  // the salary plan, its bonds bought through the Bonds & deposits tab's buyer (mpBondCtx):
+  // the switches that spend Russian cash and liquid assets on, before and after that tab is drawn
+  async charts(page, step) {
+    const salary = async tag => {
+      for (const v of ['5700', '30000', '0']) { await setValue(page, '#mp_salary_amount', v); await step(`${tag}_salary=${v}`); }
+    };
+    const boxes = await page.$$eval('#charts input[type=checkbox][id^="mp_salary_"]', els => els.map(el => el.id));
+    for (const b of boxes) await setValue(page, '#' + b, true);
+    await step('salary_switches_on');
+    await salary('before_bonds');
+    await page.click('.tab[data-tab="maturities"]'); await settle(page);
+    await page.click('.tab[data-tab="charts"]'); await settle(page);
+    await step('after_bonds_tab');
+    await salary('after_bonds');
+  },
+  async maturities(page, step) {
+    for (const [sel, vals] of [['#mat_birth', ['1985', '1995']], ['#mat_beta', ['0', '0.5', '1']]]) for (const v of vals) { await setValue(page, sel, v); await step(`${sel.slice(1)}=${v}`); }
+    for (const sel of ['#mat_deposits', '#mat_floaters']) for (const v of [true, false]) { await setValue(page, sel, v); await step(`${sel.slice(1)}=${v}`); }
+    // the inputs it draws itself: the sum to invest, the deposits' ends, ...
+    const dyn = await page.$$eval('#maturities input:not([id^="mat_birth"]):not([id^="mat_beta"]):not([type=checkbox])',
+      els => els.map((el, i) => (el.offsetParent !== null ? [i, el.type] : null)).filter(Boolean));
+    for (const [i, type] of dyn.slice(0, 6)) {
+      for (const v of type === 'date' ? ['2027-06-30'] : ['500000', '3000000']) {
+        await page.$$eval('#maturities input:not([id^="mat_birth"]):not([id^="mat_beta"]):not([type=checkbox])', (els, [i, v]) => {
+          const el = els[i]; if (!el) return; el.value = v;
+          el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true }));
+        }, [i, v]);
+        await settle(page);
+        await step(`input${i}=${v}`);
+      }
+    }
+  },
+  async expenses(page, step) {
+    for (const sel of ['#exp_period', '#exp_ccy', '#exp_span', '#exp_step', '#exp_income', '#exp_cmp_span', '#exp_life']) await everyOption(page, sel, step);
+    await setValue(page, '#exp_period', 'year'); await step('period_year');
+    for (const b of ['#exp_prev', '#exp_prev', '#exp_next']) { await page.click(b); await settle(page); await step(b.slice(1)); }
+    for (const [sel, v] of [['#exp_from', '2025-03-01'], ['#exp_to', '2025-09-30']]) { await setValue(page, sel, v); await step(`${sel.slice(1)}=${v}`); }
+    for (const sel of ['#exp_spread', '#exp_extrapolated', '#exp_grouped_top', '#exp_grouped']) { await setValue(page, sel, true); await step(`${sel.slice(1)}=on`); }
+    await clickEach(page, '#expenses .exp-cat', step, 6, 'cat');
+    await clickEach(page, '#expenses details > summary', step, 5, 'summary');
+  },
+};
+
 // quiet: no DOM change for 700 ms (at most 20 s)
 async function settle(page) {
   await page.evaluate(() => new Promise(res => {
@@ -62,6 +150,7 @@ export async function snapshot(root, out, fixture) {
   mkdirSync(out, { recursive: true });
   const fakeSb = `{const F=${JSON.stringify(fixture)};window.__FIXTURE=F.T;window.__FIXTURE_RPC=F.RPC;}\n`
     + readFileSync(join(HERE, 'fake_supabase.js'), 'utf8');
+  const plotlyJs = await lib('plotly'), jszipJs = await lib('jszip');
   const browser = await puppeteer.launch({ executablePath: CHROME, headless: true, args: ['--window-size=1400,1000', '--lang=en-US', '--font-render-hinting=none'] });
 
   // a fresh page (empty storage) on the folder's index.html
@@ -82,16 +171,17 @@ export async function snapshot(root, out, fixture) {
         if (req.method() === 'HEAD') return reply('', TYPES[extname(f)] || 'application/octet-stream');
         return reply(readFileSync(f), TYPES[extname(f)] || 'application/octet-stream');
       }
-      if (u.hostname === 'cdn.plot.ly') return req.continue();   // the pinned version, as the page loads it
+      if (u.hostname === 'cdn.plot.ly') return reply(plotlyJs, 'text/javascript');
+      if (req.url() === LIBS.jszip) return reply(jszipJs, 'text/javascript');
       if (u.hostname === 'cdn.jsdelivr.net' && u.pathname.includes('supabase')) return reply(fakeSb, 'text/javascript');
       if (u.hostname.endsWith('supabase.co')) return reply('{}');
       if (u.hostname === 'isdayoff.ru') return reply('0'.repeat(366), 'text/plain');
-      if (u.hostname === 'iss.moex.com') return reply('{}');
+      if (u.hostname === 'iss.moex.com') return reply(JSON.stringify(moexReply(req.url(), fixture.MOEX)));
       return req.abort();
     });
     page.__console = [];
     page.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') page.__console.push(m.type() + ': ' + m.text()); });
-    await page.goto('http://erp.test/index.html', { waitUntil: 'load' });
+    await page.goto('http://erp.test/index.html', { waitUntil: 'load', timeout: 120000 });
     await settle(page);
     return { page, ctx };
   }
@@ -116,10 +206,14 @@ export async function snapshot(root, out, fixture) {
     const first = await openPage();
     const tabs = await first.page.$$eval('.tab', ts => ts.map(t => t.dataset.tab));
     await snap(first.page, '00_load');
+    // what loadData built from data/*: every chart's traces, also those no tab draws
+    writeFileSync(join(out, '00_data.json'), await first.page.evaluate(() => JSON.stringify(DATA, null, 1)));
     await first.ctx.close();
 
+    // SNAP_ONLY=exports: the exports alone (to look at them quickly)
+    const all = process.env.SNAP_ONLY !== 'exports';
     let n = 1;
-    for (const tab of tabs) {
+    for (const tab of all ? tabs : []) {
       const { page, ctx } = await openPage();
       await page.evaluate(() => { __log.length = 0; });
       await page.click(`.tab[data-tab="${tab}"]`);
@@ -150,12 +244,47 @@ export async function snapshot(root, out, fixture) {
         await settle(page);
         await snap(page, `${id}_${tab}_ctrl${String(k++).padStart(2, '0')}`);
       }
+      // every visible number field: a small sum and a big one, one field at a time
+      const nsel = `#${tab} input[type=number]`;
+      const nums = await page.$$eval(nsel, els => els.map((el, i) => (el.offsetParent !== null && !el.disabled ? i : -1)).filter(i => i >= 0));
+      for (const i of nums.slice(0, 10)) {
+        for (const v of ['5700', '250000']) {
+          await page.$$eval(nsel, (els, [i, v]) => {
+            const el = els[i]; if (!el) return; el.value = v;
+            el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true }));
+          }, [i, v]);
+          await settle(page);
+          await snap(page, `${id}_${tab}_num${i}=${v}`);
+        }
+      }
+      if (DEEP[tab]) await DEEP[tab](page, (name) => snap(page, `${id}_${tab}_deep_${name}`));
+      await ctx.close();
+    }
+
+    // the exports, one after another on a fresh page
+    {
+      const { page, ctx } = await openPage();
+      for (const [button] of EXPORTS) {
+        const before = await page.evaluate(() => __files.length);
+        await page.evaluate(() => { __log.length = 0; });
+        await page.click('#' + button);
+        await page.waitForFunction(n => __files.length > n, { timeout: 180000 }, before).catch(() => {});
+        await settle(page);
+        await snap(page, `95_export_${button}`);
+        const file = await page.evaluate(async n => {
+          const b = __files[n]; if (!b) return null;
+          const bytes = new Uint8Array(await b.arrayBuffer());
+          let s = ''; for (const x of bytes) s += String.fromCharCode(x);
+          return { type: b.type, b64: btoa(s) };
+        }, before);
+        writeFileSync(join(out, `95_export_${button}.file`), file ? Buffer.from(file.b64, 'base64') : 'no file');
+      }
       await ctx.close();
     }
 
     // the price chart window, opened straight, each also with its checkboxes flipped
     const { page, ctx } = await openPage();
-    for (const t of PRICE_ASSETS) {
+    for (const t of all ? PRICE_ASSETS : []) {
       await page.evaluate(t => { __log.length = 0; mpOpenPriceDialog(t, t); }, t);
       await settle(page);
       await snap(page, `90_price_${t}`);

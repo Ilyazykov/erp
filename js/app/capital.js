@@ -199,7 +199,7 @@ async function mpLoadExactMask() {
   const syn = synRows.map(r => ({ ...r, tx_date: r.tx_date.slice(0, 10) }));
   const bySrc = new Map();
   for (const r of syn) { if (!bySrc.has(r.external_source)) bySrc.set(r.external_source, []); bySrc.get(r.external_source).push(r); }
-  const nextDay = d => new Date(Date.parse(d + 'T00:00:00Z') + 86400000).toISOString().slice(0, 10);
+  const nextDay = d => mpDayShift(d, 1);
   for (const [src, rs] of bySrc) {
     // past the last statement row only synthetic rows: blank from the day after it
     const { data: lr, error: el } = await sb.from('bank_transactions').select('tx_date').eq('external_source', src)

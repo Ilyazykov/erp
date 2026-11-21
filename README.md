@@ -27,10 +27,12 @@ a Supabase-backed dashboard, and a set of importers for bank and broker statemen
 - `data/` — tracked CSV/JSON that the page and the charts read.
 - `statements/` — raw bank and broker files. Not in git (see `.gitignore`).
 - `tests/*.test.mjs` — unit tests (the Charts tab's targets on a synthetic portfolio, the
-  helpers in `js/app/common.js`, the portfolio map, receipts, Apple purchases); CI runs them.
+  helpers in `js/app/common.js`, the pure parts of the Bonds & deposits and Expenses tabs,
+  the portfolio map, receipts, Apple purchases); CI runs them.
 - `tests/page_snapshot/` — the whole page in headless Chrome on synthetic data, compared
   with a committed version step by step (every tab, its checkboxes and selects, the price
-  chart window): the same DOM, Plotly calls and errors, or a refactoring changed something.
+  chart window; every option of the Bonds & deposits and Expenses tabs' controls; MOEX answered by
+  `fake_moex.mjs`): the same DOM, Plotly calls and errors, or a refactoring changed something.
 - `tmp_charts/` — local chart exports. Not in git.
 
 ## Usage

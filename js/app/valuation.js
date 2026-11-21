@@ -613,30 +613,43 @@ function allocDonut(names, base, target, colors) {
   return { traces, layout };
 }
 
-async function loadData() {
-  const [rows, eyRows, usdRubRows, usdRubStats, usdRub5yRows, targetWeightsData, targetAllocationData, vkcoRows, vkcoRevenueRows, vkcoPredicted, usZscoreRows, usTargetWeightsData, usErpRows, usTargetAllocationData, damodaranErpRows] = await Promise.all([
-    fetchCsv(`${DATA_DIR}/composite_valuation.csv`),
-    fetchCsv(`${DATA_DIR}/erp_portfolio.csv`),
-    fetchCsv(`${DATA_DIR}/usd_rub_history.csv`),
-    fetchJson(`${DATA_DIR}/usd_rub_stats.json`),
-    fetchCsv(`${DATA_DIR}/usd_rub_history_5y.csv`),
-    fetchJson(`${DATA_DIR}/target_weights.json`),
-    fetchJson(`${DATA_DIR}/target_allocation.json`),
-    fetchCsv(`${DATA_DIR}/vkco_zscore.csv`),
-    fetchCsv(`${DATA_DIR}/vkco_annual_revenue.csv`),
-    fetchJson(`${DATA_DIR}/vkco_revenue_predicted.json`),
-    fetchCsv(`${DATA_DIR}/us_zscore.csv`),
-    fetchJson(`${DATA_DIR}/us_target_weights.json`),
-    fetchCsv(`${DATA_DIR}/us_erp.csv`),
-    fetchJson(`${DATA_DIR}/us_target_allocation.json`),
-    fetchCsv(`${DATA_DIR}/damodaran_erp.csv`),
-  ]);
+// EXPERIMENTAL: basket of 37 major US stocks (ticker, base weight %), Z-score
+// vs each stock's own rolling history. NOT part of the Russian ERP portfolio.
+const US_TICKERS = [
+  ['GOOGL', 6],   ['NVDA', 5],   ['LLY', 5],    ['CAT', 5],    ['LIN', 5],
+  ['GE', 4],      ['AMZN', 4],   ['WMT', 4],    ['XOM', 4],    ['NEE', 4],
+  ['PLD', 4],     ['JPM', 3],    ['BRK-B', 3],  ['JNJ', 3],    ['META', 3],
+  ['V', 2],       ['MA', 2],     ['HOOD', 2],   ['MSFT', 2],   ['AAPL', 2],
+  ['ABBV', 2],    ['TSLA', 2],   ['HD', 2],     ['PG', 2],     ['KO', 2],
+  ['SHEL', 2],    ['CVX', 2],    ['SHW', 2],    ['DUK', 2],    ['AMT', 2],
+  ['SOFI', 1.5],  ['XYZ', 1.5],  ['INTC', 1],   ['SPCX', 1],   ['FCX', 1],
+  ['SO', 1],      ['EQIX', 1],
+];
+const US_COLORS = [
+  '#4da8c8','#f0b429','#3dd68c','#22d3ee','#e05252','#a78bfa','#fb923c',
+  '#34d399','#fbbf24','#f472b6','#60a5fa','#facc15','#c084fc','#fb7185',
+  '#2dd4bf','#f97316','#84cc16','#e879f9','#38bdf8','#fde047','#f87171',
+  '#a3e635','#818cf8','#fbcfe8','#5eead4','#fdba74','#bef264','#c4b5fd',
+  '#fca5a5','#67e8f9','#d9f99d','#f0abfc','#93c5fd','#fed7aa','#99f6e4','#ddd6fe',
+];
+// the Russian portfolio's tickers' colours (the target weights donut, the pies)
+const TICKER_COLORS = {
+  SBER: '#4da8c8', YDEX: '#f0b429', T: '#3dd68c', DOMRF: '#22d3ee',
+  TRND: '#c084fc', OZON: '#e05252', AKME: '#60a5fa', AKFN: '#facc15',
+  ROSN: '#a78bfa', VTBR: '#fb923c', GMKN: '#34d399', PLZL: '#fbbf24', IRAO: '#f472b6',
+};
+const ALLOC_COLORS = { Stocks: '#4da8c8', Bonds: '#f0b429' };
 
-  // the US target split month by month (calc_us_allocation.py); no file yet -- no chart
+// A series' first and last day, for a chart's default range; none: undefined
+const dateRange = dates => (dates.length ? [dates[0], dates[dates.length - 1]] : undefined);
+
+// The target split month by month (calc_us_allocation.py, calc_target_weights.py):
+// the stock share at each step of the formula -- plain lines (the user,
+// 18.11.2026). No file yet -- no chart.
+async function usAllocHistoryChart() {
   const usAllocHistRows = await fetchCsv(`${DATA_DIR}/us_allocation_history.csv`).catch(() => []);
   const usAllocHistDates = usAllocHistRows.map(r => r.date + '-01');
-  // the stock share at each step of the formula: age alone, age + rate (the base), and the
-  // target with the Z-score's correction -- plain lines (the user, 18.11.2026)
+  // age alone, age + rate (the base), and the target with the Z-score's correction
   const usAllocHistory = usAllocHistRows.length ? [
     jsSeries(usAllocHistDates, usAllocHistRows.map(r => val(r.age_stocks)), 'Stocks by age alone', '#8b949e', { width: 1.5, dash: 'dot' }),
     // by the Fed funds rate alone, the rate itself in the hover
@@ -647,10 +660,10 @@ async function loadData() {
     jsSeries(usAllocHistDates, usAllocHistRows.map(r => val(r.base_stocks)), 'Base: age + Fed rate', '#f0b429', { width: 1.5, dash: 'dash' }),
     jsSeries(usAllocHistDates, usAllocHistRows.map(r => val(r.target_stocks)), 'Target: age + Fed rate + ERP Z-score', '#4da8c8', { width: 2.5 }),
   ] : [];
-  const usAllocHistoryRange = usAllocHistDates.length
-    ? [usAllocHistDates[0], usAllocHistDates[usAllocHistDates.length - 1]] : undefined;
-
-  // the same for the Russian portfolio (calc_target_weights.py): rate-based base, composite Z
+  return { usAllocHistory, usAllocHistoryRange: dateRange(usAllocHistDates) };
+}
+// the same for the Russian portfolio: rate-based base, composite Z
+async function ruAllocHistoryChart() {
   const ruAllocHistRows = await fetchCsv(`${DATA_DIR}/ru_allocation_history.csv`).catch(() => []);
   const ruAllocHistDates = ruAllocHistRows.map(r => r.date + '-01');
   const ruAllocHistory = ruAllocHistRows.length ? [
@@ -660,9 +673,12 @@ async function loadData() {
     }),
     jsSeries(ruAllocHistDates, ruAllocHistRows.map(r => val(r.target_stocks)), 'Target: key rate + composite ERP Z-score', '#4da8c8', { width: 2.5 }),
   ] : [];
-  const ruAllocHistoryRange = ruAllocHistDates.length
-    ? [ruAllocHistDates[0], ruAllocHistDates[ruAllocHistDates.length - 1]] : undefined;
+  return { ruAllocHistory, ruAllocHistoryRange: dateRange(ruAllocHistDates) };
+}
 
+// The Russian ERP and its tickers (composite_valuation.csv, erp_portfolio.csv,
+// the VKCO experiment): the yields, the ERP, the Z-scores.
+function ruErpCharts(rows, eyRows, vkcoRows, vkcoRevenueRows, vkcoPredicted) {
   const dates = rows.map(r => r.date + '-01');
   const series = key => rows.map(r => val(r[key]));
 
@@ -751,32 +767,43 @@ async function loadData() {
     } : null,
   ].filter(Boolean);
 
-  // EXPERIMENTAL: basket of 37 major US stocks, Z-score vs each stock's own
-  // rolling history. NOT part of the Russian ERP portfolio.
-  const US_TICKERS = [
-    ['GOOGL', 6],   ['NVDA', 5],   ['LLY', 5],    ['CAT', 5],    ['LIN', 5],
-    ['GE', 4],      ['AMZN', 4],   ['WMT', 4],    ['XOM', 4],    ['NEE', 4],
-    ['PLD', 4],     ['JPM', 3],    ['BRK-B', 3],  ['JNJ', 3],    ['META', 3],
-    ['V', 2],       ['MA', 2],     ['HOOD', 2],   ['MSFT', 2],   ['AAPL', 2],
-    ['ABBV', 2],    ['TSLA', 2],   ['HD', 2],     ['PG', 2],     ['KO', 2],
-    ['SHEL', 2],    ['CVX', 2],    ['SHW', 2],    ['DUK', 2],    ['AMT', 2],
-    ['SOFI', 1.5],  ['XYZ', 1.5],  ['INTC', 1],   ['SPCX', 1],   ['FCX', 1],
-    ['SO', 1],      ['EQIX', 1],
+  const layer2Rebal = [
+    jsSeries(dates, series('SBER_z'), 'SBER (EY)', '#4da8c8'),
+    jsSeries(dates, series('YDEX_z'), 'YDEX (Rev Yield)', '#f0b429'),
+    jsSeries(dates, series('T_z'), 'T (EY)', '#3dd68c'),
+    jsSeries(dates, series('DOMRF_z'), 'DOMRF (EY)', '#22d3ee'),
+    jsSeries(dates, series('OZON_z'), 'OZON (Rev Yield)', '#e05252'),
+    jsSeries(dates, series('ROSN_z'), 'ROSN (FCF Yield)', '#a78bfa', { visible: false }),
+    jsSeries(dates, series('VTBR_z'), 'VTBR (EY)', '#fb923c', { visible: false }),
+    jsSeries(dates, series('GMKN_z'), 'GMKN (FCF Yield)', '#34d399', { visible: false }),
+    jsSeries(dates, series('PLZL_z'), 'PLZL (FCF Yield)', '#fbbf24', { visible: false }),
+    jsSeries(dates, series('IRAO_z'), 'IRAO (EY)', '#f472b6', { visible: false }),
+    jsSeries(
+      vkcoRows.map(r => r.date + '-01'),
+      vkcoRows.map(r => val(r.z_score)),
+      'VKCO (Rev Yield, experimental — not in portfolio)',
+      '#94a3b8',
+      { visible: false },
+    ),
   ];
-  const US_COLORS = [
-    '#4da8c8','#f0b429','#3dd68c','#22d3ee','#e05252','#a78bfa','#fb923c',
-    '#34d399','#fbbf24','#f472b6','#60a5fa','#facc15','#c084fc','#fb7185',
-    '#2dd4bf','#f97316','#84cc16','#e879f9','#38bdf8','#fde047','#f87171',
-    '#a3e635','#818cf8','#fbcfe8','#5eead4','#fdba74','#bef264','#c4b5fd',
-    '#fca5a5','#67e8f9','#d9f99d','#f0abfc','#93c5fd','#fed7aa','#99f6e4','#ddd6fe',
+
+  const layer2Alloc = [
+    jsSeries(dates, series('portfolio_z'), 'Portfolio Z', '#4da8c8'),
+    jsSeries(dates, series('ofz_z'), 'OFZ Z', '#f0b429'),
+    jsSeries(dates, series('composite_erp_z'), 'Composite ERP Z (Port − OFZ)', '#3dd68c', { width: 2.5 }),
   ];
+  return { layer1, layer1Individual, revYield, fcfYield, vkcoRevenueV2, layer2Rebal, layer2Alloc };
+}
+
+// The US basket's Z-scores (us_zscore.csv), a line a ticker, the first five shown.
+function usZscoreChart(usZscoreRows) {
   const usZDates = [...new Set(usZscoreRows.map(r => r.date + '-01'))];
   const usByTicker = {};
   usZscoreRows.forEach(r => {
     (usByTicker[r.ticker] = usByTicker[r.ticker] || []).push(r);
   });
   const usMetricLabel = { EY: 'EY', Revenue: 'Rev Yield', FCF: 'FCF Yield' };
-  const usZscore = US_TICKERS.map(([ticker, weight], i) => {
+  return US_TICKERS.map(([ticker, weight], i) => {
     const trows = usByTicker[ticker] || [];
     const byDate = {};
     trows.forEach(r => { byDate[r.date + '-01'] = r; });
@@ -789,10 +816,12 @@ async function loadData() {
       { visible: i < 5 },
     );
   });
+}
 
-  // US ERP — Shiller's Excess CAPE Yield + its own Z-score, both computed
-  // from the FULL 1871-present history stored in the CSV. The full range is
-  // plotted; use the chart's zoom/pan/range-slider to focus on a period.
+// US ERP — Shiller's Excess CAPE Yield + its own Z-score, both computed
+// from the FULL 1871-present history stored in the CSV. The full range is
+// plotted; use the chart's zoom/pan/range-slider to focus on a period.
+function usErpCharts(usErpRows, damodaranErpRows) {
   const usErpDates = usErpRows.map(r => r.date + '-01');
   const usErpYield = usErpRows.map(r => val(r.excess_cape_yield_pct));
   const usErpZ = usErpRows.map(r => val(r.z_score));
@@ -860,7 +889,7 @@ async function loadData() {
   ];
 
   // Damodaran's OWN Z-score (informational only -- NOT used to drive the
-  // allocation donut below, which stays driven by Shiller's Z-score). Uses
+  // allocation donut, which stays driven by Shiller's Z-score). Uses
   // Damodaran's own date axis (2008-09+), not Shiller's (1871+), since its
   // history is much shorter.
   const damodaranDates = damodaranErpRows.map(r => r.date + '-01');
@@ -870,9 +899,50 @@ async function loadData() {
     erpFill(damodaranDates, damodaranZ, true),
     erpFill(damodaranDates, damodaranZ, false),
   ];
+  return { usErp, usErpZChart, usErpDefaultRange, damodaranZChart };
+}
 
+// A stocks vs bonds donut's table: by target, highest first. rate: the
+// rate column's label and value; zClasses: the Z-score coloured past ±1.5
+// (the US one's; the Russian one's Z is one portfolio-wide reading, plain).
+function allocTableHtml(names, base, target, z, adjustment, colors, rate, zClasses) {
+  return `
+    <table class="data-table">
+      <thead><tr>
+        <th>Category</th><th>${rate.label}</th><th>Base</th><th>Z-score</th><th>Adjustment</th><th>Target</th><th>&Delta; vs Base</th>
+      </tr></thead>
+      <tbody>
+        ${names.slice().sort((a, b) => target[b] - target[a]).map(n => {
+          const zn = z[n];
+          const zStr = zn !== null ? (zn >= 0 ? '+' : '') + zn.toFixed(2) : '—';
+          const zCls = zn === null ? 'muted' : (zn > 1.5 ? 'pos' : (zn < -1.5 ? 'neg' : 'muted'));
+          const adj = adjustment[n];
+          const adjStr = adj !== null ? (adj >= 0 ? '+' : '') + adj.toFixed(2) + ' pp' : '—';
+          const delta = target[n] - base[n];
+          const deltaStr = (delta >= 0 ? '+' : '') + delta.toFixed(2) + ' pp';
+          const deltaCls = delta > 0.05 ? 'pos' : (delta < -0.05 ? 'neg' : 'muted');
+          const adjCls = adj === null ? 'muted' : (adj > 0 ? 'pos' : (adj < 0 ? 'neg' : 'muted'));
+          return `<tr>
+            <td class="ticker" style="color:${colors[n]}">${n}</td>
+            <td>${rate.value.toFixed(2)}%</td>
+            <td>${base[n].toFixed(1)}%</td>
+            ${zClasses ? `<td class="${zCls}">${zStr}</td>` : `<td>${zStr}</td>`}
+            <td class="${adjCls}">${adjStr}</td>
+            <td>${target[n].toFixed(1)}%</td>
+            <td class="${deltaCls}">${deltaStr}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+// The US basket's target weights and its stocks vs bonds split
+// (us_target_weights.json, us_target_allocation.json): the donuts, their
+// notes and tables written into the US stocks / US ERP tabs.
+function usTargetCharts(usTargetWeightsData, usTargetAllocationData) {
   // US target weights donut — same geometry/formula as the Russian portfolio's
-  // targetWeights chart above: angular width = base weight, radial extent =
+  // targetWeights chart: angular width = base weight, radial extent =
   // R_BASE * (target/base). Purely illustrative; not a real portfolio.
   const usTwRows = usTargetWeightsData.weights;
   const usTickerColor = {};
@@ -894,16 +964,15 @@ async function loadData() {
   document.getElementById('us_targetweights_table_wrap').innerHTML = twTableHtml(usTwRows, usTickerColor);
 
   // US Stocks vs Bonds allocation donut — same formula/geometry as the
-  // Russian portfolio's allocation donut above, but driven by the US Fed
+  // Russian portfolio's allocation donut, but driven by the US Fed
   // Funds Rate (base) and the US ERP Z-score (correction) instead of the
   // CBR key rate and composite_erp_z. Purely illustrative.
-  const US_ALLOC_COLORS = { Stocks: '#4da8c8', Bonds: '#f0b429' };
   const usAllocBase = { Stocks: usTargetAllocationData.base_stocks, Bonds: usTargetAllocationData.base_bonds };
   const usAllocTarget = { Stocks: usTargetAllocationData.target_stocks, Bonds: usTargetAllocationData.target_bonds };
   const usAllocZ = { Stocks: usTargetAllocationData.z, Bonds: usTargetAllocationData.z };
   const usAllocAdjustment = { Stocks: usTargetAllocationData.stocks_adjustment, Bonds: usTargetAllocationData.bonds_adjustment };
   const usAllocNames = ['Stocks', 'Bonds'];
-  const { traces: usAllocTargetTrace, layout: usAllocTargetLayout } = allocDonut(usAllocNames, usAllocBase, usAllocTarget, US_ALLOC_COLORS);
+  const { traces: usAllocTargetTrace, layout: usAllocTargetLayout } = allocDonut(usAllocNames, usAllocBase, usAllocTarget, ALLOC_COLORS);
 
   const usAllocZStr = usTargetAllocationData.z !== null ? usTargetAllocationData.z.toFixed(2) : 'n/a';
   document.getElementById('us_alloc_target_note').innerHTML = `
@@ -925,63 +994,18 @@ async function loadData() {
     Data as of ${usTargetAllocationData.date} (updated ${usTargetAllocationData.updated}).
   `;
 
-  const usAllocTableRows = usAllocNames.slice().sort((a, b) => usAllocTarget[b] - usAllocTarget[a]);
-  document.getElementById('us_alloc_target_table_wrap').innerHTML = `
-    <table class="data-table">
-      <thead><tr>
-        <th>Category</th><th>Fed Rate</th><th>Base</th><th>Z-score</th><th>Adjustment</th><th>Target</th><th>&Delta; vs Base</th>
-      </tr></thead>
-      <tbody>
-        ${usAllocTableRows.map(n => {
-          const z = usAllocZ[n];
-          const zStr = z !== null ? (z >= 0 ? '+' : '') + z.toFixed(2) : '—';
-          const zCls = z === null ? 'muted' : (z > 1.5 ? 'pos' : (z < -1.5 ? 'neg' : 'muted'));
-          const adj = usAllocAdjustment[n];
-          const adjStr = adj !== null ? (adj >= 0 ? '+' : '') + adj.toFixed(2) + ' pp' : '—';
-          const delta = usAllocTarget[n] - usAllocBase[n];
-          const deltaStr = (delta >= 0 ? '+' : '') + delta.toFixed(2) + ' pp';
-          const deltaCls = delta > 0.05 ? 'pos' : (delta < -0.05 ? 'neg' : 'muted');
-          const adjCls = adj === null ? 'muted' : (adj > 0 ? 'pos' : (adj < 0 ? 'neg' : 'muted'));
-          return `<tr>
-            <td class="ticker" style="color:${US_ALLOC_COLORS[n]}">${n}</td>
-            <td>${usTargetAllocationData.fed_rate.toFixed(2)}%</td>
-            <td>${usAllocBase[n].toFixed(1)}%</td>
-            <td class="${zCls}">${zStr}</td>
-            <td class="${adjCls}">${adjStr}</td>
-            <td>${usAllocTarget[n].toFixed(1)}%</td>
-            <td class="${deltaCls}">${deltaStr}</td>
-          </tr>`;
-        }).join('')}
-      </tbody>
-    </table>
-  `;
+  document.getElementById('us_alloc_target_table_wrap').innerHTML = allocTableHtml(usAllocNames, usAllocBase, usAllocTarget, usAllocZ,
+    usAllocAdjustment, ALLOC_COLORS, { label: 'Fed Rate', value: usTargetAllocationData.fed_rate }, true);
+  return { usTwRows, usTargetWeights, usTargetWeightsLayout, usAllocTargetTrace, usAllocTargetLayout, usAllocTarget };
+}
 
-  const layer2Rebal = [
-    jsSeries(dates, series('SBER_z'), 'SBER (EY)', '#4da8c8'),
-    jsSeries(dates, series('YDEX_z'), 'YDEX (Rev Yield)', '#f0b429'),
-    jsSeries(dates, series('T_z'), 'T (EY)', '#3dd68c'),
-    jsSeries(dates, series('DOMRF_z'), 'DOMRF (EY)', '#22d3ee'),
-    jsSeries(dates, series('OZON_z'), 'OZON (Rev Yield)', '#e05252'),
-    jsSeries(dates, series('ROSN_z'), 'ROSN (FCF Yield)', '#a78bfa', { visible: false }),
-    jsSeries(dates, series('VTBR_z'), 'VTBR (EY)', '#fb923c', { visible: false }),
-    jsSeries(dates, series('GMKN_z'), 'GMKN (FCF Yield)', '#34d399', { visible: false }),
-    jsSeries(dates, series('PLZL_z'), 'PLZL (FCF Yield)', '#fbbf24', { visible: false }),
-    jsSeries(dates, series('IRAO_z'), 'IRAO (EY)', '#f472b6', { visible: false }),
-    jsSeries(
-      vkcoRows.map(r => r.date + '-01'),
-      vkcoRows.map(r => val(r.z_score)),
-      'VKCO (Rev Yield, experimental — not in portfolio)',
-      '#94a3b8',
-      { visible: false },
-    ),
-  ];
+// rows: [day, value]: the value as of a day (the last one on or before it), null before the first
+const stepAt = rows => { const r = rows.filter(v => Number.isFinite(v[1])).sort((a, b) => a[0] < b[0] ? -1 : 1); return d => { let lo = 0, hi = r.length - 1, v = null; while (lo <= hi) { const mid = (lo + hi) >> 1; if (r[mid][0] <= d) { v = r[mid][1]; lo = mid + 1; } else hi = mid - 1; } return v; }; };
 
-  const layer2Alloc = [
-    jsSeries(dates, series('portfolio_z'), 'Portfolio Z', '#4da8c8'),
-    jsSeries(dates, series('ofz_z'), 'OFZ Z', '#f0b429'),
-    jsSeries(dates, series('composite_erp_z'), 'Composite ERP Z (Port − OFZ)', '#3dd68c', { width: 2.5 }),
-  ];
-
+// The yuan's target by USD/RUB (the Sigmoid tab): the curve, today's point,
+// the buy / sell lines and w_CNY over the 5 years; sets wCnyNow and writes
+// the tab's note.
+async function sigmoidCharts(usdRubRows, usdRubStats, usdRub5yRows) {
   const usdRubRates = usdRubRows.map(r => val(r.rate));
   // the target from the 5-year history, today's rate (stats.json, the CBR's
   // set for today) appended when the history doesn't have it yet
@@ -989,7 +1013,6 @@ async function loadData() {
   const dates5y = usdRub5yRows.map(r => r.date);
   if (usdRubStats.date && usdRubStats.date > dates5y[dates5y.length - 1]) { dates5y.push(usdRubStats.date); rates5y.push(usdRubStats.x); }
   // the carry: the CBR's key rate (daily) less the PBoC's (monthly), each as of the day
-  const stepAt = rows => { const r = rows.filter(v => Number.isFinite(v[1])).sort((a, b) => a[0] < b[0] ? -1 : 1); return d => { let lo = 0, hi = r.length - 1, v = null; while (lo <= hi) { const mid = (lo + hi) >> 1; if (r[mid][0] <= d) { v = r[mid][1]; lo = mid + 1; } else hi = mid - 1; } return v; }; };
   let ruAt = () => null, cnAt = () => null;
   try { ruAt = stepAt((await fetchCsv(`${DATA_DIR}/key_rate.csv`)).map(r => [r.date, val(r.rate_pct)])); } catch { /* no carry then */ }
   try {
@@ -1132,19 +1155,16 @@ async function loadData() {
       hovertemplate: '%{x}<br>USD/RUB: <b>%{y:.2f}</b><extra></extra>',
     },
   ];
+  return { sigmoidAmp, sigmoidAmpShapes, sigmoidAmpAnnotations, wCny5yCombined, wCny5yZones,
+    sigmoidAxisRange: [axisMin, axisMax], sigmoidWCnyAmp, sigmoidX };
+}
 
+// The Russian portfolio's target weights and stocks vs bonds split
+// (target_weights.json, target_allocation.json): the donuts, their notes and
+// tables written into the Layer 2 tab.
+function ruTargetCharts(targetWeightsData, targetAllocationData) {
   // Target weights donut: angular width of each ticker's sector = its BASE
-  // weight (so sectors tile the full circle exactly like a normal portfolio
-  // donut, and even 1%-base tickers show up as thin slices). All sectors
-  // share ONE common outer radius (R_BASE) representing "at base weight".
-  // The radial extent actually drawn = R_BASE * (target/base), so a sector
-  // whose target equals its base ends exactly on the common circle; a
-  // sector with target > base protrudes past it; target < base falls short.
-  const TICKER_COLORS = {
-    SBER: '#4da8c8', YDEX: '#f0b429', T: '#3dd68c', DOMRF: '#22d3ee',
-    TRND: '#c084fc', OZON: '#e05252', AKME: '#60a5fa', AKFN: '#facc15',
-    ROSN: '#a78bfa', VTBR: '#fb923c', GMKN: '#34d399', PLZL: '#fbbf24', IRAO: '#f472b6',
-  };
+  // weight, radial extent = R_BASE * (target/base) (twDonut).
   const twRows = targetWeightsData.weights;
   const { traces: targetWeights, layout: targetWeightsLayout } = twDonut(twRows, TICKER_COLORS, 10);
 
@@ -1167,7 +1187,6 @@ async function loadData() {
   // Same donut geometry as Target Weights: angular width = Base%, both
   // sectors share one common reference circle, radial extent = R_BASE *
   // (target/base) so over/underweight reads as protrude/retract vs that circle.
-  const ALLOC_COLORS = { Stocks: '#4da8c8', Bonds: '#f0b429' };
   const allocBase = { Stocks: targetAllocationData.base_stocks, Bonds: targetAllocationData.base_bonds };
   const allocTarget = { Stocks: targetAllocationData.target_stocks, Bonds: targetAllocationData.target_bonds };
   // Composite ERP Z is a single portfolio-wide reading — both rows show the
@@ -1192,57 +1211,65 @@ async function loadData() {
     Data as of ${targetAllocationData.date} (updated ${targetAllocationData.updated}).
   `;
 
-  const allocTableRows = allocNames.slice().sort((a, b) => allocTarget[b] - allocTarget[a]);
-  document.getElementById('alloc_target_table_wrap').innerHTML = `
-    <table class="data-table">
-      <thead><tr>
-        <th>Category</th><th>Key Rate</th><th>Base</th><th>Z-score</th><th>Adjustment</th><th>Target</th><th>&Delta; vs Base</th>
-      </tr></thead>
-      <tbody>
-        ${allocTableRows.map(n => {
-          const z = allocZ[n];
-          const zStr = z !== null ? (z >= 0 ? '+' : '') + z.toFixed(2) : '—';
-          const adj = allocAdjustment[n];
-          const adjStr = adj !== null ? (adj >= 0 ? '+' : '') + adj.toFixed(2) + ' pp' : '—';
-          const delta = allocTarget[n] - allocBase[n];
-          const deltaStr = (delta >= 0 ? '+' : '') + delta.toFixed(2) + ' pp';
-          const deltaCls = delta > 0.05 ? 'pos' : (delta < -0.05 ? 'neg' : 'muted');
-          const adjCls = adj === null ? 'muted' : (adj > 0 ? 'pos' : (adj < 0 ? 'neg' : 'muted'));
-          return `<tr>
-            <td class="ticker" style="color:${ALLOC_COLORS[n]}">${n}</td>
-            <td>${targetAllocationData.key_rate.toFixed(2)}%</td>
-            <td>${allocBase[n].toFixed(1)}%</td>
-            <td>${zStr}</td>
-            <td class="${adjCls}">${adjStr}</td>
-            <td>${allocTarget[n].toFixed(1)}%</td>
-            <td class="${deltaCls}">${deltaStr}</td>
-          </tr>`;
-        }).join('')}
-      </tbody>
-    </table>
-  `;
+  document.getElementById('alloc_target_table_wrap').innerHTML = allocTableHtml(allocNames, allocBase, allocTarget, allocZ,
+    allocAdjustment, ALLOC_COLORS, { label: 'Key Rate', value: targetAllocationData.key_rate }, false);
+  return { twRows, targetWeights, targetWeightsLayout, allocTargetTrace, allocTargetLayout, allocBase, allocTarget };
+}
 
-  return { layer1, layer1_individual: layer1Individual, layer2_rebal: layer2Rebal,
-           layer2_alloc: layer2Alloc, revYield, fcfYield, vkcoRevenueV2, usZscore,
-           usTargetWeights, usTargetWeightsLayout, usErp, usErpZChart, usErpDefaultRange, damodaranZChart,
-           usAllocTarget: usAllocTargetTrace, usAllocTargetLayout, usAllocHistory, usAllocHistoryRange, ruAllocHistory, ruAllocHistoryRange,
-           usAllocTargetRaw: usAllocTarget,
-           sigmoidAmp, sigmoidAmpShapes, sigmoidAmpAnnotations, wCny5yCombined, wCny5yZones,
-           targetWeights, targetWeightsLayout, allocTarget: allocTargetTrace, allocTargetLayout,
-           sigmoidAxisRange: [axisMin, axisMax],
+// Every chart of the valuation tabs from data/* (written there by the daily
+// jobs), and the targets the My Portfolio pies compare against: DATA.
+async function loadData() {
+  const [rows, eyRows, usdRubRows, usdRubStats, usdRub5yRows, targetWeightsData, targetAllocationData, vkcoRows, vkcoRevenueRows, vkcoPredicted, usZscoreRows, usTargetWeightsData, usErpRows, usTargetAllocationData, damodaranErpRows] = await Promise.all([
+    fetchCsv(`${DATA_DIR}/composite_valuation.csv`),
+    fetchCsv(`${DATA_DIR}/erp_portfolio.csv`),
+    fetchCsv(`${DATA_DIR}/usd_rub_history.csv`),
+    fetchJson(`${DATA_DIR}/usd_rub_stats.json`),
+    fetchCsv(`${DATA_DIR}/usd_rub_history_5y.csv`),
+    fetchJson(`${DATA_DIR}/target_weights.json`),
+    fetchJson(`${DATA_DIR}/target_allocation.json`),
+    fetchCsv(`${DATA_DIR}/vkco_zscore.csv`),
+    fetchCsv(`${DATA_DIR}/vkco_annual_revenue.csv`),
+    fetchJson(`${DATA_DIR}/vkco_revenue_predicted.json`),
+    fetchCsv(`${DATA_DIR}/us_zscore.csv`),
+    fetchJson(`${DATA_DIR}/us_target_weights.json`),
+    fetchCsv(`${DATA_DIR}/us_erp.csv`),
+    fetchJson(`${DATA_DIR}/us_target_allocation.json`),
+    fetchCsv(`${DATA_DIR}/damodaran_erp.csv`),
+  ]);
+  const usHist = await usAllocHistoryChart();
+  const ruHist = await ruAllocHistoryChart();
+  const ru = ruErpCharts(rows, eyRows, vkcoRows, vkcoRevenueRows, vkcoPredicted);
+  const usZscore = usZscoreChart(usZscoreRows);
+  const us = usErpCharts(usErpRows, damodaranErpRows);
+  const usT = usTargetCharts(usTargetWeightsData, usTargetAllocationData);
+  const sig = await sigmoidCharts(usdRubRows, usdRubStats, usdRub5yRows);
+  const ruT = ruTargetCharts(targetWeightsData, targetAllocationData);
+
+  return { layer1: ru.layer1, layer1_individual: ru.layer1Individual, layer2_rebal: ru.layer2Rebal,
+           layer2_alloc: ru.layer2Alloc, revYield: ru.revYield, fcfYield: ru.fcfYield, vkcoRevenueV2: ru.vkcoRevenueV2, usZscore,
+           usTargetWeights: usT.usTargetWeights, usTargetWeightsLayout: usT.usTargetWeightsLayout,
+           usErp: us.usErp, usErpZChart: us.usErpZChart, usErpDefaultRange: us.usErpDefaultRange, damodaranZChart: us.damodaranZChart,
+           usAllocTarget: usT.usAllocTargetTrace, usAllocTargetLayout: usT.usAllocTargetLayout,
+           usAllocHistory: usHist.usAllocHistory, usAllocHistoryRange: usHist.usAllocHistoryRange,
+           ruAllocHistory: ruHist.ruAllocHistory, ruAllocHistoryRange: ruHist.ruAllocHistoryRange,
+           usAllocTargetRaw: usT.usAllocTarget,
+           sigmoidAmp: sig.sigmoidAmp, sigmoidAmpShapes: sig.sigmoidAmpShapes, sigmoidAmpAnnotations: sig.sigmoidAmpAnnotations,
+           wCny5yCombined: sig.wCny5yCombined, wCny5yZones: sig.wCny5yZones,
+           targetWeights: ruT.targetWeights, targetWeightsLayout: ruT.targetWeightsLayout, allocTarget: ruT.allocTargetTrace, allocTargetLayout: ruT.allocTargetLayout,
+           sigmoidAxisRange: sig.sigmoidAxisRange,
            // Raw (non-chart-trace) target figures, reused by the My Portfolio
            // pie charts to compare against the user's actual holdings —
            // see mpRenderPortfolioPies().
-           ruTargetWeightsRaw: twRows,
-           usTargetWeightsRaw: usTwRows,
-           ruAllocTargetRaw: { base: allocBase, target: allocTarget },
+           ruTargetWeightsRaw: ruT.twRows,
+           usTargetWeightsRaw: usT.usTwRows,
+           ruAllocTargetRaw: { base: ruT.allocBase, target: ruT.allocTarget },
            // The chart's actual displayed/current target (red dot + "w_CNY = NN%"
            // annotation on the sigmoid tab) is the volatility-amplified value,
            // NOT the plain fixed-k=15 wCny() -- using the latter here would
            // silently disagree with the number the user sees on that chart.
-           currentWCny: sigmoidWCnyAmp,
+           currentWCny: sig.sigmoidWCnyAmp,
            ruTickerColors: TICKER_COLORS,
            usTickerColors: US_COLORS,
-           currentUsdRub: sigmoidX };
+           currentUsdRub: sig.sigmoidX };
 }
 

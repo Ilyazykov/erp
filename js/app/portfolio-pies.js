@@ -9,16 +9,8 @@
 // Russian-stocks donut, otherwise Actual%/New% are computed against a
 // smaller denominator than the RUB columns.
 const RU_STOCK_TICKERS = ['SBER', 'YDEX', 'T', 'DOMRF', 'TRND', 'OZON', 'AKME', 'AKFN', 'ROSN', 'VTBR', 'GMKN', 'PLZL', 'IRAO'];
-// Same 37-ticker list as US_TICKERS inside loadData()'s renderChart('usstocks')
-// closure -- duplicated here (tickers only, weights not needed) since that
-// one is local to loadData() and this code runs independently of chart
-// rendering/login state.
-const US_STOCK_TICKERS = [
-  'GOOGL', 'NVDA', 'LLY', 'CAT', 'LIN', 'GE', 'AMZN', 'WMT', 'XOM', 'NEE', 'PLD',
-  'JPM', 'BRK-B', 'JNJ', 'META', 'V', 'MA', 'HOOD', 'MSFT', 'AAPL', 'ABBV',
-  'TSLA', 'HD', 'PG', 'KO', 'SHEL', 'CVX', 'SHW', 'DUK', 'AMT', 'SOFI', 'XYZ',
-  'INTC', 'SPCX', 'FCX', 'SO', 'EQIX',
-];
+// the US basket's tickers (valuation.js's US_TICKERS, without the weights)
+const US_STOCK_TICKERS = US_TICKERS.map(([t]) => t);
 
 
 
