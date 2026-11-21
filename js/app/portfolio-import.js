@@ -754,6 +754,76 @@ async function mpSberPdfCsvs(docs) {
   }
   return out;
 }
+// MyMagti's payment history (magticom.ge -> MyMagti -> ტრანზაქციები, the page printed to PDF,
+// 22.11.2026) as this project's receipt CSV, as Wolt's receipts are: each payment a receipt of
+// one line (the number paid for; "ბალანსის შევსება", a top-up, when the page shows it opened),
+// matched to the bank's row by match_receipts. Its number: Magti's number paid for, the day and
+// time; store and chain as the banks name Magti ("Magticom": Revolut's row, TBC's POS row). A
+// payment shown on several pages (each opening one) is one receipt, what each page adds put
+// together.
+function mpIsMagtiPdf(rows) {
+  return rows.some(r => r.cells.some(c => /magticom\.ge\/\S*payment-history/.test(c.s)));
+}
+// [{ amount, number, day, time, topup, method, card }]
+function mpMagtiPayments(rows) {
+  const MON = { 'იან': 1, 'თებ': 2, 'მარ': 3, 'აპრ': 4, 'მაი': 5, 'ივნ': 6, 'ივლ': 7, 'აგვ': 8, 'სექ': 9, 'ოქტ': 10, 'ნოე': 11, 'დეკ': 12 };
+  const out = [];
+  let cur = null;
+  // the page's icons (the lari sign, the calendar, the clock) are characters of its own font
+  const clean = x => x.replace(/[\uE000-\uF8FF]/g, '').trim();
+  for (const { cells: raw } of rows) {
+    const cells = raw.map(c => ({ ...c, s: clean(c.s) }));
+    const s = cells.map(c => c.s).filter(Boolean);
+    const date = s.map(x => x.match(/^(\d{1,2}) \/ (\S+) \/ (\d{4})$/)).find(Boolean);
+    const amount = cells.find(c => c.x < 200 && /^\d+(?:[.,]\d{1,2})?$/.test(c.s));
+    if (date && amount && MON[date[2]]) {
+      cur = { amount: Number(amount.s.replace(',', '.')), number: '', day: `${date[3]}-${String(MON[date[2]]).padStart(2, '0')}-${date[1].padStart(2, '0')}`, time: '', topup: false, method: '', card: '' };
+      out.push(cur);
+    }
+    if (!cur) continue;
+    for (const x of s) {
+      if (/^\d{9}$/.test(x) && !cur.number) cur.number = x;
+      else if (/^\d{2}:\d{2}:\d{2}$/.test(x) && !cur.time) cur.time = x;
+      else if (/ბალანსის შევსება/.test(x)) cur.topup = true;
+      else if (/\*{4} \*{4} \*{4} (\d{4})/.test(x)) cur.card = x.match(/(\d{4})$/)[1];
+    }
+    const m = s.findIndex(x => /^გადახდის მეთოდი:?$/.test(x));
+    if (m >= 0 && s[m + 1]) cur.method = s[m + 1] === 'საბანკო ბარათი' ? 'card' : s[m + 1];
+  }
+  return out;
+}
+// Magti's internet packages (MyMagti -> ინტერნეტი, 22.11.2026), by price in lari: a top-up of
+// exactly a package's price is that package bought (the line names it; the top-up in its note)
+const MP_MAGTI_PACKAGES = {
+  2: ['ინტერნეტი ულიმიტო, 1 დღე', 'Internet unlimited, 1 day'],
+  5: ['ინტერნეტი 1 000 MB, 30 დღე', 'Internet 1 000 MB, 30 days'],
+  9: ['ინტერნეტი 3 000 MB, 30 დღე', 'Internet 3 000 MB, 30 days'],
+  10: ['ინტერნეტი ულიმიტო, 7 დღე', 'Internet unlimited, 7 days'],
+  12: ['ინტერნეტი 5 000 MB, 30 დღე', 'Internet 5 000 MB, 30 days'],
+  30: ['ინტერნეტი 20 000 MB, 30 დღე', 'Internet 20 000 MB, 30 days'],
+  35: ['ინტერნეტი ულიმიტო, 30 დღე', 'Internet unlimited, 30 days'],
+};
+// docs: [{ name, rows }] of MyMagti's pages -> { csv, payments }; csv null when none read
+function mpMagtiReceiptsCsv(docs) {
+  const payments = [];
+  for (const d of docs) for (const p of mpMagtiPayments(d.rows)) {
+    const had = payments.find(q => q.number === p.number && q.day === p.day && q.time === p.time && q.amount === p.amount);
+    if (had) { had.method ||= p.method; had.card ||= p.card; had.topup ||= p.topup; continue; }
+    payments.push(p);
+  }
+  const q = v => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+  const out = ['receipt,date,time,store,chain,city,country,currency,total,line,item,item_en,qty,unit,unit_price_list,unit_price_paid,line_total,barcode,note'];
+  for (const p of payments) {
+    const how = p.method === 'card' ? `bank card${p.card ? ` …${p.card}` : ''}` : p.method;
+    const pack = MP_MAGTI_PACKAGES[p.amount];
+    const paid = [p.topup ? `balance top-up ${p.number}` : `payment ${p.number}`, how ? `paid by ${how}` : ''].filter(Boolean).join(', ');
+    out.push([`MAGTI-${p.number}-${p.day.replace(/-/g, '')}-${p.time.replace(/:/g, '')}`, p.day, p.time.slice(0, 5), 'Magticom', 'Magticom', '', 'GE', 'GEL',
+      p.amount.toFixed(2), 1, pack ? `${pack[0]} (${p.number})` : `${p.topup ? 'ბალანსის შევსება' : 'გადახდა'} ${p.number}`,
+      pack ? `${pack[1]} (${p.number})` : `${p.topup ? 'Balance top-up' : 'Payment'}, number ${p.number}`,
+      1, 'pcs', p.amount.toFixed(2), p.amount.toFixed(2), p.amount.toFixed(2), '', pack ? `${paid[0].toUpperCase()}${paid.slice(1)}` : how ? `Paid by ${how}` : ''].map(q).join(','));
+  }
+  return { csv: payments.length ? out.join('\n') + '\n' : null, payments };
+}
 // Wolt's receipts (PDFs, 14.11.2026) as this project's receipt CSV: an order comes as two --
 // the venue's (the food, "Receipt #...") and Wolt's own ("Wolt delivery receipt #...": delivery,
 // service fee) -- and is paid as one (TBC: "POS - WOLT GEORGIA LTD", the sum of both). Both are
@@ -828,7 +898,7 @@ async function mpImportFiles(files) {
   if (!session) { listEl.textContent = 'Sign in first.'; return; }
   if (!mpImportRunning) listEl.textContent = '';
   // PDFs, read here: Raiffeisen's, Alfa-Bank's, T-Bank's and Sber's statements -- each its own
-  // CSV of the statement's days -- and Wolt's receipts (an order's two put together, one receipt CSV)
+  // CSV of the statement's days --, MyMagti's payment history (a receipt CSV) and Wolt's receipts (an order's two put together, one receipt CSV)
   const pdfs = files.filter(f => /\.pdf$/i.test(f.name));
   if (pdfs.length) {
     files = files.filter(f => !pdfs.includes(f));
@@ -894,6 +964,17 @@ async function mpImportFiles(files) {
             mpImportedSinceRefresh = true;
           }
         }
+      }
+      // MyMagti's payment history: a receipt CSV of its payments
+      const magti = docs.filter(d => mpIsMagtiPdf(d.rows));
+      docs = docs.filter(d => !magti.includes(d));
+      if (magti.length) {
+        const { csv, payments } = mpMagtiReceiptsCsv(magti);
+        const rl = document.createElement('div');
+        rl.textContent = `${magti.map(d => d.name).join(', ')}: MyMagti payment history, ${payments.length} payment(s)`
+          + `${payments.length ? ` (${payments.map(p => `${p.day} ${p.time} ${p.amount.toFixed(2)} GEL, ${p.number}`).join('; ')})` : ''}.`;
+        listEl.appendChild(rl);
+        if (csv) files.push(new File([csv], `magti_${[...new Set(payments.map(p => p.number))].join('+')}_${payments.map(p => p.day).sort()[0]}_${payments.map(p => p.day).sort().pop()}.csv`, { type: 'text/csv' }));
       }
       if (!docs.length) { line.remove(); }
       const { csv, orders, problems } = docs.length ? mpWoltReceiptsCsv(docs) : { csv: null, orders: [], problems: [] };
