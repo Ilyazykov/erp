@@ -883,7 +883,7 @@ async function mpImportFiles(files) {
       docs = docs.filter(d => !tbank.includes(d) && !sber.includes(d));
       if (tbank.length || sber.length) {
         const bankWise = [['T-Bank', tbank, mpTbankPdfCsvs], ['Sber', sber, mpSberPdfCsvs]];
-        for (const r of (await Promise.all(bankWise.map(([bank, ds, f]) => (ds.length ? f(ds) : []).then(rs => rs.map(r => ({ ...r, bank })))))).flat()) {
+        for (const r of (await Promise.all(bankWise.map(([bank, ds, f]) => Promise.resolve(ds.length ? f(ds) : []).then(rs => rs.map(r => ({ ...r, bank })))))).flat()) {
           const rl = document.createElement('div');
           rl.textContent = r.text;
           listEl.appendChild(rl);
