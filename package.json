@@ -1,0 +1,12 @@
+{
+  "name": "erp",
+  "private": true,
+  "description": "Tests only: the page itself needs no build step.",
+  "scripts": {
+    "test": "for t in tests/*.test.mjs; do node $t || exit 1; done",
+    "test:page": "node tests/page_snapshot/compare.mjs"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^24.43.1"
+  }
+}

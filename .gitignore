@@ -5,3 +5,4 @@ tmp_charts/
 checks/
 prompts/
 docs/
+node_modules/

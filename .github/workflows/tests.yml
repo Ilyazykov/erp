@@ -17,5 +17,7 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Charts tab target checks
-        run: node tests/charts.test.mjs
+      # every tests/*.test.mjs: none needs an npm install (tests/page_snapshot/
+      # does -- and Chrome -- and is run by hand around a refactoring)
+      - name: Unit tests
+        run: for t in tests/*.test.mjs; do echo "== $t"; node "$t" || exit 1; done

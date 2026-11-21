@@ -1,0 +1,90 @@
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0d1117; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 24px; }
+  h1 { font-size: 1.3rem; font-weight: 600; color: #e6edf3; margin-bottom: 4px; }
+  .subtitle { font-size: 0.85rem; color: #6a7381; margin-bottom: 24px; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .tab { padding: 6px 16px; border-radius: 6px; border: 1px solid #1e2830; background: #13191f;
+          color: #8b949e; cursor: pointer; font-size: 0.85rem; transition: all 0.15s; }
+  .tab:hover { border-color: #4da8c8; color: #c9d1d9; }
+  .tab.active { background: #1a2a3a; border-color: #4da8c8; color: #4da8c8; }
+  .chart-wrap { background: #0d1117; border: 1px solid #1e2830; border-radius: 8px;
+                 padding: 8px; margin-bottom: 16px; display: none; }
+  .chart-wrap.active { display: block; }
+  .note { font-size: 0.78rem; color: #6a7381; margin-top: 8px; line-height: 1.5; }
+  .note b { color: #8b949e; }
+  .note .stat { color: #c9d1d9; }
+  .loading { color: #6a7381; font-size: 0.85rem; padding: 16px; }
+  .data-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 12px; }
+  .data-table th, .data-table td { padding: 6px 10px; text-align: right; border-bottom: 1px solid #1e2830; }
+  .data-table th:first-child, .data-table td:first-child { text-align: left; }
+  .data-table th { color: #8b949e; font-weight: 600; font-size: 0.78rem; background: #171d25; }
+  .data-table td.ticker { font-weight: 600; background: #171d25; }
+  /* Not counted: a gap between pairs, none between a pair's two rows */
+  .pair-rows tr.pair-out:not(:first-child) td { border-top: 10px solid #0d1117; }
+  .pair-rows tr.pair-out td { border-bottom: none; }
+  .data-table td.pos { color: #3dd68c; }
+  .data-table td.neg { color: #e05252; }
+  .data-table td.muted { color: #6a7381; }
+  .mp-src { cursor: help; text-decoration: underline dotted; position: relative; }
+  .mp-src:hover::after {
+    content: attr(data-src); position: absolute; left: 0; top: 100%; margin-top: 4px; z-index: 20;
+    width: max-content; max-width: min(520px, 80vw); white-space: normal; text-align: left;
+    background: #222c38; color: #e6edf3; border: 1px solid #3a4656; border-radius: 6px;
+    padding: 8px 10px; font-size: 0.8rem; font-weight: normal; line-height: 1.4; box-shadow: 0 4px 14px rgba(0,0,0,.4);
+  }
+  .data-table .zero { color: #4b5560; font-size: 0.78rem; }
+  .data-table .zero-held { font-size: 0.78rem; }   /* a zero where the account once held something */
+  .data-table th:last-child, .data-table td:last-child { background: #171d25; }
+  .data-table tbody tr:hover { background: #13191f; }
+  .data-table tbody tr:hover td.ticker, .data-table tbody tr:hover td:last-child { background: #1a222b; }
+  .data-table tr.total-row td { border-top: 2px solid #2a3540; border-bottom: none; background: #1c242e; }
+  .data-table tr.total-row td.ticker, .data-table tr.total-row td:last-child { background: #222c38; }
+  .data-table th.corner { background: #222c38; }
+  .auth-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; font-size: 0.85rem; }
+  .btn { padding: 6px 14px; border-radius: 6px; border: 1px solid #1e2830; background: #13191f;
+         color: #c9d1d9; cursor: pointer; font-size: 0.85rem; }
+  .btn:hover { border-color: #4da8c8; }
+  .btn:disabled { opacity: 0.35; cursor: default; border-color: #1e2830; }
+  .btn.primary { background: #1a2a3a; border-color: #4da8c8; color: #4da8c8; }
+  .btn.danger:hover { border-color: #e05252; color: #e05252; }
+  .form-row { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
+  .form-row input, .form-row select { background: #13191f; border: 1px solid #1e2830; color: #c9d1d9;
+         border-radius: 6px; padding: 6px 10px; font-size: 0.85rem; }
+  .form-row input:focus, .form-row select:focus { outline: none; border-color: #4da8c8; }
+  .section-title { font-size: 1rem; font-weight: 600; color: #e6edf3; margin: 20px 0 10px; }
+  .section-title:first-child { margin-top: 0; }
+  .pie-grid { display: flex; flex-wrap: wrap; gap: 16px; }
+  .pie-grid .pie-card { flex: 1 1 420px; max-width: 560px; min-width: 0; overflow: hidden; background: #13191f; border: 1px solid #1e2830; border-radius: 8px; padding: 12px 12px 4px; }
+  .pie-grid .pie-card h4 { margin: 0 0 4px; font-size: 0.9rem; font-weight: 600; color: #e6edf3; }
+  .pie-grid .pie-plot { height: 380px; }
+  .pie-grid .pie-plot.target { height: 440px; }
+  .pie-grid .pie-total { margin: 6px 0 8px; text-align: center; font-size: 0.9rem; color: #c9d1d9; }
+  .drop-zone { margin-top: 8px; padding: 14px; border: 1px dashed #2a3540; border-radius: 6px; color: #8b949e;
+    text-align: center; font-size: 0.85rem; }
+  .drop-zone.over { border-color: #4da8c8; color: #4da8c8; background: #13191f; }
+  .empty-note { color: #6a7381; font-size: 0.85rem; padding: 8px 0; }
+  .exp-layout { display: grid; grid-template-columns: minmax(280px, 420px) 1fr; gap: 24px; align-items: start; }
+  @media (max-width: 800px) { .exp-layout { grid-template-columns: 1fr; } }
+  .exp-cat { display: flex; align-items: center; gap: 12px; padding: 10px 8px; border-bottom: 1px solid #1e2830; cursor: pointer; }
+  .exp-cat:hover { background: #13191f; }
+  .exp-cat.exp-sub { padding-left: 40px; }
+  .exp-caret { color: #6a7381; font-weight: 400; display: inline !important; font-size: 0.8em !important; }
+  .exp-cat.exp-sub .exp-dot { width: 26px; height: 26px; font-size: 12px; }
+  .exp-dot { width: 32px; height: 32px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; font-size: 15px; }
+  .exp-name { flex: 1; min-width: 0; }
+  .exp-name b { display: block; color: #e6edf3; font-weight: 600; }
+  .exp-name span, .exp-amt span { font-size: 0.78rem; color: #6a7381; }
+  .exp-amt { text-align: right; white-space: nowrap; }
+  .exp-amt b { display: block; color: #e6edf3; font-weight: 600; }
+  .exp-rows { padding: 0 8px 8px 52px; }
+  .exp-rows .data-table { margin-top: 4px; }
+  .icon-btn { background: none; border: none; color: #6a7381; cursor: pointer; font-size: 0.9rem; padding: 2px 6px; }
+  .icon-btn:hover { color: #e05252; }
+  .card-reminder { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; padding: 10px 14px;
+    border: 1px solid #e0a83a; border-left-width: 4px; border-radius: 6px; background: #fff7e6; color: #5a3d00; font-size: 0.9rem; }
+  .card-reminder.urgent { border-color: #e05252; background: #fdecec; color: #6b1414; }
+  .card-reminder .note { color: inherit; opacity: 0.75; font-size: 0.8rem; }
+  .card-reminder.faint { border-color: #8b949e; border-left-width: 3px; background: transparent; color: #8b949e; padding: 6px 12px; font-size: 0.85rem; }
+  /* the donut's hover label next to a slice at the edge: past the plot, not cut by it */
+  #plot_exp_donut .main-svg { overflow: visible !important; }
+  [data-chart] { cursor: pointer; }

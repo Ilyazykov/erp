@@ -1,4 +1,4 @@
-// Checks the Charts tab's target pies (index.html) on a synthetic portfolio:
+// Checks the Charts tab's target pies (js/app/) on a synthetic portfolio:
 //   1. with no salary, every target pie's targets add up to its own total;
 //   2. "Russian infrastructure vs the rest": Russia's target is 5% of the total;
 //   3. with a salary, the plan buys exactly the salary (plus spent excess cash),
@@ -6,9 +6,9 @@
 // Run: node tests/charts.test.mjs
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { pageScript } from './page_scripts.mjs';
 
-const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
-const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]).join('\n');
+const script = pageScript();
 
 // A do-nothing DOM / library stand-in: any property is another stub, any call returns a stub.
 const stub = () => new Proxy(function () {}, {
@@ -205,8 +205,8 @@ await scenario('Russia above 5%, no salary money left for Russia', base, 300);
 {
   const shared = await import('../supabase/functions/_shared/income_days.js');
   const fnText = src => src.match(/function mpExpIncomeDays\(rows\) \{[\s\S]*?\n\}\n/)[0];
-  check(fnText(readFileSync(new URL('../supabase/functions/_shared/income_days.js', import.meta.url), 'utf8')) === fnText(html),
-    'income_days.js: mpExpIncomeDays is index.html\'s, word for word');
+  check(fnText(readFileSync(new URL('../supabase/functions/_shared/income_days.js', import.meta.url), 'utf8')) === fnText(script),
+    'income_days.js: mpExpIncomeDays is the page\'s, word for word');
   // a salary paid on the 5th and the 28th, a cash salary, a flat's rent with two in a month, interest a day
   const rows = [];
   const add = (day, account, category, usd) => rows.push({ day, account, category, usd, eur: usd / 1.1, rub: usd * 90 });

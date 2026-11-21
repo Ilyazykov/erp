@@ -933,7 +933,7 @@ export function drawLegend(el, scale = SATURATE_AT, unit = '%') {
 
 // ---- Wiring (runs only in the page: the container is there) ----
 // Reuses the page's own loaders (index.html's classic script globals): the pies'
-// rows (mpLoadPortfolioBase, mpSplitFundsCash, mpWithCushion), snowballFetchAll,
+// rows (mpLoadPortfolioBase, mpSplitFundsCash, mpWithCushion), mpFetchAll,
 // the Supabase client `sb`, and investment_by_asset for the colour. A period
 // switch fetches that period's earned rows once (cached); the checkboxes only
 // redraw from what is loaded.
@@ -979,7 +979,7 @@ function wireTreemap() {
       .filter(r => r.value_usd !== null && !frozen.has(String(r.ticker || '').toUpperCase()));
     // fund constituents: weight as a fraction, the market_prices ticker where the security has one
     // eslint-disable-next-line no-undef
-    const fh = await snowballFetchAll(() => sb.from('fund_holdings').select('fund, security_id, weight').order('fund').order('security_id'));
+    const fh = await mpFetchAll(() => sb.from('fund_holdings').select('fund, security_id, weight').order('fund').order('security_id'));
     const ids = [...new Set(fh.map(r => r.security_id))].filter(id => id !== 'OTHER');
     const sec = new Map();
     const companyOf = new Map();   // a constituent's company (its name): share classes of one company merge
@@ -1005,7 +1005,7 @@ function wireTreemap() {
       (fundHoldings[r.fund] = fundHoldings[r.fund] || []).push({ ticker: t, weight: Number(r.weight) / 100 });
     }
     // eslint-disable-next-line no-undef
-    const savings = await snowballFetchAll(() => sb.from('trades').select('ticker, side, quantity, price, trade_date, currency, note, id')
+    const savings = await mpFetchAll(() => sb.from('trades').select('ticker, side, quantity, price, trade_date, currency, note, id')
       .or('ticker.like.SAVINGS:%,ticker.like.DEPOSIT:%,ticker.like.ВКЛАД:%').in('side', ['buy', 'sell']).order('trade_date').order('id'));
     const { links, periods } = buildSavingsLinks(savings);
     // 'all': counted from the first purchase in the trades table
@@ -1019,7 +1019,7 @@ function wireTreemap() {
     const fx = new Map();
     if (ccys.length) {
       // eslint-disable-next-line no-undef
-      const fxRows = await snowballFetchAll(() => sb.from('fx_history').select('currency, day, usd_per_unit').in('currency', ccys).order('day'));
+      const fxRows = await mpFetchAll(() => sb.from('fx_history').select('currency, day, usd_per_unit').in('currency', ccys).order('day'));
       for (const r of fxRows) {
         if (!fx.has(r.currency)) fx.set(r.currency, []);
         fx.get(r.currency).push([r.day, Number(r.usd_per_unit)]);
