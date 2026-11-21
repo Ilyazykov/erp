@@ -389,7 +389,36 @@ async function sberStandIns(db: any, userId: string): Promise<number> {
     .eq('user_id', userId).neq('account', 'Sber').lt('amount', 0).eq('synthetic', false)
     .gte('tx_date', first[0].tx_date).ilike('description', '%829-70-%').order('tx_date');
   if (oErr) throw new Error(oErr.message);
-  const outgoing = (outs ?? []).filter((t: { description: string }) => SBER_OUT_RE.test(t.description));
+  type Outgoing = { external_source: string; external_id: string; tx_date: string; amount: number; currency: string; description: string; account: string };
+  const outgoing: Outgoing[] = (outs ?? []).filter((t: { description: string }) => SBER_OUT_RE.test(t.description));
+  // ... and (21.11.2026) a transfer by account number to one's own Sber card -- T-Bank's
+  // "External bank transfer to account 40817810942004893373, ... ПАО СБЕРБАНК", out of a card
+  // (bank_transactions) or out of a savings account / deposit (a sell in trades, the
+  // description in its note): the card's numbers are the ones its statements came under
+  // (sber_csv:<number>)
+  const { data: srcRows, error: srcErr } = await db.from('bank_transactions').select('external_source')
+    .eq('user_id', userId).eq('account', 'Sber').eq('product', 'debit_card').like('external_source', 'sber_csv:%')
+    .order('tx_date', { ascending: false }).limit(1000);
+  if (srcErr) throw new Error(srcErr.message);
+  const sberAccounts = [...new Set((srcRows ?? []).map((r: { external_source: string }) => r.external_source.split(':')[1]))]
+    .filter((a): a is string => /^\d{20}$/.test(String(a)));
+  if (sberAccounts.length) {
+    const like = (col: string) => sberAccounts.map(a => `${col}.ilike.%${a}%`).join(',');
+    const { data: byCard, error: cErr } = await db.from('bank_transactions').select('external_source, external_id, tx_date, amount, currency, description, account')
+      .eq('user_id', userId).neq('account', 'Sber').lt('amount', 0).eq('synthetic', false)
+      .gte('tx_date', first[0].tx_date).or(like('description')).order('tx_date');
+    if (cErr) throw new Error(cErr.message);
+    const { data: bySale, error: tErr } = await db.from('trades').select('external_source, external_id, trade_date, quantity, price, currency, note, account')
+      .eq('user_id', userId).neq('account', 'Sber').eq('side', 'sell').neq('external_source', SBER_STANDIN_SOURCE)
+      .gte('trade_date', String(first[0].tx_date).slice(0, 10)).or(like('note')).order('trade_date');
+    if (tErr) throw new Error(tErr.message);
+    outgoing.push(...(byCard ?? []).filter((t: Outgoing) => !outgoing.some(o => o.external_source === t.external_source && o.external_id === t.external_id)),
+      ...(bySale ?? []).map((s: { external_source: string; external_id: string; trade_date: string; quantity: number; price: number; currency: string; note: string; account: string }) => ({
+        external_source: s.external_source, external_id: s.external_id, tx_date: `${s.trade_date}T00:00:00Z`,
+        amount: -Number(s.quantity) * Number(s.price), currency: s.currency, description: s.note || '', account: s.account,
+      })));
+    outgoing.sort((a, b) => String(a.tx_date).localeCompare(String(b.tx_date)));
+  }
   if (outgoing.length) {
     const from = new Date(Date.parse(outgoing[0].tx_date) - 3 * 86400000).toISOString();
     const { data: cardIn, error } = await db.from('bank_transactions').select('tx_date, amount, currency')
