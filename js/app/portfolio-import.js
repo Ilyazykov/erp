@@ -754,6 +754,146 @@ async function mpSberPdfCsvs(docs) {
   }
   return out;
 }
+// TBC Bank's statement as PDF (tbconline.ge -> the account -> statement -> PDF, 22.11.2026): the
+// account's IBAN and the period in its head, the opening and closing balances, the totals paid out
+// and in; then the rows -- the day, the description and the additional information (each may run
+// on to a second line), the amount in the Paid Out or the Paid In column, the balance after it.
+// The PDF writes the CSV's Georgian in Latin letters ("restorani, kape, bari") and a day of the
+// month with one space ("Nov 1 2026", the CSV: "Nov  1 2026").
+function mpIsTbcPdf(rows) {
+  return rows.slice(0, 15).some(r => r.cells[0]?.s === 'Account Statement:' && r.cells.some(c => /^GE\d{2}TB\d{16}$/.test(c.s)));
+}
+// The CSV's card-payment categories, as the PDF writes them
+const MP_TBC_CATEGORIES = {
+  'restorani, kape, bari': 'რესტორანი, კაფე, ბარი',
+  'sasursato maghaziebi': 'სასურსათო მაღაზიები',
+  'skhvadaskhva kharjebi': 'სხვადასხვა ხარჯები',
+  'ghamis klubi': 'ღამის კლუბი',
+};
+// the PDF's description as the CSV has it (a category not listed above stays in Latin letters)
+function mpTbcDescription(s) {
+  return s.replace(/\b([A-Z][a-z]{2}) (\d) (\d{4} \d{1,2}:\d{2}[AP]M)/, '$1  $2 $3')
+    .replace(/(\d{1,2}:\d{2}[AP]M), (.+?), MCC:/, (m, t, cat) => `${t},  ${MP_TBC_CATEGORIES[cat] ?? cat}, MCC:`);
+}
+// -> { iban, currency, from, to, opening, closing, paidOut, paidIn, txs: [{ date, description, info, amount, balance }] } or { error }
+function mpTbcPdfParse({ rows }) {
+  const num = s => Number(s.replace(/,/g, ''));
+  const dmy = s => { const [d, m, y] = s.split('/'); return `${y}-${m}-${d}`; };
+  const head = rows.find(r => r.cells[0]?.s === 'Account Statement:');
+  const iban = head.cells.find(c => /^GE\d{2}TB\d{16}$/.test(c.s)).s;
+  const period = head.cells.map(c => c.s).filter(s => /^\d{2}\/\d{2}\/\d{4}$/.test(s));
+  const figure = label => {
+    const r = rows.find(x => x.cells[0]?.s === label);
+    const c = r?.cells.find(x => /^-?[\d,]+\.\d{2}$/.test(x.s));
+    return c ? { value: num(c.s), currency: r.cells[r.cells.indexOf(c) + 1]?.s } : null;
+  };
+  const opening = figure('Opening Balance'), closing = figure('Closing Balance'), paidOut = figure('Total Paid out'), paidIn = figure('Total Paid in');
+  if (!opening || !closing || !paidOut || !paidIn || period.length < 2) return { error: "the statement's head (period, balances, totals) not read" };
+  const txs = [];
+  let cols = null, cur = null;
+  for (const { cells } of rows) {
+    if (cells[0]?.s === 'Date' && cells.some(c => c.s === 'Balance')) {
+      // the header: Paid Out / Paid In ("Paid" twice, "Out" and "In" on the line below), Balance
+      const paid = cells.filter(c => /^Paid/.test(c.s));
+      cols = { out: paid[0].x, in: paid[1].x, info: cells.find(c => c.s === 'Additional Information').x };
+      cur = null;
+      continue;
+    }
+    if (!cols) continue;
+    if (/^\d+ - \d+$/.test(cells[0]?.s || '')) { cur = null; continue; }   // the page's number
+    const date = /^\d{2}\/\d{2}\/\d{4}$/.test(cells[0]?.s || '') ? cells[0].s : null;
+    if (date) {
+      const money = cells.filter(c => /^[\d,]+\.\d{2}$/.test(c.s) && c.x > cols.info);
+      if (money.length !== 2) return { error: `a row of ${date} has no amount and balance` };
+      const [amt, bal] = money;
+      const out = Math.abs(amt.x - cols.out) < Math.abs(amt.x - cols.in);
+      const text = cells.slice(1).filter(c => !money.includes(c));
+      // the description column ends where the additional information's begins: the first row tells it
+      cols.infoAt ??= text[1]?.x;
+      cur = { date: dmy(date), desc: [], info: [], amount: (out ? -1 : 1) * num(amt.s), balance: num(bal.s) };
+      txs.push(cur);
+      for (const c of text) (cols.infoAt != null && c.x >= cols.infoAt - 2 ? cur.info : cur.desc).push(c.s);
+      continue;
+    }
+    if (!cur) continue;
+    for (const c of cells) (cols.infoAt != null && c.x >= cols.infoAt - 2 ? cur.info : cur.desc).push(c.s);
+  }
+  const r2 = x => Math.round(x * 100) / 100;
+  // the balances: each row's the one before it and its amount; the totals and the closing balance the statement's
+  let bal = opening.value;
+  for (const t of txs) {
+    if (r2(bal + t.amount) !== r2(t.balance)) return { error: `the balance after a row of ${t.date} (${t.balance}) isn't the one before (${r2(bal)}) and its amount (${t.amount})` };
+    bal = t.balance;
+  }
+  const sum = f => r2(txs.filter(f).reduce((a, t) => a + Math.abs(t.amount), 0));
+  if (r2(bal) !== closing.value || sum(t => t.amount < 0) !== paidOut.value || sum(t => t.amount > 0) !== paidIn.value)
+    return { error: `the rows don't add up to the statement's totals (paid out ${sum(t => t.amount < 0)} / ${paidOut.value}, paid in ${sum(t => t.amount > 0)} / ${paidIn.value}, closing ${r2(bal)} / ${closing.value})` };
+  return {
+    iban, currency: opening.currency, from: dmy(period[0]), to: dmy(period[1]), opening: opening.value, closing: closing.value,
+    txs: txs.map(t => ({ date: t.date, description: mpTbcDescription(t.desc.join(' ')), info: t.info.join(' '), amount: t.amount, balance: t.balance })),
+  };
+}
+// docs: [{ name, rows }] of TBC's statements (mpIsTbcPdf) -> [{ text, file?, checked? }]: a bank CSV
+// per statement, as the bank's CSV of the same account makes (tbcToBankCsv): the same account
+// number, product, descriptions and the bank's type. A row already stored (the same account, day
+// and amount) keeps its stored description -- the key: updated, not doubled, its labels kept.
+async function mpTbcPdfCsvs(docs) {
+  const out = [], seen = new Map();
+  const q = v => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+  for (const d of docs) {
+    const p = mpTbcPdfParse(d);
+    if (p.error) { out.push({ text: `${d.name}: TBC statement: ${p.error} -- not loaded.` }); continue; }
+    const key = `${p.iban}|${p.from}|${p.to}|${p.txs.length}|${p.closing}`;
+    if (seen.has(key)) { out.push({ text: `${d.name}: the same statement as ${seen.get(key)} -- left out.` }); continue; }
+    seen.set(key, d.name);
+    const what = `${d.name}: TBC statement, ${p.iban} ${p.currency}, ${p.from} – ${p.to}`;
+    // the account: by its IBAN (TBC_ACCOUNTS), else the stored account its rows are, else by its kind
+    let acc = Object.keys(TBC_ACCOUNTS).find(n => TBC_ACCOUNTS[n].iban === p.iban);
+    let product = acc && TBC_ACCOUNTS[acc].product;
+    if (!acc && p.txs.length) {
+      const pick = await tbcMatchAccount(p.txs);
+      if (pick && pick.currency === p.currency) ({ num: acc, product } = pick);
+    }
+    if (!acc) {
+      const kind = tbcKindOf(p.txs);
+      product = kind?.product ?? 'current_account';
+      acc = Object.keys(TBC_ACCOUNTS).find(n => TBC_ACCOUNTS[n].product === product && TBC_ACCOUNTS[n].currency === p.currency);
+    }
+    if (!acc) { out.push({ text: `${what}: an account not known yet -- upload its CSV statement first.` }); continue; }
+    if (!p.txs.length) { out.push({ text: `${what}: no transactions, balance ${p.closing} -- noted as checked to ${p.to}.`, checked: { name: d.name, from: p.from, to: p.to } }); continue; }
+    const deposit = product === 'savings_account';
+    const first = p.txs[0].date, last = p.txs[p.txs.length - 1].date;
+    const stored = deposit
+      ? await mpFetchAll(() => sb.from('trades').select('external_id').eq('external_source', `tbc_bank_deposit_csv:${acc}`)
+        .gte('trade_date', first).lte('trade_date', last).order('id'))
+      : await mpFetchAll(() => sb.from('bank_transactions').select('external_id').eq('external_source', `tbc_bank_csv:${acc}`)
+        .gte('tx_date', `${first}T00:00:00Z`).lte('tx_date', `${last}T23:59:59.999Z`).eq('synthetic', false).order('id'));
+    const ids = stored.map(s => s.external_id.replace(/:dup\d+$/, ''));
+    const taken = new Set();
+    let kept = 0;
+    for (const t of p.txs) {
+      const head = `${acc}:${t.date}::`, tail = `:${Number(t.amount.toFixed(2))}`;
+      // the same description first, else the row of that day and amount
+      let i = ids.findIndex((id, n) => !taken.has(n) && id === head + t.description + tail);
+      if (i < 0) i = ids.findIndex((id, n) => !taken.has(n) && id.startsWith(head) && id.endsWith(tail) && id.length > head.length + tail.length);
+      if (i < 0) continue;
+      taken.add(i);
+      const desc = ids[i].slice(head.length, -tail.length);
+      if (desc !== t.description) kept++;
+      t.description = desc;
+    }
+    // the bank's type, as its CSV has it
+    const type = t => /^Transfer between your accounts$/.test(t.description) ? 'საკუთარ ანგარიშებს შორის გადარიცხვა'
+      : t.amount < 0 && /^(POS|Private transfer)/.test(t.description) ? 'გადარიცხვა თანხის გატანა' : '';
+    const csv = ['bank,account_number,product,currency,date,time,card,description,amount,balance,category_bank,source_file',
+      ...p.txs.map(t => ['TBC Bank', acc, product, p.currency, t.date, '', '', t.description, t.amount, t.balance.toFixed(2), type(t), d.name].map(q).join(','))].join('\n') + '\n';
+    out.push({
+      text: `${what}: ${p.txs.length} transaction(s)${kept ? ` (${kept} under the description already stored)` : ''}, balance ${p.closing.toFixed(2)}.`,
+      file: new File([csv], `tbc_${acc}_${p.from}_${p.to}.csv`, { type: 'text/csv' }),
+    });
+  }
+  return out;
+}
 // MyMagti's payment history (magticom.ge -> MyMagti -> ტრანზაქციები, the page printed to PDF,
 // 22.11.2026) as this project's receipt CSV, as Wolt's receipts are: each payment a receipt of
 // one line (the number paid for; "ბალანსის შევსება", a top-up, when the page shows it opened),
@@ -950,9 +1090,10 @@ async function mpImportFiles(files) {
       // its contract from the other statement)
       const tbank = docs.filter(d => mpIsTbankPdf(d.rows));
       const sber = docs.filter(d => !tbank.includes(d) && mpIsSberPdf(d.rows));
-      docs = docs.filter(d => !tbank.includes(d) && !sber.includes(d));
-      if (tbank.length || sber.length) {
-        const bankWise = [['T-Bank', tbank, mpTbankPdfCsvs], ['Sber', sber, mpSberPdfCsvs]];
+      const tbc = docs.filter(d => !tbank.includes(d) && !sber.includes(d) && mpIsTbcPdf(d.rows));
+      docs = docs.filter(d => !tbank.includes(d) && !sber.includes(d) && !tbc.includes(d));
+      if (tbank.length || sber.length || tbc.length) {
+        const bankWise = [['T-Bank', tbank, mpTbankPdfCsvs], ['Sber', sber, mpSberPdfCsvs], ['TBC Bank', tbc, mpTbcPdfCsvs]];
         for (const r of (await Promise.all(bankWise.map(([bank, ds, f]) => Promise.resolve(ds.length ? f(ds) : []).then(rs => rs.map(r => ({ ...r, bank })))))).flat()) {
           const rl = document.createElement('div');
           rl.textContent = r.text;
@@ -1077,7 +1218,7 @@ const MP_ACCOUNT_SOURCE = {
   Alfa: 'Alfa-Online → statements of the current, salary and Alfa-Account (PDF), uploaded as is; broker account: Alfa-Investments → broker report (XML), uploaded as is.',
   'Yandex Bank': 'Yandex Bank app → statement for each contract (current account, «Сейв») (PDF) → to Claude.',
   'Ozon Bank': 'Ozon Bank app → Ещё → Получить справку → О движении средств → language → основной / накопительный / кредитная карта (PDF, one each) → to Claude.',
-  'TBC Bank': 'tbconline.ge → Transactions / the account → statement (CSV), one for each account and currency (GEL, EUR, My Safe); keep the file name. Upload as is.',
+  'TBC Bank': 'tbconline.ge → Transactions / the account → statement (CSV or PDF), one for each account and currency (GEL, EUR, My Safe); keep the file name of a CSV. Upload as is.',
   'Credo Bank': 'mycredo.ge → Transactions (screenshots or the statement) → to Claude, who builds the Credo Bank CSV (import-bank-csv).',
   Wise: 'Wise → balance statement, CSV, one per currency. Upload as is.',
   'Crypto.com': 'Crypto.com App → Accounts → History → Export → Crypto Wallet. Upload as is.',
@@ -1970,9 +2111,10 @@ async function mpLogUpload(kind, fileName, csvText, result) {
 // same days again is the same rows, not new ones. A kind not there yet is a
 // new account: it goes in here with the number its first export had.
 const TBC_ACCOUNTS = {
-  19475881: { currency: 'GEL', product: 'current_account' },
+  // iban: the account's own number, which the PDF statement names (mpTbcPdfCsvs)
+  19475881: { currency: 'GEL', product: 'current_account', iban: 'GE40TB7046445064400014' },
   19475897: { currency: 'EUR', product: 'current_account' },
-  19475906: { currency: 'GEL', product: 'savings_account' },   // My Safe
+  19475906: { currency: 'GEL', product: 'savings_account', iban: 'GE82TB7046436515100073' },   // My Safe
   19526746: { currency: 'USD', product: 'current_account' },
 };
 // The account's kind from its rows: the savings account takes deposits in
