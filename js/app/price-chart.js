@@ -343,9 +343,13 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   if (opts.currency) {
     try {
       const C = opts.currency;
-      const rows = await mpFetchAll(() => sb.from('currency_exchanges').select('at, sold_ccy, sold_amount, sold_usd, bought_ccy, bought_amount, bought_usd, how, kind')
+      const rows = await mpFetchAll(() => sb.from('currency_exchanges').select('*')
         .or(`sold_ccy.eq.${C},bought_ccy.eq.${C}`).order('at'));
       const amt = (a, c) => `${Number(a).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${c}`;
+      // the time, when known (the view's known_at: set by hand or from the bank's receipt -- a wall-clock time
+      // kept as UTC), and its weekday: a bank's rate is worse when the market's shut (Ziraat: ~3% on an evening
+      // or a weekend, ~1% in a weekday's hours)
+      const when = t => (t ? `${String(t).slice(11, 16)} ${new Date(String(t).slice(0, 10) + 'T00:00:00Z').toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })}, ` : '');
       fxDeals = rows.map(e => {
         const bought = e.bought_ccy === C;
         const mine = Number(bought ? e.bought_amount : e.sold_amount), otherUsd = Number(bought ? e.sold_usd : e.bought_usd);
@@ -365,7 +369,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         // the mark as the chart's own asset's deal: on USD/RUB (the dollar's price in roubles) roubles bought
         // are the dollar sold -- a red sale; on RUB/USD (the rouble's price) a green buy
         return { day: String(e.at).slice(0, 10), bought, card: e.kind === 'card', side: bought === !!opts.invert ? 'buy' : 'sell', rate,
-          text: `${amt(e.sold_amount, e.sold_ccy)} → ${amt(e.bought_amount, e.bought_ccy)}<br>${mpEscapeHtml(via)}` };
+          text: `${amt(e.sold_amount, e.sold_ccy)} → ${amt(e.bought_amount, e.bought_ccy)}<br>${when(e.known_at)}${mpEscapeHtml(via)}` };
       }).filter(Boolean);
     } catch (err) { console.warn('currency exchanges:', err); }
   }
