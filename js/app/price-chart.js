@@ -79,7 +79,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   const numbered = mpCodeLike(asset);   // a number or an ISIN: its name instead
   if (numbered && MP_SHORT_NAMES[asset]) title = MP_SHORT_NAMES[asset];
   dlg.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><b><span id="mp_price_title">${mpEscapeHtml(title)}</span> <span id="mp_price_meta" style="color:#8b949e;font-weight:normal">${title !== asset && !numbered ? `· ${mpEscapeHtml(dealTickers.join(' + '))}` : ''}</span></b><button type="button" data-act="close">✕</button></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><b><span id="mp_price_title">${mpEscapeHtml(title)}</span> <span id="mp_price_meta" style="color:#8b949e;font-weight:normal">${title !== asset && !numbered && !opts.currency ? `· ${mpEscapeHtml(dealTickers.join(' + '))}` : ''}</span></b><button type="button" data-act="close">✕</button></div>
     <div class="form-row" style="gap:6px;align-items:center">${MP_PRICE_PERIODS.map(([l]) => `<button class="btn${l === '1y' ? ' primary' : ''}" type="button" data-p="${l}">${l}</button>`).join('')}
       <label style="margin-left:12px" id="mp_price_ccy_box"><input type="checkbox" id="mp_price_usd"> in USD</label>
       <label style="margin-left:12px;display:none" id="mp_price_via_box"><input type="checkbox" id="mp_price_via" checked> buys through funds</label>
@@ -269,8 +269,8 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   }
   if (moneyCcy) {
     const rates = fx.length && ccy === moneyCcy ? fx : await mpFetchAll(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', moneyCcy).order('day'));
-    // by default a cheap currency per dollar (USD/RUB), a dear one in dollars (EUR/USD); the box turns it round
-    const cheap = !!(rates.length && Number(rates[rates.length - 1].usd_per_unit) < 0.2) !== !!opts.invert;
+    // by default every currency per dollar (USD/EUR, USD/RUB -- one way for all); the box turns it round
+    const cheap = !opts.invert;
     const invBox = dlg.querySelector('#mp_price_inv_box');
     invBox.style.display = '';
     invBox.querySelector('span').textContent = cheap ? `${moneyCcy}/USD` : `USD/${moneyCcy}`;
@@ -281,13 +281,13 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       ccy = moneyCcy;
       fx = rates;
       rateNote = `USD/${moneyCcy} rate`;
-      dlg.querySelector('#mp_price_title').textContent = `${title} — USD/${moneyCcy}`;
+      dlg.querySelector('#mp_price_title').textContent = opts.currency ? `USD/${moneyCcy}` : `${title} — USD/${moneyCcy}`;
     } else {
       prices = rates.map(r => ({ day: r.day, price_usd: Number(r.usd_per_unit) }));
       ccy = 'USD';
       fx = [];
       rateNote = `${moneyCcy}/USD rate`;
-      dlg.querySelector('#mp_price_title').textContent = `${title} — ${moneyCcy}/USD`;
+      dlg.querySelector('#mp_price_title').textContent = opts.currency ? `${moneyCcy}/USD` : `${title} — ${moneyCcy}/USD`;
     }
   }
   if (!prices.length && opts.currency) { note.textContent = `No ${opts.currency} rates stored (fx_history keeps only the currencies of the accounts).`; return; }
