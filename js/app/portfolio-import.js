@@ -1120,7 +1120,7 @@ async function mpZiraatPdfPage(page, ocr) {
   for (const [a, b] of foot) footVals.push(await ocr(rect2(X.amt, X.end, a - Math.round((b - a) * 0.35), Math.round((b - a) * 1.7)), 'digits'));
   function rect2(x0, x1, y, hh) { return { left: x0 + inside, top: y, width: x1 - x0 - 2 * inside, height: hh }; }
   // the box above the table: "Customer No : 103119215-5001", "Currency : TRY"
-  const head = await ocr({ left: Math.round(tx0 + tw * 0.55), top: Math.max(0, Math.round(hy0 - (hy1 - hy0) * 3.2)), width: Math.round(tw * 0.45), height: Math.round((hy1 - hy0) * 2.9) }, 'text');
+  const head = await ocr({ left: Math.round(tx0 + tw * 0.55), top: Math.max(0, Math.round(hy0 - (hy1 - hy0) * 3.2)), width: Math.round(tw * 0.42), height: Math.round((hy1 - hy0) * 2.9) }, 'text');
   return { head, rows, foot: footVals };
 }
 
@@ -1135,10 +1135,12 @@ function mpZiraatPdfStatement(pages) {
     return m && m[2].replace(/[.,]/g, '').length >= 3 ? Number(m[1] + m[2].replace(/[.,]/g, '')) / 100 : null;
   };
   const head = pages.map(p => p.head).join('\n');
-  const accountNo = head.match(/(\d{9})\s*-\s*(\d{4})/);
+  // "Customer No : 103119215-5001", else from the IBAN "TR48 00010 0 90 103119215 0 5001"
+  const iban = head.replace(/\s/g, '').match(/TR\d{2}000100\d{2}(\d{9})0(\d{4})/);
+  const accountNo = head.match(/(\d{9})\s*-\s*(\d{4})/) || iban;
   // the currency's code, "TRY" read as "IRY" at times
-  const code = (head.match(/Currency\s*\S?\s*([A-Z]{2,3})\b/) || [])[1] || '';
-  const cur = ['USD', 'EUR', 'GBP'].includes(code) ? code : /^(?:.RY|T.Y|TR.|TL)$/.test(code) ? 'TRY' : null;
+  const code = ((head.match(/Currency[^A-Za-z]{0,6}([A-Za-z]{2,4})/) || [])[1] || '').toUpperCase();
+  const cur = ['USD', 'EUR', 'GBP'].find(c => code.includes(c)) || (/R[YV]|^T.Y|^TL$/.test(code) ? 'TRY' : null);
   const rows = pages.flatMap(p => p.rows).map(r => ({
     date: (String(r.date).match(/(\d{2})\.?(\d{2})\.?(\d{4})/) || []).slice(1).join('.'),
     invoiceNo: String(r.invoiceNo).replace(/\s/g, '').replace(/^(\D)(.*)$/, (m, a, b) => a + b.replace(/O/g, '0').replace(/[IL]/g, '1')),
@@ -1148,7 +1150,7 @@ function mpZiraatPdfStatement(pages) {
   const foot = pages.flatMap(p => p.foot).map(num);
   const where = r => `the row of ${r.date || '?'} ${r.invoiceNo} (${r.amount ?? '?'}, balance ${r.balanceAfter ?? '?'})`;
   if (!rows.length) return { error: 'no rows read from the statement' };
-  if (!accountNo || !cur) return { error: "the account number / currency not read from the statement's head" };
+  if (!accountNo || !cur) return { error: `the account number / currency not read from the statement's head ("${head.replace(/\s+/g, ' ').slice(0, 200)}")` };
   const unread = rows.find(r => !/^\d{2}\.\d{2}\.\d{4}$/.test(r.date) || r.amount === null || r.balanceAfter === null);
   if (unread) return { error: `${where(unread)} misread` };
   for (let i = 0; i < rows.length; i++) {
