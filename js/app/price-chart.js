@@ -357,7 +357,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         // the mark as the chart's own asset's deal: on USD/RUB (the dollar's price in roubles) roubles bought
         // are the dollar sold -- a red sale; on RUB/USD (the rouble's price) a green buy
         return { day: String(e.at).slice(0, 10), bought, card: e.kind === 'card', side: bought === !!opts.invert ? 'buy' : 'sell', rate,
-          text: `${amt(e.sold_amount, e.sold_ccy)} → ${amt(e.bought_amount, e.bought_ccy)} · ${via}` };
+          text: `${amt(e.sold_amount, e.sold_ccy)} → ${amt(e.bought_amount, e.bought_ccy)}<br>${mpEscapeHtml(via)}` };
       }).filter(Boolean);
     } catch (err) { console.warn('currency exchanges:', err); }
   }
@@ -633,15 +633,15 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     const head = dlg.querySelector('#mp_price_head');
     if (first && last) {
       const up = last.v >= first.v, col = up ? '#3fb950' : '#f85149', d = last.v - first.v;
-      head.innerHTML = `<span style="font-size:2em;font-weight:700">${mpEscapeHtml(fmt(last.v))}</span>`
+      // a currency's rate: its sign (82.19 ₽), the central bank's rate after it in brackets, (14%)
+      const sym = unit !== 'USD' && opts.currency ? (MP_CURRENCY_SYMBOLS[unit] || (() => {
+        try { return new Intl.NumberFormat('en', { style: 'currency', currency: unit, currencyDisplay: 'narrowSymbol' }).formatToParts(1).find(x => x.type === 'currency')?.value; } catch { return null; }
+      })()) : null;
+      const big = sym && sym !== unit ? `${last.v.toLocaleString('en-US', { maximumFractionDigits: last.v < 10 ? 4 : 2 })} ${sym}` : fmt(last.v);
+      head.innerHTML = `<span style="font-size:2em;font-weight:700">${mpEscapeHtml(big)}</span>`
+        + (pol.length ? `<span style="color:#8b949e;font-size:1.3em" title="${mpEscapeHtml(policyName)}">(${pol[pol.length - 1].rate}%)</span>` : '')
         + `<span style="color:${col};font-size:1.1em">${up ? '▲' : '▼'} ${Math.abs(ch).toFixed(2)}% · ${mpEscapeHtml(fmt(Math.abs(d)))}</span>`
-        + `<span style="color:#8b949e">over ${mpEscapeHtml(period)}</span>`
-        // the central bank's rate now and its change over the period, next to the currency's
-        + (pol.length ? (() => {
-          const r0 = pol[0].rate, r1 = pol[pol.length - 1].rate, dr = r1 - r0;
-          return `<span style="color:#8b949e;margin-left:12px">${mpEscapeHtml(policyName)} <b style="color:#c9d1d9">${r1}%</b>`
-            + `${Math.abs(dr) < 1e-9 ? ' · unchanged' : ` · ${dr > 0 ? '▲' : '▼'} ${Math.abs(dr).toFixed(2)} pp`} over ${mpEscapeHtml(period)}</span>`;
-        })() : '');
+        + `<span style="color:#8b949e">over ${mpEscapeHtml(period)}</span>`;
     } else head.innerHTML = '';
   };
   dlg.querySelectorAll('[data-p]').forEach(b => b.onclick = () => {
