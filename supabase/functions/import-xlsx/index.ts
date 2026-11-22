@@ -45,7 +45,8 @@ Deno.serve(async (req) => {
       return json({ error: 'Unrecognized .xlsx -- expected a T-Bank broker report, an Atomyze (ЦФА) platform report, a Freedom24 cash-movement report or a Ziraat Bank account activity export' }, 400);
     }
 
-    const res = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/${route.fn}`, {
+    // the page's query goes along (?deposit_rate= for a Ziraat term deposit)
+    const res = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/${route.fn}${new URL(req.url).search}`, {
       method: 'POST',
       headers: {
         Authorization: auth,

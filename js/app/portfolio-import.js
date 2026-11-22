@@ -2471,6 +2471,15 @@ async function mpImportOneFile(file, statusEl, session) {
       kind = result.detected;
       label = endpoints[kind].label;
     }
+    // a Ziraat term deposit's statement doesn't give its rate: asked once, the file sent again with it
+    if (res.status === 422 && result.needs_deposit_rate && !file.mpQuery) {
+      const rate = prompt(`Ziraat term deposit ${result.account_no}, opened ${result.opened}`
+        + `${result.end ? `, until ${result.end}` : ''}: its interest rate, % a year?`);
+      if (rate && Number(rate.replace(',', '.')) > 0) {
+        file.mpQuery = `?deposit_rate=${encodeURIComponent(rate.replace(',', '.').replace('%', '').trim())}`;
+        return mpImportOneFile(file, statusEl, session);
+      }
+    }
     if (!res.ok) {
       // A function that crashed / hit a platform limit answers without an
       // `error` field (e.g. {code: 'WORKER_LIMIT', message: ...}).
@@ -2681,8 +2690,12 @@ async function mpImportOneFile(file, statusEl, session) {
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
     } else if (kind === 'ziraat_xlsx') {
-      statusEl.textContent = `Detected: ${label} (${result.currency}). Imported ${result.imported} transactions `
-        + `(${result.total_rows} parsed, ${result.skipped_bad_date} skipped as bad date).`;
+      statusEl.textContent = result.deposit
+        ? `Detected: ${label}, term deposit ${result.deposit}${result.deposit_end ? ` until ${result.deposit_end}` : ''}. `
+          + `Imported ${result.imported} deposit movements.`
+        : `Detected: ${label} (${result.currency}). Imported ${result.imported} transactions `
+          + `(${result.total_rows} parsed, ${result.skipped_bad_date} skipped as bad date).`;
+      if (result.deposit) { mpRenderPortfolioPies(); mpRenderBondByType(); }
     } else if (kind === 'revolut_fund') {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} rows `
         + `(${result.total_rows} parsed, ${result.interest_rows} interest/fee rows, `

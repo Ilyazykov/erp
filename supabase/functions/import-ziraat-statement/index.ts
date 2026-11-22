@@ -78,22 +78,25 @@ function detectCurrency(accountNumberCell: string): string | null {
   return null;
 }
 
-function parseRows(sheet: XLSX.WorkSheet): { rows: ZiraatRow[]; currency: string | null } {
+function parseRows(sheet: XLSX.WorkSheet): { rows: ZiraatRow[]; currency: string | null; accountNo: string | null } {
   const grid: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
 
   let currency: string | null = null;
+  let accountNo: string | null = null;
   let headerRowIdx = -1;
   for (let i = 0; i < grid.length; i++) {
     const row = grid[i];
     if (!currency && row[0] === 'Account Number' && typeof row[2] === 'string') {
       currency = detectCurrency(row[2]);
+      // "1553-103119215-5004 MURATPAŞA/ANTALYA ŞUBESİ TL" -> "103119215-5004"
+      accountNo = row[2].match(/^\s*\d+-(\d+-\d+)/)?.[1] ?? null;
     }
     if (row[0] === 'Date' && row[1] === 'Invoice No.') {
       headerRowIdx = i;
       break;
     }
   }
-  if (headerRowIdx < 0) return { rows: [], currency };
+  if (headerRowIdx < 0) return { rows: [], currency, accountNo };
 
   const rows: ZiraatRow[] = [];
   for (let i = headerRowIdx + 1; i < grid.length; i++) {
@@ -115,7 +118,27 @@ function parseRows(sheet: XLSX.WorkSheet): { rows: ZiraatRow[]; currency: string
       balanceAfter: typeof row[4] === 'number' ? row[4] : null,
     });
   }
-  return { rows, currency };
+  return { rows, currency, accountNo };
+}
+
+// A term deposit (vadeli hesap) is an account of its own, opened from the drawing account:
+// "103119215-5001 No.lu Vds. Hes.tan 103119215-5004 - Hes. Açılış, Hes. Aç. Tr: 23/11/2026
+// VB: 23/11/2026 VS: 07/01/2027" -- from 5001, account 5004 opened on 23.11, its term to 07.01.
+// The same row stands in both statements; it's the deposit's own when the account opened is
+// the statement's.
+const OPENING_RE = /(\d+-\d+)\s+No\.lu\s+Vds\.\s*Hes\.tan\s+(\d+-\d+)\s*-\s*Hes\.\s*Açılış/i;
+const dmy = (s: string | undefined) => s?.replace(/^(\d{2})\/(\d{2})\/(\d{4})$/, '$3-$2-$1') ?? null;
+function depositOpening(rows: ZiraatRow[], accountNo: string | null) {
+  if (!accountNo) return null;
+  for (const r of rows) {
+    const m = r.description.match(OPENING_RE);
+    if (!m || m[2] !== accountNo) continue;
+    return {
+      opened: dmy(r.description.match(/Hes\.\s*Aç\.\s*Tr:\s*(\d{2}\/\d{2}\/\d{4})/)?.[1]) ?? parseDate(r.date),
+      end: dmy(r.description.match(/VS:\s*(\d{2}\/\d{2}\/\d{4})/)?.[1]),
+    };
+  }
+  return null;
 }
 
 Deno.serve(async (req) => {
@@ -152,7 +175,7 @@ Deno.serve(async (req) => {
         { status: 400, headers: corsHeaders });
     }
 
-    const { rows: ziraatRows, currency } = parseRows(sheet);
+    const { rows: ziraatRows, currency, accountNo } = parseRows(sheet);
     if (!currency) {
       return new Response(JSON.stringify({
         error: 'Could not detect account currency from the "Account Number" header cell '
@@ -166,6 +189,62 @@ Deno.serve(async (req) => {
 
     const account = 'Ziraat Bank';
     let skippedBadDate = 0;
+
+    // A term deposit's statement: its rows are the deposit's buys (opening, interest) and
+    // sells (back to the drawing account), as T-Bank's and Sber's deposits are -- trades of
+    // "DEPOSIT:Ziraat Bank TRY 34% 23.11.2026", the rate in the name (the capital history
+    // accrues the interest from it). The statement doesn't give the rate: the page asks for
+    // it (?deposit_rate=34) the first time; later statements of the account take the name
+    // already stored.
+    const depositSource = `ziraat_deposit_xlsx:${accountNo}`;
+    const opening = depositOpening(ziraatRows, accountNo);
+    const { data: prevDeposit } = accountNo
+      ? await supabase.from('trades').select('ticker').eq('external_source', depositSource)
+        .order('trade_date', { ascending: false }).limit(1)
+      : { data: null };
+    if (opening || prevDeposit?.length) {
+      const rateParam = new URL(req.url).searchParams.get('deposit_rate')?.replace(',', '.');
+      const rate = rateParam ? Number(rateParam) : NaN;
+      let ticker = prevDeposit?.[0]?.ticker as string | undefined;
+      if (!ticker) {
+        if (!(rate > 0 && rate < 200)) {
+          return new Response(JSON.stringify({
+            error: `A term deposit (account ${accountNo}, opened ${opening!.opened}): its interest rate is needed`,
+            needs_deposit_rate: true, account_no: accountNo, opened: opening!.opened, end: opening!.end,
+          }), { status: 422, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+        const [y, m, d] = opening!.opened!.split('-');
+        ticker = `DEPOSIT:${account} ${currency} ${rate}% ${d}.${m}.${y}`;
+      }
+      const trades = [];
+      const seen = new Map<string, number>();
+      for (const r of ziraatRows) {
+        const isoDate = parseDate(r.date);
+        if (!isoDate || r.amount === 0) continue;
+        const signature = `${r.date}:${r.invoiceNo}:${r.description}:${r.amount}`;
+        const occurrence = seen.get(signature) ?? 0;
+        seen.set(signature, occurrence + 1);
+        trades.push({
+          user_id: user.id, ticker, side: r.amount < 0 ? 'sell' : 'buy', quantity: Math.abs(r.amount), price: 1,
+          trade_date: isoDate, currency, account, note: r.description,
+          external_source: depositSource, external_id: occurrence === 0 ? signature : `${signature}:dup${occurrence}`,
+        });
+      }
+      const { error: tErr, count } = await supabase.from('trades')
+        .upsert(trades, { onConflict: 'user_id,external_source,external_id', count: 'exact' });
+      if (tErr) {
+        return new Response(JSON.stringify({ error: tErr.message }), { status: 500, headers: corsHeaders });
+      }
+      // the term's end, for the Bonds & deposits tab (deposit_terms, otherwise set by hand)
+      if (opening?.end) {
+        await supabase.from('deposit_terms').upsert({ user_id: user.id, ticker, end_day: opening.end, updated_at: new Date().toISOString() },
+          { onConflict: 'user_id,ticker' });
+      }
+      return new Response(JSON.stringify({
+        imported: count ?? trades.length, currency, total_rows: ziraatRows.length, skipped_bad_date: 0,
+        deposit: ticker.replace(/^DEPOSIT:/, ''), deposit_end: opening?.end ?? null,
+      }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
 
     const rows = [];
     const dupSeen = new Map<string, number>();
