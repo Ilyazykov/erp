@@ -84,7 +84,8 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       <label style="margin-left:12px" id="mp_price_ccy_box"><input type="checkbox" id="mp_price_usd"> in USD</label>
       <label style="margin-left:12px;display:none" id="mp_price_via_box"><input type="checkbox" id="mp_price_via" checked> buys through funds</label>
       <label style="margin-left:12px;display:none" id="mp_price_pay_box"><input type="checkbox" id="mp_price_pay" checked> payouts</label>
-      <label style="margin-left:12px;display:none" id="mp_price_inv_box"><input type="checkbox" id="mp_price_inv"> <span></span></label></div>
+      <label style="margin-left:12px;display:none" id="mp_price_inv_box"><input type="checkbox" id="mp_price_inv"> <span></span></label>
+      <label style="margin-left:12px;display:none" id="mp_price_rate_box"><input type="checkbox" id="mp_price_rate" checked> <span></span></label></div>
     <div id="mp_price_head" style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap"></div>
     <div id="mp_price_chart" style="height:420px"></div>
     <p class="note" style="margin:0" id="mp_price_note">Loading…</p>
@@ -518,12 +519,13 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         hovertemplate: '%{x}: %{text}<extra></extra>' });
     }
     if (payTrace) traces.push(payTrace);
-    // the central bank's rate: a step line in a strip under the chart (from the last change before the period)
+    // the central bank's rate: a step line over the rate's, its own scale on the right (from the last change
+    // before the period); the box hides it
     const fromIdx = policy.findLastIndex(r => r.day <= from);
-    const pol = policy.slice(Math.max(0, fromIdx));
+    const pol = dlg.querySelector('#mp_price_rate').checked ? policy.slice(Math.max(0, fromIdx)) : [];
     if (pol.length) {
       const xs = [...pol.map((r, i) => (i === 0 && r.day < from ? from : r.day)), today], ys = [...pol.map(r => r.rate), pol[pol.length - 1].rate];
-      traces.push({ x: xs, y: ys, yaxis: 'y3', type: 'scatter', mode: 'lines', line: { shape: 'hv', color: '#d2a8ff', width: 1.5 },
+      traces.push({ x: xs, y: ys, yaxis: 'y3', type: 'scatter', mode: 'lines', line: { shape: 'hv', color: '#d2a8ff', width: 1.5, dash: 'dot' },
         name: policyName, hovertemplate: `%{x}: ${policyName} %{y}%<extra></extra>` });
     }
     // like a broker's app: the period's low and high (white dots, the price by them), a line at today's
@@ -543,7 +545,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         bgcolor: '#2d333b', font: { color: '#8b949e', size: 12 }, borderpad: 3 });
     }
     // to the right of the plot, a gap between (they melted into the line's end)
-    const label = (y, text, bg, fg) => notes.push({ xref: 'paper', x: 1, xanchor: 'left', xshift: 10, yref: 'y', y, text, showarrow: false,
+    const label = (y, text, bg, fg) => notes.push({ xref: 'paper', x: 1, xanchor: 'left', xshift: pol.length ? 52 : 10, yref: 'y', y, text, showarrow: false,
       bgcolor: bg, font: { color: fg, size: 12 }, borderpad: 3 });
     if (last0) {
       lines.push({ type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: last0.v, y1: last0.v, line: { color: 'rgba(230,237,243,0.35)', width: 1 }, layer: 'below' });
@@ -596,11 +598,10 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       }
     }
     Plotly.react(dlg.querySelector('#mp_price_chart'), traces, Object.assign({}, LAYOUT_BASE, {
-      margin: { l: 60, r: 130, t: 24, b: 40 }, showlegend: false, hovermode: 'closest', annotations: notes,
-      xaxis: Object.assign({}, LAYOUT_BASE.xaxis, { type: 'date', dtick: undefined, tickformat: undefined, range: [from, today] }, pol.length ? { anchor: 'y3' } : {}),
-      yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { type: 'linear', tickformat: undefined, ticksuffix: unit === 'USD' ? '' : ` ${unit}`, tickprefix: unit === 'USD' ? '$' : '' },
-        pol.length ? { domain: [0.3, 1] } : {}),
-      ...(pol.length ? { yaxis3: Object.assign({}, LAYOUT_BASE.yaxis, { domain: [0, 0.22], ticksuffix: '%', anchor: 'x', title: { text: policyName, font: { size: 11, color: '#d2a8ff' } } }) } : {}),
+      margin: { l: 60, r: pol.length ? 172 : 130, t: 24, b: 40 }, showlegend: false, hovermode: 'closest', annotations: notes,
+      xaxis: Object.assign({}, LAYOUT_BASE.xaxis, { type: 'date', dtick: undefined, tickformat: undefined, range: [from, today] }),
+      yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { type: 'linear', tickformat: undefined, ticksuffix: unit === 'USD' ? '' : ` ${unit}`, tickprefix: unit === 'USD' ? '$' : '' }),
+      ...(pol.length ? { yaxis3: { overlaying: 'y', side: 'right', showgrid: false, zeroline: false, ticksuffix: '%', tickfont: { color: '#d2a8ff' }, linecolor: '#1e2830' } } : {}),
       yaxis2: { overlaying: 'y', range: [0, 1], visible: false, fixedrange: true }, shapes: [...payShapes, ...lines, ...dealShapes],
     }), CONFIG);
     const first = pts[0], last = pts[pts.length - 1];
@@ -630,6 +631,11 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   try { payBox.checked = localStorage.getItem('mp_price_pay') !== '0'; } catch { /* no storage */ }
   if (payouts.length) dlg.querySelector('#mp_price_pay_box').style.display = '';
   payBox.onchange = () => { mpSave('mp_price_pay', payBox.checked ? '1' : '0'); draw(); };
+  // the central bank's rate over a currency's: shown or not (remembered); the box only when there's one
+  const rateBox = dlg.querySelector('#mp_price_rate');
+  try { rateBox.checked = localStorage.getItem('mp_price_rate') !== '0'; } catch { /* no storage */ }
+  if (policy.length) { dlg.querySelector('#mp_price_rate_box').style.display = ''; dlg.querySelector('#mp_price_rate_box span').textContent = policyName; }
+  rateBox.onchange = () => { mpSave('mp_price_rate', rateBox.checked ? '1' : '0'); draw(); };
   viaBox.onchange = () => { mpSave('mp_price_via', viaBox.checked ? '1' : '0'); draw(); };
   draw();
 }
