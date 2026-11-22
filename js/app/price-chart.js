@@ -311,6 +311,24 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       }).filter(Boolean);
     } catch (err) { console.warn('currency exchanges:', err); }
   }
+  // ...and its central bank's rate under it: the CBR's key rate by day (key_rates), the others' policy
+  // rates by month from the BIS (cb_rates_monthly: a month's rate as at its end). None for the lari,
+  // the dirham, the lek: the BIS hasn't them.
+  const MP_CB_OF = { RUB: ['RU', 'CBR key rate'], EUR: ['XM', 'ECB rate'], GBP: ['GB', 'BoE rate'], CNY: ['CN', 'PBoC rate'],
+    TRY: ['TR', 'CBRT rate'], HUF: ['HU', 'MNB rate'], ILS: ['IL', 'BoI rate'], RSD: ['RS', 'NBS rate'], MKD: ['MK', 'NBRM rate'],
+    JPY: ['JP', 'BoJ rate'], CHF: ['CH', 'SNB rate'], CAD: ['CA', 'BoC rate'], AUD: ['AU', 'RBA rate'], KRW: ['KR', 'BoK rate'],
+    HKD: ['HK', 'HKMA rate'], INR: ['IN', 'RBI rate'], BRL: ['BR', 'BCB rate'], ZAR: ['ZA', 'SARB rate'], PLN: ['PL', 'NBP rate'],
+    CZK: ['CZ', 'CNB rate'], SEK: ['SE', 'Riksbank rate'], NOK: ['NO', 'Norges Bank rate'], MXN: ['MX', 'Banxico rate'] };
+  let policy = [], policyName = '';
+  if (opts.currency && MP_CB_OF[opts.currency]) {
+    try {
+      const [country, name] = MP_CB_OF[opts.currency];
+      policy = country === 'RU'
+        ? (await mpFetchAll(() => sb.from('key_rates').select('day, rate').order('day'))).map(r => ({ day: r.day, rate: Number(r.rate) }))
+        : (await mpFetchAll(() => sb.from('cb_rates_monthly').select('month, rate').eq('country', country).order('month'))).map(r => ({ day: r.month, rate: Number(r.rate) }));
+      policyName = name;
+    } catch (err) { console.warn('central bank rate:', err); }
+  }
   if (!prices.length && opts.currency) { note.textContent = `No ${opts.currency} rates stored (fx_history keeps only the currencies of the accounts).`; return; }
   if (!prices.length) { note.textContent = 'No price history for this asset (a deposit, a savings account or cash has none).'; return; }
   // Splits: price_history keeps each day's price as it was (GOOGL 2 255 -> 112 on
@@ -458,6 +476,14 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         hovertemplate: '%{x}: %{text}<extra></extra>' });
     }
     if (payTrace) traces.push(payTrace);
+    // the central bank's rate: a step line in a strip under the chart (from the last change before the period)
+    const fromIdx = policy.findLastIndex(r => r.day <= from);
+    const pol = policy.slice(Math.max(0, fromIdx));
+    if (pol.length) {
+      const xs = [...pol.map((r, i) => (i === 0 && r.day < from ? from : r.day)), today], ys = [...pol.map(r => r.rate), pol[pol.length - 1].rate];
+      traces.push({ x: xs, y: ys, yaxis: 'y3', type: 'scatter', mode: 'lines', line: { shape: 'hv', color: '#d2a8ff', width: 1.5 },
+        name: policyName, hovertemplate: `%{x}: ${policyName} %{y}%<extra></extra>` });
+    }
     // like a broker's app: the period's low and high (white dots, the price by them), a line at today's
     // price and one at the average buy price of what one holds now
     const lines = [], notes = [];
@@ -529,14 +555,16 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     }
     Plotly.react(dlg.querySelector('#mp_price_chart'), traces, Object.assign({}, LAYOUT_BASE, {
       margin: { l: 60, r: 130, t: 24, b: 40 }, showlegend: false, hovermode: 'closest', annotations: notes,
-      xaxis: Object.assign({}, LAYOUT_BASE.xaxis, { type: 'date', dtick: undefined, tickformat: undefined, range: [from, today] }),
-      yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { type: 'linear', tickformat: undefined, ticksuffix: unit === 'USD' ? '' : ` ${unit}`, tickprefix: unit === 'USD' ? '$' : '' }),
+      xaxis: Object.assign({}, LAYOUT_BASE.xaxis, { type: 'date', dtick: undefined, tickformat: undefined, range: [from, today] }, pol.length ? { anchor: 'y3' } : {}),
+      yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { type: 'linear', tickformat: undefined, ticksuffix: unit === 'USD' ? '' : ` ${unit}`, tickprefix: unit === 'USD' ? '$' : '' },
+        pol.length ? { domain: [0.3, 1] } : {}),
+      ...(pol.length ? { yaxis3: Object.assign({}, LAYOUT_BASE.yaxis, { domain: [0, 0.22], ticksuffix: '%', anchor: 'x', title: { text: policyName, font: { size: 11, color: '#d2a8ff' } } }) } : {}),
       yaxis2: { overlaying: 'y', range: [0, 1], visible: false, fixedrange: true }, shapes: [...payShapes, ...lines, ...dealShapes],
     }), CONFIG);
     const first = pts[0], last = pts[pts.length - 1];
     const ch = first && last && first.v ? (last.v / first.v - 1) * 100 : null;
     note.textContent = first ? `${rateNote ? `${rateNote}: ` : ''}${first.day} ${fmt(first.v)} → ${last.day} ${fmt(last.v)}${ch == null ? '' : ` (${ch >= 0 ? '+' : ''}${ch.toFixed(1)}%)`}`
-      + `${shown.length ? ` · deals marked: ${shown.length}` : ''}${fxShown.length ? ` · exchanges marked: ${fxShown.length} (at the rate each got)` : ''}${avgNote}${splits.length ? ` · split-adjusted: ${splits.join(', ')}` : ''}` : 'No prices in this period.';
+      + `${shown.length ? ` · deals marked: ${shown.length}` : ''}${fxShown.length ? ` · exchanges marked: ${fxShown.length} (at the rate each got)` : ''}${pol.length ? ` · ${policyName} now ${pol[pol.length - 1].rate}%` : ''}${avgNote}${splits.length ? ` · split-adjusted: ${splits.join(', ')}` : ''}` : 'No prices in this period.';
     // today's price, big, and the period's change under the title (a broker app's header)
     const head = dlg.querySelector('#mp_price_head');
     if (first && last) {

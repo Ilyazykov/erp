@@ -282,13 +282,14 @@ Deno.serve(async (req) => {
     if (delTrend) throw new Error(delTrend.message);
     const { error: trendErr } = await db.from('key_rate_trend_odds').insert(trendRows);
     if (trendErr) throw new Error(trendErr.message);
-    // 7. the ladders' tables, and the two rates by month (the tab's rate now for China)
+    // 7. the ladders' tables, and the rates by month (the tab's rate now for China; every country's for the currency charts)
     const ladder = LADDERS.flatMap(L => {
       const series = bis.get(L.country);
       if (!series || series.size < 300) throw new Error(`BIS: ${L.country} ${series?.size} months`);
       return horizonOdds(series, L).map(r => ({ ...r, country: L.country, computed_at }));
     });
-    const monthly = LADDERS.flatMap(L => [...bis.get(L.country)!].map(([m, rate]) => ({ country: L.country, month: `${m}-01`, rate })));
+    // every country's (22.11.2026): a currency's rate chart shows its central bank's rate under it
+    const monthly = [...bis].flatMap(([country, series]) => [...series].map(([m, rate]) => ({ country, month: `${m}-01`, rate })));
     for (let i = 0; i < monthly.length; i += 1000) {
       const { error: mErr } = await db.from('cb_rates_monthly').upsert(monthly.slice(i, i + 1000));
       if (mErr) throw new Error(mErr.message);
