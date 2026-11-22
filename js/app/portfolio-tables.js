@@ -101,20 +101,31 @@ const MP_ASSET_CLASS_LABELS = {
   cash: 'cash 💵', credit: 'credit 💳', gold: 'gold 🥇', crypto: 'crypto ₿', real_estate: 'real estate 🏠',
 };
 
-// The safety cushion -- $10,000 not to be touched (30.10.2026): the cash at
-// Bank of Cyprus, Ziraat, Raiffeisen and Wise and TBC's savings account,
-// whole, and Revolut's liquid assets (its money-market funds) up to what
-// that leaves of the $10,000: the euro ones first, then the dollar ones, then
-// the pound ones (23.11.2026). Not new money: those rows' amounts move from
-// their column (cash / liquid assets) to 'cushion' -- the totals stay.
+// The safety cushion -- $10,000 not to be touched (30.10.2026): the money it
+// takes whole -- an account's cash or liquid assets, switched on and off on the
+// page (table cushion_sources, 23.11.2026) -- and Revolut's liquid assets (its
+// money-market funds) up to what that leaves of the $10,000: the euro ones
+// first, then the dollar ones, then the pound ones. Not new money: those rows'
+// amounts move from their column (cash / liquid assets) to 'cushion' -- the
+// totals stay.
 const MP_CUSHION_USD = 10000;
-const MP_CUSHION_CASH_ACCOUNTS = new Set(['Bank of Cyprus', 'Ziraat Bank', 'Raiffeisen', 'Wise']);
+// "account|instrument_type" taken whole; loaded once signed in (mpCushionEnsure)
+let mpCushionSources = new Set();
+let mpCushionLoading = null;
+function mpCushionEnsure() {
+  return mpCushionLoading = mpCushionLoading || (async () => {
+    const { data, error } = await sb.from('cushion_sources').select('account, instrument_type');
+    if (error) { mpCushionLoading = null; throw error; }
+    mpCushionSources = new Set((data || []).map(r => `${r.account}|${r.instrument_type}`));
+  })();
+}
+window.mpCushionEnsure = mpCushionEnsure;
 // The brokerage accounts outside Russia: their cash is invested with the
 // liquidity funds (the salary plan), not spent on things.
 const MP_FOREIGN_BROKERS = new Set(['IBKR', 'Freedom24']);
 // (a row the fund takes whole -- its cell then shows a grey zero)
-const mpCushionWhole = r => r.value_usd > 0 && ((r.instrument_type === 'cash' && MP_CUSHION_CASH_ACCOUNTS.has(r.account))
-  || (r.instrument_type === 'liquid' && r.account === 'TBC Bank'));
+const mpCushionWhole = r => r.value_usd > 0 && (r.instrument_type === 'cash' || r.instrument_type === 'liquid')
+  && mpCushionSources.has(`${r.account}|${r.instrument_type}`);
 function mpWithCushion(rows) {
   const out = rows.map(r => (mpCushionWhole(r) ? { ...r, instrument_type: 'cushion' } : r));
   let need = MP_CUSHION_USD - out.filter(r => r.instrument_type === 'cushion').reduce((a, r) => a + r.value_usd, 0);
@@ -641,6 +652,9 @@ async function mpRenderBrokerAssetClass() {
   // the emergency fund in a column of its own when switched on (kept in this browser)
   const rows = [...split, ...cashRows, ...realEstateRows];
   const cushion = document.getElementById('assetclass_cushion').checked;
+  if (cushion) {
+    try { await mpCushionEnsure(); } catch (e) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(e.message)}</p>`; return; }
+  }
   const everHeld = await mpEverHeld('instrument_type');
   // (a cell the fund emptied -- all of Wise's cash -- shows a grey 0, not an
   // ever-held "$0.00": nothing's gone, it's all in the fund)
@@ -648,6 +662,47 @@ async function mpRenderBrokerAssetClass() {
   const shown = cushion ? new Set([...everHeld].filter(k => !moved.has(k))) : everHeld;
   mpRenderBrokerPivot(wrap, cushion ? mpWithCushion(rows) : rows,
     'instrument_type', 'No holdings yet — import trades above.', undefined, shown, money);
+  if (cushion) mpRenderCushionSources(wrap, rows, money);
+}
+
+// Under the table, with the emergency fund on: what it takes whole, each a switch -- an
+// account's cash, or its liquid assets (but Revolut's funds, which top it up to its $10,000)
+function mpRenderCushionSources(wrap, rows, money) {
+  const by = new Map();
+  for (const r of rows) {
+    if (r.instrument_type !== 'cash' && r.instrument_type !== 'liquid') continue;
+    if (r.instrument_type === 'liquid' && r.account === 'Revolut') continue;
+    const k = `${r.account}|${r.instrument_type}`;
+    by.set(k, (by.get(k) || 0) + (Number(r.value_usd) || 0));
+  }
+  for (const k of mpCushionSources) if (!by.has(k)) by.set(k, 0);
+  const items = [...by.entries()].filter(([k, v]) => v > 0.005 || mpCushionSources.has(k))
+    .sort((a, b) => Number(mpCushionSources.has(b[0])) - Number(mpCushionSources.has(a[0])) || b[1] - a[1]);
+  const box = document.createElement('div');
+  box.className = 'empty-note';
+  box.append('Emergency fund takes whole: ');
+  items.forEach(([k, v], i) => {
+    const [account, type] = k.split('|');
+    const label = document.createElement('label');
+    label.style.whiteSpace = 'nowrap';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = mpCushionSources.has(k);
+    cb.addEventListener('change', async () => {
+      cb.disabled = true;
+      const { error } = cb.checked
+        ? await sb.from('cushion_sources').insert({ account, instrument_type: type })
+        : await sb.from('cushion_sources').delete().eq('account', account).eq('instrument_type', type);
+      if (error) { cb.checked = !cb.checked; cb.disabled = false; alert(error.message); return; }
+      if (cb.checked) mpCushionSources.add(k); else mpCushionSources.delete(k);
+      mpRenderBrokerAssetClass();
+    });
+    label.append(cb, ` ${MP_BROKER_SHORT_NAMES[account] || account} ${type === 'liquid' ? 'savings' : 'cash'} ${money(v)}`);
+    if (i) box.append(' · ');
+    box.append(label);
+  });
+  box.append(`. The rest up to ${money(MP_CUSHION_USD)}: Revolut's funds -- euro, then dollar, then pound.`);
+  wrap.appendChild(box);
 }
 try { const v = localStorage.getItem('mp_assetclass_ccy'); if (v) document.getElementById('assetclass_ccy').value = v; } catch { /* no storage */ }
 try { document.getElementById('assetclass_cushion').checked = localStorage.getItem('mp_assetclass_cushion') === '1'; } catch { /* no storage */ }

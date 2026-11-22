@@ -671,6 +671,7 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   // The emergency fund's money (30.10.2026) is out of chart 9 and the group
   // its targets are split over: Revolut's funds (euro, then dollar, then pound) and TBC's savings in it
   // aren't liquid assets to invest.
+  await mpCushionEnsure().catch(() => {});   // what the fund takes whole (cushion_sources)
   const withCushion = mpWithCushion(assetRows.filter(r => !isRealEstate(r)));
   const L = MP_ASSET_CLASS_LABELS;
   const buckets3 = mpAssetBuckets(withCushion);

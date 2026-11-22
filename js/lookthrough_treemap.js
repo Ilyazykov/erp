@@ -1089,6 +1089,7 @@ function wireTreemap() {
       // the cushion's money per asset, taken out of the asset's capital below (its earnings stay)
       const cushionOf = new Map();
       if (cushionMode !== 'accounts' && g('mpWithCushion')) {
+        if (g('mpCushionEnsure')) await window.mpCushionEnsure().catch(() => {});
         rows = [...window.mpWithCushion(rows.filter(r => r.account !== 'real estate')), ...rows.filter(r => r.account === 'real estate')];
         for (const r of rows) if (r.instrument_type === 'cushion') cushionOf.set(assetKey(r.ticker), (cushionOf.get(assetKey(r.ticker)) || 0) + Number(r.value_usd));
         rows = rows.map(r => (r.instrument_type !== 'cushion' ? r : { ...r, ticker: 'CUSHION' }));
