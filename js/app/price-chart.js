@@ -313,7 +313,9 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   }
   if (moneyCcy) {
     const rates = fx.length && ccy === moneyCcy ? fx : await mpFetchAll(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', moneyCcy).order('day'));
-    // by default every currency per dollar (USD/EUR, USD/RUB -- one way for all); the box turns it round
+    // by default every currency's price in dollars (EUR/USD, RUB/USD, CNY/USD -- one way for all, its rise a
+    // rise of the line); the box turns it round
+    if (opts.invert === undefined) opts = { ...opts, invert: true };
     const cheap = !opts.invert;
     const invBox = dlg.querySelector('#mp_price_inv_box');
     invBox.style.display = '';
@@ -606,23 +608,28 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         hi.yshift = gap; lo.yshift = -gap;
       }
     }
+    // the rate's scale: its line in the lower quarter
+    const rateRange = () => {
+      const rs = pol.map(r => r.rate), lo = Math.min(...rs), hi = Math.max(...rs), span = Math.max(hi - lo, 0.25, Math.abs(hi) * 0.05);
+      return [lo - span * 0.08, lo + span / 0.25];
+    };
     Plotly.react(dlg.querySelector('#mp_price_chart'), traces, Object.assign({}, LAYOUT_BASE, {
       margin: { l: 60, r: pol.length ? 172 : 130, t: 24, b: 40 }, showlegend: false, hovermode: 'closest', annotations: notes,
       xaxis: Object.assign({}, LAYOUT_BASE.xaxis, { type: 'date', dtick: undefined, tickformat: undefined, range: [from, today] }),
       yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { type: 'linear', tickformat: undefined, ticksuffix: unit === 'USD' ? '' : ` ${unit}`, tickprefix: unit === 'USD' ? '$' : '' },
         // with the central bank's rate in the lower quarter, the currency's line (its marks and the low's label too)
-        // keeps above it: the scale starts half its span lower
+        // keeps just above where the rate's line reaches
         pol.length ? (() => {
           const ys = [...pts.map(p => p.v), ...fxShown.map(d => d.rate)].filter(Number.isFinite);
           const lo = Math.min(...ys), hi = Math.max(...ys), sp = (hi - lo) || Math.abs(hi) * 0.02 || 1;
-          return { range: [lo - sp * 0.55, hi + sp * 0.06] };
+          const [r0, r1] = rateRange(), rTop = Math.max(...pol.map(r => r.rate));
+          const f = Math.min(0.4, (rTop - r0) / (r1 - r0) + 0.07);   // the rate line's top, a share of the height, and a gap
+          const total = sp / (1 - f - 0.05);
+          return { range: [lo - f * total, lo - f * total + total] };
         })() : {}),
       // the rate in the chart's lower quarter, grey and faint: there, not in the way of the currency's line
       ...(pol.length ? { yaxis3: { overlaying: 'y', side: 'right', showgrid: false, zeroline: false, ticksuffix: '%', fixedrange: true,
-        tickfont: { color: 'rgba(139,148,158,0.7)' }, linecolor: '#1e2830', range: (() => {
-          const rs = pol.map(r => r.rate), lo = Math.min(...rs), hi = Math.max(...rs), span = Math.max(hi - lo, 0.25, Math.abs(hi) * 0.05);
-          return [lo - span * 0.08, lo + span / 0.25];
-        })() } } : {}),
+        tickfont: { color: 'rgba(139,148,158,0.7)' }, linecolor: '#1e2830', range: rateRange() } } : {}),
       yaxis2: { overlaying: 'y', range: [0, 1], visible: false, fixedrange: true }, shapes: [...payShapes, ...lines, ...dealShapes],
     }), CONFIG);
     const first = pts[0], last = pts[pts.length - 1];
