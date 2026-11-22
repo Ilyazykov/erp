@@ -349,11 +349,15 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         const mine = Number(bought ? e.bought_amount : e.sold_amount), otherUsd = Number(bought ? e.sold_usd : e.bought_usd);
         if (!(mine > 0) || !(otherUsd > 0)) return null;
         const rate = opts.invert ? otherUsd / mine : mine / otherUsd;
-        const kind = { transfer: 'transfer', exchange: 'exchange', fund: 'through a fund', card: 'card payment' }[e.kind] || e.kind;
+        // through what, short: the bank (TBC Bank), banks (Revolut → Ozon Bank), the fund (T-Bank, TLCB), the card
+        const how = String(e.how || '');
+        const via = / -> /.test(how) ? how.replace(/ -> /, ' → ')
+          : e.kind === 'fund' ? how.replace(/^(.*?): (?:buy|sell) /, '$1, ')
+          : e.kind === 'card' ? `${how.split(': ')[0]} card` : how.split(': ')[0];
         // the mark as the chart's own asset's deal: on USD/RUB (the dollar's price in roubles) roubles bought
         // are the dollar sold -- a red sale; on RUB/USD (the rouble's price) a green buy
         return { day: String(e.at).slice(0, 10), bought, card: e.kind === 'card', side: bought === !!opts.invert ? 'buy' : 'sell', rate,
-          text: `${amt(e.sold_amount, e.sold_ccy)} → ${amt(e.bought_amount, e.bought_ccy)} (${kind}) · ${e.how}` };
+          text: `${amt(e.sold_amount, e.sold_ccy)} → ${amt(e.bought_amount, e.bought_ccy)} · ${via}` };
       }).filter(Boolean);
     } catch (err) { console.warn('currency exchanges:', err); }
   }
@@ -520,7 +524,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       for (const d of ds) dealShapes.push({ type: 'path', xref: 'x', yref: 'y', xsizemode: 'pixel', ysizemode: 'pixel',
         xanchor: d.day, yanchor: d.rate, path: house(side === 'buy', d.card ? 0.55 : 0.9), fillcolor: color, line: { color: '#000000', width: 0.6 }, layer: 'above' });
       traces.push({ x: ds.map(d => d.day), y: ds.map(d => d.rate), type: 'scatter', mode: 'markers', name: side === 'buy' ? 'bought' : 'sold',
-        marker: { color, size: 14, opacity: 0 }, text: ds.map(d => `${d.bought ? 'bought' : 'sold'} ${opts.currency} at ${fmt(d.rate)}: ${d.text}`),
+        marker: { color, size: 14, opacity: 0 }, text: ds.map(d => d.text),
         hovertemplate: '%{x}: %{text}<extra></extra>' });
     }
     if (payTrace) traces.push(payTrace);
@@ -605,7 +609,14 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     Plotly.react(dlg.querySelector('#mp_price_chart'), traces, Object.assign({}, LAYOUT_BASE, {
       margin: { l: 60, r: pol.length ? 172 : 130, t: 24, b: 40 }, showlegend: false, hovermode: 'closest', annotations: notes,
       xaxis: Object.assign({}, LAYOUT_BASE.xaxis, { type: 'date', dtick: undefined, tickformat: undefined, range: [from, today] }),
-      yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { type: 'linear', tickformat: undefined, ticksuffix: unit === 'USD' ? '' : ` ${unit}`, tickprefix: unit === 'USD' ? '$' : '' }),
+      yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { type: 'linear', tickformat: undefined, ticksuffix: unit === 'USD' ? '' : ` ${unit}`, tickprefix: unit === 'USD' ? '$' : '' },
+        // with the central bank's rate in the lower quarter, the currency's line (its marks and the low's label too)
+        // keeps above it: the scale starts half its span lower
+        pol.length ? (() => {
+          const ys = [...pts.map(p => p.v), ...fxShown.map(d => d.rate)].filter(Number.isFinite);
+          const lo = Math.min(...ys), hi = Math.max(...ys), sp = (hi - lo) || Math.abs(hi) * 0.02 || 1;
+          return { range: [lo - sp * 0.55, hi + sp * 0.06] };
+        })() : {}),
       // the rate in the chart's lower quarter, grey and faint: there, not in the way of the currency's line
       ...(pol.length ? { yaxis3: { overlaying: 'y', side: 'right', showgrid: false, zeroline: false, ticksuffix: '%', fixedrange: true,
         tickfont: { color: 'rgba(139,148,158,0.7)' }, linecolor: '#1e2830', range: (() => {
@@ -624,7 +635,13 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       const up = last.v >= first.v, col = up ? '#3fb950' : '#f85149', d = last.v - first.v;
       head.innerHTML = `<span style="font-size:2em;font-weight:700">${mpEscapeHtml(fmt(last.v))}</span>`
         + `<span style="color:${col};font-size:1.1em">${up ? '▲' : '▼'} ${Math.abs(ch).toFixed(2)}% · ${mpEscapeHtml(fmt(Math.abs(d)))}</span>`
-        + `<span style="color:#8b949e">over ${mpEscapeHtml(period)}</span>`;
+        + `<span style="color:#8b949e">over ${mpEscapeHtml(period)}</span>`
+        // the central bank's rate now and its change over the period, next to the currency's
+        + (pol.length ? (() => {
+          const r0 = pol[0].rate, r1 = pol[pol.length - 1].rate, dr = r1 - r0;
+          return `<span style="color:#8b949e;margin-left:12px">${mpEscapeHtml(policyName)} <b style="color:#c9d1d9">${r1}%</b>`
+            + `${Math.abs(dr) < 1e-9 ? ' · unchanged' : ` · ${dr > 0 ? '▲' : '▼'} ${Math.abs(dr).toFixed(2)} pp`} over ${mpEscapeHtml(period)}</span>`;
+        })() : '');
     } else head.innerHTML = '';
   };
   dlg.querySelectorAll('[data-p]').forEach(b => b.onclick = () => {
