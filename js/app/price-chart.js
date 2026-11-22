@@ -641,11 +641,12 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   try { payBox.checked = localStorage.getItem('mp_price_pay') !== '0'; } catch { /* no storage */ }
   if (payouts.length) dlg.querySelector('#mp_price_pay_box').style.display = '';
   payBox.onchange = () => { mpSave('mp_price_pay', payBox.checked ? '1' : '0'); draw(); };
-  // the central bank's rate over a currency's: shown or not (remembered); the box only when there's one
+  // the central bank's rate over a currency's: on whenever the window opens (not remembered), the box hides it
+  // for a look; the box only when there's one
   const rateBox = dlg.querySelector('#mp_price_rate');
-  try { rateBox.checked = localStorage.getItem('mp_price_rate') !== '0'; } catch { /* no storage */ }
+  rateBox.checked = true;
   if (policy.length) { dlg.querySelector('#mp_price_rate_box').style.display = ''; dlg.querySelector('#mp_price_rate_box span').textContent = policyName; }
-  rateBox.onchange = () => { mpSave('mp_price_rate', rateBox.checked ? '1' : '0'); draw(); };
+  rateBox.onchange = draw;
   viaBox.onchange = () => { mpSave('mp_price_via', viaBox.checked ? '1' : '0'); draw(); };
   draw();
 }
