@@ -362,6 +362,12 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       const rows = await mpFetchAll(() => sb.from('currency_exchanges').select('*')
         .or(`sold_ccy.eq.${C},bought_ccy.eq.${C}`).order('at'));
       const amt = (a, c) => `${Number(a).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${c}`;
+      // how far the rate got was off the day's rate (fx_history: the CBR's for the rouble, the market's for the
+      // rest): what came in over what went out, at that rate -- "+1.9%" better, "−2.97%" worse
+      const edge = e => {
+        const p = Number(e.sold_usd) > 0 ? (Number(e.bought_usd) / Number(e.sold_usd) - 1) * 100 : null;
+        return p == null || !Number.isFinite(p) ? '' : ` · ${p >= 0 ? '+' : '−'}${Math.abs(p).toFixed(2)}% vs the day's rate`;
+      };
       // the time, when known (the view's known_at: set by hand or from the bank's receipt -- a wall-clock time
       // kept as UTC), and its weekday: a bank's rate is worse when the market's shut (Ziraat: ~3% on an evening
       // or a weekend, ~1% in a weekday's hours)
@@ -385,7 +391,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         // the mark as the chart's own asset's deal: on USD/RUB (the dollar's price in roubles) roubles bought
         // are the dollar sold -- a red sale; on RUB/USD (the rouble's price) a green buy
         return { day: String(e.at).slice(0, 10), bought, card: e.kind === 'card', side: bought === !!opts.invert ? 'buy' : 'sell', rate,
-          text: `${amt(e.sold_amount, e.sold_ccy)} → ${amt(e.bought_amount, e.bought_ccy)}<br>${when(e.known_at)}${mpEscapeHtml(via)}` };
+          text: `${amt(e.sold_amount, e.sold_ccy)} → ${amt(e.bought_amount, e.bought_ccy)}${edge(e)}<br>${when(e.known_at)}${mpEscapeHtml(via)}` };
       }).filter(Boolean);
     } catch (err) { console.warn('currency exchanges:', err); }
   }
