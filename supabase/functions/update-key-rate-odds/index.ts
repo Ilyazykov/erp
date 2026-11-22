@@ -117,6 +117,32 @@ async function bisRates() {
   return byCountry;
 }
 
+// Georgia's rate: the BIS hasn't it -- the National Bank of Georgia's own list of its decisions (its site's
+// API, 99 a page, every one since 23.01.2008: the day and the rate), as month -> the rate at its end
+async function nbgRates() {
+  const decisions: { day: string; rate: number }[] = [];
+  for (let skip = 0; skip < 2000; skip += 99) {
+    const res = await fetch(`https://nbg.gov.ge/gw/api/ct/MonetaryPolicy/Rates?take=99&skip=${skip}`, { signal: AbortSignal.timeout(30_000) });
+    if (!res.ok) throw new Error(`NBG: HTTP ${res.status}`);
+    const page = await res.json();
+    for (const d of page.data ?? []) {
+      const rate = Number(d.rate);
+      if (Number.isFinite(rate) && /^\d{4}-\d{2}-\d{2}/.test(d.date)) decisions.push({ day: d.date.slice(0, 10), rate });
+    }
+    if (skip + 99 >= (page.meta?.total ?? 0)) break;
+  }
+  if (decisions.length < 100) throw new Error(`NBG: ${decisions.length} decisions`);
+  decisions.sort((a, b) => a.day.localeCompare(b.day));
+  const out = new Map<string, number>();
+  const now = new Date().toISOString().slice(0, 7);
+  let i = 0, rate: number | null = null;
+  for (let m = decisions[0].day.slice(0, 7); m <= now; m = new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7), 1)).toISOString().slice(0, 7)) {
+    while (i < decisions.length && decisions[i].day.slice(0, 7) <= m) rate = decisions[i++].rate;
+    if (rate != null) out.set(m, rate);
+  }
+  return out;
+}
+
 function worldTrendOdds(byCountry: Map<string, Map<string, number>>, weight: (h: number) => number) {
   // [bucket][position]: [up (weighted), all (weighted)]; per position the same
   const cell = TREND.map(() => [0, 1, 2].map(() => [0, 0]));
@@ -290,6 +316,10 @@ Deno.serve(async (req) => {
     });
     // every country's (22.11.2026): a currency's rate chart shows its central bank's rate under it
     const monthly = [...bis].flatMap(([country, series]) => [...series].map(([m, rate]) => ({ country, month: `${m}-01`, rate })));
+    // ...and Georgia's from its central bank (a failure there leaves the rest be)
+    try {
+      for (const [m, rate] of await nbgRates()) monthly.push({ country: 'GE', month: `${m}-01`, rate });
+    } catch (err) { console.warn(`NBG: ${(err as Error).message}`); }
     for (let i = 0; i < monthly.length; i += 1000) {
       const { error: mErr } = await db.from('cb_rates_monthly').upsert(monthly.slice(i, i + 1000));
       if (mErr) throw new Error(mErr.message);

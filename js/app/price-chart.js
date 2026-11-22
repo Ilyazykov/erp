@@ -312,9 +312,11 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     } catch (err) { console.warn('currency exchanges:', err); }
   }
   // ...and its central bank's rate under it: the CBR's key rate by day (key_rates), the others' policy
-  // rates by month from the BIS (cb_rates_monthly: a month's rate as at its end). None for the lari,
-  // the dirham, the lek: the BIS hasn't them.
+  // rates by month from the BIS (cb_rates_monthly: a month's rate as at its end); the lari's from the
+  // NBG itself (the BIS hasn't it); the dirham is pegged to the dollar, the CBUAE's rate follows the
+  // Fed's: the Fed's. None for the lek.
   const MP_CB_OF = { RUB: ['RU', 'CBR key rate'], EUR: ['XM', 'ECB rate'], GBP: ['GB', 'BoE rate'], CNY: ['CN', 'PBoC rate'],
+    GEL: ['GE', 'NBG rate'], AED: ['US', 'Fed rate (AED pegged)'],
     TRY: ['TR', 'CBRT rate'], HUF: ['HU', 'MNB rate'], ILS: ['IL', 'BoI rate'], RSD: ['RS', 'NBS rate'], MKD: ['MK', 'NBRM rate'],
     JPY: ['JP', 'BoJ rate'], CHF: ['CH', 'SNB rate'], CAD: ['CA', 'BoC rate'], AUD: ['AU', 'RBA rate'], KRW: ['KR', 'BoK rate'],
     HKD: ['HK', 'HKMA rate'], INR: ['IN', 'RBI rate'], BRL: ['BR', 'BCB rate'], ZAR: ['ZA', 'SARB rate'], PLN: ['PL', 'NBP rate'],
