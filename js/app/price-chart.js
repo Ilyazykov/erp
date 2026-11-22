@@ -83,7 +83,8 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     <div class="form-row" style="gap:6px;align-items:center">${MP_PRICE_PERIODS.map(([l]) => `<button class="btn${l === '1y' ? ' primary' : ''}" type="button" data-p="${l}">${l}</button>`).join('')}
       <label style="margin-left:12px" id="mp_price_ccy_box"><input type="checkbox" id="mp_price_usd"> in USD</label>
       <label style="margin-left:12px;display:none" id="mp_price_via_box"><input type="checkbox" id="mp_price_via" checked> buys through funds</label>
-      <label style="margin-left:12px;display:none" id="mp_price_pay_box"><input type="checkbox" id="mp_price_pay" checked> payouts</label></div>
+      <label style="margin-left:12px;display:none" id="mp_price_pay_box"><input type="checkbox" id="mp_price_pay" checked> payouts</label>
+      <label style="margin-left:12px;display:none" id="mp_price_inv_box"><input type="checkbox" id="mp_price_inv"> <span></span></label></div>
     <div id="mp_price_head" style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap"></div>
     <div id="mp_price_chart" style="height:420px"></div>
     <p class="note" style="margin:0" id="mp_price_note">Loading…</p>
@@ -268,7 +269,12 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   }
   if (moneyCcy) {
     const rates = fx.length && ccy === moneyCcy ? fx : await mpFetchAll(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', moneyCcy).order('day'));
-    const cheap = rates.length && Number(rates[rates.length - 1].usd_per_unit) < 0.2;
+    // by default a cheap currency per dollar (USD/RUB), a dear one in dollars (EUR/USD); the box turns it round
+    const cheap = !!(rates.length && Number(rates[rates.length - 1].usd_per_unit) < 0.2) !== !!opts.invert;
+    const invBox = dlg.querySelector('#mp_price_inv_box');
+    invBox.style.display = '';
+    invBox.querySelector('span').textContent = cheap ? `${moneyCcy}/USD` : `USD/${moneyCcy}`;
+    invBox.querySelector('input').onchange = () => { dlg.close(); mpOpenPriceDialog(asset, title, { ...opts, invert: !opts.invert }); };
     if (cheap) {
       // one dollar, shown in the currency at each day's rate: the currency per dollar
       prices = rates.map(r => ({ day: r.day, price_usd: 1 }));
