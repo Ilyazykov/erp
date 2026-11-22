@@ -103,9 +103,10 @@ const MP_ASSET_CLASS_LABELS = {
 
 // The safety cushion -- $10,000 not to be touched (30.10.2026): the cash at
 // Bank of Cyprus, Ziraat, Raiffeisen and Wise and TBC's savings account,
-// whole, and Revolut's euro liquid assets (its EUR money-market fund) up to
-// what that leaves of the $10,000. Not new money: those rows' amounts move
-// from their column (cash / liquid assets) to 'cushion' -- the totals stay.
+// whole, and Revolut's liquid assets (its money-market funds) up to what
+// that leaves of the $10,000: the euro ones first, then the dollar ones, then
+// the pound ones (23.11.2026). Not new money: those rows' amounts move from
+// their column (cash / liquid assets) to 'cushion' -- the totals stay.
 const MP_CUSHION_USD = 10000;
 const MP_CUSHION_CASH_ACCOUNTS = new Set(['Bank of Cyprus', 'Ziraat Bank', 'Raiffeisen', 'Wise']);
 // The brokerage accounts outside Russia: their cash is invested with the
@@ -117,9 +118,11 @@ const mpCushionWhole = r => r.value_usd > 0 && ((r.instrument_type === 'cash' &&
 function mpWithCushion(rows) {
   const out = rows.map(r => (mpCushionWhole(r) ? { ...r, instrument_type: 'cushion' } : r));
   let need = MP_CUSHION_USD - out.filter(r => r.instrument_type === 'cushion').reduce((a, r) => a + r.value_usd, 0);
-  const euro = out.filter(r => r.account === 'Revolut' && r.instrument_type === 'liquid' && r.value_usd > 0
-    && (r.underlying_currency || r.currency) === 'EUR').sort((a, b) => b.value_usd - a.value_usd);
-  for (const r of euro) {
+  const order = ['EUR', 'USD', 'GBP'];
+  const funds = out.filter(r => r.account === 'Revolut' && r.instrument_type === 'liquid' && r.value_usd > 0
+    && order.includes(r.underlying_currency || r.currency))
+    .sort((a, b) => order.indexOf(a.underlying_currency || a.currency) - order.indexOf(b.underlying_currency || b.currency) || b.value_usd - a.value_usd);
+  for (const r of funds) {
     if (need <= 0) break;
     const take = Math.min(need, r.value_usd);
     out.splice(out.indexOf(r), 1, { ...r, value_usd: r.value_usd - take }, { ...r, instrument_type: 'cushion', value_usd: take, quantity: null });

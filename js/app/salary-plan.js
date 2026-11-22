@@ -669,7 +669,7 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   const CRYPTO_TARGET_PCT = mpCryptoPlan(total3Now > 0 ? cryptoNow / total3Now * 100 : 0)?.target ?? 5;
   const total3 = Object.values(types).reduce((s, v) => s + v, 0);
   // The emergency fund's money (30.10.2026) is out of chart 9 and the group
-  // its targets are split over: Revolut's euro fund and TBC's savings in it
+  // its targets are split over: Revolut's funds (euro, then dollar, then pound) and TBC's savings in it
   // aren't liquid assets to invest.
   const withCushion = mpWithCushion(assetRows.filter(r => !isRealEstate(r)));
   const L = MP_ASSET_CLASS_LABELS;
