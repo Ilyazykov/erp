@@ -38,7 +38,7 @@ const mpIsDayOff = d => {
 async function mpRenderCardReminders() {
   const box = document.getElementById('card_reminders');
   const { data: rules, error } = await sb.from('credit_card_reminders').select('*');
-  const out = [...await mpStaleDataReminders(), ...await mpEarnReminders()];
+  const out = [...await mpStaleDataReminders(), ...await mpEarnReminders(), ...await mpDepositEndReminders()];
   if (error || !rules?.length) { box.innerHTML = out.join(''); return; }
   const today = new Date(); today.setHours(0, 0, 0, 0);
   for (const r of rules) {
@@ -238,6 +238,38 @@ async function mpEarnReminders() {
     const d = dayOf(w.tx_time), n = days(d);
     if (n < -14 || moves.some(m => Number(m.amount) < 0 && m.symbol === w.symbol && m.tx_time > w.tx_time)) continue;
     out.push(`<div class="card-reminder faint">🔒 Crypto.com Earn: вклад ${amt(w)} ${w.symbol} закрылся ${fmt(d)} и не открыт заново — открыть</div>`);
+  }
+  return out;
+}
+
+// A term deposit's end (deposit_terms, set from the statement or by hand): a faint banner from a week
+// before it to 3 days after, while it's still held. A Ziraat lira deposit's money is changed back in
+// Ziraat's app, whose rate is ~1% off the market in the Turkish market's hours on a weekday and ~3% off
+// on an evening, a night or a weekend (its receipts' times, 23.11.2026): the hours, and which it is now.
+async function mpDepositEndReminders() {
+  const { data: terms } = await sb.from('deposit_terms').select('ticker, end_day');
+  if (!terms?.length) return [];
+  const { data: held } = await sb.from('portfolio_value_usd').select('ticker, quantity').in('ticker', terms.map(t => t.ticker));
+  const qty = new Map((held || []).map(h => [h.ticker, Number(h.quantity)]));
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const fmt = d => d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  // Istanbul's clock now (UTC+3, no summer time): a weekday 10:00-16:30 is the narrow spread
+  const ist = new Date(Date.now() + 3 * 3600000);
+  const mins = ist.getUTCHours() * 60 + ist.getUTCMinutes();
+  const open = ist.getUTCDay() >= 1 && ist.getUTCDay() <= 5 && mins >= 600 && mins < 990;
+  const out = [];
+  for (const t of terms) {
+    const left = qty.get(t.ticker);
+    if (!(left > 0)) continue;
+    const end = new Date(t.end_day + 'T00:00:00');
+    const n = Math.round((end - today) / 86400000);
+    if (n > 7 || n < -3) continue;
+    const name = t.ticker.replace(/^DEPOSIT:/, '');
+    const when = n > 0 ? `закрывается ${fmt(end)} (через ${n} дн.)` : n === 0 ? 'закрывается сегодня' : `закрылся ${fmt(end)}`;
+    const fx = /^Ziraat Bank TRY /.test(name)
+      ? ` — лиры менять в будни с 11:00 до 17:30 по Тбилиси: наценка Ziraat ~1%, вечером, ночью и в выходные ~3%. Сейчас ${open ? '<b>~1%</b>' : '<b>~3%</b>, лучше подождать'}`
+      : '';
+    out.push(`<div class="card-reminder faint">🏦 Вклад ${mpEscapeHtml(name)} ${when}${fx}</div>`);
   }
   return out;
 }

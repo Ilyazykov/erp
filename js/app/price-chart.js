@@ -72,6 +72,17 @@ document.addEventListener('click', ev => {
   const td = ev.target.closest?.('[data-chart]');
   if (td && td.dataset.chart) mpOpenPriceDialog(td.dataset.chart, td.dataset.chartTitle || td.dataset.chart);
 });
+// When a bank's own exchange is fair, by the times of the user's exchanges (23.11.2026): shown under a
+// currency's chart. Ziraat: its receipts' times -- 10:52 and 16:34 on weekdays ~1% off the market,
+// 19:29, 21:42, 02:58 and a Sunday's 17:16 ~3%. T-Bank: its 67 exchanges -- ~1% on a weekday 10:00-18:59
+// (Moscow), ~5.5-7.5% from 19:00 to midnight, ~2.5-3.5% at night, ~6% on a weekend. TBC: its 4 exchanges
+// (weekdays, no times) -- dollars ~0.4%, euros ~0.9-1.15%; over 2 500 GEL its app offers to ask for a better
+// rate (Entrepreneur Georgia); nothing found on its weekends.
+const MP_FX_RULES = {
+  TRY: 'Ziraat: change in its app on a weekday 11:00–17:30 Tbilisi time (10:00–16:30 Istanbul) — ~1% off the market; in the evening, at night or on a weekend ~3%.',
+  GEL: 'TBC: dollars to lari ~0.4% off the market, euros ~0.9–1.15% — change dollars; over 2 500 GEL its app offers "ask for a better rate": ask (more than once). Weekends: unknown — compare the app\'s rate with the NBG\'s banks table first.',
+  RUB: 'T-Bank: change on a weekday 10:00–19:00 Moscow time — ~1% off the market; from 19:00 ~6%, at night ~3%, on a weekend ~6%.',
+};
 async function mpOpenPriceDialog(asset, title, opts = {}) {
   const dealTickers = [asset, ...(opts.also || [])];
   const dlg = document.createElement('dialog');
@@ -649,6 +660,11 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     const ch = first && last && first.v ? (last.v / first.v - 1) * 100 : null;
     note.textContent = first ? `${rateNote ? `${rateNote}: ` : ''}${first.day} ${fmt(first.v)} → ${last.day} ${fmt(last.v)}${ch == null ? '' : ` (${ch >= 0 ? '+' : ''}${ch.toFixed(1)}%)`}`
       + `${shown.length ? ` · deals marked: ${shown.length}` : ''}${fxShown.length ? ` · exchanges marked: ${fxShown.length} (at the rate each got)` : ''}${pol.length ? ` · ${policyName} now ${pol[pol.length - 1].rate}%` : ''}${avgNote}${splits.length ? ` · split-adjusted: ${splits.join(', ')}` : ''}` : 'No prices in this period.';
+    // a currency's exchange rule: when the bank's rate is fair (from the marks' times, 23.11.2026)
+    let rule = dlg.querySelector('#mp_price_fx_rule');
+    if (!rule) { rule = document.createElement('p'); rule.id = 'mp_price_fx_rule'; rule.className = note.className; note.after(rule); }
+    rule.textContent = MP_FX_RULES[opts.currency] || '';
+    rule.style.display = rule.textContent ? '' : 'none';
     // today's price, big, and the period's change under the title (a broker app's header)
     const head = dlg.querySelector('#mp_price_head');
     if (first && last) {
