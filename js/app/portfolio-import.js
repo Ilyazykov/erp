@@ -89,6 +89,8 @@ function mpDetectCsvKind(headerLine, fullText) {
   if (/^\uFEFF?User ID,Time,Account,Operation,Coin,Change,Remark/i.test(h)) return 'binance';
   if (/^\uFEFF?Symbol,Type,Quantity,Price,Value,Fees,Date/i.test(h)) return 'revolut_crypto';
   if (/^\uFEFF?\{/.test(h) && /"companyName"\s*:\s*"Freedom24"/.test(fullText)) return 'freedom24_json';
+  // a Ziraat PDF statement read on the page (mpZiraatPdfRead)
+  if (/^\{"ziraat_pdf":true/.test(h)) return 'ziraat_pdf';
   if (/^\uFEFF?Date,Ticker,Type,Quantity,Price per share,Total Amount,Currency/i.test(h)) return 'revolut_invest';
   if (/<html/i.test(fullText.slice(0, 2000)) && /Отчет брокера/.test(fullText) && /Сделки купли\/продажи ценных бумаг|Портфель Ценных Бумаг/.test(fullText)) return 'sber_broker';
   if (/^\uFEFF?Time,Coin,Network,Amount,(Fee,)?Address,TXID,Status/i.test(h)) return 'binance_aux';
@@ -1031,6 +1033,171 @@ function mpWoltReceiptsCsv(docs) {
   }
   return { csv: orders.length ? out.join('\n') + '\n' : null, orders, problems };
 }
+// Ziraat's PDF statement is a picture (no text in it, 23.11.2026): read from the page's pixels
+// and OCR. `page` is { width, height, lum(x, y) } (0 black - 255 white); `ocr(rect, kind)` reads
+// a rectangle -- kind 'digits' (a date, an amount), 'code' (the invoice no) or 'text'. The table's
+// grey header band and its borders give the columns (at their fixed share of the table, as Ziraat
+// prints it); each row is a line of ink in the date column (a row's explanation wraps over two
+// lines, its date in the middle). Returns { accountNo, currency, rows: [{ date, invoiceNo,
+// description, amount, balanceAfter }] } (newest first, as printed), owed / received from the foot.
+async function mpZiraatPdfPage(page, ocr) {
+  const { width: W, height: H, lum } = page;
+  const greyRow = y => { let n = 0; for (let x = 0; x < W; x += 2) { const v = lum(x, y); if (v > 180 && v < 235) n++; } return n > W / 2 * 0.6; };
+  let hy0 = -1, hy1 = -1;
+  for (let y = 0; y < H; y++) { if (greyRow(y)) { if (hy0 < 0) hy0 = y; hy1 = y; } else if (hy0 >= 0 && y - hy1 > 8) break; }
+  if (hy0 < 0) return null;
+  // the band's left and right ends: the table's
+  const mid = Math.round((hy0 + hy1) / 2);
+  let tx0 = 0, tx1 = W - 1;
+  while (tx0 < W && !(lum(tx0, mid) > 180 && lum(tx0, mid) < 235)) tx0++;
+  while (tx1 > 0 && !(lum(tx1, mid) > 180 && lum(tx1, mid) < 235)) tx1--;
+  const tw = tx1 - tx0;
+  // the columns: the header's words -- Date | Invoice No | Explanation | Transaction Amount |
+  // Balance -- as runs of ink across the band, a gap of 1% of the table between them
+  const starts = [];
+  let last = -1e9;
+  for (let x = tx0 + 2; x < tx1 - 2; x++) {
+    let ink = false;
+    for (let y = hy0 + 2; y < hy1 - 2; y++) if (lum(x, y) < 120) { ink = true; break; }
+    if (!ink) continue;
+    if (x - last > tw * 0.011) starts.push(x);
+    last = x;
+  }
+  if (starts.length !== 5) return null;
+  const pad = Math.round(tw * 0.006);
+  const X = { date: starts[0] - pad, inv: starts[1] - pad, expl: starts[2] - pad, amt: starts[3] - pad, bal: starts[4] - pad, end: tx1 };
+  // lines of ink in a strip, below the band to the table's bottom border
+  const inkLines = (x0, x1, y0, y1) => {
+    const out = [];
+    let start = -1;
+    for (let y = y0; y < y1; y++) {
+      let ink = false;
+      for (let x = x0; x < x1; x++) if (lum(x, y) < 140) { ink = true; break; }
+      if (ink && start < 0) start = y;
+      if (!ink && start >= 0) { if (y - start > 4) out.push([start, y]); start = -1; }
+    }
+    return out;
+  };
+  // the table's bottom: the first long dark line below the band
+  let ty1 = H - 1;
+  for (let y = hy1 + 2; y < H; y++) {
+    let n = 0;
+    for (let x = tx0; x < tx1; x += 2) if (lum(x, y) < 120) n++;
+    if (n > tw / 2 * 0.9) { ty1 = y; break; }
+  }
+  const inside = 6;
+  const dates = inkLines(X.date + inside, X.inv - inside, hy1 + 3, ty1 - 2);
+  // the foot ("Amount Owed:", "Recipient:") stands in the invoice column, below the last date
+  const invLines = inkLines(X.inv + inside, X.expl - inside, hy1 + 3, ty1 - 2);
+  const lastDate = dates.length ? dates[dates.length - 1][1] : hy1;
+  const foot = invLines.filter(([a]) => a > lastDate + 2);
+  const rows = [];
+  for (let i = 0; i < dates.length; i++) {
+    const [a, b] = dates[i], h = b - a;
+    const top = i ? Math.round((dates[i - 1][1] + a) / 2) : hy1 + 3;
+    const bottom = i + 1 < dates.length ? Math.round((b + dates[i + 1][0]) / 2) : (foot.length ? foot[0][0] - 2 : Math.min(ty1 - 2, b + h * 2));
+    const line = { y: a - Math.round(h * 0.35), h: Math.round(h * 1.7) };
+    const rect = (x0, x1, y, hh) => ({ left: x0 + inside, top: y, width: x1 - x0 - 2 * inside, height: hh });
+    rows.push({
+      date: await ocr(rect(X.date, X.inv, line.y, line.h), 'digits'),
+      invoiceNo: await ocr(rect(X.inv, X.expl, line.y, line.h), 'code'),
+      description: await ocr(rect(X.expl, X.amt, top, bottom - top), 'text'),
+      amount: await ocr(rect(X.amt, X.bal, line.y, line.h), 'digits'),
+      balanceAfter: await ocr(rect(X.bal, X.end, line.y, line.h), 'digits'),
+    });
+  }
+  const footVals = [];
+  for (const [a, b] of foot) footVals.push(await ocr(rect2(X.amt, X.end, a - Math.round((b - a) * 0.35), Math.round((b - a) * 1.7)), 'digits'));
+  function rect2(x0, x1, y, hh) { return { left: x0 + inside, top: y, width: x1 - x0 - 2 * inside, height: hh }; }
+  // the box above the table: "Customer No : 103119215-5001", "Currency : TRY"
+  const head = await ocr({ left: Math.round(tx0 + tw * 0.55), top: Math.max(0, Math.round(hy0 - (hy1 - hy0) * 3.2)), width: Math.round(tw * 0.45), height: Math.round((hy1 - hy0) * 2.9) }, 'text');
+  return { head, rows, foot: footVals };
+}
+
+// The pages read (mpZiraatPdfPage) into the statement, checked: every amount and balance a
+// number, each balance the one below it (older) plus its amount, the amounts out and in summing
+// to the foot's "Amount Owed" / "Recipient" -- a misread digit doesn't go in. { error } else.
+function mpZiraatPdfStatement(pages) {
+  // an amount is always printed with its kuruş ("-100.028,37"), its separators often misread
+  // (a comma as a dot, one dropped): its digits, the last two the kuruş
+  const num = s => {
+    const m = String(s || '').replace(/[\s—–]/g, '').match(/^[^-\d]*(-?)(\d[\d.,]*\d)$/);
+    return m && m[2].replace(/[.,]/g, '').length >= 3 ? Number(m[1] + m[2].replace(/[.,]/g, '')) / 100 : null;
+  };
+  const head = pages.map(p => p.head).join('\n');
+  const accountNo = head.match(/(\d{9})\s*-\s*(\d{4})/);
+  // the currency's code, "TRY" read as "IRY" at times
+  const code = (head.match(/Currency\s*\S?\s*([A-Z]{2,3})\b/) || [])[1] || '';
+  const cur = ['USD', 'EUR', 'GBP'].includes(code) ? code : /^(?:.RY|T.Y|TR.|TL)$/.test(code) ? 'TRY' : null;
+  const rows = pages.flatMap(p => p.rows).map(r => ({
+    date: (String(r.date).match(/(\d{2})\.?(\d{2})\.?(\d{4})/) || []).slice(1).join('.'),
+    invoiceNo: String(r.invoiceNo).replace(/\s/g, '').replace(/^(\D)(.*)$/, (m, a, b) => a + b.replace(/O/g, '0').replace(/[IL]/g, '1')),
+    description: String(r.description).replace(/\s+/g, ' ').trim(),
+    amount: num(r.amount), balanceAfter: num(r.balanceAfter),
+  }));
+  const foot = pages.flatMap(p => p.foot).map(num);
+  const where = r => `the row of ${r.date || '?'} ${r.invoiceNo} (${r.amount ?? '?'}, balance ${r.balanceAfter ?? '?'})`;
+  if (!rows.length) return { error: 'no rows read from the statement' };
+  if (!accountNo || !cur) return { error: "the account number / currency not read from the statement's head" };
+  const unread = rows.find(r => !/^\d{2}\.\d{2}\.\d{4}$/.test(r.date) || r.amount === null || r.balanceAfter === null);
+  if (unread) return { error: `${where(unread)} misread` };
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const older = rows[i + 1];
+    if (older && Math.abs(older.balanceAfter + r.amount - r.balanceAfter) > 0.005) return { error: `${where(r)} doesn't add up with the balance below it -- misread` };
+  }
+  const out = rows.filter(r => r.amount < 0).reduce((s, r) => s + r.amount, 0);
+  const inn = rows.filter(r => r.amount > 0).reduce((s, r) => s + r.amount, 0);
+  if (foot.length < 2 || foot[0] === null || foot[1] === null
+    || Math.abs(foot[0] - out) > 0.005 || Math.abs(foot[1] - inn) > 0.005) {
+    return { error: `the amounts read don't sum to the statement's totals (${foot.join(' / ')} vs ${out.toFixed(2)} / ${inn.toFixed(2)}) -- misread` };
+  }
+  return { accountNo: `${accountNo[1]}-${accountNo[2]}`, currency: cur, rows };
+}
+
+// A Ziraat PDF statement (a picture) read on the page: pdf.js draws each page, Tesseract.js
+// (loaded the first time one's needed) reads the cells mpZiraatPdfPage points at -- the text
+// in Turkish, dates / amounts / the invoice no. as digits and capitals only. -> the statement
+// (mpZiraatPdfStatement) or { error }; null when the PDF isn't one of Ziraat's.
+let mpTesseract = null;
+async function mpZiraatPdfRead(file, onPage) {
+  await mpPdfRows({ arrayBuffer: async () => new ArrayBuffer(0) }).catch(() => {});   // pdf.js loaded
+  const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  if (!window.Tesseract) {
+    await new Promise((ok, fail) => { const s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js'; s.onload = ok; s.onerror = () => fail(new Error('Tesseract.js did not load')); document.head.appendChild(s); });
+  }
+  if (!mpTesseract) {
+    const text = await Tesseract.createWorker('tur');
+    const digits = await Tesseract.createWorker('eng');
+    await digits.setParameters({ tessedit_char_whitelist: '0123456789.,-', tessedit_pageseg_mode: '7' });
+    const code = await Tesseract.createWorker('eng');
+    await code.setParameters({ tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', tessedit_pageseg_mode: '7' });
+    mpTesseract = { text, digits, code };
+  }
+  const pages = [];
+  for (let n = 1; n <= pdf.numPages; n++) {
+    if (onPage) onPage(n, pdf.numPages);
+    const page = await pdf.getPage(n);
+    const vp = page.getViewport({ scale: 4 });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(vp.width); canvas.height = Math.round(vp.height);
+    const g = canvas.getContext('2d', { willReadFrequently: true });
+    g.fillStyle = '#fff'; g.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: g, viewport: vp }).promise;
+    const px = g.getImageData(0, 0, canvas.width, canvas.height).data, W = canvas.width;
+    const ocr = async (r, kind) => {
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, r.width); c.height = Math.max(1, r.height);
+      c.getContext('2d').drawImage(canvas, r.left, r.top, r.width, r.height, 0, 0, r.width, r.height);
+      return (await mpTesseract[kind].recognize(c)).data.text.trim();
+    };
+    const read = await mpZiraatPdfPage({ width: W, height: canvas.height, lum: (x, y) => px[(y * W + x) * 4] }, ocr);
+    if (read) pages.push(read);
+  }
+  if (!pages.length) return null;
+  return mpZiraatPdfStatement(pages);
+}
+
 async function mpImportFiles(files) {
   const listEl = document.getElementById('mp_any_csv_status');
   files = [...files];
@@ -1049,6 +1216,26 @@ async function mpImportFiles(files) {
     try {
       let docs = [];
       for (const f of pdfs) docs.push({ name: f.name, rows: await mpPdfRows(f) });
+      // Ziraat's statements are pictures (no text in them): read by OCR, each sent as the
+      // statement's rows (JSON) to import-ziraat-statement
+      const pictures = docs.filter(d => !d.rows.length);
+      docs = docs.filter(d => d.rows.length);
+      for (const d of pictures) {
+        const rl = document.createElement('div');
+        listEl.appendChild(rl);
+        const f = pdfs.find(x => x.name === d.name);
+        try {
+          const r = await mpZiraatPdfRead(f, (n, of) => { rl.textContent = `${d.name}: a picture PDF -- reading it (OCR), page ${n} of ${of}…`; });
+          if (!r) { rl.textContent = `${d.name}: a PDF with no text in it, not a Ziraat statement -- nothing read.`; continue; }
+          if (r.error) { rl.textContent = `${d.name}: Ziraat statement, ${r.error}.`; continue; }
+          const days = r.rows.map(x => x.date.split('.').reverse().join('-')).sort();
+          rl.textContent = `${d.name}: Ziraat statement (PDF, read by OCR), account ${r.accountNo} ${r.currency}, ${days[0]} – ${days[days.length - 1]}: `
+            + `${r.rows.length} transaction(s), every amount checked against the balances and the totals.`;
+          files.push(new File([JSON.stringify({ ziraat_pdf: true, pdf: true, ...r })], `ziraat_${r.accountNo}_${days[0]}_${days[days.length - 1]}.json`, { type: 'application/json' }));
+        } catch (error) {
+          rl.textContent = `${d.name}: reading the picture PDF failed: ${error.message}`;
+        }
+      }
       const raif = docs.filter(d => mpIsRaifPdf(d.rows));
       docs = docs.filter(d => !raif.includes(d));
       for (const d of raif) {
@@ -2007,7 +2194,7 @@ async function mpRenderLatestSources() {
 // still up to date once its statement is in). Snowball is no statement.
 const MP_UPLOAD_ACCOUNT = {
   revolut_account: 'Revolut', revolut_fund: 'Revolut', revolut_deposit: 'Revolut', revolut_crypto: 'Revolut',
-  revolut_invest: 'Revolut', boc_account: 'Bank of Cyprus', ziraat_xlsx: 'Ziraat Bank', raiffeisen_account: 'Raiffeisen',
+  revolut_invest: 'Revolut', boc_account: 'Bank of Cyprus', ziraat_xlsx: 'Ziraat Bank', ziraat_pdf: 'Ziraat Bank', raiffeisen_account: 'Raiffeisen',
   bybit_log: 'Bybit', cryptocom: 'Crypto.com', telegram_wallet: 'Telegram', binance: 'Binance', sber_broker: 'Sber',
   wise: 'Wise', ibkr: 'IBKR', freedom24_xlsx: 'Freedom24', freedom24_json: 'Freedom24', tbank_broker_xlsx: 'T-Bank',
   atomyze_xlsx: 'T-Bank',
@@ -2424,6 +2611,7 @@ async function mpImportOneFile(file, statusEl, session) {
       revolut_deposit: { fn: 'import-revolut-deposit-statement', label: 'Revolut Instant Access Savings statement' },
       boc_account: { fn: 'import-boc-statement', label: 'Bank of Cyprus transaction history' },
       ziraat_xlsx: { fn: 'import-ziraat-statement', label: 'Ziraat Bank account activity' },
+      ziraat_pdf: { fn: 'import-ziraat-statement', label: 'Ziraat Bank account activity (PDF)' },
       raiffeisen_account: { fn: 'import-raiffeisen-statement', label: 'Raiffeisen Bank Serbia transaction history' },
       bank_csv: { fn: 'import-bank-csv', label: 'bank transaction history (generic CSV)' },
       broker_csv: { fn: 'import-broker-csv', label: 'broker operations (generic CSV)' },
@@ -2461,7 +2649,7 @@ async function mpImportOneFile(file, statusEl, session) {
         'Authorization': `Bearer ${session.access_token}`,
         'Content-Type': isXlsx
           ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-          : 'text/csv',
+          : kind === 'ziraat_pdf' ? 'application/json' : 'text/csv',
       },
       body: isXlsx ? await file.arrayBuffer() : csvText,
     });
@@ -2689,12 +2877,12 @@ async function mpImportOneFile(file, statusEl, session) {
       }
       mpRenderBrokerCurrency();
       mpRenderBrokerAssetClass();
-    } else if (kind === 'ziraat_xlsx') {
+    } else if (kind === 'ziraat_xlsx' || kind === 'ziraat_pdf') {
       statusEl.textContent = result.deposit
         ? `Detected: ${label}, term deposit ${result.deposit}${result.deposit_end ? ` until ${result.deposit_end}` : ''}. `
           + `Imported ${result.imported} deposit movements.`
         : `Detected: ${label} (${result.currency}). Imported ${result.imported} transactions `
-          + `(${result.total_rows} parsed, ${result.skipped_bad_date} skipped as bad date).`;
+          + `(${result.total_rows} parsed${result.already_in ? `, ${result.already_in} already in from the .xlsx` : ''}, ${result.skipped_bad_date} skipped as bad date).`;
       if (result.deposit) { mpRenderPortfolioPies(); mpRenderBondByType(); }
     } else if (kind === 'revolut_fund') {
       statusEl.textContent = `Detected: ${label}. Imported ${result.imported} rows `

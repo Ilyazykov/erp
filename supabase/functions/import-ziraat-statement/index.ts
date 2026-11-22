@@ -125,18 +125,17 @@ function parseRows(sheet: XLSX.WorkSheet): { rows: ZiraatRow[]; currency: string
 // "103119215-5001 No.lu Vds. Hes.tan 103119215-5004 - Hes. Açılış, Hes. Aç. Tr: 23/11/2026
 // VB: 23/11/2026 VS: 07/01/2027" -- from 5001, account 5004 opened on 23.11, its term to 07.01.
 // The same row stands in both statements; it's the deposit's own when the account opened is
-// the statement's.
-const OPENING_RE = /(\d+-\d+)\s+No\.lu\s+Vds\.\s*Hes\.tan\s+(\d+-\d+)\s*-\s*Hes\.\s*Açılış/i;
+// the statement's. Loose about the dots and the letters OCR misreads in a PDF's ("Vds Hes tan",
+// "VE: 07/01/2027"): the first date in it the opening, the last the term's end.
+const OPENING_RE = /(\d+-\d+)\s+No\.?\s*lu\s+Vds\.?\s*Hes\.?\s*tan\s+(\d+-\d+)\s*-\s*Hes\.?\s*Açılış/i;
 const dmy = (s: string | undefined) => s?.replace(/^(\d{2})\/(\d{2})\/(\d{4})$/, '$3-$2-$1') ?? null;
 function depositOpening(rows: ZiraatRow[], accountNo: string | null) {
   if (!accountNo) return null;
   for (const r of rows) {
     const m = r.description.match(OPENING_RE);
     if (!m || m[2] !== accountNo) continue;
-    return {
-      opened: dmy(r.description.match(/Hes\.\s*Aç\.\s*Tr:\s*(\d{2}\/\d{2}\/\d{4})/)?.[1]) ?? parseDate(r.date),
-      end: dmy(r.description.match(/VS:\s*(\d{2}\/\d{2}\/\d{4})/)?.[1]),
-    };
+    const days = r.description.match(/\d{2}\/\d{2}\/\d{4}/g) ?? [];
+    return { opened: dmy(days[0]) ?? parseDate(r.date), end: days.length > 1 ? dmy(days[days.length - 1]) : null };
   }
   return null;
 }
@@ -167,15 +166,25 @@ Deno.serve(async (req) => {
         { status: 401, headers: corsHeaders });
     }
 
-    const fileBytes = new Uint8Array(await req.arrayBuffer());
-    const workbook = XLSX.read(fileBytes, { type: 'array' });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    if (!sheet) {
-      return new Response(JSON.stringify({ error: 'No sheet found in workbook' }),
-        { status: 400, headers: corsHeaders });
+    // The .xlsx as is, or a PDF statement read on the page (Ziraat's PDF is a picture: OCR,
+    // each amount checked against the balances and the totals there) as JSON -- { pdf: true,
+    // accountNo, currency, rows: [{ date, invoiceNo, description, amount, balanceAfter }] }.
+    let parsed: { rows: ZiraatRow[]; currency: string | null; accountNo: string | null };
+    const fromPdf = /json/i.test(req.headers.get('Content-Type') ?? '');
+    if (fromPdf) {
+      const body = await req.json();
+      parsed = { rows: body.rows ?? [], currency: body.currency ?? null, accountNo: body.accountNo ?? null };
+    } else {
+      const fileBytes = new Uint8Array(await req.arrayBuffer());
+      const workbook = XLSX.read(fileBytes, { type: 'array' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      if (!sheet) {
+        return new Response(JSON.stringify({ error: 'No sheet found in workbook' }),
+          { status: 400, headers: corsHeaders });
+      }
+      parsed = parseRows(sheet);
     }
-
-    const { rows: ziraatRows, currency, accountNo } = parseRows(sheet);
+    const { rows: ziraatRows, currency, accountNo } = parsed;
     if (!currency) {
       return new Response(JSON.stringify({
         error: 'Could not detect account currency from the "Account Number" header cell '
@@ -216,22 +225,34 @@ Deno.serve(async (req) => {
         const [y, m, d] = opening!.opened!.split('-');
         ticker = `DEPOSIT:${account} ${currency} ${rate}% ${d}.${m}.${y}`;
       }
+      // a movement already in (from the other of the PDF / the .xlsx): its id -- by day, side
+      // and amount, the description differing between the two
+      const { data: had } = await supabase.from('trades').select('external_id, trade_date, side, quantity')
+        .eq('external_source', depositSource);
+      const known = new Map<string, string[]>();
+      for (const t of had ?? []) {
+        const k = `${t.trade_date}|${t.side}|${Number(t.quantity).toFixed(2)}`;
+        known.set(k, [...(known.get(k) ?? []), t.external_id]);
+      }
       const trades = [];
       const seen = new Map<string, number>();
       for (const r of ziraatRows) {
         const isoDate = parseDate(r.date);
         if (!isoDate || r.amount === 0) continue;
-        const signature = `${r.date}:${r.invoiceNo}:${r.description}:${r.amount}`;
+        const side = r.amount < 0 ? 'sell' : 'buy';
+        const prior = known.get(`${isoDate}|${side}|${Math.abs(r.amount).toFixed(2)}`)?.shift();
+        if (prior && fromPdf) continue;   // the .xlsx's words stay
+        const signature = fromPdf ? `pdf:${r.date}:${r.invoiceNo}:${r.amount}` : `${r.date}:${r.invoiceNo}:${r.description}:${r.amount}`;
         const occurrence = seen.get(signature) ?? 0;
         seen.set(signature, occurrence + 1);
         trades.push({
-          user_id: user.id, ticker, side: r.amount < 0 ? 'sell' : 'buy', quantity: Math.abs(r.amount), price: 1,
+          user_id: user.id, ticker, side, quantity: Math.abs(r.amount), price: 1,
           trade_date: isoDate, currency, account, note: r.description,
-          external_source: depositSource, external_id: occurrence === 0 ? signature : `${signature}:dup${occurrence}`,
+          external_source: depositSource, external_id: prior ?? (occurrence === 0 ? signature : `${signature}:dup${occurrence}`),
         });
       }
-      const { error: tErr, count } = await supabase.from('trades')
-        .upsert(trades, { onConflict: 'user_id,external_source,external_id', count: 'exact' });
+      const { error: tErr, count } = trades.length ? await supabase.from('trades')
+        .upsert(trades, { onConflict: 'user_id,external_source,external_id', count: 'exact' }) : { error: null, count: 0 };
       if (tErr) {
         return new Response(JSON.stringify({ error: tErr.message }), { status: 500, headers: corsHeaders });
       }
@@ -246,13 +267,30 @@ Deno.serve(async (req) => {
       }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
+    // a row already in (from the other of the PDF / the .xlsx of these days): its id -- by day,
+    // amount and balance after, the description differing between the two. A PDF's row leaves
+    // it as it is; an .xlsx's overwrites it (its words are the bank's own).
+    const isoDays = ziraatRows.map(r => parseDate(r.date)).filter(Boolean).sort() as string[];
+    const known = new Map<string, string[]>();
+    if (isoDays.length) {
+      const { data: had } = await supabase.from('bank_transactions').select('external_id, tx_date, amount, balance_after')
+        .eq('external_source', 'ziraat_xlsx').eq('currency', currency)
+        .gte('tx_date', `${isoDays[0]}T00:00:00Z`).lte('tx_date', `${isoDays[isoDays.length - 1]}T23:59:59Z`);
+      for (const b of had ?? []) {
+        const k = `${String(b.tx_date).slice(0, 10)}|${Number(b.amount).toFixed(2)}|${b.balance_after === null ? '' : Number(b.balance_after).toFixed(2)}`;
+        known.set(k, [...(known.get(k) ?? []), b.external_id]);
+      }
+    }
+    let alreadyIn = 0;
     const rows = [];
     const dupSeen = new Map<string, number>();
     for (const r of ziraatRows) {
       const isoDate = parseDate(r.date);
       if (!isoDate) { skippedBadDate++; continue; }
+      const prior = known.get(`${isoDate}|${r.amount.toFixed(2)}|${r.balanceAfter === null ? '' : r.balanceAfter.toFixed(2)}`)?.shift();
+      if (prior && fromPdf) { alreadyIn++; continue; }
 
-      const signature = `${r.date}:${r.invoiceNo}:${r.description}:${r.amount}`;
+      const signature = fromPdf ? `pdf:${r.date}:${r.invoiceNo}:${r.amount}` : `${r.date}:${r.invoiceNo}:${r.description}:${r.amount}`;
       const occurrence = dupSeen.get(signature) ?? 0;
       dupSeen.set(signature, occurrence + 1);
 
@@ -267,7 +305,7 @@ Deno.serve(async (req) => {
         category: null,
         balance_after: r.balanceAfter,
         external_source: 'ziraat_xlsx',
-        external_id: occurrence === 0 ? signature : `${signature}:dup${occurrence}`,
+        external_id: prior ?? (occurrence === 0 ? signature : `${signature}:dup${occurrence}`),
       });
     }
 
@@ -280,6 +318,10 @@ Deno.serve(async (req) => {
       dates.length > 1 && dates[0] > dates[dates.length - 1]);
     rows.forEach((r, i) => { r.tx_date = r.tx_date.replace('T00:00:00Z', `T${clockFor(pos[i])}Z`); });
 
+    if (!rows.length && alreadyIn) {
+      return new Response(JSON.stringify({ imported: 0, already_in: alreadyIn, currency, total_rows: ziraatRows.length, skipped_bad_date: skippedBadDate }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
     if (!rows.length) {
       return new Response(JSON.stringify({
         error: 'No importable rows found',
@@ -298,6 +340,7 @@ Deno.serve(async (req) => {
 
     return new Response(JSON.stringify({
       imported: count ?? rows.length,
+      already_in: alreadyIn,
       currency,
       total_rows: ziraatRows.length,
       skipped_bad_date: skippedBadDate,
