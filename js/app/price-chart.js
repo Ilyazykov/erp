@@ -83,7 +83,12 @@ const MP_FX_RULES = {
   GEL: 'TBC: dollars to lari ~0.4% off the market, euros ~0.9–1.15% — change dollars; over 2 500 GEL its app offers "ask for a better rate": ask (more than once). Weekends: unknown — compare the app\'s rate with the NBG\'s banks table first.',
   RUB: 'T-Bank: change on a weekday 10:00–19:00 Moscow time — ~1% off the market; from 19:00 ~6%, at night ~3%, on a weekend ~6%.',
 };
+// Gold funds, their deals marked on gold's chart as buys through a fund (the weight: their share of gold)
+// -- T-Capital's TGLD, bought on T-Bank's brokerage account (May-June 2026); securities / fund_holdings
+// don't list it, so it's named here
+const MP_GOLD_FUNDS = [{ fund: 'TGLD', weight: 1 }];
 async function mpOpenPriceDialog(asset, title, opts = {}) {
+  if (asset === 'XAU' && !opts.via?.length) opts = { ...opts, via: MP_GOLD_FUNDS };
   const dealTickers = [asset, ...(opts.also || [])];
   const dlg = document.createElement('dialog');
   dlg.style.cssText = 'background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:16px 18px;min-width:320px;width:min(94vw,960px)';

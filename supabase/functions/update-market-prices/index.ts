@@ -424,8 +424,12 @@ const MOEX_BOND_ETF_TICKERS = new Set(['TBRU', 'SAFE', 'SBMM', 'AKMB', 'AKMM', '
 // Денежный рынок Юани). SAFE / TBRU / AKMB / TLCB / SBBY / AKGP stay bonds.
 const MOEX_MONEY_MARKET_ETF_TICKERS = new Set(['SBMM', 'AKMM', 'AMNY', 'AKMC']);
 
+// MOEX gold funds -- gold, wherever it's counted (user's rule, 23.11.2026): T-Capital's TGLD.
+const MOEX_GOLD_ETF_TICKERS = new Set(['TGLD']);
+
 function moexFundAssetClass(ticker: string): string {
   const t = ticker.toUpperCase();
+  if (MOEX_GOLD_ETF_TICKERS.has(t)) return 'gold';
   if (MOEX_MONEY_MARKET_ETF_TICKERS.has(t)) return 'money_market_fund';
   return MOEX_BOND_ETF_TICKERS.has(t) ? 'moex_bond_etf' : 'moex_share_or_etf';
 }
@@ -1213,6 +1217,7 @@ async function runUpdate(): Promise<Record<string, unknown>> {
     // `currency` itself.
     const instrumentType: InstrumentType =
       info.asset_class === 'money_market_fund' ? 'liquid'
+      : info.asset_class === 'gold' ? 'gold'
       : (info.asset_class === 'moex_bond' || info.asset_class === 'moex_ofz' || info.asset_class === 'moex_bond_etf')
         ? 'bond'
         : 'stock';

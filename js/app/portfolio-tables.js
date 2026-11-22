@@ -524,7 +524,8 @@ const MP_ALTCOINS_COLUMN = 'Altcoins';
 const MP_CHART_COIN_OF = { TSTON: 'GRAM' };
 const mpChartCoin = t => MP_CHART_COIN_OF[t] || t;
 function mpBrokerCurrencyUnit(r) {
-  if (r.ticker === 'XAUT') return 'XAU';
+  // any gold -- XAUT, a gold fund (TGLD) -- is the XAU column, its USD value in ounces at XAU's price
+  if (r.ticker === 'XAUT' || r.asset_class === 'gold') return 'XAU';
   if (r.asset_class === 'crypto' && !MP_MAJOR_CRYPTO_COLUMNS.has(r.ticker)) return MP_ALTCOINS_COLUMN;
   // underlying_currency (not currency) so CNY-denominated MOEX funds like
   // SBBY/TLCB/AMNY land in the CNY column instead of RUB, which is only
@@ -548,7 +549,9 @@ async function mpLoadPortfolioBase() {
   // display to still work when there's no separate real XAU holding.
   for (const r of data) {
     // no per-unit rate for the mixed Altcoins column -- it's shown in USD
-    if (MP_UNIT_QUOTED_ASSET_CLASSES.has(r.asset_class) && r.price_usd !== null && mpBrokerCurrencyUnit(r) !== MP_ALTCOINS_COLUMN) {
+    // (gold's ounce price from XAU / XAUT only: a gold fund's unit price isn't an ounce's)
+    if (MP_UNIT_QUOTED_ASSET_CLASSES.has(r.asset_class) && r.price_usd !== null && mpBrokerCurrencyUnit(r) !== MP_ALTCOINS_COLUMN
+      && (r.asset_class !== 'gold' || r.ticker === 'XAU' || r.ticker === 'XAUT')) {
       fxByCurrency[mpBrokerCurrencyUnit(r)] = r.price_usd;
     }
   }
