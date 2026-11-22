@@ -100,8 +100,13 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   // ticker again: "NVDA · NVIDIA Corp 🇺🇸 · Information Technology"
   let ccyReady = () => {};
   const ccyKnown = new Promise(r => { ccyReady = r; });
+  // a coin is no company: SOL (Solana) isn't the ASX's SOL (Washington H. Soul Pattinson) the funds' lists
+  // hold, nor bought through those funds -- what market_prices says the ticker is decides
+  const cryptoKnown = sb.from('market_prices').select('asset_class').eq('ticker', asset).maybeSingle()
+    .then(({ data }) => data?.asset_class === 'crypto', () => false);
   sb.from('securities').select('name, country, country_code, sector, currency').or(`market_ticker.eq.${asset},ticker.eq.${asset}`)
     .then(async ({ data }) => {
+      if (await cryptoKnown) return;
       // one ticker, two companies (T: AT&T in the funds' lists, T-Technologies on MOEX): the one in the
       // currency of one's deals; none of them -- the broker's name from the deals
       const c = await ccyKnown;
@@ -344,10 +349,10 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         const mine = Number(bought ? e.bought_amount : e.sold_amount), otherUsd = Number(bought ? e.sold_usd : e.bought_usd);
         if (!(mine > 0) || !(otherUsd > 0)) return null;
         const rate = opts.invert ? otherUsd / mine : mine / otherUsd;
-        const kind = { transfer: 'transfer', exchange: 'exchange', fund: 'through a fund' }[e.kind] || e.kind;
+        const kind = { transfer: 'transfer', exchange: 'exchange', fund: 'through a fund', card: 'card payment' }[e.kind] || e.kind;
         // the mark as the chart's own asset's deal: on USD/RUB (the dollar's price in roubles) roubles bought
         // are the dollar sold -- a red sale; on RUB/USD (the rouble's price) a green buy
-        return { day: String(e.at).slice(0, 10), bought, side: bought === !!opts.invert ? 'buy' : 'sell', rate,
+        return { day: String(e.at).slice(0, 10), bought, card: e.kind === 'card', side: bought === !!opts.invert ? 'buy' : 'sell', rate,
           text: `${amt(e.sold_amount, e.sold_ccy)} → ${amt(e.bought_amount, e.bought_ccy)} (${kind}) · ${e.how}` };
       }).filter(Boolean);
     } catch (err) { console.warn('currency exchanges:', err); }
@@ -397,7 +402,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   // buy / sale of the fund is one of this paper -- the money (the fund's USD price that day x its
   // units) x the paper's weight in the fund, over the paper's USD price that day
   // (a map tile in "as held" or merged passes an empty list: looked up here too)
-  if (!opts.via?.length && !rateNote) {
+  if (!opts.via?.length && !rateNote && !(await cryptoKnown)) {
     try {
       const { data: secs } = await sb.from('securities').select('id, name').or(dealTickers.map(t => `ticker.eq.${t},market_ticker.eq.${t}`).join(','));
       // the company's other share classes too (GOOGL and GOOG: one "Alphabet Inc")
@@ -513,7 +518,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       const ds = fxShown.filter(d => d.side === side);
       if (!ds.length) continue;
       for (const d of ds) dealShapes.push({ type: 'path', xref: 'x', yref: 'y', xsizemode: 'pixel', ysizemode: 'pixel',
-        xanchor: d.day, yanchor: d.rate, path: house(side === 'buy', 0.9), fillcolor: color, line: { color: '#000000', width: 0.6 }, layer: 'above' });
+        xanchor: d.day, yanchor: d.rate, path: house(side === 'buy', d.card ? 0.55 : 0.9), fillcolor: color, line: { color: '#000000', width: 0.6 }, layer: 'above' });
       traces.push({ x: ds.map(d => d.day), y: ds.map(d => d.rate), type: 'scatter', mode: 'markers', name: side === 'buy' ? 'bought' : 'sold',
         marker: { color, size: 14, opacity: 0 }, text: ds.map(d => `${d.bought ? 'bought' : 'sold'} ${opts.currency} at ${fmt(d.rate)}: ${d.text}`),
         hovertemplate: '%{x}: %{text}<extra></extra>' });
@@ -525,7 +530,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     const pol = dlg.querySelector('#mp_price_rate').checked ? policy.slice(Math.max(0, fromIdx)) : [];
     if (pol.length) {
       const xs = [...pol.map((r, i) => (i === 0 && r.day < from ? from : r.day)), today], ys = [...pol.map(r => r.rate), pol[pol.length - 1].rate];
-      traces.push({ x: xs, y: ys, yaxis: 'y3', type: 'scatter', mode: 'lines', line: { shape: 'hv', color: '#d2a8ff', width: 1.5, dash: 'dot' },
+      traces.push({ x: xs, y: ys, yaxis: 'y3', type: 'scatter', mode: 'lines', line: { shape: 'hv', color: 'rgba(139,148,158,0.55)', width: 1.5, dash: 'dot' },
         name: policyName, hovertemplate: `%{x}: ${policyName} %{y}%<extra></extra>` });
     }
     // like a broker's app: the period's low and high (white dots, the price by them), a line at today's
@@ -601,7 +606,12 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       margin: { l: 60, r: pol.length ? 172 : 130, t: 24, b: 40 }, showlegend: false, hovermode: 'closest', annotations: notes,
       xaxis: Object.assign({}, LAYOUT_BASE.xaxis, { type: 'date', dtick: undefined, tickformat: undefined, range: [from, today] }),
       yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { type: 'linear', tickformat: undefined, ticksuffix: unit === 'USD' ? '' : ` ${unit}`, tickprefix: unit === 'USD' ? '$' : '' }),
-      ...(pol.length ? { yaxis3: { overlaying: 'y', side: 'right', showgrid: false, zeroline: false, ticksuffix: '%', tickfont: { color: '#d2a8ff' }, linecolor: '#1e2830' } } : {}),
+      // the rate in the chart's lower quarter, grey and faint: there, not in the way of the currency's line
+      ...(pol.length ? { yaxis3: { overlaying: 'y', side: 'right', showgrid: false, zeroline: false, ticksuffix: '%', fixedrange: true,
+        tickfont: { color: 'rgba(139,148,158,0.7)' }, linecolor: '#1e2830', range: (() => {
+          const rs = pol.map(r => r.rate), lo = Math.min(...rs), hi = Math.max(...rs), span = Math.max(hi - lo, 0.25, Math.abs(hi) * 0.05);
+          return [lo - span * 0.08, lo + span / 0.25];
+        })() } } : {}),
       yaxis2: { overlaying: 'y', range: [0, 1], visible: false, fixedrange: true }, shapes: [...payShapes, ...lines, ...dealShapes],
     }), CONFIG);
     const first = pts[0], last = pts[pts.length - 1];
