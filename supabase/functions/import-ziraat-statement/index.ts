@@ -127,7 +127,7 @@ function parseRows(sheet: XLSX.WorkSheet): { rows: ZiraatRow[]; currency: string
 // The same row stands in both statements; it's the deposit's own when the account opened is
 // the statement's. Loose about the dots and the letters OCR misreads in a PDF's ("Vds Hes tan",
 // "VE: 07/01/2027"): the first date in it the opening, the last the term's end.
-const OPENING_RE = /(\d+-\d+)\s+No\.?\s*lu\s+Vds\.?\s*Hes\.?\s*tan\s+(\d+-\d+)\s*-\s*Hes\.?\s*Açılış/i;
+const OPENING_RE = /(\d{6,}-\d{4})\s+\S+\s+Vds\.?\s*Hes\.?\s*tan\s+(\d{6,}-\d{4})\s*-\s*Hes\.?\s*A[cç][ıi1l]l[ıi1l][sş]/i;
 const dmy = (s: string | undefined) => s?.replace(/^(\d{2})\/(\d{2})\/(\d{4})$/, '$3-$2-$1') ?? null;
 function depositOpening(rows: ZiraatRow[], accountNo: string | null) {
   if (!accountNo) return null;

@@ -1045,7 +1045,7 @@ async function mpZiraatPdfPage(page, ocr) {
   const greyRow = y => { let n = 0; for (let x = 0; x < W; x += 2) { const v = lum(x, y); if (v > 180 && v < 235) n++; } return n > W / 2 * 0.6; };
   let hy0 = -1, hy1 = -1;
   for (let y = 0; y < H; y++) { if (greyRow(y)) { if (hy0 < 0) hy0 = y; hy1 = y; } else if (hy0 >= 0 && y - hy1 > 8) break; }
-  if (hy0 < 0) return null;
+  if (hy0 < 0) return { fail: 'no grey table header found' };
   // the band's left and right ends: the table's
   const mid = Math.round((hy0 + hy1) / 2);
   let tx0 = 0, tx1 = W - 1;
@@ -1063,7 +1063,7 @@ async function mpZiraatPdfPage(page, ocr) {
     if (x - last > tw * 0.011) starts.push(x);
     last = x;
   }
-  if (starts.length !== 5) return null;
+  if (starts.length !== 5) return { fail: `${starts.length} header columns found, not 5` };
   const pad = Math.round(tw * 0.006);
   const X = { date: starts[0] - pad, inv: starts[1] - pad, expl: starts[2] - pad, amt: starts[3] - pad, bal: starts[4] - pad, end: tx1 };
   // lines of ink in a strip, below the band to the table's bottom border
@@ -1174,7 +1174,7 @@ async function mpZiraatPdfRead(file, onPage) {
     await code.setParameters({ tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', tessedit_pageseg_mode: '7' });
     mpTesseract = { text, digits, code };
   }
-  const pages = [];
+  const pages = [], fails = [];
   for (let n = 1; n <= pdf.numPages; n++) {
     if (onPage) onPage(n, pdf.numPages);
     const page = await pdf.getPage(n);
@@ -1192,9 +1192,14 @@ async function mpZiraatPdfRead(file, onPage) {
       return (await mpTesseract[kind].recognize(c)).data.text.trim();
     };
     const read = await mpZiraatPdfPage({ width: W, height: canvas.height, lum: (x, y) => px[(y * W + x) * 4] }, ocr);
-    if (read) pages.push(read);
+    if (!read.fail) { pages.push(read); continue; }
+    // what the page's pixels came back as: a browser guarding against fingerprinting gives
+    // back a blank or noised canvas
+    let white = 0, dark = 0, seen = 0;
+    for (let i = 0; i < px.length; i += 4 * 101) { seen++; if (px[i] > 245) white++; else if (px[i] < 120) dark++; }
+    fails.push(`page ${n}: ${read.fail} (${canvas.width}x${canvas.height}, ${Math.round(white / seen * 100)}% white, ${Math.round(dark / seen * 1000) / 10}% dark)`);
   }
-  if (!pages.length) return null;
+  if (!pages.length) return { fails };
   return mpZiraatPdfStatement(pages);
 }
 
@@ -1226,7 +1231,7 @@ async function mpImportFiles(files) {
         const f = pdfs.find(x => x.name === d.name);
         try {
           const r = await mpZiraatPdfRead(f, (n, of) => { rl.textContent = `${d.name}: a picture PDF -- reading it (OCR), page ${n} of ${of}…`; });
-          if (!r) { rl.textContent = `${d.name}: a PDF with no text in it, not a Ziraat statement -- nothing read.`; continue; }
+          if (r.fails) { rl.textContent = `${d.name}: a PDF with no text in it, not read as a Ziraat statement -- ${r.fails.join('; ')}.`; continue; }
           if (r.error) { rl.textContent = `${d.name}: Ziraat statement, ${r.error}.`; continue; }
           const days = r.rows.map(x => x.date.split('.').reverse().join('-')).sort();
           rl.textContent = `${d.name}: Ziraat statement (PDF, read by OCR), account ${r.accountNo} ${r.currency}, ${days[0]} – ${days[days.length - 1]}: `
