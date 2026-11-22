@@ -738,6 +738,8 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     const c = key(String(l || ''));
     if (!c || c === 'other' || c === 'others' || c === 'USD') return null;
     if (isFiatLabel(l)) return [`FX:${c}`, c, { currency: c }];
+    // gold as the portfolio map opens it: XAU's price, the deals of XAU (Revolut) and XAUT (the exchanges)
+    if (c === 'XAU') return ['XAU', 'Gold', { also: ['XAUT'] }];
     return [c, c, { also: Object.keys(MP_CHART_COIN_OF).filter(k => MP_CHART_COIN_OF[k] === c) }];
   });
   {

@@ -290,6 +290,27 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       dlg.querySelector('#mp_price_title').textContent = opts.currency ? `${moneyCcy}/USD` : `${title} — ${moneyCcy}/USD`;
     }
   }
+  // a currency's own chart (chart 1): its exchanges (the view currency_exchanges -- transfers between
+  // currencies, a bank's own exchanges, yuan funds bought for roubles), each at the rate it got: the
+  // currency's amount over the other side's dollars that day (USD/RUB: roubles a dollar; RUB/USD the other way)
+  let fxDeals = [];
+  if (opts.currency) {
+    try {
+      const C = opts.currency;
+      const rows = await mpFetchAll(() => sb.from('currency_exchanges').select('at, sold_ccy, sold_amount, sold_usd, bought_ccy, bought_amount, bought_usd, how, kind')
+        .or(`sold_ccy.eq.${C},bought_ccy.eq.${C}`).order('at'));
+      const amt = (a, c) => `${Number(a).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${c}`;
+      fxDeals = rows.map(e => {
+        const bought = e.bought_ccy === C;
+        const mine = Number(bought ? e.bought_amount : e.sold_amount), otherUsd = Number(bought ? e.sold_usd : e.bought_usd);
+        if (!(mine > 0) || !(otherUsd > 0)) return null;
+        const rate = opts.invert ? otherUsd / mine : mine / otherUsd;
+        const kind = { transfer: 'transfer', exchange: 'exchange', fund: 'through a fund' }[e.kind] || e.kind;
+        return { day: String(e.at).slice(0, 10), side: bought ? 'buy' : 'sell', rate,
+          text: `${amt(e.sold_amount, e.sold_ccy)} → ${amt(e.bought_amount, e.bought_ccy)} (${kind}) · ${e.how}` };
+      }).filter(Boolean);
+    } catch (err) { console.warn('currency exchanges:', err); }
+  }
   if (!prices.length && opts.currency) { note.textContent = `No ${opts.currency} rates stored (fx_history keeps only the currencies of the accounts).`; return; }
   if (!prices.length) { note.textContent = 'No price history for this asset (a deposit, a savings account or cash has none).'; return; }
   // Splits: price_history keeps each day's price as it was (GOOGL 2 255 -> 112 on
@@ -425,6 +446,17 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
           text: ds.map(d => `${side} ${Number(d.quantity)}${dealTickers.length > 1 ? ` ${d.ticker}` : ''} at ${d.account}`), hovertemplate: '%{x}: %{text}<extra></extra>' });
       }
     }
+    // a currency's exchanges: a mark at the rate each got (off the line by how much better or worse than the day's)
+    const fxShown = fxDeals.filter(d => d.day >= from);
+    for (const [side, color] of [['buy', '#39ff5a'], ['sell', '#ff2d2d']]) {
+      const ds = fxShown.filter(d => d.side === side);
+      if (!ds.length) continue;
+      for (const d of ds) dealShapes.push({ type: 'path', xref: 'x', yref: 'y', xsizemode: 'pixel', ysizemode: 'pixel',
+        xanchor: d.day, yanchor: d.rate, path: house(side === 'buy', 0.9), fillcolor: color, line: { color: '#000000', width: 0.6 }, layer: 'above' });
+      traces.push({ x: ds.map(d => d.day), y: ds.map(d => d.rate), type: 'scatter', mode: 'markers', name: side === 'buy' ? `${opts.currency} bought` : `${opts.currency} sold`,
+        marker: { color, size: 14, opacity: 0 }, text: ds.map(d => `${side === 'buy' ? 'bought' : 'sold'} ${opts.currency} at ${fmt(d.rate)}: ${d.text}`),
+        hovertemplate: '%{x}: %{text}<extra></extra>' });
+    }
     if (payTrace) traces.push(payTrace);
     // like a broker's app: the period's low and high (white dots, the price by them), a line at today's
     // price and one at the average buy price of what one holds now
@@ -504,7 +536,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     const first = pts[0], last = pts[pts.length - 1];
     const ch = first && last && first.v ? (last.v / first.v - 1) * 100 : null;
     note.textContent = first ? `${rateNote ? `${rateNote}: ` : ''}${first.day} ${fmt(first.v)} → ${last.day} ${fmt(last.v)}${ch == null ? '' : ` (${ch >= 0 ? '+' : ''}${ch.toFixed(1)}%)`}`
-      + `${shown.length ? ` · deals marked: ${shown.length}` : ''}${avgNote}${splits.length ? ` · split-adjusted: ${splits.join(', ')}` : ''}` : 'No prices in this period.';
+      + `${shown.length ? ` · deals marked: ${shown.length}` : ''}${fxShown.length ? ` · exchanges marked: ${fxShown.length} (at the rate each got)` : ''}${avgNote}${splits.length ? ` · split-adjusted: ${splits.join(', ')}` : ''}` : 'No prices in this period.';
     // today's price, big, and the period's change under the title (a broker app's header)
     const head = dlg.querySelector('#mp_price_head');
     if (first && last) {
