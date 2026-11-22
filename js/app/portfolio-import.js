@@ -1042,28 +1042,37 @@ function mpWoltReceiptsCsv(docs) {
 // description, amount, balanceAfter }] } (newest first, as printed), owed / received from the foot.
 async function mpZiraatPdfPage(page, ocr) {
   const { width: W, height: H, lum } = page;
-  const greyRow = y => { let n = 0; for (let x = 0; x < W; x += 2) { const v = lum(x, y); if (v > 180 && v < 235) n++; } return n > W / 2 * 0.6; };
+  // the band: the first run of rows mostly mid-grey, at least 15 rows tall (a browser may draw
+  // the grey a shade lighter or darker), its shade the middle row's
+  const isGrey = v => v > 150 && v < 242;
+  const greyRow = y => { let n = 0; for (let x = 0; x < W; x += 2) if (isGrey(lum(x, y))) n++; return n > W / 2 * 0.6; };
   let hy0 = -1, hy1 = -1;
-  for (let y = 0; y < H; y++) { if (greyRow(y)) { if (hy0 < 0) hy0 = y; hy1 = y; } else if (hy0 >= 0 && y - hy1 > 8) break; }
+  for (let y = 0, run = -1; y <= H; y++) {
+    if (y < H && greyRow(y)) { if (run < 0) run = y; continue; }
+    if (run >= 0 && y - run >= 15) { hy0 = run; hy1 = y - 1; break; }
+    run = -1;
+  }
   if (hy0 < 0) return { fail: 'no grey table header found' };
   // the band's left and right ends: the table's
   const mid = Math.round((hy0 + hy1) / 2);
   let tx0 = 0, tx1 = W - 1;
-  while (tx0 < W && !(lum(tx0, mid) > 180 && lum(tx0, mid) < 235)) tx0++;
-  while (tx1 > 0 && !(lum(tx1, mid) > 180 && lum(tx1, mid) < 235)) tx1--;
+  while (tx0 < W && !isGrey(lum(tx0, mid))) tx0++;
+  while (tx1 > 0 && !isGrey(lum(tx1, mid))) tx1--;
+  const shade = lum(Math.round((tx0 + tx1) / 2), hy0 + 2);
+  const ink = Math.min(120, shade - 60);
   const tw = tx1 - tx0;
   // the columns: the header's words -- Date | Invoice No | Explanation | Transaction Amount |
   // Balance -- as runs of ink across the band, a gap of 1% of the table between them
   const starts = [];
   let last = -1e9;
   for (let x = tx0 + 2; x < tx1 - 2; x++) {
-    let ink = false;
-    for (let y = hy0 + 2; y < hy1 - 2; y++) if (lum(x, y) < 120) { ink = true; break; }
-    if (!ink) continue;
+    let inked = false;
+    for (let y = hy0 + 2; y < hy1 - 2; y++) if (lum(x, y) < ink) { inked = true; break; }
+    if (!inked) continue;
     if (x - last > tw * 0.011) starts.push(x);
     last = x;
   }
-  if (starts.length !== 5) return { fail: `${starts.length} header columns found, not 5` };
+  if (starts.length !== 5) return { fail: `${starts.length} header columns found, not 5 (band rows ${hy0}-${hy1}, x ${tx0}-${tx1}, shade ${shade})` };
   const pad = Math.round(tw * 0.006);
   const X = { date: starts[0] - pad, inv: starts[1] - pad, expl: starts[2] - pad, amt: starts[3] - pad, bal: starts[4] - pad, end: tx1 };
   // lines of ink in a strip, below the band to the table's bottom border
