@@ -259,7 +259,8 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   // The same for a deposit or a savings account (a unit is one rouble, euro...): its currency's rate.
   // A currency worth little against the dollar (the rouble) the other way round, USD/RUB: roubles a dollar.
   const MONEY_FUND_CCY = { IE0002RUHW32: 'GBP', IE000AZVL3K0: 'EUR', IE000H9J0QX4: 'USD' };
-  const moneyCcy = MONEY_FUND_CCY[String(asset).toUpperCase()] || (/^(DEPOSIT|SAVINGS|ВКЛАД):/i.test(String(asset)) ? ccy : null);
+  // (opts.currency: a currency itself, chart 1's slice -- its rate, no deals)
+  const moneyCcy = opts.currency || MONEY_FUND_CCY[String(asset).toUpperCase()] || (/^(DEPOSIT|SAVINGS|ВКЛАД):/i.test(String(asset)) ? ccy : null);
   let rateNote = '';
   if (moneyCcy === 'USD') {
     note.textContent = 'Dollars: a unit is always $1, the value moves only by the interest earned.';
@@ -283,6 +284,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       dlg.querySelector('#mp_price_title').textContent = `${title} — ${moneyCcy}/USD`;
     }
   }
+  if (!prices.length && opts.currency) { note.textContent = `No ${opts.currency} rates stored (fx_history keeps only the currencies of the accounts).`; return; }
   if (!prices.length) { note.textContent = 'No price history for this asset (a deposit, a savings account or cash has none).'; return; }
   // Splits: price_history keeps each day's price as it was (GOOGL 2 255 -> 112 on
   // 18.07.2022, its 20-for-1) -- a day's move of almost exactly a whole number of

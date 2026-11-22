@@ -733,7 +733,13 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     const i = currencyOrder.indexOf(l);
     return isFiatLabel(l) ? (i >= 0 ? i : 100) : 1000 + (i >= 0 ? i : 500);
   };
-  pie(grid, '1. Currencies', byCurrency, '', currencyRank, true, l => (isFiatLabel(l) ? 0 : 1), currencyColor);
+  // a click on a slice: a currency's rate to the dollar, a coin's or gold's price (not the dollar, not "other")
+  pie(grid, '1. Currencies', byCurrency, '', currencyRank, true, l => (isFiatLabel(l) ? 0 : 1), currencyColor, {}, l => {
+    const c = key(String(l || ''));
+    if (!c || c === 'other' || c === 'others' || c === 'USD') return null;
+    if (isFiatLabel(l)) return [`FX:${c}`, c, { currency: c }];
+    return [c, c, { also: Object.keys(MP_CHART_COIN_OF).filter(k => MP_CHART_COIN_OF[k] === c) }];
+  });
   {
     // the target by safety (MP_BROKER_TARGETS); what's held elsewhere -- 0
     const t = mpBrokerTargets();
@@ -775,6 +781,8 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     tpie(grid, '7. Crypto', coins.map(t => ({
       label: t, usd: shown[t] || 0, target: MP_CRYPTO_TARGETS[t] || 0,
       color: t === 'other' ? MP_OTHER_COLOR : currencyColor(t) || mpSliceColor(t, () => null),
+      // a click: the coin's price chart, its staked form's deals (tsTON is GRAM's) and old ticker marked too
+      ...(t === 'other' ? {} : { chart: t, chartAlso: [...Object.keys(MP_CHART_COIN_OF).filter(k => MP_CHART_COIN_OF[k] === t), ...(t === 'GRAM' ? ['TON'] : [])] }),
     })), small.length ? `other: ${small.map(([t, v]) => `${t} ${(v / cryptoSum * 100).toFixed(2)}%`).join(', ')}` : '');
   }
   // Targets for the Russian-infrastructure charts (7 and 11), per slice in

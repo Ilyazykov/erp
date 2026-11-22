@@ -66,8 +66,9 @@ const mpFlagOf = code => (/^[A-Z]{2}$/.test(code || '') && code !== 'XX'
 // the same neutral grey.
 // breakdown (optional): label -> {part: USD} -- a slice made of parts (EU
 // -> its member states), listed largest first on hover and under the chart.
+// chartOf (optional): label -> [asset, title, opts] for mpOpenPriceDialog -- a click on the slice opens it.
 function mpPie(el, title, buckets, note = '', order = null, groupSmall = true, smallGroupOf = () => 0, colorOf = () => null,
-  breakdown = {}) {
+  breakdown = {}, chartOf = null) {
   const card = document.createElement('div');
   card.className = 'pie-card';
   card.innerHTML = `<h4>${mpEscapeHtml(title)}</h4><div class="pie-plot"></div><p class="pie-total"></p>`
@@ -120,6 +121,13 @@ function mpPie(el, title, buckets, note = '', order = null, groupSmall = true, s
     uniformtext: { minsize: 9, mode: 'hide' },
     showlegend: false, margin: { t: 10, b: 10, l: 10, r: 10 },
   }, { responsive: true, displayModeBar: false });
+  const plot = card.querySelector('.pie-plot');
+  if (chartOf && plot.on) {
+    plot.on('plotly_click', ev => {
+      const what = chartOf(ev.points?.[0]?.label);
+      if (what) mpOpenPriceDialog(...what);
+    });
+  }
 }
 
 // A pie measured against target weights, drawn like the USD/RUB -> CNY
@@ -240,9 +248,19 @@ function mpTargetPie(el, title, items, note = '', targetTotal = null, shareOfTar
       textfont: { color: rows.map(r => mpContrastText(r.color)), size: 12 },
     },
   ], layout, { responsive: true, displayModeBar: false });
+  // a slice whose item names an asset (item.chart, its other tickers item.chartAlso): its price chart on a click
+  const plot = card.querySelector('.pie-plot');
+  if (rows.some(r => r.chart) && plot.on) {
+    plot.style.cursor = 'pointer';
+    plot.on('plotly_click', ev => {
+      const p = ev.points?.find(x => x.curveNumber === 0);
+      const r = p && rows[p.pointNumber];
+      if (r?.chart) mpOpenPriceDialog(r.chart, r.label, { also: r.chartAlso || [] });
+    });
+  }
 }
 
-const mpAdd = (acc, key, v) => { if (v) acc[key] = (acc[key] || 0) + v; return acc; };
+const mpAdd =(acc, key, v) => { if (v) acc[key] = (acc[key] || 0) + v; return acc; };
 // Credit-card debt isn't shown on its own: it's netted against liquid
 // assets of the same infrastructure -- a Russian bank's card against the
 // liquid assets held in Russian banks / brokers only, any other card
