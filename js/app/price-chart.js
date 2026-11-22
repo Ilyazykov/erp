@@ -363,11 +363,13 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         .or(`sold_ccy.eq.${C},bought_ccy.eq.${C}`).order('at'));
       const amt = (a, c) => `${Number(a).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${c}`;
       // how far the rate got was off the day's rate (fx_history: the CBR's for the rouble, the market's for the
-      // rest): what came in over what went out, at that rate -- "(+1.99%)" better, "(-1.15%)" worse
+      // rest): what came in over what went out, at that rate, and in dollars -- "(+1.99%, +$7.49)" better,
+      // "(-1.15%, -$4.66)" worse
       const edge = e => {
         const p = Number(e.sold_usd) > 0 ? (Number(e.bought_usd) / Number(e.sold_usd) - 1) * 100 : null;
-        return p == null || !Number.isFinite(p) ? ''
-          : ` (${p >= 0 ? '+' : '-'}${Math.abs(p).toFixed(2)}%)`;
+        if (p == null || !Number.isFinite(p)) return '';
+        const sign = p >= 0 ? '+' : '-', usd = Math.abs(Number(e.bought_usd) - Number(e.sold_usd)).toFixed(2);
+        return ` (${sign}${Math.abs(p).toFixed(2)}%, ${sign}$${usd})`;
       };
       // the time, when known (the view's known_at: set by hand or from the bank's receipt -- a wall-clock time
       // kept as UTC), and its weekday: a bank's rate is worse when the market's shut (Ziraat: ~3% on an evening
