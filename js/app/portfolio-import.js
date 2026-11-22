@@ -1066,9 +1066,10 @@ async function mpZiraatPdfPage(page, ocr) {
   const starts = [];
   let last = -1e9;
   for (let x = tx0 + 2; x < tx1 - 2; x++) {
-    let inked = false;
-    for (let y = hy0 + 2; y < hy1 - 2; y++) if (lum(x, y) < ink) { inked = true; break; }
-    if (!inked) continue;
+    // ink in this column of the band -- a line through all of it is the table's border, not a word
+    let inked = 0;
+    for (let y = hy0 + 2; y < hy1 - 2; y++) if (lum(x, y) < ink) inked++;
+    if (!inked || inked > (hy1 - hy0) * 0.8) continue;
     if (x - last > tw * 0.011) starts.push(x);
     last = x;
   }
