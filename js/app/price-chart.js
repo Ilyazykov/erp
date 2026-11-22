@@ -353,9 +353,15 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         const rate = opts.invert ? otherUsd / mine : mine / otherUsd;
         // through what, short: the bank (TBC Bank), banks (Revolut → Ozon Bank), the fund (T-Bank, TLCB), the card
         const how = String(e.how || '');
+        // (a broker's own account says "broker" -- the view's; an exchange in a bank's app "in-bank exchange";
+        // cash, an exchange office)
+        const acct = how.split(': ')[0];
         const via = / -> /.test(how) ? how.replace(/ -> /, ' → ')
-          : e.kind === 'fund' ? how.replace(/^(.*?): (?:buy|sell) /, '$1, ')
-          : e.kind === 'card' ? `${how.split(': ')[0]} card` : how.split(': ')[0];
+          : e.kind === 'fund' ? how.replace(/^(.*?): (?:buy|sell) /, '$1 broker, ')
+          : e.kind === 'card' ? `${acct} card`
+          : / broker$/.test(acct) || /^(IBKR|Freedom24|Interactive Brokers)$/i.test(acct) ? acct
+          : acct === 'cash' ? 'cash, exchange office'
+          : `${acct}, in-bank exchange`;
         // the mark as the chart's own asset's deal: on USD/RUB (the dollar's price in roubles) roubles bought
         // are the dollar sold -- a red sale; on RUB/USD (the rouble's price) a green buy
         return { day: String(e.at).slice(0, 10), bought, card: e.kind === 'card', side: bought === !!opts.invert ? 'buy' : 'sell', rate,
