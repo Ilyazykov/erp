@@ -218,6 +218,16 @@ async function mpEverHeld(field) {
 
 // money: how a USD amount is shown in the non-currency cells and the totals
 // (the asset-class table can show them in roubles).
+// A currency column's chart, as chart 1's slices open it: the dollar -- the Fed's rate; a currency -- its
+// rate to the dollar; gold -- XAU with the XAUT deals; a coin -- its price; "others" / altcoins -- none
+const MP_COIN_COLUMNS = new Set(['BTC', 'ETH', 'SOL', 'TON', 'GRAM', 'TAO']);
+function mpCurrencyChart(c) {
+  if (!c || c === 'Others' || c === 'Altcoins') return null;
+  if (c === 'USD') return ['FX:USD', 'USD', { currency: 'USD' }];
+  if (c === 'XAU') return ['XAU', 'Gold', { also: ['XAUT'] }];
+  if (MP_COIN_COLUMNS.has(c)) return [c, c, { also: Object.keys(MP_CHART_COIN_OF).filter(k => MP_CHART_COIN_OF[k] === c) }];
+  return /^[A-Z]{3}$/.test(c) ? [`FX:${c}`, c, { currency: c }] : null;
+}
 function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurrency, everHeld = new Set(), money = mpFormatUsd) {
   if (!data.length) { wrap.innerHTML = `<p class="empty-note">${emptyMessage}</p>`; return; }
   // Zero balances (a closed account like UniCredit, a spent-down currency)
@@ -291,7 +301,7 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
     return a in MP_BROKER_FLAGS ? `${name} ${MP_BROKER_FLAGS[a]}` : name;
   };
   wrap.innerHTML = `<table class="data-table"><thead><tr>
-    <th class="corner">Broker</th>${categories.map(c => `<th>${headerLabel(c)}</th>`).join('')}<th class="corner">Total</th>
+    <th class="corner">Broker</th>${categories.map(c => `<th${fxByCurrency && mpCurrencyChart(c) ? ` data-ccy="${mpEscapeHtml(c)}" style="cursor:pointer" title="Open its chart"` : ''}>${headerLabel(c)}</th>`).join('')}<th class="corner">Total</th>
   </tr></thead><tbody>${accounts.map(a => `<tr${dimmed.has(a) ? ' style="opacity:0.45" title="Not included in the totals"' : ''}>
     <td class="ticker">${brokerLabel(a)}</td>
     ${categories.map(c => `<td>${!cell[`${a} ${c}`] && everHeld.has(`${a} ${c}`) ? heldZero(c) : cellDisplay(cell[`${a} ${c}`] || 0, c)}</td>`).join('')}
@@ -303,6 +313,8 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
     <td><b>${money(grandTotal)}</b></td>
   </tr></tbody></table>
   ${anyMissing ? '<p class="empty-note">Some tickers have no price yet — totals are a partial sum.</p>' : ''}`;
+  // a currency's header opens its chart (as chart 1's slices do)
+  if (fxByCurrency) wrap.querySelectorAll('th[data-ccy]').forEach(th => th.addEventListener('click', () => mpOpenPriceDialog(...mpCurrencyChart(th.dataset.ccy))));
 }
 
 // Reads the FX:<CCY> synthetic tickers update-market-prices publishes
