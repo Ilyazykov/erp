@@ -290,7 +290,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       const ps = pol.slice(i0);
       const xs = [...ps.map((r, i) => (i === 0 && r.day < from ? from : r.day)), today], ys = [...ps.map(r => r.rate), ps[ps.length - 1].rate];
       Plotly.react(dlg.querySelector('#mp_price_chart'), [{ x: xs, y: ys, type: 'scatter', mode: 'lines', line: { shape: 'hv', color: '#d2a8ff', width: 2 },
-        hovertemplate: '%{x}: Fed rate %{y}%<extra></extra>' }], Object.assign({}, LAYOUT_BASE, {
+        hovertemplate: '%{x}: Fed rate %{y}<extra></extra>' }], Object.assign({}, LAYOUT_BASE, {
         margin: { l: 60, r: 30, t: 24, b: 40 }, showlegend: false, hovermode: 'closest',
         xaxis: Object.assign({}, LAYOUT_BASE.xaxis, { type: 'date', dtick: undefined, tickformat: undefined, range: [from, today] }),
         yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { ticksuffix: '%', tickformat: undefined }),
@@ -526,6 +526,9 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     }
     // a currency's exchanges: a mark at the rate each got (off the line by how much better or worse than the day's)
     const fxShown = fxDeals.filter(d => d.day >= from);
+    // the chart runs to the last deal when that's after the last price (a Sunday's exchange, the market shut
+    // since Friday): the line stops at its last price, the mark stands on its own
+    const end = [today, ...shown.map(d => d.trade_date), ...fxShown.map(d => d.day)].reduce((a, b) => (b > a ? b : a));
     for (const [side, color] of [['buy', '#39ff5a'], ['sell', '#ff2d2d']]) {
       const ds = fxShown.filter(d => d.side === side);
       if (!ds.length) continue;
@@ -541,9 +544,9 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     const fromIdx = policy.findLastIndex(r => r.day <= from);
     const pol = dlg.querySelector('#mp_price_rate').checked ? policy.slice(Math.max(0, fromIdx)) : [];
     if (pol.length) {
-      const xs = [...pol.map((r, i) => (i === 0 && r.day < from ? from : r.day)), today], ys = [...pol.map(r => r.rate), pol[pol.length - 1].rate];
+      const xs = [...pol.map((r, i) => (i === 0 && r.day < from ? from : r.day)), end], ys = [...pol.map(r => r.rate), pol[pol.length - 1].rate];
       traces.push({ x: xs, y: ys, yaxis: 'y3', type: 'scatter', mode: 'lines', line: { shape: 'hv', color: 'rgba(139,148,158,0.55)', width: 1.5, dash: 'dot' },
-        name: policyName, hovertemplate: `%{x}: ${policyName} %{y}%<extra></extra>` });
+        name: policyName, hovertemplate: `%{x}: ${policyName} %{y}<extra></extra>` });   // (y3's ticksuffix gives the %)
     }
     // like a broker's app: the period's low and high (white dots, the price by them), a line at today's
     // price and one at the average buy price of what one holds now
@@ -621,7 +624,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     };
     Plotly.react(dlg.querySelector('#mp_price_chart'), traces, Object.assign({}, LAYOUT_BASE, {
       margin: { l: 60, r: pol.length ? 172 : 130, t: 24, b: 40 }, showlegend: false, hovermode: 'closest', annotations: notes,
-      xaxis: Object.assign({}, LAYOUT_BASE.xaxis, { type: 'date', dtick: undefined, tickformat: undefined, range: [from, today] }),
+      xaxis: Object.assign({}, LAYOUT_BASE.xaxis, { type: 'date', dtick: undefined, tickformat: undefined, range: [from, end] }),
       yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { type: 'linear', tickformat: undefined, ticksuffix: unit === 'USD' ? '' : ` ${unit}`, tickprefix: unit === 'USD' ? '$' : '' },
         // with the central bank's rate in the lower quarter, the currency's line (its marks and the low's label too)
         // keeps just above where the rate's line reaches
