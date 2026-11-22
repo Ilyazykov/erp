@@ -736,7 +736,8 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   // a click on a slice: a currency's rate to the dollar, a coin's or gold's price (not the dollar, not "other")
   pie(grid, '1. Currencies', byCurrency, '', currencyRank, true, l => (isFiatLabel(l) ? 0 : 1), currencyColor, {}, l => {
     const c = key(String(l || ''));
-    if (!c || c === 'other' || c === 'others' || c === 'USD') return null;
+    if (!c || c === 'other' || c === 'others') return null;
+    if (c === 'USD') return ['FX:USD', 'USD', { currency: 'USD' }];   // the Fed's rate
     if (isFiatLabel(l)) return [`FX:${c}`, c, { currency: c }];
     // gold as the portfolio map opens it: XAU's price, the deals of XAU (Revolut) and XAUT (the exchanges)
     if (c === 'XAU') return ['XAU', 'Gold', { also: ['XAUT'] }];

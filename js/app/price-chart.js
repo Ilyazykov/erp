@@ -263,6 +263,44 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   // (opts.currency: a currency itself, chart 1's slice -- its rate, no deals)
   const moneyCcy = opts.currency || MONEY_FUND_CCY[String(asset).toUpperCase()] || (/^(DEPOSIT|SAVINGS|ВКЛАД):/i.test(String(asset)) ? ccy : null);
   let rateNote = '';
+  // the dollar's own slice (chart 1): no rate to the dollar -- the Fed's rate alone (the BIS's, monthly)
+  if (opts.currency === 'USD') {
+    dlg.querySelector('#mp_price_title').textContent = 'USD — Fed rate';
+    dlg.querySelector('#mp_price_meta').textContent = '';
+    dlg.querySelector('#mp_price_ccy_box').style.display = 'none';
+    let pol = [];
+    try {
+      pol = (await mpFetchAll(() => sb.from('cb_rates_monthly').select('month, rate').eq('country', 'US').order('month')))
+        .map(r => ({ day: r.month, rate: Number(r.rate) }));
+    } catch (err) { note.textContent = String(err.message || err); return; }
+    if (!pol.length) { note.textContent = 'No Fed rates stored yet.'; return; }
+    const today = new Date().toISOString().slice(0, 10);
+    const drawFed = period => {
+      const spec = MP_PRICE_PERIODS.find(([l]) => l === period)?.[1];
+      let from = pol[0].day;
+      if (spec === 'ytd') from = `${today.slice(0, 4) - 1}-12-31`;
+      else if (spec != null) { const d = new Date(`${today}T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() - spec); from = d.toISOString().slice(0, 10); }
+      const i0 = Math.max(0, pol.findLastIndex(r => r.day <= from));
+      const ps = pol.slice(i0);
+      const xs = [...ps.map((r, i) => (i === 0 && r.day < from ? from : r.day)), today], ys = [...ps.map(r => r.rate), ps[ps.length - 1].rate];
+      Plotly.react(dlg.querySelector('#mp_price_chart'), [{ x: xs, y: ys, type: 'scatter', mode: 'lines', line: { shape: 'hv', color: '#d2a8ff', width: 2 },
+        hovertemplate: '%{x}: Fed rate %{y}%<extra></extra>' }], Object.assign({}, LAYOUT_BASE, {
+        margin: { l: 60, r: 30, t: 24, b: 40 }, showlegend: false, hovermode: 'closest',
+        xaxis: Object.assign({}, LAYOUT_BASE.xaxis, { type: 'date', dtick: undefined, tickformat: undefined, range: [from, today] }),
+        yaxis: Object.assign({}, LAYOUT_BASE.yaxis, { ticksuffix: '%', tickformat: undefined }),
+      }), CONFIG);
+      const first = ys[0], last = ys[ys.length - 1];
+      dlg.querySelector('#mp_price_head').innerHTML = `<span style="font-size:2em;font-weight:700">${last}%</span>`
+        + `<span style="color:#8b949e">${first === last ? 'unchanged' : `${last > first ? '▲' : '▼'} ${Math.abs(last - first).toFixed(2)} pp`} over ${mpEscapeHtml(period)}</span>`;
+      note.textContent = `Fed rate (the BIS's, a month's as at its end; the middle of the target range): ${ps[ps.length - 1].day.slice(0, 7)} ${last}%`;
+    };
+    dlg.querySelectorAll('[data-p]').forEach(b => b.onclick = () => {
+      dlg.querySelectorAll('[data-p]').forEach(x => x.classList.toggle('primary', x === b));
+      drawFed(b.dataset.p);
+    });
+    drawFed('1y');
+    return;
+  }
   if (moneyCcy === 'USD') {
     note.textContent = 'Dollars: a unit is always $1, the value moves only by the interest earned.';
     return;
