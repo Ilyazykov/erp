@@ -363,10 +363,11 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         .or(`sold_ccy.eq.${C},bought_ccy.eq.${C}`).order('at'));
       const amt = (a, c) => `${Number(a).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${c}`;
       // how far the rate got was off the day's rate (fx_history: the CBR's for the rouble, the market's for the
-      // rest): what came in over what went out, at that rate -- "+1.9%" better, "−2.97%" worse
+      // rest): what came in over what went out, at that rate -- "(+1.99%)" better, "(-1.15%)" worse
       const edge = e => {
         const p = Number(e.sold_usd) > 0 ? (Number(e.bought_usd) / Number(e.sold_usd) - 1) * 100 : null;
-        return p == null || !Number.isFinite(p) ? '' : ` · ${p >= 0 ? '+' : '−'}${Math.abs(p).toFixed(2)}% vs the day's rate`;
+        return p == null || !Number.isFinite(p) ? ''
+          : ` (${p >= 0 ? '+' : '-'}${Math.abs(p).toFixed(2)}%)`;
       };
       // the time, when known (the view's known_at: set by hand or from the bank's receipt -- a wall-clock time
       // kept as UTC), and its weekday: a bank's rate is worse when the market's shut (Ziraat: ~3% on an evening
@@ -562,7 +563,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         xanchor: d.day, yanchor: d.rate, path: house(side === 'buy', d.card ? 0.55 : 0.9), fillcolor: color, line: { color: '#000000', width: 0.6 }, layer: 'above' });
       traces.push({ x: ds.map(d => d.day), y: ds.map(d => d.rate), type: 'scatter', mode: 'markers', name: side === 'buy' ? 'bought' : 'sold',
         marker: { color, size: 14, opacity: 0 }, text: ds.map(d => d.text),
-        hovertemplate: '%{x}: %{text}<extra></extra>' });
+        hovertemplate: '%{x}:<br>%{text}<extra></extra>' });
     }
     if (payTrace) traces.push(payTrace);
     // the central bank's rate: a step line over the rate's, its own scale on the right (from the last change
