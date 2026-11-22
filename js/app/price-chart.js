@@ -306,7 +306,9 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         if (!(mine > 0) || !(otherUsd > 0)) return null;
         const rate = opts.invert ? otherUsd / mine : mine / otherUsd;
         const kind = { transfer: 'transfer', exchange: 'exchange', fund: 'through a fund' }[e.kind] || e.kind;
-        return { day: String(e.at).slice(0, 10), side: bought ? 'buy' : 'sell', rate,
+        // the mark as the chart's own asset's deal: on USD/RUB (the dollar's price in roubles) roubles bought
+        // are the dollar sold -- a red sale; on RUB/USD (the rouble's price) a green buy
+        return { day: String(e.at).slice(0, 10), bought, side: bought === !!opts.invert ? 'buy' : 'sell', rate,
           text: `${amt(e.sold_amount, e.sold_ccy)} → ${amt(e.bought_amount, e.bought_ccy)} (${kind}) · ${e.how}` };
       }).filter(Boolean);
     } catch (err) { console.warn('currency exchanges:', err); }
@@ -473,8 +475,8 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       if (!ds.length) continue;
       for (const d of ds) dealShapes.push({ type: 'path', xref: 'x', yref: 'y', xsizemode: 'pixel', ysizemode: 'pixel',
         xanchor: d.day, yanchor: d.rate, path: house(side === 'buy', 0.9), fillcolor: color, line: { color: '#000000', width: 0.6 }, layer: 'above' });
-      traces.push({ x: ds.map(d => d.day), y: ds.map(d => d.rate), type: 'scatter', mode: 'markers', name: side === 'buy' ? `${opts.currency} bought` : `${opts.currency} sold`,
-        marker: { color, size: 14, opacity: 0 }, text: ds.map(d => `${side === 'buy' ? 'bought' : 'sold'} ${opts.currency} at ${fmt(d.rate)}: ${d.text}`),
+      traces.push({ x: ds.map(d => d.day), y: ds.map(d => d.rate), type: 'scatter', mode: 'markers', name: side === 'buy' ? 'bought' : 'sold',
+        marker: { color, size: 14, opacity: 0 }, text: ds.map(d => `${d.bought ? 'bought' : 'sold'} ${opts.currency} at ${fmt(d.rate)}: ${d.text}`),
         hovertemplate: '%{x}: %{text}<extra></extra>' });
     }
     if (payTrace) traces.push(payTrace);

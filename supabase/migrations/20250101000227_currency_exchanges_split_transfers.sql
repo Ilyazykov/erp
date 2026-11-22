@@ -1,7 +1,8 @@
 -- currency_exchanges (...226): a transfer paired with several on the other side is one exchange
 -- (06.11.2026: TBC's -320 GEL paired by hand with Sber's +1 000 and +9 050 RUB from the same person --
 -- one exchange, 320 GEL for 10 050 RUB, 81.6 RUB a dollar; the view took them for two, 320 GEL for
--- 9 050 RUB drawn at 73 a dollar, the other left out as too far from any rate). The rest as in ...226.
+-- 9 050 RUB drawn at 73 a dollar, the other left out as too far from any rate); T-Bank's broker rows
+-- of a day paired only within 2% of the rate. The rest as in ...226.
 create or replace view public.currency_exchanges
 with (security_invoker = true) as
 with fiat as (select distinct currency as c from public.fx_history union select 'USD'),
@@ -26,7 +27,9 @@ same as (
 ),
 same_ranked as (
   select *, row_number() over (partition by oid order by dt, gap) as ro, row_number() over (partition by iid order by dt, gap) as ri
-  from same where gap < 0.08
+  -- a broker's "Покупка/продажа" names no currency deal: any buy and sale of a day share it (T-Bank's
+  -- 13.07.2020: 108 EUR "for" 129 USD, 5% over the market) -- its currency deals only within 2%
+  from same where gap < case when how ~ '^T-Bank: (Покупка/продажа|Иные операции)$' then 0.02 else 0.08 end
 ),
 pairs as (
   select it.user_id, it.out_at as at, it.out_source || '|' || it.out_id as okey, it.in_source || '|' || it.in_id as ikey,
