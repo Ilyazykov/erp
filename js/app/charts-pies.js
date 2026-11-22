@@ -215,7 +215,8 @@ function mpTargetPie(el, title, items, note = '', targetTotal = null, shareOfTar
   const R_BASE = 100;
   let cursor = 0;
   const rows = usable.map(it0 => {
-    const it = it0;
+    // the gold slice (chart 3's asset classes) opens gold's chart, its XAU and XAUT deals marked
+    const it = !it0.chart && it0.label === MP_ASSET_CLASS_LABELS.gold ? { ...it0, chart: 'XAU', chartAlso: ['XAUT'] } : it0;
     const current = Math.max(0, it.usd) / total * 100;
     const wantUsd = it.target / 100 * base;
     const w = current / 100 * 360;
@@ -264,7 +265,7 @@ function mpTargetPie(el, title, items, note = '', targetTotal = null, shareOfTar
     plot.on('plotly_click', ev => {
       const p = ev.points?.find(x => x.curveNumber === 0);
       const r = p && rows[p.pointNumber];
-      if (r?.chart) mpOpenPriceDialog(r.chart, r.label, { also: r.chartAlso || [] });
+      if (r?.chart) mpOpenPriceDialog(r.chart, r.chart === 'XAU' ? 'Gold' : r.label, { also: r.chartAlso || [] });
     });
   }
 }
