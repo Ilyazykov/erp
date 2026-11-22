@@ -96,7 +96,16 @@ function mpPie(el, title, buckets, note = '', order = null, groupSmall = true, s
     entries.push(['other', small.reduce((s, e) => s + e[1], 0),
       [...listed.slice(0, HOVER_LINES), ...(listed.length > HOVER_LINES ? [`… +${listed.length - HOVER_LINES} more below`] : [])].join('<br>')]);
     const otherEl = card.querySelector('.pie-other');
-    otherEl.textContent = `other: ${listed.join(', ')}`;
+    otherEl.textContent = 'other: ';
+    // each one clickable when the chart opens its slices (chartOf): the same window as its own slice would
+    const smallSorted = [...small].sort((a, b) => (smallGroupOf(a[0]) - smallGroupOf(b[0])) || (b[1] - a[1]));
+    smallSorted.forEach((e, i) => {
+      const what = chartOf ? chartOf(e[0]) : null;
+      const el = document.createElement(what ? 'a' : 'span');
+      el.textContent = `${e[0]} ${(e[1] / total * 100).toFixed(2)}%`;
+      if (what) { el.href = '#'; el.style.cssText = 'color:inherit;text-decoration:underline dotted;cursor:pointer'; el.onclick = ev => { ev.preventDefault(); mpOpenPriceDialog(...what); }; }
+      otherEl.append(el, i < smallSorted.length - 1 ? ', ' : '');
+    });
     otherEl.hidden = false;
   }
   for (const e of entries) {

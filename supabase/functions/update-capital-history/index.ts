@@ -277,7 +277,11 @@ Deno.serve(async (req) => {
     // MKD, ALL: card payments in North Macedonia and Albania, made in them from a
     // euro account -- no account holds them, the exchange fee wants their rate
     // (migration ...151)
-    const ccys = new Set<string>(['RUB', 'EUR', 'GBP', 'CNY', 'MKD', 'ALL', ...trades.map(t => (t.currency || '').toUpperCase()), ...bankCcy.map(r => r.currency)]);
+    // ...and the currencies the funds hold (chart 1's "other": CAD, KRW, HKD...), whose rate charts open from
+    // it (22.11.2026) -- Yahoo's <CCY>USD=X
+    const FUND_CCYS = ['CAD', 'KRW', 'HKD', 'AUD', 'INR', 'BRL', 'ZAR', 'SGD', 'SAR', 'MXN', 'MYR', 'THB', 'IDR', 'CLP', 'QAR',
+      'KWD', 'NZD', 'PHP', 'COP', 'EGP', 'JPY', 'CHF', 'TWD', 'SEK', 'NOK', 'DKK', 'PLN', 'CZK'];
+    const ccys = new Set<string>(['RUB', 'EUR', 'GBP', 'CNY', 'MKD', 'ALL', ...FUND_CCYS, ...trades.map(t => (t.currency || '').toUpperCase()), ...bankCcy.map(r => r.currency)]);
     ccys.delete(''); ccys.delete('USD');
     for (const x of ['XAU', 'XAG', 'XPT', 'XPD']) ccys.delete(x);
     const fxDone: string[] = [];
