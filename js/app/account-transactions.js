@@ -13,6 +13,40 @@ function mpTxLayerFilter(layer) {
   return { label: layer.label, fiat, codes, tickers, any: [...new Set([...codes, ...tickers])] };
 }
 
+// A bank row's name in plain words: the shop out of the statement's line; a game store's purchase by the
+// note that names the game (any other note goes under the name).
+function mpTxNamed(description, note) {
+  const shop = description.match(/İŞYERİ:\s*(.*?)\s+MUTABAKAT/)?.[1] ?? mpShortDesc(description).replace(/^Payment in /, '');
+  const name = /^PLAYSTATION/i.test(shop) ? 'PlayStation' : /^STEAM/i.test(shop) ? 'Steam'
+    : /APPLE\.COM\/BILL|ITUNES\.COM/i.test(shop) ? 'Apple' : shop;
+  const game = (name === 'PlayStation' || name === 'Steam') && !!note;
+  return { text: game ? note : name, full: description, noteLine: game ? '' : note || '' };
+}
+// Apple's charges by what they paid for (its purchase history, imported as receipts): "YouTube Premium", a subscription.
+async function mpTxAddAppleNames(rows) {
+  const apple = rows.filter(r => r.xid && r.text === 'Apple');
+  const ids = [...new Set(apple.map(r => r.xid))];
+  if (!ids.length) return;
+  const orders = [];
+  for (let i = 0; i < ids.length; i += 10) {
+    const { data, error } = await sb.from('receipts_active').select('id, tx_source, tx_external_id')
+      .eq('source', 'apple').in('tx_external_id', ids.slice(i, i + 10));
+    if (error) return;
+    orders.push(...data);
+  }
+  if (!orders.length) return;
+  const { data: lines, error } = await sb.from('receipt_lines').select('receipt_id, name_printed, note, is_other, line_no')
+    .in('receipt_id', orders.map(o => o.id)).order('line_no');
+  if (error) return;
+  for (const r of apple) {
+    const order = orders.find(o => o.tx_source === r.src && o.tx_external_id === r.xid);
+    const items = (lines || []).filter(l => l.receipt_id === order?.id && !l.is_other);
+    if (!items.length) continue;
+    r.text = items.slice(0, 2).map(l => l.name_printed).join(', ') + (items.length > 2 ? ` +${items.length - 2}` : '');
+    if (items.some(l => /^(\d{1,2} [A-Za-z]+\.? \d{4} - |Renews|Renewed|Expires|Expired)/.test(l.note || ''))) r.type = 'subscription';
+  }
+}
+
 // One source's next rows: [{day, at, ...}], from `offset`.
 function mpTxSources(account, filter, wallets) {
   const all = account === MP_ALL_ACCOUNTS;
@@ -24,11 +58,12 @@ function mpTxSources(account, filter, wallets) {
     return data;
   };
   const money = async offset => {
-    let q = scoped(sb.from('bank_transactions').select('id, account, tx_date, description, counterparty, amount, currency, amount_approximate, expense_category, income_category, balance_after, product, external_source'))
+    let q = scoped(sb.from('bank_transactions').select('id, account, tx_date, description, counterparty, amount, currency, amount_approximate, expense_category, income_category, balance_after, product, external_source, external_id, expense_note'))
       .or('synthetic.is.null,synthetic.eq.false');
     if (filter) q = q.in('currency', filter.any);
     return (await page(q.order('tx_date', { ascending: false }).order('id'), offset)).map(r => ({
-      day: r.tx_date.slice(0, 10), at: r.tx_date, account: r.account, text: plain(r.description) || r.counterparty || '', type: '',
+      day: r.tx_date.slice(0, 10), at: r.tx_date, account: r.account, ...mpTxNamed(plain(r.description) || r.counterparty || '', r.expense_note), type: '',
+      src: r.external_source, xid: r.external_id,
       amount: Number(r.amount), unit: r.currency, approx: !!r.amount_approximate || /^ESTIMATED:/.test(r.description || ''),
       balance: r.balance_after == null ? null : Number(r.balance_after), chain: `${r.account}|${r.currency}|${r.product || ''}|${r.external_source}`,
       category: r.income_category || r.expense_category || '', meta: r.income_category ? mpIncomeMeta(r.income_category) : mpExpMeta(r.expense_category) }));
@@ -178,9 +213,9 @@ function mpTxRowHtml(r, withAccount, display) {
   const right = r.amount != null
     ? `<span class="${r.amount < 0 ? 'neg' : 'pos'}">${r.approx ? '≈ ' : ''}${r.amount < 0 ? '−' : '+'}${shown(r.amount, r.coin ? 8 : 2)}</span>`
     : `<span>${r.approx ? '≈ ' : ''}${r.qty < 0 ? '−' : ''}${number(r.qty, 8)}${r.price ? ` @ ${shown(r.price, 4)}` : ''}</span>`;
-  const sub = [r.type, withAccount ? MP_BROKER_SHORT_NAMES[r.account] || r.account : ''].filter(Boolean).join(' · ');
+  const sub = [r.type, r.noteLine, withAccount ? MP_BROKER_SHORT_NAMES[r.account] || r.account : ''].filter(Boolean).join(' · ');
   // (a deal or a coin move has no spending category: the grey mark, to keep the column)
-  return `<div class="mp-tx-row${r.approx ? ' approx' : ''}"><span title="${mpEscapeHtml(r.category || '')}">${mpExpDot(r.meta || mpExpMeta())}</span><div class="mp-tx-body"><div class="mp-tx-main"><span class="mp-tx-name" title="${mpEscapeHtml(r.text)}">${mpEscapeHtml(r.text)}</span>${right}</div>${sub ? `<div class="mp-tx-sub">${mpEscapeHtml(sub)}</div>` : ''}</div></div>`;
+  return `<div class="mp-tx-row${r.approx ? ' approx' : ''}"><span title="${mpEscapeHtml(r.category || '')}">${mpExpDot(r.meta || mpExpMeta())}</span><div class="mp-tx-body"><div class="mp-tx-main"><span class="mp-tx-name" title="${mpEscapeHtml(r.full || r.text)}">${mpEscapeHtml(r.text)}</span>${right}</div>${sub ? `<div class="mp-tx-sub">${mpEscapeHtml(sub)}</div>` : ''}</div></div>`;
 }
 
 // Puts the feed beside `plot`. display: {code, conv(day, usd)} to show amounts in, null: each in its own currency.
@@ -226,6 +261,7 @@ function mpAccountTxFeed(dlg, plot, account, startDisplay = null) {
       }
       sources ||= mpTxSources(account, filter, wallets);
       const rows = await mpTxNext(sources, MP_TX_STEP);
+      await mpTxAddAppleNames(rows).catch(() => {});   // without them: "Apple"
       for (let asked; asked !== display;) { asked = display; await mpTxEnsureRates(rows, asked); }
       if (mine !== ticket) return;
       shownRows.push(...rows);
