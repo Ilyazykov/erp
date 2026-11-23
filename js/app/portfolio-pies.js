@@ -47,9 +47,9 @@ function mpDonutLayout(maxR) {
 // "Target CNY sale (RUB)" for the RUB/CNY donut) instead of the generic
 // default, since the same function backs 4 differently-themed tables.
 
-// "Prefer expensive shares": a big budget is the chance to buy what a small one can't. Expensive = one
-// share costs this part of the budget; these get one share first, within this part of it.
-const MP_EXPENSIVE_FROM = 0.2, MP_EXPENSIVE_TO = 0.4, MP_EXPENSIVE_BUDGET = 0.5;
+// "Prefer expensive shares": a big budget is the chance to buy what a small one can't. Expensive = above
+// this price; these get one share first: the first whenever it's affordable, the rest within this part of the budget.
+const MP_EXPENSIVE_USD = 500, MP_EXPENSIVE_BUDGET = 0.5;
 
 // The sector as the allocators' second factor: within one Z group, a stock of an underweight sector
 // gets more. item -> sector target / sector held, from 0.25 to 4; 1 for an item with no sector.
@@ -254,8 +254,8 @@ function mpAllocatePoolByZPriorityWithLots(usable, totalUsd, userInjectionUsd, o
     for (;;) {
       const factors = mpSectorFactors(usable, targetUsdOf, it => currentUsdOf(it) + deltaUsdByItem.get(it));
       const next = usable
-        .filter(it => !bought.has(it) && !(it.z < -1.5) && isBelowTarget(it) && it.priceUsd >= budget * MP_EXPENSIVE_FROM
-          && it.priceUsd <= budget * MP_EXPENSIVE_TO && budget - pool + it.priceUsd <= budget * MP_EXPENSIVE_BUDGET)
+        .filter(it => !bought.has(it) && !(it.z < -1.5) && isBelowTarget(it) && it.priceUsd > MP_EXPENSIVE_USD
+          && it.priceUsd <= pool && (!bought.size || budget - pool + it.priceUsd <= budget * MP_EXPENSIVE_BUDGET))
         .sort((a, b) => zRank(a) - zRank(b) || factors.get(b) - factors.get(a) || b.priceUsd - a.priceUsd)[0];
       if (!next) break;
       bought.add(next);

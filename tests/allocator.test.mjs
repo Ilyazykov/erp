@@ -8,7 +8,7 @@ const src = readFileSync(new URL('../js/app/portfolio-pies.js', import.meta.url)
 const pick = n => src.match(new RegExp(`^function ${n}\\([^]*?\\n}\\n`, 'm'))[0];
 const ctx = {};
 vm.createContext(ctx);
-vm.runInContext(['const MP_EXPENSIVE_FROM = 0.2, MP_EXPENSIVE_TO = 0.4, MP_EXPENSIVE_BUDGET = 0.5;\n'].join('') + ['mpSectorFactors', 'mpWeightedShares', 'mpAllocatePoolByZPriorityLegacy', 'mpAllocatePoolByZPriorityWithLots']
+vm.runInContext(['const MP_EXPENSIVE_USD = 500, MP_EXPENSIVE_BUDGET = 0.5;\n'].join('') + ['mpSectorFactors', 'mpWeightedShares', 'mpAllocatePoolByZPriorityLegacy', 'mpAllocatePoolByZPriorityWithLots']
   .map(pick).join('\n') + '\nthis.legacy = mpAllocatePoolByZPriorityLegacy; this.lots = mpAllocatePoolByZPriorityWithLots;', ctx);
 
 let failed = 0;
@@ -59,6 +59,16 @@ check('prefer expensive: never a Z < -1.5 stock, and within half the budget', ()
   assert.ok(got(r, its[1]) + got(r, its[2]) >= 1500);
   assert.ok(got(r, its[0]) <= 1500);
   assert.ok(its.reduce((s, it) => s + got(r, it), 0) <= 5000);
+});
+check('prefer expensive: a share at or below the threshold gets no priority', () => {
+  const its = [item('C', 'A', 10, 0, 0, 400), item('Y', 'B', 90, 0, 0, 10)];
+  const r = ctx.lots(its, 0, 1000, { preferExpensive: true });
+  assert.equal(got(r, its[0]), 0);
+});
+check('prefer expensive: the first share may take over half of a small budget', () => {
+  const its = [item('X', 'A', 10, 0, 0, 637), item('Y', 'B', 90, 0, 0, 10)];
+  const r = ctx.lots(its, 0, 1000, { preferExpensive: true });
+  assert.equal(got(r, its[0]), 637);
 });
 if (failed) process.exit(1);
 console.log('\nall ok');
