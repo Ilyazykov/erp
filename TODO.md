@@ -1988,3 +1988,39 @@ number», контрагент пуст).
 - [ ] Проревьюить валюты в неточных (estimated) данных.
 
 **Не реализовано.**
+
+## 37. Чеки PlayStation: оставшиеся заказы
+
+Заказы из истории PlayStation Store связываются с платежами Ziraat по цене со страницы
+`Order Details`. Готовые чеки, список заказов и цены лежат в `statements/_upload/psn_2026-11-24/`
+(папка не в git и не синхронизируется между компьютерами).
+
+- [ ] Загрузить на сайте `psn_receipts_2026-11-24.csv` (77 чеков). Повторная загрузка безопасна.
+- [ ] Открыть `Order Details` и занести цены (50 страниц, последний заказ группы определится сам):
+  - 15.08.2025: Marvel Rivals; Clair Obscur: Expedition 33; Frostpunk 2
+  - 12.08.2025: The Invincible (рядом три платежа на один заказ: понять, что за остальные два)
+  - 30.07-01.08.2025: Lies of P: Overture; Black Book
+  - 04.01.2025: NieR: Automata; Sifu; VISAGE
+  - 11.12.2024: Still Wakes the Deep
+  - 03.12.2024: Beyond Hanwell; Kingdom Come: Deliverance
+  - 15-16.11.2024: RE7 Not a Hero; Braid; The Callisto Protocol
+  - 24-25.10.2024: Return of the Obra Dinn; Armored Core VI
+  - 17.10.2024: Alan Wake 2
+  - 08.10.2024: Until Dawn; This War of Mine: All Expansions
+  - 30.09-02.10.2024: Frostpunk: Console Edition; The Last Autumn; On The Edge; The Rifts
+  - 11.09.2024: Silent Hill 2
+  - 03-04.06.2024: Alone in the Dark; Hitman HD; Silent Hill: The Short Message
+  - 09-10.05.2024: Lords of the Fallen
+  - 10-11.04.2024: Wolfenstein: The New Order
+  - 04-05.04.2024: S.T.A.L.K.E.R.; TLOU Part II Remastered; Blasphemous
+  - 20-21.12.2023: Little Nightmares
+  - 17-19.11.2023: Miles Morales; Witcher 3; This is the Police; RDR2; Dark Souls III
+  - 02.11.2023: Lies of P
+  - 26-28.10.2023: Bloodborne: The Old Hunters; The Evil Within
+  - 28.09.2023: Spider-Man 2; AC Valhalla; Dead Space
+  - 24.09.2023: RE4: The Mercenaries; RE4: Separate Ways
+  - 26-27.08.2023: Ticket to Ride; Humankind + Doom 3
+  - 24.03.2023: God of War
+- [ ] Скидки: у заказов, связанных только по дате, цены без скидки нет. Для отметки нужны их страницы.
+
+**Частично:** 77 чеков готовы, в базу не загружены.
