@@ -219,27 +219,12 @@
     <p class="empty-note" id="mp_xlsx_status"></p>
 
     <div class="section-title">Full export to Snowball</div>
-    <p class="note">Everything stored here as one Snowball CSV, laid out like Snowball's own export and starting,
-      like the Snowball portfolio, on its first deal (2025-08-28), without blocked assets: every
-      trade, dividend, coupon, amortisation and redemption (MOEX as MCX, Revolut funds as EUFUND). Snowball caps
-      the number of custom holdings (CUSTOM_HOLDING), so only the ones it already has are exported — BTC, ETH,
-      XAUT, XAU and the deposit ВКЛАД:Т16%13; other crypto, deposits, savings accounts and ЦФА are left out.
-      Crypto on exchanges and wallets becomes buys / sells / rewards from their transaction logs (coins bought
-      by card through Mercuryo / Transak at what the card paid, on the day they arrived), plus one
-      reconciling row per coin dated today so its quantity matches the current balance (transfers between own
-      wallets and network fees aren't trades). Custom holdings also get a price for every day and their settings rows.</p>
+    <p class="note">All deals and payouts since 28.08.2025, without cash.</p>
     <div class="form-row">
       <button class="btn primary" id="mp_full_snowball_export">Download full Snowball CSV</button>
     </div>
     <p class="empty-note" id="mp_full_snowball_status"></p>
-    <p class="note">The full export with fewer custom holdings and the money added. XAUT goes into XAU; every rouble deposit
-      and savings account is one holding, ВКЛАДЫ (each row's Note names the original, so an upload of Snowball's export
-      splits them again). The money -- bank and broker accounts, cash on hand, savings in other currencies and the
-      dollars on the crypto exchanges (today's balance only), less what's owed on the credit cards -- is Snowball's cash: the balance the
-      day before the first deal, then conversions (CASH_CONVERT), interest and cashback (CASH_GAIN), fees and taxes
-      (CASH_EXPENSE) and every other money row (CASH_IN / CASH_OUT) the deals and payouts don't already move, each
-      with its bank, product and account in the Note; a few reconciling rows take what's left (a deal settling days
-      after Snowball books it). Snowball's cash then ends at the accounts' balances today.</p>
+    <p class="note">The same plus the money on all accounts.</p>
     <div class="form-row">
       <button class="btn" id="mp_cash_snowball_export">Download full Snowball CSV with cash</button>
     </div>
