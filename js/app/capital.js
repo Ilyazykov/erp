@@ -379,38 +379,54 @@ function mpFiatOrder(list) {
     ...list.filter(r => !MP_FIAT_ORDER.includes(code(r)))];
 }
 const mpDayNumber = day => Math.round((Date.parse(`${day}T00:00:00Z`) - Date.UTC(2000, 0, 1)) / 864e5);
-async function mpAccountCurrencySeries(account) {
-  if (mpAccountSeries.has(account)) return mpAccountSeries.get(account);
+// An account's history as {currency label: Map(day number -> USD)}, split as the Currencies pie is.
+async function mpAccountByLabel(account) {
   const { data, error } = await sb.rpc('capital_account_series', { p_account: account });
   if (error || !data?.length) return null;
   const parts = (await mpSplitFundsByCurrency(data.map(s => ({ ...s, value_usd: 1 })))).map(mpCurrencyColumn);
-  const add = (m, d, v) => m.set(d, (m.get(d) || 0) + v);
   const byLabel = new Map();
   for (const p of parts) {
     const label = mpCurrencySliceLabel(p);
-    if (!byLabel.has(label)) byLabel.set(label, { byDay: new Map(), cashByDay: new Map() });
-    const c = byLabel.get(label);
-    // the "cash" account's part (its tickers end in :cash), for the Total to fade on the days it's an estimate
-    const isCash = /^CASH:.*:cash$/.test(p.ticker);
-    p.days.forEach((d, i) => {
-      const v = Number(p.amounts[i]) * p.value_usd;
-      add(c.byDay, d, v);
-      if (isCash) add(c.cashByDay, d, v);
+    if (!byLabel.has(label)) byLabel.set(label, new Map());
+    const m = byLabel.get(label);
+    p.days.forEach((d, i) => m.set(d, (m.get(d) || 0) + Number(p.amounts[i]) * p.value_usd));
+  }
+  return byLabel;
+}
+async function mpAccountCurrencySeries(account) {
+  if (mpAccountSeries.has(account)) return mpAccountSeries.get(account);
+  const byLabel = await mpAccountByLabel(account);
+  if (!byLabel) return null;
+  const add = (m, d, v) => m.set(d, (m.get(d) || 0) + v);
+  // the Total: what every account with estimated days (cash, UniCredit...) held on those days, to fade it
+  const estimates = new Map();
+  let complete = true;
+  if (account === MP_ALL_ACCOUNTS) {
+    const masked = Object.keys(mpExactMask || {}).filter(a => mpExactMask[a].length);
+    const held = await Promise.all(masked.map(a => mpAccountByLabel(a).catch(() => null)));
+    masked.forEach((a, k) => {
+      if (!held[k]) { complete = false; return; }
+      for (const [label, days] of held[k]) {
+        if (!estimates.has(label)) estimates.set(label, new Map());
+        for (const [d, v] of days) {
+          if (mpAccountMasked(a, new Date(Date.UTC(2000, 0, 1) + d * 864e5).toISOString().slice(0, 10))) add(estimates.get(label), d, v);
+        }
+      }
     });
   }
-  const ranked = [...byLabel].map(([label, c]) => ({ label, ...c, size: [...c.byDay.values()].reduce((s, v) => s + Math.abs(v), 0) }))
-    .sort((a, b) => b.size - a.size);
+  const ranked = [...byLabel].map(([label, byDay]) => ({ label, byDay, estByDay: estimates.get(label) || new Map(),
+    size: [...byDay.values()].reduce((s, v) => s + Math.abs(v), 0) })).sort((x, y) => y.size - x.size);
   // the main currencies, gold, BTC and ETH always on their own, however small; the rest up to 8 layers, then "other"
   const named = new Set(ranked.filter(r => MP_MAIN_CURRENCIES.has(r.label.split(' ')[0]) || ['XAU', 'BTC', 'ETH'].includes(r.label.split(' ')[0])));
   for (const r of ranked) { if (named.size >= 8) break; named.add(r); }
   const fold = (list, label) => {
     if (!list.length) return [];
-    const byDay = new Map(), cashByDay = new Map();
+    const byDay = new Map(), estByDay = new Map();
     for (const r of list) {
       for (const [d, v] of r.byDay) add(byDay, d, v);
-      for (const [d, v] of r.cashByDay) add(cashByDay, d, v);
+      for (const [d, v] of r.estByDay) add(estByDay, d, v);
     }
-    return [{ label, byDay, cashByDay }];
+    return [{ label, byDay, estByDay }];
   };
   // fiat first, its small ones as "other" right after it; then gold, the coins and the small coins together
   const isFiat = r => mpIsFiatLabel(r.label), isGold = r => r.label === 'XAU';
@@ -421,7 +437,8 @@ async function mpAccountCurrencySeries(account) {
     ...ranked.filter(r => named.has(r) && !isFiat(r) && !isGold(r)),
     ...fold(ranked.filter(r => !named.has(r) && !isFiat(r)), 'Altcoins'),
   ];
-  mpAccountSeries.set(account, out);
+  // (an account's estimates that didn't load: asked for again the next time the window opens)
+  if (complete) mpAccountSeries.set(account, out);
   return out;
 }
 
@@ -466,7 +483,7 @@ async function mpOpenAccountChart(account) {
   const rows = mpCapitalBrokerRows.slice(firstHeld);
   const today = rows[rows.length - 1].day;
   const color = MP_COLORS.broker[account] || (account === 'real estate' ? MP_COLORS.type.real_estate : '#4a9ff5');
-  if (mpExactMask[account === MP_ALL_ACCOUNTS ? 'cash' : account]?.length) dlg.querySelector('#mp_account_fade_box').style.display = '';
+  if (account === MP_ALL_ACCOUNTS ? Object.values(mpExactMask).some(m => m.length) : mpExactMask[account]?.length) dlg.querySelector('#mp_account_fade_box').style.display = '';
   // the hover: only the layer under the cursor (Plotly's own can't tell a point inside a stacked area)
   const tip = document.createElement('div');
   tip.id = 'mp_account_tip';
@@ -516,22 +533,22 @@ async function mpOpenAccountChart(account) {
       // (the Total in steps: a slope between a faded day and a solid one would draw a spike at the first cash count)
       line: { width: 0, color: fillcolor, shape: account === MP_ALL_ACCOUNTS ? 'hv' : 'linear' }, fillcolor, hoverinfo: 'skip', showlegend: false, ...extra });
     const layers = [];
-    let shapes = [], cashEstimated = false;
+    let shapes = [], totalEstimated = false;
     if (series) {
       // by currency; an account's days that are estimates shaded over all of them
       const nums = shown.map(r => mpDayNumber(r.day));
       const lines = series.map(c => {
         const y = shown.map((r, i) => conv(r.day, c.byDay.get(nums[i]) || 0));
-        // the Total: the cash of the days it's an estimate, faded
-        const est = shown.map((r, i) => (fadeOn && account === MP_ALL_ACCOUNTS && mpAccountMasked('cash', r.day)
-          ? Math.min(Math.max(0, y[i]), Math.max(0, conv(r.day, c.cashByDay.get(nums[i]) || 0))) : 0));
+        // the Total: what accounts held on their estimated days (cash, UniCredit...), faded
+        const est = shown.map((r, i) => (fadeOn && account === MP_ALL_ACCOUNTS
+          ? Math.min(Math.max(0, y[i]), Math.max(0, conv(r.day, c.estByDay.get(nums[i]) || 0))) : 0));
         return { label: c.label, color: mpSliceColor(c.label, mpCurrencyColor), y, est };
       }).filter(c => c.y.some(v => Math.abs(v) >= tiny));
       // each currency's estimate right on top of its own exact part
       for (const c of lines) {
         layers.push(area(c.y.map((v, i) => Math.max(0, v) - c.est[i]), c.color, 'assets', { name: c.label, legendgroup: c.label, showlegend: lines.length > 1 }));
         if (c.est.some(v => v >= tiny)) {
-          cashEstimated = true;
+          totalEstimated = true;
           layers.push(area(c.est, mpFade(c.color, 0.45), 'assets', { name: `${c.label} (estimate)`, legendgroup: c.label }));
         }
       }
@@ -559,7 +576,7 @@ async function mpOpenAccountChart(account) {
       xaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', type: 'date', tickangle: -45, range: [days[0], days[days.length - 1]] },
       yaxis: Object.assign({}, LAYOUT_BASE.yaxis, rub ? { tickformat: cents ? ',.2~f' : ',.0f', ticksuffix: ' ₽' } : { tickformat: cents ? '$,.2~f' : '$,.0f' }, yRange ? { range: yRange, autorange: false } : {}),
       margin: { t: 10, r: 20, b: 60, l: 80 } }), CONFIG);
-    note.textContent = `${!fadeOn ? '' : cashEstimated ? 'Faded: estimated cash. ' : parts.known || parts.extrapolated ? `${series ? 'Shaded' : 'Faded'}: estimates. ` : ''}Includes money moved in and out, not only gains.`;
+    note.textContent = `${!fadeOn ? '' : totalEstimated ? 'Faded: estimates. ' : parts.known || parts.extrapolated ? `${series ? 'Shaded' : 'Faded'}: estimates. ` : ''}Includes money moved in and out, not only gains.`;
   };
   mpBindPeriods(dlg, p => { period = p; draw(); });
   fadeBox.onchange = () => { mpSave('mp_account_fade', fadeBox.checked ? '1' : '0'); draw(); };
