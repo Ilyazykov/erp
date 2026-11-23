@@ -149,7 +149,7 @@ function mpSalaryPlan(c, salary, flags = mpSalaryFlags()) {
   parts.usBondsFreedom = parts.usBonds * fShare;
   rows.push(['4', fShare ? `US Treasuries \u2014 IBKR ${Math.round((1 - fShare) * 100)}% / Freedom ${Math.round(fShare * 100)}%` : 'US Treasuries \u2014 IBKR', parts.usBonds,
     parts.usBonds ? `IBKR ${mpFormatUsd(parts.usBonds - parts.usBondsFreedom)}, Freedom ${mpFormatUsd(parts.usBondsFreedom)}` : '']);
-  // 4.1 Individual companies up to 5% of the stocks (US Stocks Z-score allocator), the rest into the world fund.
+  // 4.1 Individual companies up to 5% of the stocks (US Stocks tab allocator), the rest into the world fund.
   const usTotal = US_STOCK_TICKERS.reduce((s, t) => s + (c.valueByTicker[t] || 0), 0);
   const indAdd = Math.max(0, Math.min(stockAdd, 0.05 * (c.stockAll + stockAdd) - usTotal));
   parts.usStocks = mpSalaryAllocate(DATA && DATA.usTargetWeightsRaw, usTotal, indAdd, c, false, flags.sellStocks);
@@ -326,7 +326,7 @@ function mpRenderSalaryTable(plan) {
       <td class="muted" style="text-align:left">${mpEscapeHtml(detail || '')}</td></tr>`).join('')}</tbody></table></div>`;
 }
 
-// The Z-score allocator (US Stocks Z-score / Yield per Stock & Rebalancing)
+// The Z-score allocator (the US Stocks / RU Stocks tabs)
 // on `usd`: [{ticker, usd (signed), shares}] (a sale if it trims an
 // overweight Z < -1.5 name).
 // exact: fractional amounts (no whole-share rounding) -- the Russian step,
