@@ -532,11 +532,9 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     // "house" (a box with a pointed end) just off the line -- a buy under it pointing up at it, a sale over
     // it pointing down; drawn as shapes in pixels around the deal's point, an invisible dot there for the hover
     const dealShapes = [];
-    // (centred: the mark's middle on its point -- an exchange's mark stands at its own rate, off the line)
-    const house = (up, k, centred = false) => {
-      const g = centred ? 0 : 3, w = 3.5 * k, sh = g + 4 * k, b = g + 11 * k, sg = up ? -1 : 1;   // gap, half-width, shoulders, base
-      const mid = centred ? b / 2 : 0;
-      const P = (x, y) => `${x.toFixed(1)},${(sg * (y - mid)).toFixed(1)}`;
+    const house = (up, k) => {
+      const g = 3, w = 3.5 * k, sh = g + 4 * k, b = g + 11 * k, sg = up ? -1 : 1;   // gap, half-width, shoulders, base
+      const P = (x, y) => `${x.toFixed(1)},${(sg * y).toFixed(1)}`;
       return `M ${P(0, g)} L ${P(w, sh)} L ${P(w, b)} L ${P(-w, b)} L ${P(-w, sh)} Z`;
     };
     for (const via of [true, false]) {
@@ -564,9 +562,9 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       const ds = fxShown.filter(d => d.side === side);
       if (!ds.length) continue;
       for (const d of ds) dealShapes.push({ type: 'path', xref: 'x', yref: 'y', xsizemode: 'pixel', ysizemode: 'pixel',
-        xanchor: d.day, yanchor: d.rate, path: house(side === 'buy', d.card ? 1 : 1.5, true), fillcolor: color, line: { color: '#000000', width: 0.8 }, layer: 'above' });
+        xanchor: d.day, yanchor: d.rate, path: house(side === 'buy', d.card ? 0.55 : 0.9), fillcolor: color, line: { color: '#000000', width: 0.6 }, layer: 'above' });
       traces.push({ x: ds.map(d => d.day), y: ds.map(d => d.rate), type: 'scatter', mode: 'markers', name: side === 'buy' ? 'bought' : 'sold',
-        marker: { color, size: 22, opacity: 0 }, text: ds.map(d => d.text),
+        marker: { color, size: 14, opacity: 0 }, text: ds.map(d => d.text),
         hovertemplate: '%{x}:<br>%{text}<extra></extra>' });
     }
     if (payTrace) traces.push(payTrace);
