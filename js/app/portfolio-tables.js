@@ -303,7 +303,7 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
   wrap.innerHTML = `<table class="data-table"><thead><tr>
     <th class="corner">Broker</th>${categories.map(c => `<th${fxByCurrency && mpCurrencyChart(c) ? ` data-ccy="${mpEscapeHtml(c)}" style="cursor:pointer" title="Open its chart"` : ''}>${headerLabel(c)}</th>`).join('')}<th class="corner">Total</th>
   </tr></thead><tbody>${accounts.map(a => `<tr${dimmed.has(a) ? ' style="opacity:0.45" title="Not included in the totals"' : ''}>
-    <td class="ticker">${brokerLabel(a)}</td>
+    <td class="ticker" data-account="${mpEscapeHtml(a)}" style="cursor:pointer" title="Open its chart">${brokerLabel(a)}</td>
     ${categories.map(c => `<td>${!cell[`${a} ${c}`] && everHeld.has(`${a} ${c}`) ? heldZero(c) : cellDisplay(cell[`${a} ${c}`] || 0, c)}</td>`).join('')}
     <td><b>${money(rowTotal(a))}</b></td>
   </tr>`).join('')}
@@ -313,6 +313,8 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
     <td><b>${money(grandTotal)}</b></td>
   </tr></tbody></table>
   ${anyMissing ? '<p class="empty-note">Some tickers have no price yet — totals are a partial sum.</p>' : ''}`;
+  // a bank's or broker's name opens its money over time
+  wrap.querySelectorAll('td[data-account]').forEach(td => td.addEventListener('click', () => mpOpenAccountChart(td.dataset.account)));
   // a currency's header opens its chart (as chart 1's slices do)
   if (fxByCurrency) wrap.querySelectorAll('th[data-ccy]').forEach(th => th.addEventListener('click', () => mpOpenPriceDialog(...mpCurrencyChart(th.dataset.ccy))));
 }

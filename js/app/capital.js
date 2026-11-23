@@ -308,16 +308,113 @@ async function mpLoadProvenCash(cashOnDay) {
   return { strict: walk(false), events: walk(true) };
 }
 const MP_BROKER_FALLBACK_COLORS = ['#7b8494', '#c08457', '#6fa8ff', '#ff7eb6', '#00b86b', '#ffd000', '#9b6bff', '#ff6a13'];
+// What the broker chart and a bank's window both need: the daily history, which days are estimates, and
+// how a day's value splits into exact, known at an approximate amount, and estimated.
+async function mpEnsureBrokerRows() {
+  if (mpCapitalBrokerRows) return;
+  const { rows, error } = await mpFetchAllRows(() => sb.from('capital_daily_by_account').select('day, accounts, real_estate').order('day'));
+  if (error) throw error;
+  mpCapitalBrokerRows = rows;
+}
+async function mpEnsureExactData(proven) {
+  if (!mpExactMask) mpExactMask = await mpLoadExactMask();
+  if (proven && !mpProvenCash) {
+    const cashOn = new Map(mpCapitalBrokerRows.map(r => [r.day, Number((r.accounts || {}).cash || 0)]));
+    mpProvenCash = await mpLoadProvenCash(day => cashOn.get(day) || 0);
+  }
+}
+const mpAccountFull = (a, r) => Number((a === 'real estate' ? r.real_estate : (r.accounts || {})[a]) || 0);
+const mpAccountMasked = (a, day) => (mpExactMask[a] || []).some(([f, t]) => f <= day && day < t);
+// exact: blank where it's an estimate; cash with `proven`: there the least it must have been
+const mpAccountExact = (a, r, proven) => (!mpAccountMasked(a, r.day) ? mpAccountFull(a, r)
+  : a === 'cash' && proven ? mpProvenCash.strict[r.day] || 0 : 0);
+// cash: what surely happened, at approximate amounts
+const mpAccountKnown = (a, r) => (mpAccountMasked(a, r.day) ? mpProvenCash.events[r.day] || 0 : mpAccountFull(a, r));
+const mpFade = (c, alpha) => (/^#[0-9a-f]{6}$/i.test(c) ? `rgba(${parseInt(c.slice(1, 3), 16)}, ${parseInt(c.slice(3, 5), 16)}, ${parseInt(c.slice(5, 7), 16)}, ${alpha})` : c);
+// The stacked parts of a value: solid (exact), known (half-faded), extrapolated (faded); null where there's none.
+function mpEstimateLayers(exact, full, known) {
+  const pos = y => Math.max(0, y);
+  const solid = exact.map(pos);
+  const m = known ? known.map((v, i) => Math.min(pos(full[i]), Math.max(pos(v), solid[i]))) : solid;
+  const above = (lo, hi) => hi.map((h, i) => Math.max(0, h - lo[i]));
+  return {
+    solid,
+    known: known && m.some((v, i) => v - solid[i] > 0.5) ? above(solid, m) : null,
+    extrapolated: full.some((f, i) => pos(f) - m[i] > 0.5) ? above(m, full.map(pos)) : null,
+  };
+}
+// the stacked layers' lowest and highest, with a margin (a debt is stacked down from zero)
+function mpAccountYRange(layers) {
+  let hi = -Infinity, lo = Infinity;
+  layers[0].x.forEach((_, i) => {
+    let up = 0, down = 0;
+    for (const t of layers) { if (t.stackgroup === 'assets') up += t.y[i] || 0; else down += t.y[i] || 0; }
+    hi = Math.max(hi, up);
+    lo = Math.min(lo, down < 0 ? down : up);
+  });
+  if (!Number.isFinite(hi)) return null;
+  const pad = (hi - lo) * 0.06 || Math.abs(hi) * 0.05 || 1;
+  return [lo >= 0 ? Math.max(0, lo - pad) : lo - pad, hi + pad];
+}
+
+// A bank's or broker's money over time, in a chart window (a click on its name in the broker tables).
+async function mpOpenAccountChart(account) {
+  const { dlg, head, plot, note } = mpChartDialog('mp_account', mpEscapeHtml(MP_BROKER_SHORT_NAMES[account] || account),
+    '<label style="margin-left:12px"><input type="checkbox" id="mp_account_rub"> in RUB</label>');
+  const rubBox = dlg.querySelector('#mp_account_rub');
+  try {
+    await mpEnsureBrokerRows();
+    await mpEnsureExactData(account === 'cash');
+  } catch (error) { note.textContent = error.message; return; }
+  const firstHeld = mpCapitalBrokerRows.findIndex(r => Math.abs(mpAccountFull(account, r)) >= 1);
+  if (firstHeld < 0) { note.textContent = 'No history for this account.'; return; }
+  const rows = mpCapitalBrokerRows.slice(firstHeld);
+  const today = rows[rows.length - 1].day;
+  const color = MP_COLORS.broker[account] || (account === 'real estate' ? MP_COLORS.type.real_estate : '#4a9ff5');
+  let period = '1y';
+  const draw = () => {
+    const rub = rubBox.checked, conv = mpCapitalConverter(rub ? 'RUB' : 'USD');
+    const from = mpPeriodStart(period, rows[0].day, today);
+    const shown = rows.filter(r => r.day >= from);
+    const days = shown.map(r => r.day), full = shown.map(r => conv(r.day, mpAccountFull(account, r)));
+    const parts = mpEstimateLayers(shown.map(r => conv(r.day, mpAccountExact(account, r, true))), full,
+      account === 'cash' ? shown.map(r => conv(r.day, mpAccountKnown(account, r))) : null);
+    const fmt = v => (rub ? `${v < 0 ? '−' : ''}${Math.abs(Math.round(v)).toLocaleString('en-US')} ₽` : `${v < 0 ? '−' : ''}$${Math.abs(Math.round(v)).toLocaleString('en-US')}`);
+    const area = (y, fillcolor, stackgroup = 'assets') => ({ x: days, y, type: 'scatter', mode: 'lines', stackgroup, line: { width: 0, color }, fillcolor, hoverinfo: 'skip' });
+    const layers = [area(parts.solid, color)];
+    if (parts.known) layers.push(area(parts.known, mpFade(color, 0.75)));
+    if (parts.extrapolated) layers.push(area(parts.extrapolated, mpFade(color, 0.45)));
+    if (full.some(v => v < -0.5)) layers.push(area(full.map(v => Math.min(0, v)), color, 'debt'));
+    const first = full[0], last = full[full.length - 1], diff = last - first;
+    const pct = first > 0 ? ` · ${diff >= 0 ? '+' : ''}${(diff / first * 100).toFixed(1)}%` : '';
+    head.innerHTML = `<span style="font-size:2em;font-weight:700">${fmt(last)}</span><span class="${diff >= 0 ? 'pos' : 'neg'}">${diff >= 0 ? '+' : '−'}${fmt(Math.abs(diff))}${pct}</span><span class="muted">over ${period}</span>`;
+    const yRange = mpAccountYRange(layers);
+    Plotly.react(plot, [...layers, { x: days, y: full, type: 'scatter', mode: 'lines', line: { width: 0 }, showlegend: false,
+      text: full.map((v, i) => `${fmt(v)}${Math.max(0, v) - parts.solid[i] > 0.5 ? ` (exact: ${fmt(parts.solid[i])})` : ''}`), hovertemplate: '%{x}: %{text}<extra></extra>' }],
+    Object.assign({}, LAYOUT_BASE, { showlegend: false, hovermode: 'x',
+      xaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', type: 'date', tickangle: -45, range: [days[0], days[days.length - 1]], hoverformat: '%d %b %Y' },
+      yaxis: Object.assign({}, LAYOUT_BASE.yaxis, rub ? { tickformat: ',.0f', ticksuffix: ' ₽' } : { tickformat: '$,.0f' }, yRange ? { range: yRange, autorange: false } : {}),
+      margin: { t: 10, r: 20, b: 60, l: 80 } }), CONFIG);
+    note.textContent = `${parts.known || parts.extrapolated ? 'Faded: estimates. ' : ''}Includes money moved in and out, not only gains.`;
+  };
+  mpBindPeriods(dlg, p => { period = p; draw(); });
+  rubBox.onchange = async () => {
+    if (rubBox.checked && !mpCapitalRub) {
+      note.textContent = 'Loading RUB rates…';
+      try { mpCapitalRub = await mpLoadRubRates(); } catch (error) { rubBox.checked = false; note.textContent = error.message; return; }
+    }
+    draw();
+  };
+  draw();
+}
+
 async function mpRenderCapitalBrokers() {
   const status = document.getElementById('brokers_status');
   const el = document.getElementById('plot_capital_brokers');
   const ccy = document.getElementById('brokers_ccy').value === 'RUB' ? 'RUB' : 'USD';
   if (!mpCapitalBrokerRows) {
     status.textContent = 'Loading…';
-    const { rows, error } = await mpFetchAllRows(() => sb.from('capital_daily_by_account').select('day, accounts, real_estate')
-      .order('day'));
-    if (error) { status.textContent = error.message; return; }
-    mpCapitalBrokerRows = rows;
+    try { await mpEnsureBrokerRows(); } catch (error) { status.textContent = error.message; return; }
   }
   if (ccy === 'RUB' && !mpCapitalRub) {
     status.textContent = 'Loading RUB rates…';
@@ -331,23 +428,13 @@ async function mpRenderCapitalBrokers() {
   const withRe = document.getElementById('brokers_re').checked;
   const mode = document.getElementById('brokers_exact').value;
   const exact = mode !== 'all';
-  if (exact && !mpExactMask) {
-    status.textContent = 'Loading…';
-    try { mpExactMask = await mpLoadExactMask(); } catch (error) { status.textContent = error.message; return; }
-    status.textContent = '';
-  }
   const proven = mode === 'proven' || mode === 'both';
-  if (proven && !mpProvenCash) {
+  if (exact && (!mpExactMask || (proven && !mpProvenCash))) {
     status.textContent = 'Loading…';
-    const cashOn = new Map(rows.map(r => [r.day, Number((r.accounts || {}).cash || 0)]));
-    try { mpProvenCash = await mpLoadProvenCash(day => cashOn.get(day) || 0); } catch (error) { status.textContent = error.message; return; }
+    try { await mpEnsureExactData(proven); } catch (error) { status.textContent = error.message; return; }
     status.textContent = '';
   }
-  const hidden = (a, day) => exact && (mpExactMask[a] || []).some(([f, t]) => f <= day && day < t);
-  const all = (a, r) => Number((r.accounts || {})[a] || 0);
-  const value = (a, r) => (mode === 'all' ? all(a, r)
-    : a === 'cash' && proven && hidden(a, r.day) ? mpProvenCash.strict[r.day] || 0
-    : hidden(a, r.day) ? 0 : all(a, r));
+  const value = (a, r) => (mode === 'all' ? mpAccountFull(a, r) : mpAccountExact(a, r, proven));
   // accounts, the one holding money earliest at the bottom
   const first = new Map();
   rows.forEach((r, i) => Object.entries(r.accounts || {}).forEach(([a, v]) => {
@@ -367,15 +454,14 @@ async function mpRenderCapitalBrokers() {
   // 'both': each bank as its proven part, then what the estimates add on top of it
   // (faded) -- the 4th entry; the full value drives the totals and the debt
   for (const a of accounts) {
-    const full = mode === 'both' ? rows.map(r => conv(r.day, all(a, r))) : null;
+    const full = mode === 'both' ? rows.map(r => conv(r.day, mpAccountFull(a, r))) : null;
     // cash: the middle layer -- what surely happened, at approximate amounts
     const mid = mode === 'both' && a === 'cash'
-      ? rows.map(r => conv(r.day, hidden(a, r.day) ? mpProvenCash.events[r.day] || 0 : all(a, r))) : null;
+      ? rows.map(r => conv(r.day, mpAccountKnown(a, r))) : null;
     series.push([MP_BROKER_SHORT_NAMES[a] || a, color(a), rows.map(r => conv(r.day, value(a, r))), full, mid]);
   }
   const top = ([, , ys, full], i) => (full ? full[i] : ys[i]);
   const totals = days.map((_, i) => series.reduce((s, x) => s + Math.max(0, top(x, i)), 0));
-  const fade = (c, alpha) => (/^#[0-9a-f]{6}$/i.test(c) ? `rgba(${parseInt(c.slice(1, 3), 16)}, ${parseInt(c.slice(3, 5), 16)}, ${parseInt(c.slice(5, 7), 16)}, ${alpha})` : c);
   const money = pct ? '%{y:.1f}%' : ccy === 'RUB' ? '%{y:,.0f} ₽' : '$%{y:,.0f}';
   const area = (label, c, ys, group, legend = true, name = label, fill = c) => ({
     x: days, y: ys, name, type: 'scatter', mode: 'lines', stackgroup: group, showlegend: legend,
@@ -385,18 +471,12 @@ async function mpRenderCapitalBrokers() {
   // positive totals stacked up; a bank below zero as a whole stacked down
   const traces = [];
   // solid: exact / proven; half-faded: events known at approximate amounts; faded: extrapolated
-  const pos = y => Math.max(0, y);
   for (const [label, c, ys, full, mid] of series) {
     traces.push(area(label, c, ys.map(share), 'assets'));
     if (!full) continue;
-    const m = mid ? mid.map((v, i) => Math.min(pos(full[i]), Math.max(pos(v), pos(ys[i])))) : ys.map(pos);
-    const layer = (lo, hi) => hi.map((h, i) => share(Math.max(0, h - lo[i]), i));
-    if (mid && m.some((v, i) => v - pos(ys[i]) > 0.5)) {
-      traces.push(area(label, c, layer(ys.map(pos), m), 'assets', false, `${label} (known, approximate amount)`, fade(c, 0.75)));
-    }
-    if (full.some((f, i) => pos(f) - m[i] > 0.5)) {
-      traces.push(area(label, c, layer(m, full.map(pos)), 'assets', false, `${label} (extrapolated)`, fade(c, 0.45)));
-    }
+    const parts = mpEstimateLayers(ys, full, mid);
+    if (parts.known) traces.push(area(label, c, parts.known.map(share), 'assets', false, `${label} (known, approximate amount)`, mpFade(c, 0.75)));
+    if (parts.extrapolated) traces.push(area(label, c, parts.extrapolated.map(share), 'assets', false, `${label} (extrapolated)`, mpFade(c, 0.45)));
   }
   if (!pct) {
     for (const [label, c, ys, full] of series) {

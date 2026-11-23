@@ -108,32 +108,54 @@ const MP_GOLD_FUNDS = [{ fund: 'TGLD', weight: 1 }];
 // (60.3% by weight) and STOXX Europe 600 (14.2%). The weight: what the broad fund holds of this fund's papers.
 const MP_INDEX_FUNDS = new Set(['CSPX', 'VUAA', 'SXR8', 'VOO', 'SPY', 'IVV', 'TSPX', 'XSX6']);
 const MP_BROAD_FUNDS = ['VWRA', 'VWCE'];   // one fund, two listings: one list of holdings
+// The window a chart opens in (a paper's, a currency's, a bank's): title, period buttons, the controls given,
+// a headline, the plot, a note. Ids are `${prefix}_head`, `_chart`, `_note`. Opened before anything is drawn
+// (Plotly measures a closed dialog as empty); removed however it's closed.
+function mpChartDialog(prefix, titleHtml, controlsHtml = '') {
+  const dlg = document.createElement('dialog');
+  dlg.style.cssText = 'background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:16px 18px;min-width:320px;width:min(94vw,1400px)';
+  dlg.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><b>${titleHtml}</b><button type="button" data-act="close">✕</button></div>
+    <div class="form-row" style="gap:6px;align-items:center">${MP_PRICE_PERIODS.map(([l]) => `<button class="btn${l === '1y' ? ' primary' : ''}" type="button" data-p="${l}">${l}</button>`).join('')}
+      ${controlsHtml}</div>
+    <div id="${prefix}_head" style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap"></div>
+    <div id="${prefix}_chart" style="height:min(60vh,600px)"></div>
+    <p class="note" style="margin:0" id="${prefix}_note">Loading…</p>
+  </div>`;
+  document.body.appendChild(dlg);
+  dlg.addEventListener('close', () => dlg.remove());
+  dlg.showModal();
+  dlg.querySelector('[data-act=close]').onclick = () => dlg.close();
+  return { dlg, head: dlg.querySelector(`#${prefix}_head`), plot: dlg.querySelector(`#${prefix}_chart`), note: dlg.querySelector(`#${prefix}_note`) };
+}
+// The period buttons of such a window: the one pressed lit, onPick(its label).
+function mpBindPeriods(dlg, onPick) {
+  dlg.querySelectorAll('[data-p]').forEach(b => b.onclick = () => {
+    dlg.querySelectorAll('[data-p]').forEach(x => x.classList.toggle('primary', x === b));
+    onPick(b.dataset.p);
+  });
+}
+// The first day of a period counted back from `last`; "all": `first`.
+function mpPeriodStart(period, first, last) {
+  const spec = MP_PRICE_PERIODS.find(([l]) => l === period)?.[1];
+  if (spec == null) return first;
+  if (spec === 'ytd') return `${last.slice(0, 4) - 1}-12-31`;
+  const d = new Date(`${last}T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() - spec); return d.toISOString().slice(0, 10);
+}
+
 async function mpOpenPriceDialog(asset, title, opts = {}) {
   if (asset === 'XAU' && !opts.via?.length) opts = { ...opts, via: MP_GOLD_FUNDS };
   const dealTickers = [asset, ...(opts.also || [])];
-  const dlg = document.createElement('dialog');
-  dlg.style.cssText = 'background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:16px 18px;min-width:320px;width:min(94vw,1400px)';
   const numbered = mpCodeLike(asset);   // a number or an ISIN: its name instead
   if (numbered && MP_SHORT_NAMES[asset]) title = MP_SHORT_NAMES[asset];
-  dlg.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><b><span id="mp_price_title">${mpEscapeHtml(title)}</span> <span id="mp_price_meta" style="color:#8b949e;font-weight:normal">${title !== asset && !numbered && !opts.currency ? `· ${mpEscapeHtml(dealTickers.join(' + '))}` : ''}</span></b><button type="button" data-act="close">✕</button></div>
-    <div class="form-row" style="gap:6px;align-items:center">${MP_PRICE_PERIODS.map(([l]) => `<button class="btn${l === '1y' ? ' primary' : ''}" type="button" data-p="${l}">${l}</button>`).join('')}
-      <label style="margin-left:12px" id="mp_price_ccy_box"><input type="checkbox" id="mp_price_usd"> in USD</label>
+  const { dlg, note } = mpChartDialog('mp_price',
+    `<span id="mp_price_title">${mpEscapeHtml(title)}</span> <span id="mp_price_meta" style="color:#8b949e;font-weight:normal">${title !== asset && !numbered && !opts.currency ? `· ${mpEscapeHtml(dealTickers.join(' + '))}` : ''}</span>`,
+    `<label style="margin-left:12px" id="mp_price_ccy_box"><input type="checkbox" id="mp_price_usd"> in USD</label>
       <label style="margin-left:12px;display:none" id="mp_price_via_box"><input type="checkbox" id="mp_price_via" checked> buys through funds</label>
       <label style="margin-left:12px;display:none" id="mp_price_pay_box"><input type="checkbox" id="mp_price_pay" checked> payouts</label>
       <label style="margin-left:12px;display:none" id="mp_price_inv_box"><input type="checkbox" id="mp_price_inv"> <span></span></label>
       <label style="margin-left:12px;display:none" id="mp_price_rate_box"><input type="checkbox" id="mp_price_rate" checked> <span></span></label>
-      <label style="margin-left:12px;display:none" id="mp_price_avg_box"><input type="checkbox" id="mp_price_avg_all"> avg over all time</label></div>
-    <div id="mp_price_head" style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap"></div>
-    <div id="mp_price_chart" style="height:min(60vh,600px)"></div>
-    <p class="note" style="margin:0" id="mp_price_note">Loading…</p>
-  </div>`;
-  document.body.appendChild(dlg);
-  // opened before the chart is drawn (Plotly measures a closed dialog as empty); removed however it's closed
-  dlg.addEventListener('close', () => dlg.remove());
-  dlg.showModal();
-  dlg.querySelector('[data-act=close]').onclick = () => dlg.close();
-  const note = dlg.querySelector('#mp_price_note');
+      <label style="margin-left:12px;display:none" id="mp_price_avg_box"><input type="checkbox" id="mp_price_avg_all"> avg over all time</label>`);
   // the company, its country (a flag) and sector from the funds' lists (securities), instead of the
   // ticker again: "NVDA · NVIDIA Corp 🇺🇸 · Information Technology"
   let ccyReady = () => {};
@@ -320,10 +342,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     if (!pol.length) { note.textContent = 'No Fed rates stored yet.'; return; }
     const today = new Date().toISOString().slice(0, 10);
     const drawFed = period => {
-      const spec = MP_PRICE_PERIODS.find(([l]) => l === period)?.[1];
-      let from = pol[0].day;
-      if (spec === 'ytd') from = `${today.slice(0, 4) - 1}-12-31`;
-      else if (spec != null) { const d = new Date(`${today}T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() - spec); from = d.toISOString().slice(0, 10); }
+      const from = mpPeriodStart(period, pol[0].day, today);
       const i0 = Math.max(0, pol.findLastIndex(r => r.day <= from));
       const ps = pol.slice(i0);
       const xs = [...ps.map((r, i) => (i === 0 && r.day < from ? from : r.day)), today], ys = [...ps.map(r => r.rate), ps[ps.length - 1].rate];
@@ -338,10 +357,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         + `<span style="color:#8b949e">${first === last ? 'unchanged' : `${last > first ? '▲' : '▼'} ${Math.abs(last - first).toFixed(2)} pp`} over ${mpEscapeHtml(period)}</span>`;
       note.textContent = `Fed rate (the BIS's, a month's as at its end; the middle of the target range): ${ps[ps.length - 1].day.slice(0, 7)} ${last}%`;
     };
-    dlg.querySelectorAll('[data-p]').forEach(b => b.onclick = () => {
-      dlg.querySelectorAll('[data-p]').forEach(x => x.classList.toggle('primary', x === b));
-      drawFed(b.dataset.p);
-    });
+    mpBindPeriods(dlg, drawFed);
     drawFed('1y');
     return;
   }
@@ -508,16 +524,13 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     } catch (err) { console.warn('fund deals:', err); }
   }
   const usdBox = dlg.querySelector('#mp_price_usd');
+  // gold trades in dollars: opens in USD whatever most of the buys were paid in (the box gets that currency back)
+  if (!rateNote && ['XAU', 'XAUT'].includes(asset)) usdBox.checked = true;
   if (ccy === 'USD' || rateNote) dlg.querySelector('#mp_price_ccy_box').style.display = 'none';   // a rate: nothing to switch
   // the rate of a day: the last one on or before it
   const rateOn = day => { let lo = 0, hi = fx.length - 1, r = null; while (lo <= hi) { const m = (lo + hi) >> 1; if (fx[m].day <= day) { r = Number(fx[m].usd_per_unit); lo = m + 1; } else hi = m - 1; } return r; };
   const today = prices[prices.length - 1].day;
-  const startOf = p => {
-    const spec = MP_PRICE_PERIODS.find(([l]) => l === p)?.[1];
-    if (spec === null) return prices[0].day;
-    if (spec === 'ytd') return `${today.slice(0, 4) - 1}-12-31`;
-    const d = new Date(`${today}T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() - spec); return d.toISOString().slice(0, 10);
-  };
+  const startOf = p => mpPeriodStart(p, prices[0].day, today);
   let period = '1y';
   const draw = () => {
     const usd = ccy === 'USD' || usdBox.checked;
@@ -752,11 +765,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         + `<span style="color:#8b949e">over ${mpEscapeHtml(period)}</span>`;
     } else head.innerHTML = '';
   };
-  dlg.querySelectorAll('[data-p]').forEach(b => b.onclick = () => {
-    period = b.dataset.p;
-    dlg.querySelectorAll('[data-p]').forEach(x => x.classList.toggle('primary', x === b));
-    draw();
-  });
+  mpBindPeriods(dlg, p => { period = p; draw(); });
   usdBox.onchange = draw;
   // the funds' deals marked as this paper's: shown or not (remembered); the box only when there are any
   const viaBox = dlg.querySelector('#mp_price_via');

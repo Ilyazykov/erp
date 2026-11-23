@@ -192,9 +192,10 @@ const LAYOUT_BASE = {
   paper_bgcolor: '#0d1117',
   plot_bgcolor:  '#0d1117',
   font:  { color: '#c9d1d9', size: 11 },
-  xaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', tickformat: '%Y-%m',
-            tickangle: -45, dtick: 'M3' },
-  yaxis: { gridcolor: '#1e2830', linecolor: '#1e2830' },
+  // getters: a fresh object for every chart. Plotly writes autorange and range into the axis it's given;
+  // on a shared one that autorange reached every later chart and overrode the period it asked for
+  get xaxis() { return { gridcolor: '#1e2830', linecolor: '#1e2830', tickformat: '%Y-%m', tickangle: -45, dtick: 'M3' }; },
+  get yaxis() { return { gridcolor: '#1e2830', linecolor: '#1e2830' }; },
   legend: { bgcolor: '#13191f', bordercolor: '#1e2830', borderwidth: 1 },
   hovermode: 'x unified',
   hoverlabel: { bgcolor: '#13191f', bordercolor: '#1e2830', font: { color: '#c9d1d9' } },
