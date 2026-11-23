@@ -1404,7 +1404,7 @@ document.getElementById('mp_any_csv_upload').addEventListener('click', () => {
 // 4 real transactions per 30 days over the 90 days before its newest record --
 // else monthly.
 const MP_ACCOUNT_SCHEDULE = {
-  UniCredit: 'closed', Finuslugi: 'closed', YooMoney: 'closed', cash: 365, Wise: 365, 'Credo Bank': 365, 'TBC Bank': 30,
+  UniCredit: 'closed', Finuslugi: 'closed', YooMoney: 'closed', QIWI: 'closed', cash: 365, Wise: 365, 'Credo Bank': 365, 'TBC Bank': 30,
   IBKR: 30, Freedom24: 30, Raiffeisen: 30, 'Ziraat Bank': 30, 'Yandex Bank': 365,
   Bybit: 30, 'Crypto.com': 30, Telegram: 365, Binance: 365,
 };
@@ -1426,7 +1426,6 @@ const mpPartPeriod = p => {
 const MP_CHECK_HISTORY = {
   KoronaPay: 'Korona app → «Переводы»: the transfers from the cards *3263 (Pochta Bank), *2372 (QIWI), T-Bank — where the roubles went (TODO.md 35).',
   Unistream: 'Unistream: the transfer of 06.03.2023 (81 508 ₽ from T-Bank) — how many lira came (TODO.md 35).',
-  QIWI: 'QIWI: the bank is liquidated — try Qplus (qplus.ru) with the old phone number for the old history (TODO.md 35).',
 };
 const MP_ACCOUNT_SOURCE = {
   Revolut: 'Revolut app → avatar → Documents & statements → by type: account, Flexible Cash Funds, savings, stocks, crypto, gold -- CSV each. Upload as is.',
