@@ -135,12 +135,14 @@ function mpBindPeriods(dlg, onPick) {
     onPick(b.dataset.p);
   });
 }
-// Periods longer than the history would all show the same chart: greyed out, "all" stays. Returns the
-// period to open with: `wanted`, or "all" when the history is shorter than that.
+// Periods longer than the history would all show the same chart: the first that covers all of it stays,
+// the longer ones are greyed out ("all" and YTD always work). Returns the period to open with: `wanted`, or
+// "all" when that one is greyed out.
 function mpLimitPeriods(dlg, first, last, wanted = '1y') {
-  let period = wanted;
+  let period = wanted, covered = false;
   dlg.querySelectorAll('[data-p]').forEach(b => {
-    if (b.dataset.p === 'all' || mpPeriodStart(b.dataset.p, first, last) >= first) return;
+    if (b.dataset.p === 'all' || b.dataset.p === 'YTD' || mpPeriodStart(b.dataset.p, first, last) >= first) return;
+    if (!covered) { covered = true; return; }
     b.disabled = true;
     b.style.opacity = '0.35';
     b.style.cursor = 'default';
