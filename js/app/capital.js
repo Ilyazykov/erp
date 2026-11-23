@@ -491,12 +491,15 @@ function mpStackLayerAt(layers, i, y) {
 // A bank's or broker's money over time, in a chart window (a click on its name in the broker tables);
 // MP_ALL_ACCOUNTS (a click on Total): all of them together, by currency too.
 const MP_SERIES_RETRY_MS = 15000;
+// An account's own currency, where it's neither USD nor RUB (those have the chart's default and "in RUB")
+const MP_ACCOUNT_HOME = { Raiffeisen: 'RSD', UniCredit: 'RSD', 'Bank of Cyprus': 'EUR', Revolut: 'EUR', Wise: 'EUR', 'Credo Bank': 'GEL', 'TBC Bank': 'GEL', 'Ziraat Bank': 'TRY' };
 async function mpOpenAccountChart(account) {
   const { dlg, head, plot, note } = mpChartDialog('mp_account', account === MP_ALL_ACCOUNTS ? 'All banks and brokers' : mpEscapeHtml(MP_BROKER_SHORT_NAMES[account] || account),
     `<label style="margin-left:12px"><input type="checkbox" id="mp_account_rub"> in RUB</label>
+     ${MP_ACCOUNT_HOME[account] ? `<label style="margin-left:12px"><input type="checkbox" id="mp_account_home"> in ${MP_ACCOUNT_HOME[account]}</label>` : ''}
      <label style="margin-left:12px;display:none" id="mp_account_fade_box"><input type="checkbox" id="mp_account_fade"> grey out estimates</label>
      <label style="margin-left:12px;display:none" id="mp_account_pct_box"><input type="checkbox" id="mp_account_pct"> as % of the total</label>`);
-  const rubBox = dlg.querySelector('#mp_account_rub');
+  const rubBox = dlg.querySelector('#mp_account_rub'), homeBox = dlg.querySelector('#mp_account_home'), homeCode = MP_ACCOUNT_HOME[account];
   // estimates greyed out or drawn like the rest (remembered); the box where there are any
   const fadeBox = dlg.querySelector('#mp_account_fade');
   try { fadeBox.checked = localStorage.getItem('mp_account_fade') !== '0'; } catch { fadeBox.checked = true; }
@@ -560,8 +563,8 @@ async function mpOpenAccountChart(account) {
     const code = view.byCurrency ? String(t.legendgroup).split(' ')[0] : null;
     const day = new Date(view.ms[i]).toISOString().slice(0, 10);
     let nativeText = '';
-    if (code && !['USD', 'other', 'Altcoins'].includes(code) && !(view.rub && code === 'RUB')) {
-      const fiat = mpIsFiatLabel(t.legendgroup), rate = mpUnitPriceOn(code, fiat, mpDayNumber(day));
+    if (code && !['other', 'Altcoins'].includes(code) && code !== view.shown) {
+      const fiat = mpIsFiatLabel(t.legendgroup), rate = code === 'USD' ? 1 : mpUnitPriceOn(code, fiat, mpDayNumber(day));
       if (rate) nativeText = ` · ${mpNativeAmount(value / view.conv(day, 1) / rate, code, fiat)}`;
     }
     tip.innerHTML = `${date}<br><span style="color:${t.fillcolor}">■</span> <b>${mpEscapeHtml(name)}: ${view.fmt(value)}</b>${nativeText}`
@@ -575,7 +578,11 @@ async function mpOpenAccountChart(account) {
   let period = '1y';
   const draw = () => {
     hideTip();
-    const rub = rubBox.checked, conv = mpCapitalConverter(rub ? 'RUB' : 'USD'), fadeOn = fadeBox.checked;
+    const rub = rubBox.checked, home = !!homeBox?.checked, fadeOn = fadeBox.checked;
+    const shownCode = rub ? 'RUB' : home ? homeCode : 'USD', unit = rub ? '₽' : home ? homeCode : null;
+    // the account's own currency at each day's rate (before the first known rate, at that first one)
+    const conv = home ? (d, usd) => Number(usd || 0) / (mpUnitPriceOn(homeCode, true, mpDayNumber(d)) || mpUnitPrices.get(`${homeCode}|true`).prices[0])
+      : mpCapitalConverter(rub ? 'RUB' : 'USD');
     // a period is the whole period, at zero before the account's first money; "all" starts at that first money
     const from = mpPeriodStart(period, rows[0].day, today);
     const shown = mpCapitalBrokerRows.filter(r => r.day >= from);
@@ -586,7 +593,7 @@ async function mpOpenAccountChart(account) {
     const cents = Math.max(...full.map(Math.abs)) < 100;
     const tiny = cents ? 0.005 : 0.5;
     const amount = v => Math.abs(v).toLocaleString('en-US', cents ? { minimumFractionDigits: 2, maximumFractionDigits: 2 } : { maximumFractionDigits: 0 });
-    const fmt = v => (rub ? `${v < 0 ? '−' : ''}${amount(v)} ₽` : `${v < 0 ? '−' : ''}$${amount(v)}`);
+    const fmt = v => (unit ? `${v < 0 ? '−' : ''}${amount(v)} ${unit}` : `${v < 0 ? '−' : ''}$${amount(v)}`);
     const area = (y, fillcolor, stackgroup = 'assets', extra = {}) => ({ x: days, y, type: 'scatter', mode: 'lines', stackgroup,
       // (the Total in steps: a slope between a faded day and a solid one would draw a spike at the first cash count)
       line: { width: 0, color: fillcolor, shape: account === MP_ALL_ACCOUNTS ? 'hv' : 'linear' }, fillcolor, hoverinfo: 'skip', showlegend: false, ...extra });
@@ -622,7 +629,7 @@ async function mpOpenAccountChart(account) {
       if (fadeOn && parts.extrapolated) layers.push(area(parts.extrapolated, mpFade(color, 0.45), 'assets', { ...group, name: `${own} (estimate)` }));
       if (full.some(v => v < -0.5)) layers.push(area(full.map(v => Math.min(0, v)), color, 'debt', { ...group, name: own }));
     }
-    view = { ms: days.map(d => Date.parse(`${d}T00:00:00Z`)), full, fmt, conv, rub, byCurrency: !!series };
+    view = { ms: days.map(d => Date.parse(`${d}T00:00:00Z`)), full, fmt, conv, shown: shownCode, byCurrency: !!series };
     const first = full[0], last = full[full.length - 1], diff = last - first;
     const pct = first > 0 ? ` · ${diff >= 0 ? '+' : ''}${(diff / first * 100).toFixed(1)}%` : '';
     head.innerHTML = `<span style="font-size:2em;font-weight:700">${fmt(last)}</span><span class="${diff >= 0 ? 'pos' : 'neg'}">${diff >= 0 ? '+' : '−'}${fmt(Math.abs(diff))}${pct}</span><span class="muted">over ${period}</span>`;
@@ -641,7 +648,7 @@ async function mpOpenAccountChart(account) {
     Plotly.react(plot, drawn,
     Object.assign({}, LAYOUT_BASE, { showlegend: layers.some(t => t.showlegend), hovermode: false, shapes,
       xaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', type: 'date', tickangle: -45, range: [days[0], days[days.length - 1]] },
-      yaxis: Object.assign({}, LAYOUT_BASE.yaxis, rub ? { tickformat: cents ? ',.2~f' : ',.0f', ticksuffix: ' ₽' } : { tickformat: cents ? '$,.2~f' : '$,.0f' }, yRange ? { range: yRange, autorange: false } : {},
+      yaxis: Object.assign({}, LAYOUT_BASE.yaxis, unit ? { tickformat: cents ? ',.2~f' : ',.0f', ticksuffix: ` ${unit}` } : { tickformat: cents ? '$,.2~f' : '$,.0f' }, yRange ? { range: yRange, autorange: false } : {},
         pctOn ? { tickformat: '.0f', ticksuffix: '%', tickprefix: '', range: [0, 100], autorange: false } : {}),
       margin: { t: 10, r: 20, b: 60, l: 80 } }), CONFIG);
     note.textContent = `${series ? '' : 'Database is recounting: currencies will appear when it ends. '}${!fadeOn ? '' : totalEstimated ? 'Faded: estimates. ' : parts.known || parts.extrapolated ? `${series ? 'Shaded' : 'Faded'}: estimates. ` : ''}Includes money moved in and out, not only gains.`;
@@ -649,7 +656,17 @@ async function mpOpenAccountChart(account) {
   mpBindPeriods(dlg, p => { period = p; draw(); });
   pctBox.onchange = () => { mpSave('mp_account_pct', pctBox.checked ? '1' : '0'); draw(); };
   fadeBox.onchange = () => { mpSave('mp_account_fade', fadeBox.checked ? '1' : '0'); draw(); };
+  if (homeBox) homeBox.onchange = async () => {
+    if (homeBox.checked) {
+      rubBox.checked = false;
+      note.textContent = `Loading ${homeCode} rates…`;
+      await mpLoadUnitPrices([{ label: mpCurrencyLabel(homeCode) }]).catch(() => {});
+      if (!mpUnitPrices.get(`${homeCode}|true`)?.prices.length) { homeBox.checked = false; note.textContent = `No ${homeCode} rates.`; return; }
+    }
+    draw();
+  };
   rubBox.onchange = async () => {
+    if (rubBox.checked && homeBox) homeBox.checked = false;
     if (rubBox.checked && !mpCapitalRub) {
       note.textContent = 'Loading RUB rates…';
       try { mpCapitalRub = await mpLoadRubRates(); } catch (error) { rubBox.checked = false; note.textContent = error.message; return; }
