@@ -20,17 +20,18 @@ function mpTxNamed(description, note) {
   const name = /^PLAYSTATION/i.test(shop) ? 'PlayStation' : /^STEAM/i.test(shop) ? 'Steam'
     : /APPLE\.COM\/BILL|ITUNES\.COM/i.test(shop) ? 'Apple' : shop;
   const game = (name === 'PlayStation' || name === 'Steam') && !!note;
-  return { text: game ? note : name, full: description, noteLine: game ? '' : note || '' };
+  return { text: game ? note : name, full: description, noteLine: game ? '' : note || '', store: ['Apple', 'PlayStation', 'Steam'].includes(name) };
 }
-// Apple's charges by what they paid for (its purchase history, imported as receipts): "YouTube Premium", a subscription.
-async function mpTxAddAppleNames(rows) {
-  const apple = rows.filter(r => r.xid && r.text === 'Apple');
-  const ids = [...new Set(apple.map(r => r.xid))];
+// Apple's and the game stores' charges by what they paid for (their purchase history, imported as receipts):
+// "YouTube Premium", a subscription; a game's name over a note that guessed it.
+async function mpTxAddStoreNames(rows) {
+  const bought = rows.filter(r => r.xid && r.store);
+  const ids = [...new Set(bought.map(r => r.xid))];
   if (!ids.length) return;
   const orders = [];
   for (let i = 0; i < ids.length; i += 10) {
     const { data, error } = await sb.from('receipts_active').select('id, tx_source, tx_external_id')
-      .eq('source', 'apple').in('tx_external_id', ids.slice(i, i + 10));
+      .in('source', ['apple', 'receipt_csv']).in('tx_external_id', ids.slice(i, i + 10));
     if (error) return;
     orders.push(...data);
   }
@@ -38,7 +39,7 @@ async function mpTxAddAppleNames(rows) {
   const { data: lines, error } = await sb.from('receipt_lines').select('receipt_id, name_printed, note, is_other, line_no')
     .in('receipt_id', orders.map(o => o.id)).order('line_no');
   if (error) return;
-  for (const r of apple) {
+  for (const r of bought) {
     const order = orders.find(o => o.tx_source === r.src && o.tx_external_id === r.xid);
     const items = (lines || []).filter(l => l.receipt_id === order?.id && !l.is_other);
     if (!items.length) continue;
@@ -261,7 +262,7 @@ function mpAccountTxFeed(dlg, plot, account, startDisplay = null) {
       }
       sources ||= mpTxSources(account, filter, wallets);
       const rows = await mpTxNext(sources, MP_TX_STEP);
-      await mpTxAddAppleNames(rows).catch(() => {});   // without them: "Apple"
+      await mpTxAddStoreNames(rows).catch(() => {});   // without them: "Apple", "PlayStation"
       for (let asked; asked !== display;) { asked = display; await mpTxEnsureRates(rows, asked); }
       if (mine !== ticket) return;
       shownRows.push(...rows);
