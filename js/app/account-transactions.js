@@ -128,6 +128,35 @@ function mpTxChainOrder(rows) {
   return done;
 }
 
+// An exchange's two legs (the same line in two currencies, as in the currency_exchanges view) side by side:
+// the currency sold first, then the one bought. Only moved where neither account's balance needs the old order.
+function mpTxPairExchanges(line) {
+  const key = r => `${r.account}|${String(r.src).split(':')[0]}|${String(r.full || '').replace(/\s+/g, '')}`;
+  const ms = r => Date.parse(r.at);
+  const used = new Set();
+  for (const sold of line.filter(r => r.chain && r.amount < 0 && r.category === 'Currency exchange')) {
+    const legs = line.filter(r => !used.has(r) && r.chain && r.amount > 0 && r.unit !== sold.unit && key(r) === key(sold));
+    if (!legs.length) continue;
+    const bought = legs.reduce((a, b) => (Math.abs(ms(b) - ms(sold)) < Math.abs(ms(a) - ms(sold)) ? b : a));
+    used.add(bought);
+    const from = line.indexOf(sold), to = line.indexOf(bought);
+    if (from < to) {
+      // spending later is always covered
+      line.splice(from, 1);
+      line.splice(line.indexOf(bought), 0, sold);
+      continue;
+    }
+    const between = line.slice(to + 1, from);
+    if (!between.some(r => r.chain === sold.chain && r.amount > 0)) {
+      line.splice(from, 1);
+      line.splice(to, 0, sold);
+    } else if (!between.some(r => r.chain === bought.chain && r.amount < 0)) {
+      line.splice(to, 1);
+      line.splice(line.indexOf(sold) + 1, 0, bought);
+    }
+  }
+}
+
 // A day's rows, newest first. A deal stands next to its money (same account, currency and sum):
 // the sale before the money it brought, the purchase after the money it took.
 function mpTxArrangeDay(rows) {
@@ -139,6 +168,7 @@ function mpTxArrangeDay(rows) {
     const ordered = mpTxChainOrder(places.map(i => line[i]));
     places.forEach((i, k) => { line[i] = ordered[k]; });
   }
+  mpTxPairExchanges(line);
   const before = new Map(), after = new Map(), alone = [];
   const taken = new Set();
   for (const d of rows.filter(isDeal)) {
