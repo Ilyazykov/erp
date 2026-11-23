@@ -36,7 +36,7 @@ async function mpTxAddStoreNames(rows) {
     orders.push(...data);
   }
   if (!orders.length) return;
-  const { data: lines, error } = await sb.from('receipt_lines').select('receipt_id, name_printed, note, is_other, line_no')
+  const { data: lines, error } = await sb.from('receipt_lines').select('receipt_id, name_printed, note, is_other, line_no, unit_price_list, line_total')
     .in('receipt_id', orders.map(o => o.id)).order('line_no');
   if (error) return;
   for (const r of bought) {
@@ -45,6 +45,9 @@ async function mpTxAddStoreNames(rows) {
     if (!items.length) continue;
     r.text = items.slice(0, 2).map(l => l.name_printed).join(', ') + (items.length > 2 ? ` +${items.length - 2}` : '');
     if (items.some(l => /^(\d{1,2} [A-Za-z]+\.? \d{4} - |Renews|Renewed|Expires|Expired)/.test(l.note || ''))) r.type = 'subscription';
+    // bought on sale: the list price is on the receipt
+    const full = items.reduce((s, l) => s + Number(l.unit_price_list ?? l.line_total), 0), paid = items.reduce((s, l) => s + Number(l.line_total), 0);
+    if (full > paid + 0.005) r.saleLine = `−${Math.round((1 - paid / full) * 100)}% from ${full.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${r.unit}`;
   }
 }
 
@@ -244,7 +247,7 @@ function mpTxRowHtml(r, withAccount, display) {
   const right = r.amount != null
     ? `<span class="${r.amount < 0 ? 'neg' : 'pos'}">${r.approx ? '≈ ' : ''}${r.amount < 0 ? '−' : '+'}${shown(r.amount, r.coin ? 8 : 2)}</span>`
     : `<span>${r.approx ? '≈ ' : ''}${r.qty < 0 ? '−' : ''}${number(r.qty, 8)}${r.price ? ` @ ${shown(r.price, 4)}` : ''}</span>`;
-  const sub = [r.type, r.noteLine, withAccount ? MP_BROKER_SHORT_NAMES[r.account] || r.account : ''].filter(Boolean).join(' · ');
+  const sub = [r.type, r.saleLine, r.noteLine, withAccount ? MP_BROKER_SHORT_NAMES[r.account] || r.account : ''].filter(Boolean).join(' · ');
   // (a deal or a coin move has no spending category: the grey mark, to keep the column)
   return `<div class="mp-tx-row${r.approx ? ' approx' : ''}"><span title="${mpEscapeHtml(r.category || '')}">${mpExpDot(r.meta || mpExpMeta())}</span><div class="mp-tx-body"><div class="mp-tx-main"><span class="mp-tx-name" title="${mpEscapeHtml(r.full || r.text)}">${mpEscapeHtml(r.text)}</span>${right}</div>${sub ? `<div class="mp-tx-sub">${mpEscapeHtml(sub)}</div>` : ''}</div></div>`;
 }
