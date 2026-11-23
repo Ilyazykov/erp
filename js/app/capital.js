@@ -387,8 +387,11 @@ async function mpAccountByLabel(account) {
   const byLabel = new Map();
   for (const p of parts) {
     const label = mpCurrencySliceLabel(p);
-    if (!byLabel.has(label)) byLabel.set(label, new Map());
+    if (!byLabel.has(label)) byLabel.set(label, Object.assign(new Map(), { codes: new Set(), tickers: new Set() }));
     const m = byLabel.get(label);
+    // what the layer is made of: the transactions feed filters by it
+    m.codes.add(p.own_currency);
+    m.tickers.add(p.ticker);
     p.days.forEach((d, i) => m.set(d, (m.get(d) || 0) + Number(p.amounts[i]) * p.value_usd));
   }
   return byLabel;
@@ -421,7 +424,8 @@ async function mpAccountCurrencySeries(account) {
   for (const r of ranked) { if (named.size >= 8) break; named.add(r); }
   const fold = (list, label) => {
     if (!list.length) return [];
-    const byDay = new Map(), estByDay = new Map();
+    const byDay = Object.assign(new Map(), { codes: new Set(list.flatMap(r => [...r.byDay.codes])), tickers: new Set(list.flatMap(r => [...r.byDay.tickers])) });
+    const estByDay = new Map();
     for (const r of list) {
       for (const [d, v] of r.byDay) add(byDay, d, v);
       for (const [d, v] of r.estByDay) add(estByDay, d, v);
@@ -498,6 +502,7 @@ async function mpOpenAccountChart(account) {
   // stretched to 100% (remembered); the box where there are several layers
   const pctBox = dlg.querySelector('#mp_account_pct');
   try { pctBox.checked = localStorage.getItem('mp_account_pct') === '1'; } catch { /* no storage */ }
+  const txFeed = mpAccountTxFeed(dlg, plot, account);
   try {
     await mpEnsureBrokerRows();
     await mpEnsureExactData(account === 'cash');
@@ -520,15 +525,30 @@ async function mpOpenAccountChart(account) {
   let view = null;
   const hideTip = () => { tip.style.display = 'none'; };
   plot.addEventListener('mouseleave', hideTip);
-  plot.addEventListener('mousemove', ev => {
+  // the layer under the cursor, if any
+  const layerAt = ev => {
     const fl = plot._fullLayout;
-    if (!view || !fl || ev.buttons) { hideTip(); return; }
+    if (!view || !fl) return null;
     const box = plot.getBoundingClientRect(), px = ev.clientX - box.left - fl._size.l, py = ev.clientY - box.top - fl._size.t;
-    if (px < 0 || py < 0 || px > fl._size.w || py > fl._size.h) { hideTip(); return; }
+    if (px < 0 || py < 0 || px > fl._size.w || py > fl._size.h) return null;
     const i = mpDayIndexAt(view.ms, fl.xaxis.p2l(px), account === MP_ALL_ACCOUNTS);
     const shownLayers = plot.data.filter(t => t.stackgroup && t.visible !== 'legendonly');
     const t = mpStackLayerAt(shownLayers, i, fl.yaxis.p2l(py));
-    if (!t) { hideTip(); return; }
+    return t ? { i, t, shownLayers } : null;
+  };
+  // a click (not a zoom drag) on a colour: the feed shows that currency. On window: Plotly covers the page while dragging
+  plot.addEventListener('mousedown', down => {
+    if (down.target.closest('.modebar, .legend')) return;
+    window.addEventListener('mouseup', up => {
+      if (Math.hypot(up.clientX - down.clientX, up.clientY - down.clientY) > 4 || !view?.byCurrency) return;
+      const layer = series.find(c => c.label === layerAt(up)?.t.legendgroup);
+      if (layer) txFeed.toggle(layer);
+    }, { capture: true, once: true });
+  });
+  plot.addEventListener('mousemove', ev => {
+    const hit = ev.buttons ? null : layerAt(ev);
+    if (!hit) { hideTip(); return; }
+    const { i, t, shownLayers } = hit;
     const same = shownLayers.filter(x => x.legendgroup === t.legendgroup && x.stackgroup === t.stackgroup);
     // (customdata: a layer's money, its y being a share when stretched to 100%)
     const value = t.customdata[i], whole = same.reduce((s, x) => s + (x.customdata[i] || 0), 0), total = view.full[i];
