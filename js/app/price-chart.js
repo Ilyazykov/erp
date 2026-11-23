@@ -102,7 +102,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       <label style="margin-left:12px;display:none" id="mp_price_pay_box"><input type="checkbox" id="mp_price_pay" checked> payouts</label>
       <label style="margin-left:12px;display:none" id="mp_price_inv_box"><input type="checkbox" id="mp_price_inv"> <span></span></label>
       <label style="margin-left:12px;display:none" id="mp_price_rate_box"><input type="checkbox" id="mp_price_rate" checked> <span></span></label>
-      <label style="margin-left:12px;display:none" id="mp_price_avg_box"><input type="checkbox" id="mp_price_avg_all" checked> avg over all time</label></div>
+      <label style="margin-left:12px;display:none" id="mp_price_avg_box"><input type="checkbox" id="mp_price_avg_all"> avg over all time</label></div>
     <div id="mp_price_head" style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap"></div>
     <div id="mp_price_chart" style="height:min(60vh,600px)"></div>
     <p class="note" style="margin:0" id="mp_price_note">Loading…</p>
@@ -638,31 +638,31 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         avgNote = ` · average buy price ${fmt(avg)} for ${Math.round(qty * 1e6) / 1e6} held (${last0 ? `${last0.v >= avg ? '+' : ''}${((last0.v / avg - 1) * 100).toFixed(1)}%` : ''})`;
       }
     }
-    // a currency's: the same over its exchanges -- each bought adds its units and the dollars paid, each sold
-    // takes units out at the average; the average's dollars a unit, shown as the chart is (CCY/USD or USD/CCY)
+    // a currency's: the average rate it was bought at and the one it was sold at, each weighted by the amount
+    // (a currency is mostly sold or mostly bought -- the euros of a salary -- so "what's held" leaves nothing);
+    // dollars a unit, shown as the chart is (CCY/USD or USD/CCY)
     if (opts.currency && fxDeals.length) {
-      const pos = { qty: 0, usd: 0 };
-      for (const d of fxDeals.filter(x => avgAll || x.day >= from)) {
-        if (d.bought) { pos.qty += d.mine; pos.usd += d.usd; }
-        else if (pos.qty > 0) { const a = pos.usd / pos.qty; pos.qty = Math.max(0, pos.qty - d.mine); pos.usd = pos.qty * a; }
+      const sum = { buy: { qty: 0, usd: 0 }, sell: { qty: 0, usd: 0 } };
+      for (const d of fxDeals.filter(x => avgAll || x.day >= from)) { const s = sum[d.bought ? 'buy' : 'sell']; s.qty += d.mine; s.usd += d.usd; }
+      const parts = [];
+      for (const [k, word, col] of [['buy', 'bought', '#3fb950'], ['sell', 'sold', '#f85149']]) {
+        const s = sum[k];
+        if (!(s.qty > 1e-9 && s.usd > 0)) continue;
+        const avg = opts.invert ? s.usd / s.qty : s.qty / s.usd;
+        lines.push({ type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: avg, y1: avg, line: { color: col, width: 1, dash: 'dot' }, layer: 'below' });
+        label(avg, `avg ${k} ${fmt(avg)}`, '#30363d', col);
+        parts.push(`${word} ${Math.round(s.qty).toLocaleString('en-US')} ${opts.currency} at ${fmt(avg)} on average`);
       }
-      if (pos.qty > 1e-9 && pos.usd > 0) {
-        const avg = opts.invert ? pos.usd / pos.qty : pos.qty / pos.usd;
-        lines.push({ type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: avg, y1: avg, line: { color: '#8b949e', width: 1, dash: 'dot' }, layer: 'below' });
-        label(avg, `avg ${fmt(avg)}`, '#30363d', '#e6edf3');
-        avgNote = ` · average rate ${fmt(avg)} for ${Math.round(pos.qty).toLocaleString('en-US')} ${opts.currency} bought (${last0 ? `${last0.v >= avg ? '+' : ''}${((last0.v / avg - 1) * 100).toFixed(1)}%` : ''})`;
-      }
+      if (parts.length) avgNote = ` · ${parts.join(', ')}`;
     }
     // the two labels on the right (today's price, the average) apart when they'd overlap: ~22 px of the plot's
     if (notes.length) {
       const ys = [...pts.map(p => p.v), ...notes.filter(n => n.xref === 'paper').map(n => n.y)], span = (Math.max(...ys) - Math.min(...ys)) || 1;
       const px = v => v / span * 350;   // the plot's ~350 px tall
-      const side = notes.filter(n => n.xref === 'paper');
-      if (side.length === 2 && px(Math.abs(side[0].y - side[1].y)) < 22) {
-        const [hi, lo] = side[0].y >= side[1].y ? side : [side[1], side[0]];
-        const gap = (22 - px(Math.abs(side[0].y - side[1].y))) / 2;
-        hi.yshift = gap; lo.yshift = -gap;
-      }
+      // (any number of them -- today's, a currency's average buy and sell: top down, each at least 22 px under the one above)
+      const side = notes.filter(n => n.xref === 'paper').sort((a, b) => b.y - a.y);
+      let prev = Infinity;
+      for (const n of side) { const at = Math.min(px(n.y), prev - 22); n.yshift = at - px(n.y); prev = at; }
     }
     // the rate's scale: its line in the lower quarter
     const rateRange = () => {
@@ -732,11 +732,12 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   rateBox.checked = true;
   if (policy.length) { dlg.querySelector('#mp_price_rate_box').style.display = ''; dlg.querySelector('#mp_price_rate_box span').textContent = policyName; }
   rateBox.onchange = draw;
-  // the average over all time or the period shown (remembered); the box where there's an average to draw
+  // the average over the period shown, or over all time with the box -- off whenever the window opens (not
+  // remembered, the user's rule 23.11.2026); the box where there's an average to draw
   const avgBox = dlg.querySelector('#mp_price_avg_all');
-  try { avgBox.checked = localStorage.getItem('mp_price_avg_all') !== '0'; } catch { /* no storage */ }
+  avgBox.checked = false;
   if (fxDeals.length || (!rateNote && deals.length)) dlg.querySelector('#mp_price_avg_box').style.display = '';
-  avgBox.onchange = () => { mpSave('mp_price_avg_all', avgBox.checked ? '1' : '0'); draw(); };
+  avgBox.onchange = draw;
   viaBox.onchange = () => { mpSave('mp_price_via', viaBox.checked ? '1' : '0'); draw(); };
   draw();
 }
