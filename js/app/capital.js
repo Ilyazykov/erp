@@ -406,7 +406,9 @@ async function mpOpenAccountChart(account) {
     await mpEnsureBrokerRows();
     await mpEnsureExactData(account === 'cash');
   } catch (error) { note.textContent = error.message; return; }
-  const series = await mpAccountCurrencySeries(account).catch(() => null);
+  // the split by currency, once more if the database was busy (a capital recount running); without it, one colour
+  const loadSeries = () => mpAccountCurrencySeries(account).catch(() => null);
+  const series = await loadSeries() ?? await new Promise(ok => setTimeout(ok, 1500)).then(loadSeries);
   const firstHeld = mpCapitalBrokerRows.findIndex(r => Math.abs(mpAccountFull(account, r)) >= 1);
   if (firstHeld < 0) { note.textContent = 'No history for this account.'; return; }
   const rows = mpCapitalBrokerRows.slice(firstHeld);
@@ -421,7 +423,11 @@ async function mpOpenAccountChart(account) {
     const days = shown.map(r => r.day), full = shown.map(r => conv(r.day, mpAccountFull(account, r)));
     const parts = mpEstimateLayers(shown.map(r => conv(r.day, mpAccountExact(account, r, true))), full,
       account === 'cash' ? shown.map(r => conv(r.day, mpAccountKnown(account, r))) : null);
-    const fmt = v => (rub ? `${v < 0 ? '−' : ''}${Math.abs(Math.round(v)).toLocaleString('en-US')} ₽` : `${v < 0 ? '−' : ''}$${Math.abs(Math.round(v)).toLocaleString('en-US')}`);
+    // a small account (Binance's few dollars) in cents, and its small coins drawn too
+    const cents = Math.max(...full.map(Math.abs)) < 100;
+    const tiny = cents ? 0.005 : 0.5;
+    const amount = v => Math.abs(v).toLocaleString('en-US', cents ? { minimumFractionDigits: 2, maximumFractionDigits: 2 } : { maximumFractionDigits: 0 });
+    const fmt = v => (rub ? `${v < 0 ? '−' : ''}${amount(v)} ₽` : `${v < 0 ? '−' : ''}$${amount(v)}`);
     const area = (y, fillcolor, stackgroup = 'assets', extra = {}) => ({ x: days, y, type: 'scatter', mode: 'lines', stackgroup,
       line: { width: 0, color: fillcolor }, fillcolor, hoverinfo: 'skip', showlegend: false, ...extra });
     const layers = [];
@@ -431,10 +437,10 @@ async function mpOpenAccountChart(account) {
       // by currency; an account's days that are estimates shaded over all of them
       const nums = shown.map(r => mpDayNumber(r.day));
       const lines = series.map(c => ({ label: c.label, color: mpSliceColor(c.label, mpCurrencyColor),
-        y: shown.map((r, i) => conv(r.day, c.byDay.get(nums[i]) || 0)) })).filter(c => c.y.some(v => Math.abs(v) >= 0.5));
+        y: shown.map((r, i) => conv(r.day, c.byDay.get(nums[i]) || 0)) })).filter(c => c.y.some(v => Math.abs(v) >= tiny));
       for (const c of lines) layers.push(area(c.y.map(v => Math.max(0, v)), c.color, 'assets', { name: c.label, legendgroup: c.label, showlegend: lines.length > 1 }));
-      for (const c of lines) if (c.y.some(v => v < -0.5)) layers.push(area(c.y.map(v => Math.min(0, v)), c.color, 'debt', { name: c.label, legendgroup: c.label }));
-      hover = days.map((_, i) => `<b>${fmt(full[i])}</b>${lines.map(c => [c, c.y[i]]).filter(([, v]) => Math.abs(v) >= 0.5).sort((a, b) => b[1] - a[1])
+      for (const c of lines) if (c.y.some(v => v < -tiny)) layers.push(area(c.y.map(v => Math.min(0, v)), c.color, 'debt', { name: c.label, legendgroup: c.label }));
+      hover = days.map((_, i) => `<b>${fmt(full[i])}</b>${lines.map(c => [c, c.y[i]]).filter(([, v]) => Math.abs(v) >= tiny).sort((a, b) => b[1] - a[1])
         .map(([c, v]) => `<br><span style="color:${c.color}">■</span> ${mpEscapeHtml(c.label)}: ${fmt(v)}`).join('')}`);
       shapes = (mpExactMask[account] || []).filter(([f, t]) => t > days[0] && f <= days[days.length - 1])
         .map(([f, t]) => ({ type: 'rect', xref: 'x', yref: 'paper', x0: f < days[0] ? days[0] : f, x1: t > days[days.length - 1] ? days[days.length - 1] : t,
@@ -455,7 +461,7 @@ async function mpOpenAccountChart(account) {
       text: hover, hovertemplate: '%{x}:<br>%{text}<extra></extra>' }],
     Object.assign({}, LAYOUT_BASE, { showlegend: layers.some(t => t.showlegend), hovermode: 'x', shapes,
       xaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', type: 'date', tickangle: -45, range: [days[0], days[days.length - 1]], hoverformat: '%d %b %Y' },
-      yaxis: Object.assign({}, LAYOUT_BASE.yaxis, rub ? { tickformat: ',.0f', ticksuffix: ' ₽' } : { tickformat: '$,.0f' }, yRange ? { range: yRange, autorange: false } : {}),
+      yaxis: Object.assign({}, LAYOUT_BASE.yaxis, rub ? { tickformat: cents ? ',.2~f' : ',.0f', ticksuffix: ' ₽' } : { tickformat: cents ? '$,.2~f' : '$,.0f' }, yRange ? { range: yRange, autorange: false } : {}),
       margin: { t: 10, r: 20, b: 60, l: 80 } }), CONFIG);
     note.textContent = `${parts.known || parts.extrapolated ? `${series ? 'Shaded' : 'Faded'}: estimates. ` : ''}Includes money moved in and out, not only gains.`;
   };
