@@ -567,17 +567,23 @@ async function mpLoadPortfolioBase() {
 // outside the main columns as "others").
 async function mpCurrencyRows(base) {
   const split = await mpSplitFundsByCurrency(base.data);
-  return [...split, ...base.cashRows, ...base.realEstateRows].map(r => {
-    const unit = mpBrokerCurrencyUnit(r);
-    // Other European currencies (CHF, DKK, SEK, ...) count as EUR; fiat
-    // outside the main columns (JPY, AED, ...) -> one "others" column, in USD.
-    const fiat = !MP_UNIT_QUOTED_ASSET_CLASSES.has(r.asset_class) && unit !== MP_ALTCOINS_COLUMN;
-    const ccy = fiat && MP_EUROPEAN_AS_EUR.has(unit) ? 'EUR' : unit;
-    // own_currency: the currency itself, kept for the Charts tab, which
-    // shows the "others" one by one.
-    return { ...r, own_currency: ccy, currency: fiat && !MP_MAIN_CURRENCIES.has(ccy) ? MP_OTHER_CURRENCIES_COLUMN : ccy };
-  });
+  return [...split, ...base.cashRows, ...base.realEstateRows].map(mpCurrencyColumn);
 }
+// A row with its currency column. Other European currencies (CHF, DKK, SEK, ...) count as EUR; fiat
+// outside the main columns (JPY, AED, ...) -> one "others" column, in USD. own_currency: the currency
+// itself, for the charts, which show the "others" one by one.
+function mpCurrencyColumn(r) {
+  const unit = mpBrokerCurrencyUnit(r);
+  const fiat = !MP_UNIT_QUOTED_ASSET_CLASSES.has(r.asset_class) && unit !== MP_ALTCOINS_COLUMN;
+  const ccy = fiat && MP_EUROPEAN_AS_EUR.has(unit) ? 'EUR' : unit;
+  return { ...r, own_currency: ccy, currency: fiat && !MP_MAIN_CURRENCIES.has(ccy) ? MP_OTHER_CURRENCIES_COLUMN : ccy };
+}
+// How a currency is named on the charts, and a row's slice: the "others" column split into its
+// currencies (JPY, CAD, TWD, ... flagged by the country an ISO code starts with), Altcoins into coins.
+const mpCurrencyLabel = c => (c === MP_OTHER_CURRENCIES_COLUMN ? 'others 🌍' : `${c}${MP_CURRENCY_FLAGS[c] ? ` ${MP_CURRENCY_FLAGS[c]}` : ''}`);
+const mpCurrencySliceLabel = r => (r.currency === MP_OTHER_CURRENCIES_COLUMN ? `${r.own_currency} ${mpFlagOf(r.own_currency.slice(0, 2))}`
+  : r.currency === MP_ALTCOINS_COLUMN ? (MP_CHART_COIN_OF[r.ticker] ? mpCurrencyLabel(mpChartCoin(r.ticker)) : r.ticker)
+  : mpCurrencyLabel(r.currency));
 
 async function mpRenderBrokerCurrency() {
   const wrap = document.getElementById('mp_broker_currency_wrap');

@@ -518,16 +518,9 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   const isRu = mpIsRuInfra;
 
   // 1. Currencies -- the broker x currency table's total row.
-  const currencyLabel = c => (c === MP_OTHER_CURRENCIES_COLUMN ? 'others 🌍' : `${c}${MP_CURRENCY_FLAGS[c] ? ` ${MP_CURRENCY_FLAGS[c]}` : ''}`);
+  const currencyLabel = mpCurrencyLabel;
   const byCurrency = {};
-  // The "others" column split into its currencies (JPY, CAD, TWD, ... --
-  // flagged by the country an ISO code starts with), Altcoins into coins.
-  for (const r of curRows) if (!r.excluded) {
-    const label = r.currency === MP_OTHER_CURRENCIES_COLUMN ? `${r.own_currency} ${mpFlagOf(r.own_currency.slice(0, 2))}`
-      : r.currency === MP_ALTCOINS_COLUMN ? (MP_CHART_COIN_OF[r.ticker] ? currencyLabel(mpChartCoin(r.ticker)) : r.ticker)
-      : currencyLabel(r.currency);
-    mpAdd(byCurrency, label, r.value_usd);
-  }
+  for (const r of curRows) if (!r.excluded) mpAdd(byCurrency, mpCurrencySliceLabel(r), r.value_usd);
   // 2 / 8 / 9. Banks and brokers -- the table's per-broker totals (credit netted
   // into liquid assets instead), no real estate.
   const byBroker = {};
@@ -639,7 +632,7 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   // Colours by what a label names (labels carry flags / emoji, so look the
   // key up from its first word, or from the maps the labels were built from).
   const key = l => l.split(' ')[0];
-  const currencyColor = l => MP_COLORS.currency[key(l)] || null;
+  const currencyColor = mpCurrencyColor;
   const brokerByLabel = Object.fromEntries(Object.keys(MP_COLORS.broker).map(a => [brokerName(a), a]));
   const brokerColor = l => MP_COLORS.broker[brokerByLabel[l]] || null;
   const typeByLabel = Object.fromEntries(Object.keys(MP_COLORS.type).map(t => [MP_ASSET_CLASS_LABELS[t], t]));

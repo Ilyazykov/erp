@@ -42,6 +42,8 @@ const MP_COLORS = {
     FI: '#94c2ff', BE: '#2a57c9', IE: '#66a3ff', AT: '#3f78f0', PT: '#a3c8ff', PL: '#1d4fbf', LU: '#5a85e6',
   },
 };
+// a currency's colour by its label ("EUR 🇪🇺"): the same on every chart
+const mpCurrencyColor = l => MP_COLORS.currency[l.split(' ')[0]] || null;
 function mpSliceColor(label, colorOf) {
   if (/^other\b/.test(label)) return MP_OTHER_COLOR;
   const c = colorOf(label);

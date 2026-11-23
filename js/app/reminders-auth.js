@@ -323,6 +323,7 @@ function mpUpdateAuthUi(session) {
     mpShowSignedIn(false);
     mpExpCache = null;
     mpCapitalBrokerRows = null;
+    mpAccountSeries.clear();
     mpExactMask = null;
     mpEverHeldRows = null;
     mpProvenCash = null;
