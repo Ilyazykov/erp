@@ -418,6 +418,25 @@ async function mpAccountCurrencySeries(account) {
   return out;
 }
 
+// The day under the cursor: the one drawn there (a stepped chart holds a day until the next), else the nearest.
+function mpDayIndexAt(ms, at, stepped) {
+  let lo = 0, hi = ms.length - 1;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (ms[m] <= at) lo = m; else hi = m - 1; }
+  return !stepped && lo + 1 < ms.length && ms[lo + 1] - at < at - ms[lo] ? lo + 1 : lo;
+}
+// The stacked layer at a height on day i: assets stack up from zero, debts down from it. null above or below them.
+function mpStackLayerAt(layers, i, y) {
+  const group = y >= 0 ? 'assets' : 'debt';
+  let sum = 0;
+  for (const t of layers) {
+    if (t.stackgroup !== group) continue;
+    const next = sum + (t.y[i] || 0);
+    if (y >= 0 ? y >= sum && y < next : y <= sum && y > next) return t;
+    sum = next;
+  }
+  return null;
+}
+
 // A bank's or broker's money over time, in a chart window (a click on its name in the broker tables);
 // MP_ALL_ACCOUNTS (a click on Total): all of them together, by currency too.
 async function mpOpenAccountChart(account) {
@@ -441,8 +460,39 @@ async function mpOpenAccountChart(account) {
   const today = rows[rows.length - 1].day;
   const color = MP_COLORS.broker[account] || (account === 'real estate' ? MP_COLORS.type.real_estate : '#4a9ff5');
   if (mpExactMask[account === MP_ALL_ACCOUNTS ? 'cash' : account]?.length) dlg.querySelector('#mp_account_fade_box').style.display = '';
+  // the hover: only the layer under the cursor (Plotly's own can't tell a point inside a stacked area)
+  const tip = document.createElement('div');
+  tip.id = 'mp_account_tip';
+  tip.style.cssText = 'position:fixed;display:none;pointer-events:none;z-index:10;background:#13191f;border:1px solid #30363d;border-radius:4px;padding:6px 9px;font-size:12px;line-height:1.5;color:#e6edf3;white-space:nowrap';
+  dlg.appendChild(tip);
+  let view = null;
+  const hideTip = () => { tip.style.display = 'none'; };
+  plot.addEventListener('mouseleave', hideTip);
+  plot.addEventListener('mousemove', ev => {
+    const fl = plot._fullLayout;
+    if (!view || !fl || ev.buttons) { hideTip(); return; }
+    const box = plot.getBoundingClientRect(), px = ev.clientX - box.left - fl._size.l, py = ev.clientY - box.top - fl._size.t;
+    if (px < 0 || py < 0 || px > fl._size.w || py > fl._size.h) { hideTip(); return; }
+    const i = mpDayIndexAt(view.ms, fl.xaxis.p2l(px), account === MP_ALL_ACCOUNTS);
+    const shownLayers = plot.data.filter(t => t.stackgroup && t.visible !== 'legendonly');
+    const t = mpStackLayerAt(shownLayers, i, fl.yaxis.p2l(py));
+    if (!t) { hideTip(); return; }
+    const same = shownLayers.filter(x => x.legendgroup === t.legendgroup && x.stackgroup === t.stackgroup);
+    const whole = same.reduce((s, x) => s + (x.y[i] || 0), 0), total = view.full[i];
+    // "(exact)" only on a day that also has an estimate of this currency
+    const name = Math.abs(whole - t.y[i]) >= 0.005 && t.name === t.legendgroup ? `${t.name} (exact)` : t.name;
+    const date = new Date(view.ms[i]).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+    tip.innerHTML = `${date}<br><span style="color:${t.fillcolor}">■</span> <b>${mpEscapeHtml(name)}: ${view.fmt(t.y[i])}</b>`
+      + (same.length > 1 && Math.abs(whole - t.y[i]) >= 0.005 ? `<br>${mpEscapeHtml(t.legendgroup)} in all: ${view.fmt(whole)}` : '')
+      + (total ? `<br><span style="color:#8b949e">${(t.y[i] / total * 100).toFixed(1)}% of ${view.fmt(total)}</span>` : '');
+    tip.style.display = '';
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    tip.style.left = `${ev.clientX + 14 + w > innerWidth ? ev.clientX - w - 14 : ev.clientX + 14}px`;
+    tip.style.top = `${ev.clientY + 14 + h > innerHeight ? ev.clientY - h - 14 : ev.clientY + 14}px`;
+  });
   let period = '1y';
   const draw = () => {
+    hideTip();
     const rub = rubBox.checked, conv = mpCapitalConverter(rub ? 'RUB' : 'USD'), fadeOn = fadeBox.checked;
     // a period is the whole period, at zero before the account's first money; "all" starts at that first money
     const from = mpPeriodStart(period, rows[0].day, today);
@@ -459,7 +509,6 @@ async function mpOpenAccountChart(account) {
       // (the Total in steps: a slope between a faded day and a solid one would draw a spike at the first cash count)
       line: { width: 0, color: fillcolor, shape: account === MP_ALL_ACCOUNTS ? 'hv' : 'linear' }, fillcolor, hoverinfo: 'skip', showlegend: false, ...extra });
     const layers = [];
-    let hover = full.map((v, i) => `${fmt(v)}${fadeOn && Math.max(0, v) - parts.solid[i] > 0.5 ? ` (exact: ${fmt(parts.solid[i])})` : ''}`);
     let shapes = [], cashEstimated = false;
     if (series) {
       // by currency; an account's days that are estimates shaded over all of them
@@ -480,27 +529,27 @@ async function mpOpenAccountChart(account) {
         }
       }
       for (const c of lines) if (c.y.some(v => v < -tiny)) layers.push(area(c.y.map(v => Math.min(0, v)), c.color, 'debt', { name: c.label, legendgroup: c.label }));
-      hover = days.map((_, i) => `<b>${fmt(full[i])}</b>${lines.map(c => [c, c.y[i]]).filter(([, v]) => Math.abs(v) >= tiny).sort((a, b) => b[1] - a[1])
-        .map(([c, v]) => `<br><span style="color:${c.color}">■</span> ${mpEscapeHtml(c.label)}: ${fmt(v)}${c.est[i] >= tiny ? ` (estimate: ${fmt(c.est[i])})` : ''}`).join('')}`);
       shapes = (fadeOn ? mpExactMask[account] || [] : []).filter(([f, t]) => t > days[0] && f <= days[days.length - 1])
         .map(([f, t]) => ({ type: 'rect', xref: 'x', yref: 'paper', x0: f < days[0] ? days[0] : f, x1: t > days[days.length - 1] ? days[days.length - 1] : t,
           y0: 0, y1: 1, fillcolor: 'rgba(13,17,23,0.55)', line: { width: 0 }, layer: 'above' }));
     } else {
-      layers.push(area(fadeOn ? parts.solid : full.map(v => Math.max(0, v)), color));
-      if (fadeOn && parts.known) layers.push(area(parts.known, mpFade(color, 0.75)));
-      if (fadeOn && parts.extrapolated) layers.push(area(parts.extrapolated, mpFade(color, 0.45)));
-      if (full.some(v => v < -0.5)) layers.push(area(full.map(v => Math.min(0, v)), color, 'debt'));
+      const own = MP_BROKER_SHORT_NAMES[account] || account;
+      const group = { legendgroup: own };
+      layers.push(area(fadeOn ? parts.solid : full.map(v => Math.max(0, v)), color, 'assets', { ...group, name: own }));
+      if (fadeOn && parts.known) layers.push(area(parts.known, mpFade(color, 0.75), 'assets', { ...group, name: `${own} (known, approximate amount)` }));
+      if (fadeOn && parts.extrapolated) layers.push(area(parts.extrapolated, mpFade(color, 0.45), 'assets', { ...group, name: `${own} (estimate)` }));
+      if (full.some(v => v < -0.5)) layers.push(area(full.map(v => Math.min(0, v)), color, 'debt', { ...group, name: own }));
     }
+    view = { ms: days.map(d => Date.parse(`${d}T00:00:00Z`)), full, fmt };
     const first = full[0], last = full[full.length - 1], diff = last - first;
     const pct = first > 0 ? ` · ${diff >= 0 ? '+' : ''}${(diff / first * 100).toFixed(1)}%` : '';
     head.innerHTML = `<span style="font-size:2em;font-weight:700">${fmt(last)}</span><span class="${diff >= 0 ? 'pos' : 'neg'}">${diff >= 0 ? '+' : '−'}${fmt(Math.abs(diff))}${pct}</span><span class="muted">over ${period}</span>`;
     // several layers are read as shares of the stack: from zero, or the lowest would be cut off; one is fitted
     const fit = mpAccountYRange(layers);
     const yRange = fit && layers.filter(t => t.showlegend).length > 1 ? [Math.min(0, fit[0]), fit[1]] : fit;
-    Plotly.react(plot, [...layers, { x: days, y: full, type: 'scatter', mode: 'lines', line: { width: 0 }, showlegend: false,
-      text: hover, hovertemplate: '%{x}:<br>%{text}<extra></extra>' }],
-    Object.assign({}, LAYOUT_BASE, { showlegend: layers.some(t => t.showlegend), hovermode: 'x', shapes,
-      xaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', type: 'date', tickangle: -45, range: [days[0], days[days.length - 1]], hoverformat: '%d %b %Y' },
+    Plotly.react(plot, layers,
+    Object.assign({}, LAYOUT_BASE, { showlegend: layers.some(t => t.showlegend), hovermode: false, shapes,
+      xaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', type: 'date', tickangle: -45, range: [days[0], days[days.length - 1]] },
       yaxis: Object.assign({}, LAYOUT_BASE.yaxis, rub ? { tickformat: cents ? ',.2~f' : ',.0f', ticksuffix: ' ₽' } : { tickformat: cents ? '$,.2~f' : '$,.0f' }, yRange ? { range: yRange, autorange: false } : {}),
       margin: { t: 10, r: 20, b: 60, l: 80 } }), CONFIG);
     note.textContent = `${!fadeOn ? '' : cashEstimated ? 'Faded: estimated cash. ' : parts.known || parts.extrapolated ? `${series ? 'Shaded' : 'Faded'}: estimates. ` : ''}Includes money moved in and out, not only gains.`;
