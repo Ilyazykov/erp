@@ -658,10 +658,11 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
     },
     {
       type: 'scatterpolar', mode: 'text',
-      r: usable.map(() => maxR * (opts?.labelR || 1.14)),
+      // long names (opts.labelR): small slices staggered so the names don't overlap
+      r: usable.map((it, i) => maxR * (opts?.labelR ? opts.labelR + (pctOf(it) < 5 ? (i % 3) * 0.08 : 0) : 1.14)),
       theta,
-      // long names (opts.labelR): only the slices that exist, each growing outward from its slice
-      text: usable.map(it => (opts?.labelR && !(pctOf(it) > 0) ? '' : it.label)),
+      // long names: from 1% (the rest on hover), each growing outward from its slice
+      text: usable.map(it => (opts?.labelR && pctOf(it) < 1 ? '' : it.label)),
       ...(opts?.labelR ? { textposition: theta.map(t => (t < 180 ? 'middle right' : 'middle left')) } : {}),
       textfont: { color: usable.map(it => it.color), size: 10 },
       showlegend: false,
@@ -670,7 +671,7 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
   ];
   const layout = mpDonutLayout(maxR);
   if (opts?.labelR) {
-    layout.polar.radialaxis.range = [0, maxR * (opts.labelR + 0.08)];
+    layout.polar.radialaxis.range = [0, maxR * (opts.labelR + 0.24)];
     layout.polar.domain.x = [0.24, 0.76];
   }
   if (opts?.plotTitle) layout.title = { text: opts.plotTitle, font: { size: 12, color: '#c9d1d9' }, x: 0.5, y: 0.985 };
@@ -683,17 +684,22 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
 // shares (with a pending allocation, after it).
 function mpDrawSectorDonut(divId, sectorMap, rows, pctOf, shownPct, totalUsd) {
   const raw = Object.fromEntries((rows || []).map(r => [r.ticker, r]));
-  const items = Object.entries(sectorMap).map(([label, tickers]) => ({
-    label, color: MP_SECTOR_COLORS[label],
-    target: tickers.reduce((s, t) => s + (raw[t]?.target || 0), 0),
-    current: tickers.reduce((s, t) => s + pctOf(t), 0),
-    detail: tickers.filter(t => pctOf(t) > 0).sort((a, b) => pctOf(b) - pctOf(a))
-      .map(t => `${t} ${pctOf(t).toFixed(2)}%`).join('<br>'),
-  })).sort((a, b) => b.target - a.target);
+  const split = sectorSplit(sectorMap, DATA.fundSectors);
+  const bySector = {};
+  Object.entries(split).forEach(([t, parts]) => Object.entries(parts).forEach(([label, share]) => {
+    const s = bySector[label] ??= { label, color: MP_SECTOR_COLORS[label], target: 0, current: 0, shown: 0, parts: [] };
+    s.target += (raw[t]?.target || 0) * share;
+    s.current += pctOf(t) * share;
+    s.shown += (shownPct?.get(t) || 0) * share;
+    if (pctOf(t) > 0) s.parts.push([t, pctOf(t) * share]);
+  }));
+  const items = Object.values(bySector).sort((a, b) => b.target - a.target);
+  items.forEach(s => {
+    s.detail = s.parts.sort((a, b) => b[1] - a[1]).map(([t, pct]) => `${t} ${pct.toFixed(2)}%`).join('<br>');
+  });
   mpDrawTargetDonut(divId, `${divId}_note`, items, totalUsd, null, {
     labelR: 1.05, plotTitle: 'By economic sector',
-    displayPct: shownPct && new Map(Object.entries(sectorMap).map(([label, tickers]) =>
-      [label, tickers.reduce((s, t) => s + (shownPct.get(t) || 0), 0)])),
+    displayPct: shownPct && new Map(items.map(s => [s.label, s.shown])),
   });
 }
 

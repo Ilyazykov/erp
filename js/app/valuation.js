@@ -551,14 +551,39 @@ function twTableHtml(rows, colors) {
   `;
 }
 
+// ticker -> {sector: share of it}. A fund goes by what it holds (fund_sector_weights, scaled to the whole
+// fund: cash and bonds have no sector); with no data for it, it stays under "Funds".
+function sectorSplit(sectorMap, fundSectors = {}) {
+  const out = {};
+  Object.entries(sectorMap).forEach(([sector, tickers]) => tickers.forEach(t => {
+    const parts = sector === 'Funds' ? Object.entries(fundSectors[t] || {}).filter(([, w]) => w > 0) : [];
+    const total = parts.reduce((s, [, w]) => s + w, 0);
+    out[t] = total > 0 ? Object.fromEntries(parts.map(([k, w]) => [k, w / total])) : { [sector]: 1 };
+  }));
+  return out;
+}
+
+// fund -> {sector: weight}; empty if the view can't be read (the funds then stay one slice)
+async function fundSectorWeights(funds) {
+  const { data, error } = await sb.from('fund_sector_weights').select('fund, sector, weight').in('fund', funds);
+  const out = {};
+  if (!error) (data || []).forEach(r => { (out[r.fund] ??= {})[r.sector] = Number(r.weight); });
+  return out;
+}
+
 // A basket by sector: the target weights donut's geometry (angle = base, radius = target / base),
 // a sector's hover lists its stocks; no click, a sector has no price chart.
-function sectorDonut(rows, sectorMap) {
-  const byTicker = Object.fromEntries(rows.map(r => [r.ticker, r]));
-  const sectors = Object.entries(sectorMap).map(([ticker, tickers]) => {
-    const held = tickers.map(t => byTicker[t]).filter(Boolean).sort((a, b) => b.target - a.target);
-    return { ticker, held, base: held.reduce((s, r) => s + r.base, 0), target: held.reduce((s, r) => s + r.target, 0), z: null };
-  }).filter(r => r.base > 0).sort((a, b) => b.target - a.target);
+function sectorDonut(rows, sectorMap, fundSectors = {}) {
+  const split = sectorSplit(sectorMap, fundSectors);
+  const bySector = {};
+  rows.forEach(r => Object.entries(split[r.ticker] || {}).forEach(([sector, share]) => {
+    const s = bySector[sector] ??= { ticker: sector, held: [], base: 0, target: 0, z: null };
+    s.base += r.base * share;
+    s.target += r.target * share;
+    s.held.push({ ticker: r.ticker, target: r.target * share });
+  }));
+  const sectors = Object.values(bySector).filter(r => r.base > 0).sort((a, b) => b.target - a.target);
+  sectors.forEach(r => r.held.sort((a, b) => b.target - a.target));
   const { traces, layout } = twDonut(sectors, MP_SECTOR_COLORS, 11);
   traces[0].customdata = undefined;
   traces[0].hovertemplate = sectors.map(r => {
@@ -566,9 +591,14 @@ function sectorDonut(rows, sectorMap) {
     return `<b>${r.ticker}</b><br>Base: ${r.base.toFixed(2)}%<br>Target: <b>${r.target.toFixed(2)}%</b> (${diff >= 0 ? '+' : ''}${diff.toFixed(2)} pp)<br>`
       + `${r.held.map(h => `${h.ticker} ${h.target.toFixed(2)}%`).join('<br>')}<extra></extra>`;
   });
-  // the sector names are long: further out than the tickers', clear of the widest slice
-  const maxR = layout.polar.radialaxis.range[1] / 1.25;
-  traces[2].r = sectors.map(() => maxR * 1.3);
+  // the radius by the gap in percentage points (as on the actual-portfolio donut): by the ratio, a 0.3%
+  // sector with a small change would stick out further than a 60% one
+  const radial = sectors.map(r => Math.max(0, 100 + (r.target - r.base) * 2));
+  traces[0].r = radial;
+  const maxR = Math.max(100, ...radial);
+  // the sector names are long: clear of the widest slice; under 1% only on hover, small ones staggered
+  traces[2].text = sectors.map(r => (r.base >= 1 ? r.ticker : ''));
+  traces[2].r = sectors.map((r, i) => maxR * (r.base < 5 ? 1.2 + (i % 3) * 0.1 : 1.3));
   layout.polar.radialaxis.range = [0, maxR * 1.5];
   layout.title = { text: 'By economic sector', font: { size: 13, color: '#c9d1d9' }, x: 0.5, y: 0.985 };
   return { traces, layout };
@@ -665,7 +695,7 @@ const US_SECTORS = {
   Utilities: ['NEE', 'DUK', 'SO'],
   'Real Estate': ['PLD', 'AMT', 'EQIX'],
 };
-// the Russian basket likewise; the funds aren't split by what they hold
+// the Russian basket likewise; the funds are split by what they hold (sectorSplit)
 const RU_SECTORS = {
   Financials: ['SBER', 'T', 'DOMRF', 'VTBR'],
   'Communication Services': ['YDEX'],
@@ -1216,12 +1246,12 @@ async function sigmoidCharts(usdRubRows, usdRubStats, usdRub5yRows) {
 // The Russian portfolio's target weights and stocks vs bonds split
 // (target_weights.json, target_allocation.json): the donuts, their notes and
 // tables written into the Layer 2 tab.
-function ruTargetCharts(targetWeightsData, targetAllocationData) {
+function ruTargetCharts(targetWeightsData, targetAllocationData, fundSectors) {
   // Target weights donut: angular width of each ticker's sector = its BASE
   // weight, radial extent = R_BASE * (target/base) (twDonut).
   const twRows = targetWeightsData.weights;
   const { traces: targetWeights, layout: targetWeightsLayout } = twDonut(twRows, TICKER_COLORS, 10);
-  const { traces: ruSectors, layout: ruSectorsLayout } = sectorDonut(twRows, RU_SECTORS);
+  const { traces: ruSectors, layout: ruSectorsLayout } = sectorDonut(twRows, RU_SECTORS, fundSectors);
 
   document.getElementById('targetweights_note').innerHTML = `
     Each sector's <b>angular width</b> is its <b>base</b> (strategic) weight — so sectors tile the
@@ -1298,9 +1328,10 @@ async function loadData() {
   const us = usErpCharts(usErpRows, damodaranErpRows);
   const usT = usTargetCharts(usTargetWeightsData, usTargetAllocationData);
   const sig = await sigmoidCharts(usdRubRows, usdRubStats, usdRub5yRows);
-  const ruT = ruTargetCharts(targetWeightsData, targetAllocationData);
+  const fundSectors = await fundSectorWeights(RU_SECTORS.Funds).catch(() => ({}));
+  const ruT = ruTargetCharts(targetWeightsData, targetAllocationData, fundSectors);
 
-  return { layer1: ru.layer1, layer1_individual: ru.layer1Individual, layer2_rebal: ru.layer2Rebal,
+  return { fundSectors, layer1: ru.layer1, layer1_individual: ru.layer1Individual, layer2_rebal: ru.layer2Rebal,
            layer2_alloc: ru.layer2Alloc, revYield: ru.revYield, fcfYield: ru.fcfYield, vkcoRevenueV2: ru.vkcoRevenueV2, usZscore,
            usTargetWeights: usT.usTargetWeights, usTargetWeightsLayout: usT.usTargetWeightsLayout,
            usSectors: usT.usSectors, usSectorsLayout: usT.usSectorsLayout,
