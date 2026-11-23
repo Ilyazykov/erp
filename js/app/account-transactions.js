@@ -114,7 +114,7 @@ function mpAccountTxFeed(dlg, plot, account) {
       for (const r of rows) {
         if (r.day !== lastDay) {
           lastDay = r.day;
-          html += `<div class="mp-tx-day">${new Date(`${r.day}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })}</div>`;
+          html += `<div class="mp-tx-day">${new Date(`${r.day}T00:00:00Z`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })}</div>`;
         }
         html += mpTxRowHtml(r, account === MP_ALL_ACCOUNTS);
       }
