@@ -532,8 +532,9 @@ function twTableHtml(rows, colors) {
           const adjStr = adj !== null ? (adj >= 0 ? '+' : '') + adj.toFixed(2) + ' pp' : '—';
           const delta = r.target - r.base;
           const deltaStr = (delta >= 0 ? '+' : '') + delta.toFixed(2) + ' pp';
-          const deltaCls = delta > 0.05 ? 'pos' : (delta < -0.05 ? 'neg' : 'muted');
           const adjCls = adj === null ? 'muted' : (adj > 0 ? 'pos' : (adj < 0 ? 'neg' : 'muted'));
+          // coloured only on a signal: without one the delta is just the rescaling to 100%
+          const deltaCls = adjCls;
           return `<tr>
             <td class="ticker" data-chart="${r.ticker}" style="color:${colors[r.ticker] || '#8b949e'}">${r.ticker}</td>
             <td>${r.base.toFixed(2)}%</td>
@@ -920,8 +921,9 @@ function allocTableHtml(names, base, target, z, adjustment, colors, rate, zClass
           const adjStr = adj !== null ? (adj >= 0 ? '+' : '') + adj.toFixed(2) + ' pp' : '—';
           const delta = target[n] - base[n];
           const deltaStr = (delta >= 0 ? '+' : '') + delta.toFixed(2) + ' pp';
-          const deltaCls = delta > 0.05 ? 'pos' : (delta < -0.05 ? 'neg' : 'muted');
           const adjCls = adj === null ? 'muted' : (adj > 0 ? 'pos' : (adj < 0 ? 'neg' : 'muted'));
+          // coloured only on a signal: without one the delta is just the rescaling to 100%
+          const deltaCls = adjCls;
           return `<tr>
             <td class="ticker" style="color:${colors[n]}">${n}</td>
             <td>${rate.value.toFixed(2)}%</td>
