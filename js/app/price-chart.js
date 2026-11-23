@@ -135,6 +135,21 @@ function mpBindPeriods(dlg, onPick) {
     onPick(b.dataset.p);
   });
 }
+// Periods longer than the history would all show the same chart: greyed out, "all" stays. Returns the
+// period to open with: `wanted`, or "all" when the history is shorter than that.
+function mpLimitPeriods(dlg, first, last, wanted = '1y') {
+  let period = wanted;
+  dlg.querySelectorAll('[data-p]').forEach(b => {
+    if (b.dataset.p === 'all' || mpPeriodStart(b.dataset.p, first, last) >= first) return;
+    b.disabled = true;
+    b.style.opacity = '0.35';
+    b.style.cursor = 'default';
+    b.title = `The history starts on ${first}`;
+    if (b.dataset.p === wanted) period = 'all';
+  });
+  dlg.querySelectorAll('[data-p]').forEach(b => b.classList.toggle('primary', b.dataset.p === period));
+  return period;
+}
 // The first day of a period counted back from `last`; "all": `first`.
 function mpPeriodStart(period, first, last) {
   const spec = MP_PRICE_PERIODS.find(([l]) => l === period)?.[1];
@@ -358,7 +373,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       note.textContent = `Fed rate (the BIS's, a month's as at its end; the middle of the target range): ${ps[ps.length - 1].day.slice(0, 7)} ${last}%`;
     };
     mpBindPeriods(dlg, drawFed);
-    drawFed('1y');
+    drawFed(mpLimitPeriods(dlg, pol[0].day, today));
     return;
   }
   if (moneyCcy === 'USD') {
@@ -531,7 +546,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   const rateOn = day => { let lo = 0, hi = fx.length - 1, r = null; while (lo <= hi) { const m = (lo + hi) >> 1; if (fx[m].day <= day) { r = Number(fx[m].usd_per_unit); lo = m + 1; } else hi = m - 1; } return r; };
   const today = prices[prices.length - 1].day;
   const startOf = p => mpPeriodStart(p, prices[0].day, today);
-  let period = '1y';
+  let period = mpLimitPeriods(dlg, prices[0].day, today);
   const draw = () => {
     const usd = ccy === 'USD' || usdBox.checked;
     const unit = usd ? 'USD' : ccy;

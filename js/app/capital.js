@@ -152,10 +152,13 @@ async function mpRenderCapitalTypes(ccy, conv) {
     line: { width: 0, color: MP_CAPITAL_TYPE_COLORS[key] }, fillcolor: MP_CAPITAL_TYPE_COLORS[key],
     hovertemplate: `${money}<extra>${label}</extra>`,
   });
-  // bottom to top: the more rarely a type jumps, the lower -- deposits sit
-  // still, bonds and gold drift, crypto swings but is seldom bought, stocks
-  // grow with every purchase, liquid assets and cash move with every transfer
-  const order = ['deposit', 'bond', 'gold', 'crypto', 'stock', 'liquid', 'cash'];
+  // bottom to top: the more rarely a type jumps, the lower -- bonds and gold
+  // drift, crypto swings but is seldom bought, stocks grow with every purchase,
+  // liquid assets and cash move with every transfer. Deposits (the box): right
+  // under liquid assets, with the money at hand, or at the bottom, as they sit still
+  const order = document.getElementById('capital_types_dep').checked
+    ? ['bond', 'gold', 'crypto', 'stock', 'deposit', 'liquid', 'cash']
+    : ['deposit', 'bond', 'gold', 'crypto', 'stock', 'liquid', 'cash'];
   const series = [];
   if (withRe) series.push(['real_estate', MP_ASSET_CLASS_LABELS.real_estate, mpCapitalTypeRows.map(r => conv(r.day, r.real_estate))]);
   for (const t of order) series.push([t, MP_ASSET_CLASS_LABELS[t], buckets.map((b, i) => conv(days[i], b[t]))]);
@@ -171,10 +174,14 @@ async function mpRenderCapitalTypes(ccy, conv) {
   layout.xaxis = Object.assign({}, layout.xaxis, { griddash: 'dot' });
   await mpDrawAreas(el, traces, layout, pct);
 }
-try { document.getElementById('capital_types_pct').checked = localStorage.getItem('mp_capital_types_pct') === '1'; } catch { /* no storage */ }
-for (const id of ['capital_types_re', 'capital_types_pct']) {
+try {
+  document.getElementById('capital_types_pct').checked = localStorage.getItem('mp_capital_types_pct') === '1';
+  document.getElementById('capital_types_dep').checked = localStorage.getItem('mp_capital_types_dep') !== '0';
+} catch { /* no storage */ }
+for (const id of ['capital_types_re', 'capital_types_pct', 'capital_types_dep']) {
   document.getElementById(id).addEventListener('change', () => {
-    try { localStorage.setItem('mp_capital_types_pct', document.getElementById('capital_types_pct').checked ? '1' : '0'); } catch { /* no storage */ }
+    mpSave('mp_capital_types_pct', document.getElementById('capital_types_pct').checked ? '1' : '0');
+    mpSave('mp_capital_types_dep', document.getElementById('capital_types_dep').checked ? '1' : '0');
     if (mpIsSignedIn) mpRenderCapitalTypes(mpCapitalCcy(), mpCapitalConverter(mpCapitalCcy()));
   });
 }
@@ -371,7 +378,7 @@ async function mpOpenAccountChart(account) {
   const rows = mpCapitalBrokerRows.slice(firstHeld);
   const today = rows[rows.length - 1].day;
   const color = MP_COLORS.broker[account] || (account === 'real estate' ? MP_COLORS.type.real_estate : '#4a9ff5');
-  let period = '1y';
+  let period = mpLimitPeriods(dlg, rows[0].day, today);
   const draw = () => {
     const rub = rubBox.checked, conv = mpCapitalConverter(rub ? 'RUB' : 'USD');
     const from = mpPeriodStart(period, rows[0].day, today);
