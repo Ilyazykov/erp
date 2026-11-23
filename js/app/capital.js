@@ -330,7 +330,11 @@ async function mpEnsureExactData(proven) {
     mpProvenCash = await mpLoadProvenCash(day => cashOn.get(day) || 0);
   }
 }
-const mpAccountFull = (a, r) => Number((a === 'real estate' ? r.real_estate : (r.accounts || {})[a]) || 0);
+// the Total row of the broker tables: every bank and broker together, without real estate
+const MP_ALL_ACCOUNTS = '__all__';
+const mpAccountFull = (a, r) => (a === MP_ALL_ACCOUNTS
+  ? Object.values(r.accounts || {}).reduce((sum, v) => sum + Number(v || 0), 0)
+  : Number((a === 'real estate' ? r.real_estate : (r.accounts || {})[a]) || 0));
 const mpAccountMasked = (a, day) => (mpExactMask[a] || []).some(([f, t]) => f <= day && day < t);
 // exact: blank where it's an estimate; cash with `proven`: there the least it must have been
 const mpAccountExact = (a, r, proven) => (!mpAccountMasked(a, r.day) ? mpAccountFull(a, r)
@@ -392,16 +396,33 @@ async function mpAccountCurrencySeries(account) {
   return out;
 }
 
-// A bank's or broker's money over time, in a chart window (a click on its name in the broker tables).
+// Every bank and broker as a layer of the Total's chart, the largest at the bottom, each in its own colour.
+function mpAllAccountsSeries() {
+  const byAccount = new Map();
+  for (const r of mpCapitalBrokerRows) {
+    const n = mpDayNumber(r.day);
+    for (const [a, v] of Object.entries(r.accounts || {})) {
+      if (!byAccount.has(a)) byAccount.set(a, new Map());
+      byAccount.get(a).set(n, Number(v || 0));
+    }
+  }
+  return [...byAccount].map(([a, byDay]) => ({ account: a, label: MP_BROKER_SHORT_NAMES[a] || a, byDay,
+    size: [...byDay.values()].reduce((s, v) => s + Math.abs(v), 0) }))
+    .sort((x, y) => y.size - x.size)
+    .map((c, i) => ({ ...c, color: MP_COLORS.broker[c.account] || MP_BROKER_FALLBACK_COLORS[i % MP_BROKER_FALLBACK_COLORS.length] }));
+}
+
+// A bank's or broker's money over time, in a chart window (a click on its name in the broker tables);
+// MP_ALL_ACCOUNTS (a click on Total): all of them, by bank instead of by currency.
 async function mpOpenAccountChart(account) {
-  const { dlg, head, plot, note } = mpChartDialog('mp_account', mpEscapeHtml(MP_BROKER_SHORT_NAMES[account] || account),
+  const { dlg, head, plot, note } = mpChartDialog('mp_account', account === MP_ALL_ACCOUNTS ? 'All banks and brokers' : mpEscapeHtml(MP_BROKER_SHORT_NAMES[account] || account),
     '<label style="margin-left:12px"><input type="checkbox" id="mp_account_rub"> in RUB</label>');
   const rubBox = dlg.querySelector('#mp_account_rub');
   try {
     await mpEnsureBrokerRows();
     await mpEnsureExactData(account === 'cash');
   } catch (error) { note.textContent = error.message; return; }
-  const currencies = await mpAccountCurrencySeries(account).catch(() => null);
+  const series = account === MP_ALL_ACCOUNTS ? mpAllAccountsSeries() : await mpAccountCurrencySeries(account).catch(() => null);
   const firstHeld = mpCapitalBrokerRows.findIndex(r => Math.abs(mpAccountFull(account, r)) >= 1);
   if (firstHeld < 0) { note.textContent = 'No history for this account.'; return; }
   const rows = mpCapitalBrokerRows.slice(firstHeld);
@@ -422,10 +443,10 @@ async function mpOpenAccountChart(account) {
     const layers = [];
     let hover = full.map((v, i) => `${fmt(v)}${Math.max(0, v) - parts.solid[i] > 0.5 ? ` (exact: ${fmt(parts.solid[i])})` : ''}`);
     let shapes = [];
-    if (currencies) {
-      // by currency; the days that are estimates shaded over all of them
+    if (series) {
+      // by currency (the Total: by bank); an account's days that are estimates shaded over all of them
       const nums = shown.map(r => mpDayNumber(r.day));
-      const lines = currencies.map(c => ({ label: c.label, color: mpSliceColor(c.label, mpCurrencyColor),
+      const lines = series.map(c => ({ label: c.label, color: c.color || mpSliceColor(c.label, mpCurrencyColor),
         y: shown.map((r, i) => conv(r.day, c.byDay.get(nums[i]) || 0)) })).filter(c => c.y.some(v => Math.abs(v) >= 0.5));
       for (const c of lines) layers.push(area(c.y.map(v => Math.max(0, v)), c.color, 'assets', { name: c.label, legendgroup: c.label, showlegend: lines.length > 1 }));
       for (const c of lines) if (c.y.some(v => v < -0.5)) layers.push(area(c.y.map(v => Math.min(0, v)), c.color, 'debt', { name: c.label, legendgroup: c.label }));
@@ -443,7 +464,7 @@ async function mpOpenAccountChart(account) {
     const first = full[0], last = full[full.length - 1], diff = last - first;
     const pct = first > 0 ? ` · ${diff >= 0 ? '+' : ''}${(diff / first * 100).toFixed(1)}%` : '';
     head.innerHTML = `<span style="font-size:2em;font-weight:700">${fmt(last)}</span><span class="${diff >= 0 ? 'pos' : 'neg'}">${diff >= 0 ? '+' : '−'}${fmt(Math.abs(diff))}${pct}</span><span class="muted">over ${period}</span>`;
-    // several currencies are read as shares of the stack: from zero, or the lowest would be cut off; one is fitted
+    // several layers are read as shares of the stack: from zero, or the lowest would be cut off; one is fitted
     const fit = mpAccountYRange(layers);
     const yRange = fit && layers.filter(t => t.showlegend).length > 1 ? [Math.min(0, fit[0]), fit[1]] : fit;
     Plotly.react(plot, [...layers, { x: days, y: full, type: 'scatter', mode: 'lines', line: { width: 0 }, showlegend: false,
@@ -452,7 +473,7 @@ async function mpOpenAccountChart(account) {
       xaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', type: 'date', tickangle: -45, range: [days[0], days[days.length - 1]], hoverformat: '%d %b %Y' },
       yaxis: Object.assign({}, LAYOUT_BASE.yaxis, rub ? { tickformat: ',.0f', ticksuffix: ' ₽' } : { tickformat: '$,.0f' }, yRange ? { range: yRange, autorange: false } : {}),
       margin: { t: 10, r: 20, b: 60, l: 80 } }), CONFIG);
-    note.textContent = `${parts.known || parts.extrapolated ? `${currencies ? 'Shaded' : 'Faded'}: estimates. ` : ''}Includes money moved in and out, not only gains.`;
+    note.textContent = `${parts.known || parts.extrapolated ? `${series ? 'Shaded' : 'Faded'}: estimates. ` : ''}Includes money moved in and out, not only gains.`;
   };
   mpBindPeriods(dlg, p => { period = p; draw(); });
   rubBox.onchange = async () => {

@@ -282,7 +282,7 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
     return money(usd);
   };
   const nativeTotalRow = fxByCurrency
-    ? `<tr class="total-row"><td class="ticker"><b>Total (native)</b></td>
+    ? `<tr class="total-row"><td class="ticker" data-account="${MP_ALL_ACCOUNTS}" style="cursor:pointer" title="Open the chart of all banks and brokers"><b>Total (native)</b></td>
         ${categories.map(c => `<td><b>${cellDisplay(colTotal(c), c)}</b></td>`).join('')}
         <td class="muted">—</td>
       </tr>`
@@ -308,7 +308,7 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
     <td><b>${money(rowTotal(a))}</b></td>
   </tr>`).join('')}
   ${nativeTotalRow}
-  <tr class="total-row"><td class="ticker"><b>Total (${money.unit || 'USD'})</b></td>
+  <tr class="total-row"><td class="ticker" data-account="${MP_ALL_ACCOUNTS}" style="cursor:pointer" title="Open the chart of all banks and brokers"><b>Total (${money.unit || 'USD'})</b></td>
     ${categories.map(c => `<td${c === 'cushion' && colTotal(c) < MP_CUSHION_USD - 0.005 ? ' class="neg" title="under its $10,000"' : ''}><b>${money(colTotal(c))}</b></td>`).join('')}
     <td><b>${money(grandTotal)}</b></td>
   </tr></tbody></table>
