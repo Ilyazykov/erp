@@ -101,7 +101,8 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       <label style="margin-left:12px;display:none" id="mp_price_via_box"><input type="checkbox" id="mp_price_via" checked> buys through funds</label>
       <label style="margin-left:12px;display:none" id="mp_price_pay_box"><input type="checkbox" id="mp_price_pay" checked> payouts</label>
       <label style="margin-left:12px;display:none" id="mp_price_inv_box"><input type="checkbox" id="mp_price_inv"> <span></span></label>
-      <label style="margin-left:12px;display:none" id="mp_price_rate_box"><input type="checkbox" id="mp_price_rate" checked> <span></span></label></div>
+      <label style="margin-left:12px;display:none" id="mp_price_rate_box"><input type="checkbox" id="mp_price_rate" checked> <span></span></label>
+      <label style="margin-left:12px;display:none" id="mp_price_avg_box"><input type="checkbox" id="mp_price_avg_all" checked> avg over all time</label></div>
     <div id="mp_price_head" style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap"></div>
     <div id="mp_price_chart" style="height:min(60vh,600px)"></div>
     <p class="note" style="margin:0" id="mp_price_note">Loading…</p>
@@ -393,7 +394,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
           : `${acct}, in-bank exchange`;
         // the mark as the chart's own asset's deal: on USD/RUB (the dollar's price in roubles) roubles bought
         // are the dollar sold -- a red sale; on RUB/USD (the rouble's price) a green buy
-        return { day: String(e.at).slice(0, 10), bought, card: e.kind === 'card', side: bought === !!opts.invert ? 'buy' : 'sell', rate,
+        return { day: String(e.at).slice(0, 10), bought, mine, usd: otherUsd, card: e.kind === 'card', side: bought === !!opts.invert ? 'buy' : 'sell', rate,
           text: `${amt(e.sold_amount, e.sold_ccy)} → ${amt(e.bought_amount, e.bought_ccy)}${edge(e)}<br>${when(e.known_at)}${mpEscapeHtml(via)}` };
       }).filter(Boolean);
     } catch (err) { console.warn('currency exchanges:', err); }
@@ -600,13 +601,15 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       lines.push({ type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: last0.v, y1: last0.v, line: { color: 'rgba(230,237,243,0.35)', width: 1 }, layer: 'below' });
       label(last0.v, fmt(last0.v), '#e6edf3', '#0d1117');
     }
+    // (over the whole history, or only the deals in the period shown -- the box)
+    const avgAll = dlg.querySelector('#mp_price_avg_all').checked;
     // the average buy price of what's held: one's own deals over the whole history (not a fund's), as Sber
     // counts it -- each buy adds its cost with the fee and its units, a sale takes units out at the average
     // (checked on SBMM: 18.3767 this way against Sber's 18.3771; FIFO gave 18.41); none when nothing is held
     if (!rateNote) {
       const chartOn = day => { let v = null; for (const p of prices) { if (p.day > day) break; v = p.price_usd; } return v == null ? null : val(day, v); };
       const pos = { qty: 0, cost: 0 };
-      for (const d of deals.filter(x => viaOn || !x.via)) {   // the funds' buys too when they're shown (the box)
+      for (const d of deals.filter(x => (viaOn || !x.via) && (avgAll || x.trade_date >= from))) {   // the funds' buys too when they're shown (the box)
         const q = Number(d.quantity); if (!(q > 0)) continue;
         if (d.side === 'buy') {
           const at = chartOn(d.trade_date);
@@ -633,6 +636,21 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         lines.push({ type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: avg, y1: avg, line: { color: '#8b949e', width: 1, dash: 'dot' }, layer: 'below' });
         label(avg, `avg ${fmt(avg)}`, '#30363d', '#e6edf3');
         avgNote = ` · average buy price ${fmt(avg)} for ${Math.round(qty * 1e6) / 1e6} held (${last0 ? `${last0.v >= avg ? '+' : ''}${((last0.v / avg - 1) * 100).toFixed(1)}%` : ''})`;
+      }
+    }
+    // a currency's: the same over its exchanges -- each bought adds its units and the dollars paid, each sold
+    // takes units out at the average; the average's dollars a unit, shown as the chart is (CCY/USD or USD/CCY)
+    if (opts.currency && fxDeals.length) {
+      const pos = { qty: 0, usd: 0 };
+      for (const d of fxDeals.filter(x => avgAll || x.day >= from)) {
+        if (d.bought) { pos.qty += d.mine; pos.usd += d.usd; }
+        else if (pos.qty > 0) { const a = pos.usd / pos.qty; pos.qty = Math.max(0, pos.qty - d.mine); pos.usd = pos.qty * a; }
+      }
+      if (pos.qty > 1e-9 && pos.usd > 0) {
+        const avg = opts.invert ? pos.usd / pos.qty : pos.qty / pos.usd;
+        lines.push({ type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: avg, y1: avg, line: { color: '#8b949e', width: 1, dash: 'dot' }, layer: 'below' });
+        label(avg, `avg ${fmt(avg)}`, '#30363d', '#e6edf3');
+        avgNote = ` · average rate ${fmt(avg)} for ${Math.round(pos.qty).toLocaleString('en-US')} ${opts.currency} bought (${last0 ? `${last0.v >= avg ? '+' : ''}${((last0.v / avg - 1) * 100).toFixed(1)}%` : ''})`;
       }
     }
     // the two labels on the right (today's price, the average) apart when they'd overlap: ~22 px of the plot's
@@ -714,6 +732,11 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   rateBox.checked = true;
   if (policy.length) { dlg.querySelector('#mp_price_rate_box').style.display = ''; dlg.querySelector('#mp_price_rate_box span').textContent = policyName; }
   rateBox.onchange = draw;
+  // the average over all time or the period shown (remembered); the box where there's an average to draw
+  const avgBox = dlg.querySelector('#mp_price_avg_all');
+  try { avgBox.checked = localStorage.getItem('mp_price_avg_all') !== '0'; } catch { /* no storage */ }
+  if (fxDeals.length || (!rateNote && deals.length)) dlg.querySelector('#mp_price_avg_box').style.display = '';
+  avgBox.onchange = () => { mpSave('mp_price_avg_all', avgBox.checked ? '1' : '0'); draw(); };
   viaBox.onchange = () => { mpSave('mp_price_via', viaBox.checked ? '1' : '0'); draw(); };
   draw();
 }
