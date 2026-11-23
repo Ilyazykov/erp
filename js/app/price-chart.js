@@ -638,22 +638,20 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         avgNote = ` · average buy price ${fmt(avg)} for ${Math.round(qty * 1e6) / 1e6} held (${last0 ? `${last0.v >= avg ? '+' : ''}${((last0.v / avg - 1) * 100).toFixed(1)}%` : ''})`;
       }
     }
-    // a currency's: the average rate it was bought at and the one it was sold at, each weighted by the amount
-    // (a currency is mostly sold or mostly bought -- the euros of a salary -- so "what's held" leaves nothing);
-    // dollars a unit, shown as the chart is (CCY/USD or USD/CCY)
+    // a currency's: the same over its exchanges -- each bought adds its units and the dollars paid, each sold
+    // takes units out at the average; the average's dollars a unit, shown as the chart is (CCY/USD or USD/CCY)
     if (opts.currency && fxDeals.length) {
-      const sum = { buy: { qty: 0, usd: 0 }, sell: { qty: 0, usd: 0 } };
-      for (const d of fxDeals.filter(x => avgAll || x.day >= from)) { const s = sum[d.bought ? 'buy' : 'sell']; s.qty += d.mine; s.usd += d.usd; }
-      const parts = [];
-      for (const [k, word, col] of [['buy', 'bought', '#3fb950'], ['sell', 'sold', '#f85149']]) {
-        const s = sum[k];
-        if (!(s.qty > 1e-9 && s.usd > 0)) continue;
-        const avg = opts.invert ? s.usd / s.qty : s.qty / s.usd;
-        lines.push({ type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: avg, y1: avg, line: { color: col, width: 1, dash: 'dot' }, layer: 'below' });
-        label(avg, `avg ${k} ${fmt(avg)}`, '#30363d', col);
-        parts.push(`${word} ${Math.round(s.qty).toLocaleString('en-US')} ${opts.currency} at ${fmt(avg)} on average`);
+      const pos = { qty: 0, usd: 0 };
+      for (const d of fxDeals.filter(x => avgAll || x.day >= from)) {
+        if (d.bought) { pos.qty += d.mine; pos.usd += d.usd; }
+        else if (pos.qty > 0) { const a = pos.usd / pos.qty; pos.qty = Math.max(0, pos.qty - d.mine); pos.usd = pos.qty * a; }
       }
-      if (parts.length) avgNote = ` · ${parts.join(', ')}`;
+      if (pos.qty > 1e-9 && pos.usd > 0) {
+        const avg = opts.invert ? pos.usd / pos.qty : pos.qty / pos.usd;
+        lines.push({ type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: avg, y1: avg, line: { color: '#8b949e', width: 1, dash: 'dot' }, layer: 'below' });
+        label(avg, `avg ${fmt(avg)}`, '#30363d', '#e6edf3');
+        avgNote = ` · average rate ${fmt(avg)} for ${Math.round(pos.qty).toLocaleString('en-US')} ${opts.currency} bought (${last0 ? `${last0.v >= avg ? '+' : ''}${((last0.v / avg - 1) * 100).toFixed(1)}%` : ''})`;
+      }
     }
     // the two labels on the right (today's price, the average) apart when they'd overlap: ~22 px of the plot's
     if (notes.length) {
