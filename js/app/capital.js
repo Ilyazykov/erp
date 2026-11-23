@@ -378,11 +378,12 @@ async function mpOpenAccountChart(account) {
   const rows = mpCapitalBrokerRows.slice(firstHeld);
   const today = rows[rows.length - 1].day;
   const color = MP_COLORS.broker[account] || (account === 'real estate' ? MP_COLORS.type.real_estate : '#4a9ff5');
-  let period = mpLimitPeriods(dlg, rows[0].day, today);
+  let period = '1y';
   const draw = () => {
     const rub = rubBox.checked, conv = mpCapitalConverter(rub ? 'RUB' : 'USD');
+    // a period is the whole period, at zero before the account's first money; "all" starts at that first money
     const from = mpPeriodStart(period, rows[0].day, today);
-    const shown = rows.filter(r => r.day >= from);
+    const shown = mpCapitalBrokerRows.filter(r => r.day >= from);
     const days = shown.map(r => r.day), full = shown.map(r => conv(r.day, mpAccountFull(account, r)));
     const parts = mpEstimateLayers(shown.map(r => conv(r.day, mpAccountExact(account, r, true))), full,
       account === 'cash' ? shown.map(r => conv(r.day, mpAccountKnown(account, r))) : null);
