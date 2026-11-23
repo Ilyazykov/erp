@@ -3,6 +3,8 @@ from datetime import date, timedelta, datetime, timezone
 from calendar import monthrange
 from pathlib import Path
 
+from ru_earnings import ttm_net_income
+
 SCRATCHPAD = str(Path(__file__).resolve().parent.parent / "data")
 
 def utc_timestamp():
@@ -80,8 +82,8 @@ def quarter_str_to_report_date(qstr):
     q = int(qstr[5])
     end_month, end_day = QUARTER_END[q]
     if q == 4:
-        # Q4: годовые данные известны с 1 января следующего года
-        report_date = date(year + 1, 1, 1)
+        # Q4: выходит с годовым отчётом, с 1 марта следующего года
+        report_date = date(year + 1, 3, 1)
     else:
         qend = date(year, end_month, end_day)
         report_date = qend + timedelta(days=45)
@@ -110,8 +112,7 @@ def get_ttm_ni(quarterly_data, ticker, as_of):
     if len(available) < 4:
         return None
     available.sort(key=lambda x: x[0])
-    last4 = available[-4:]
-    return sum(x[1] for x in last4)
+    return ttm_net_income([x[1] for x in available])
 
 def load_prices(ticker):
     prices = {}

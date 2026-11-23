@@ -15,6 +15,8 @@ from datetime import date, timedelta, datetime, timezone
 from calendar import monthrange
 from pathlib import Path
 
+from ru_earnings import ttm_net_income
+
 SCRATCHPAD = str(Path(__file__).resolve().parent.parent / "data")
 
 def utc_timestamp():
@@ -57,7 +59,7 @@ ANNUAL_REPORT_LAG_MONTHS = 3  # available from March of next year
 def quarter_str_to_report_date(qstr):
     year, q = int(qstr[:4]), int(qstr[5])
     if q == 4:
-        return date(year + 1, 1, 1)
+        return date(year + 1, 3, 1)  # with the annual report (see annual_report_date)
     qend = date(year, QUARTER_END[q][0], QUARTER_END[q][1])
     return qend + timedelta(days=45)
 
@@ -83,7 +85,7 @@ def get_ttm_ni(quarterly_data, ticker, as_of):
     if len(available) < 4:
         return None
     available.sort(key=lambda x: x[0])
-    return sum(x[1] for x in available[-4:])
+    return ttm_net_income([x[1] for x in available])
 
 def load_annual_extra():
     """Returns dict: (ticker, metric) -> list of (year, value, report_date)"""

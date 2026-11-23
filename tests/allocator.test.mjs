@@ -8,7 +8,7 @@ const src = readFileSync(new URL('../js/app/portfolio-pies.js', import.meta.url)
 const pick = n => src.match(new RegExp(`^function ${n}\\([^]*?\\n}\\n`, 'm'))[0];
 const ctx = {};
 vm.createContext(ctx);
-vm.runInContext(['const MP_EXPENSIVE_USD = 500, MP_EXPENSIVE_BUDGET = 0.5;\n'].join('') + ['mpSectorFactors', 'mpWeightedShares', 'mpAllocatePoolByZPriorityLegacy', 'mpAllocatePoolByZPriorityWithLots']
+vm.runInContext(['const MP_EXPENSIVE_USD = 500, MP_EXPENSIVE_RU_USD = 20, MP_EXPENSIVE_BUDGET = 0.5;\n'].join('') + ['mpSectorFactors', 'mpWeightedShares', 'mpAllocatePoolByZPriorityLegacy', 'mpAllocatePoolByZPriorityWithLots']
   .map(pick).join('\n') + '\nthis.legacy = mpAllocatePoolByZPriorityLegacy; this.lots = mpAllocatePoolByZPriorityWithLots;', ctx);
 
 let failed = 0;

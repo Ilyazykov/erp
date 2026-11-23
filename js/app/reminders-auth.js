@@ -336,7 +336,7 @@ function mpUpdateAuthUi(session) {
     Plotly.purge('plot_invested_earned');
     document.getElementById('mp_charts_grid').innerHTML = '';
     document.getElementById('mp_lookthrough_wrap').innerHTML = '';
-    ['plot_mp_pie_us_stocks', 'plot_mp_pie_us_sectors', 'plot_mp_pie_ru_stocks', 'plot_mp_pie_stocksbonds', 'plot_mp_pie_deposits']
+    ['plot_mp_pie_us_stocks', 'plot_mp_pie_us_sectors', 'plot_mp_pie_ru_stocks', 'plot_mp_pie_ru_sectors', 'plot_mp_pie_stocksbonds', 'plot_mp_pie_deposits']
       .forEach(id => { document.getElementById(id).style.display = 'none'; });
     ['mp_pie_us_stocks_note', 'mp_pie_ru_stocks_note', 'mp_pie_stocksbonds_note', 'mp_pie_deposits_note',
      'mp_pie_us_stocks_title', 'mp_pie_ru_stocks_title', 'mp_pie_stocksbonds_title', 'mp_pie_deposits_title']
@@ -353,7 +353,7 @@ function mpUpdateAuthUi(session) {
   const el = document.getElementById(id);
   if (el) el.addEventListener('input', () => { mpRenderPortfolioPies(); });
 });
-['mp_ru_stocks_respect_lots', 'mp_us_stocks_respect_lots', 'mp_us_stocks_use_sectors', 'mp_us_stocks_prefer_expensive'].forEach(id => {
+['mp_ru_stocks_respect_lots', 'mp_ru_stocks_prefer_expensive', 'mp_us_stocks_respect_lots', 'mp_us_stocks_use_sectors', 'mp_us_stocks_prefer_expensive'].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener('change', () => { mpRenderPortfolioPies(); });
 });

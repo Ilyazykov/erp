@@ -9,7 +9,7 @@ const MP_OTHER_COLOR = '#4a5563';
 const MP_SECTOR_COLORS = {
   Financials: '#f08a3c', Industrials: '#f5c542', 'Health Care': '#9b5de5', 'Information Technology': '#3a9bf7',
   'Communication Services': '#4cb86a', 'Consumer Discretionary': '#f29bd0', 'Consumer Staples': '#4fd1c5',
-  Energy: '#e8574d', Materials: '#8e8e93', Utilities: '#b9b4f5', 'Real Estate': '#f7b6d8', Unclassified: '#5c6470',
+  Energy: '#e8574d', Materials: '#8e8e93', Utilities: '#b9b4f5', 'Real Estate': '#f7b6d8', Funds: '#5c6470', Unclassified: '#5c6470',
 };
 const MP_COLORS = {
   // currencies & coins

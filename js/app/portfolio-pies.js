@@ -49,7 +49,7 @@ function mpDonutLayout(maxR) {
 
 // "Prefer expensive shares": a big budget is the chance to buy what a small one can't. Expensive = above
 // this price; these get one share first: the first whenever it's affordable, the rest within this part of the budget.
-const MP_EXPENSIVE_USD = 500, MP_EXPENSIVE_BUDGET = 0.5;
+const MP_EXPENSIVE_USD = 500, MP_EXPENSIVE_RU_USD = 20, MP_EXPENSIVE_BUDGET = 0.5;
 
 // The sector as the allocators' second factor: within one Z group, a stock of an underweight sector
 // gets more. item -> sector target / sector held, from 0.25 to 4; 1 for an item with no sector.
@@ -254,7 +254,7 @@ function mpAllocatePoolByZPriorityWithLots(usable, totalUsd, userInjectionUsd, o
     for (;;) {
       const factors = mpSectorFactors(usable, targetUsdOf, it => currentUsdOf(it) + deltaUsdByItem.get(it));
       const next = usable
-        .filter(it => !bought.has(it) && !(it.z < -1.5) && isBelowTarget(it) && it.priceUsd > MP_EXPENSIVE_USD
+        .filter(it => !bought.has(it) && !(it.z < -1.5) && isBelowTarget(it) && it.priceUsd > (options.expensiveUsd ?? MP_EXPENSIVE_USD)
           && it.priceUsd <= pool && (!bought.size || budget - pool + it.priceUsd <= budget * MP_EXPENSIVE_BUDGET))
         .sort((a, b) => zRank(a) - zRank(b) || factors.get(b) - factors.get(a) || b.priceUsd - a.priceUsd)[0];
       if (!next) break;
@@ -412,7 +412,7 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
     if (userInjectionUsd > 0) {
       const respectLotSize = opts.respectLotSize !== false;
       const allocateFn = respectLotSize ? mpAllocatePoolByZPriorityWithLots : mpAllocatePoolByZPriorityLegacy;
-      const { deltaUsdByItem } = allocateFn(usable, sharedTotalUsd, userInjectionUsd, { preferExpensive: opts.preferExpensive });
+      const { deltaUsdByItem } = allocateFn(usable, sharedTotalUsd, userInjectionUsd, { preferExpensive: opts.preferExpensive, expensiveUsd: opts.expensiveUsd });
       const newUsdByItem = usable.map(it => (it.current / 100 * sharedTotalUsd) + (deltaUsdByItem.get(it) || 0));
       const allocatedNewUsd = newUsdByItem.reduce((s, v) => s + v, 0);
       if (allocatedNewUsd > 0) {
@@ -482,7 +482,8 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
     const respectLotSize = opts.respectLotSize !== false;
     const allocateFn = respectLotSize ? mpAllocatePoolByZPriorityWithLots : mpAllocatePoolByZPriorityLegacy;
     const { deltaUsdByItem, newTotalUsd, leftoverPoolUsd } = totalUsd
-      ? allocateFn(usable, totalUsd, userInjectionUsd)
+      // the same options as the donut's call above: the table and the chart must show the same purchases
+      ? allocateFn(usable, totalUsd, userInjectionUsd, { preferExpensive: opts.preferExpensive, expensiveUsd: opts.expensiveUsd })
       : { deltaUsdByItem: new Map(), newTotalUsd: null, leftoverPoolUsd: 0 };
     let totalCurrentUsd = 0;
     let totalNewUsdAgg = 0;
@@ -678,6 +679,24 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
   return new Map(usable.map(it => [it.label, pctOf(it)]));
 }
 
+// The same stocks by economic sector, to the right of a basket's donut. shownPct: that donut's
+// shares (with a pending allocation, after it).
+function mpDrawSectorDonut(divId, sectorMap, rows, pctOf, shownPct, totalUsd) {
+  const raw = Object.fromEntries((rows || []).map(r => [r.ticker, r]));
+  const items = Object.entries(sectorMap).map(([label, tickers]) => ({
+    label, color: MP_SECTOR_COLORS[label],
+    target: tickers.reduce((s, t) => s + (raw[t]?.target || 0), 0),
+    current: tickers.reduce((s, t) => s + pctOf(t), 0),
+    detail: tickers.filter(t => pctOf(t) > 0).sort((a, b) => pctOf(b) - pctOf(a))
+      .map(t => `${t} ${pctOf(t).toFixed(2)}%`).join('<br>'),
+  })).sort((a, b) => b.target - a.target);
+  mpDrawTargetDonut(divId, `${divId}_note`, items, totalUsd, null, {
+    labelR: 1.05, plotTitle: 'By economic sector',
+    displayPct: shownPct && new Map(Object.entries(sectorMap).map(([label, tickers]) =>
+      [label, tickers.reduce((s, t) => s + (shownPct.get(t) || 0), 0)])),
+  });
+}
+
 async function mpRenderPortfolioPies() {
   if (!DATA) return;
   const { data, error } = await sb.from('portfolio_value_usd').select('*');
@@ -730,21 +749,8 @@ async function mpRenderPortfolioPies() {
       investRowId: 'mp_us_stocks_invest_row', displayCurrency: 'USD',
       respectLotSize: usRespectLotSize, preferExpensive: usPreferExpensive,
     });
-  // the same stocks by economic sector, to the right of it
-  const usRaw = Object.fromEntries((DATA.usTargetWeightsRaw || []).map(r => [r.ticker, r]));
-  const usPct = t => (valueByTicker[t] || 0) / (usTotal || 1) * 100;
-  const usSectorItems = Object.entries(US_SECTORS).map(([label, tickers]) => ({
-    label, color: MP_SECTOR_COLORS[label],
-    target: tickers.reduce((s, t) => s + (usRaw[t]?.target || 0), 0),
-    current: tickers.reduce((s, t) => s + usPct(t), 0),
-    detail: tickers.filter(t => usPct(t) > 0).sort((a, b) => usPct(b) - usPct(a))
-      .map(t => `${t} ${usPct(t).toFixed(2)}%`).join('<br>'),
-  })).sort((a, b) => b.target - a.target);
-  mpDrawTargetDonut('plot_mp_pie_us_sectors', 'mp_pie_us_sectors_note', usSectorItems, usTotal, null, {
-    labelR: 1.05, plotTitle: 'By economic sector',
-    displayPct: usShownPct && new Map(Object.entries(US_SECTORS).map(([label, tickers]) =>
-      [label, tickers.reduce((s, t) => s + (usShownPct.get(t) || 0), 0)])),
-  });
+  mpDrawSectorDonut('plot_mp_pie_us_sectors', US_SECTORS, DATA.usTargetWeightsRaw,
+    t => (valueByTicker[t] || 0) / (usTotal || 1) * 100, usShownPct, usTotal);
 
   // 2. Russian stocks: same idea, using the target list (equities + TRND/AKME/AKFN) and its
   //    own Z-score-adjusted Target column.
@@ -753,7 +759,8 @@ async function mpRenderPortfolioPies() {
   const ruUserInjectionRub = ruInvestInputEl ? (parseFloat(ruInvestInputEl.value) || 0) : 0;
   const ruRespectLotsEl = document.getElementById('mp_ru_stocks_respect_lots');
   const ruRespectLotSize = ruRespectLotsEl ? ruRespectLotsEl.checked : true;
-  mpDrawTargetDonut('plot_mp_pie_ru_stocks', 'mp_pie_ru_stocks_note',
+  const ruPreferExpensive = !!document.getElementById('mp_ru_stocks_prefer_expensive')?.checked;
+  const ruShownPct = mpDrawTargetDonut('plot_mp_pie_ru_stocks', 'mp_pie_ru_stocks_note',
     (DATA.ruTargetWeightsRaw || []).map(r => ({
       label: r.ticker, target: r.target, current: (valueByTicker[r.ticker] || 0) / (ruStockTotal || 1) * 100,
       color: (DATA.ruTickerColors || {})[r.ticker] || '#8b949e',
@@ -762,7 +769,10 @@ async function mpRenderPortfolioPies() {
     })), ruStockTotal, null, {
       zPriorityAllocation: true, userInjectionRub: ruUserInjectionRub,
       investRowId: 'mp_ru_stocks_invest_row', respectLotSize: ruRespectLotSize,
+      preferExpensive: ruPreferExpensive, expensiveUsd: MP_EXPENSIVE_RU_USD,
     });
+  mpDrawSectorDonut('plot_mp_pie_ru_sectors', RU_SECTORS, DATA.ruTargetWeightsRaw,
+    t => (valueByTicker[t] || 0) / (ruStockTotal || 1) * 100, ruShownPct, ruStockTotal);
 
   // 3. Russian stocks vs Russian bonds: target from the ERP & Stocks/Bonds
   //    Allocation tab's own base/target allocation. "Stocks" is the same

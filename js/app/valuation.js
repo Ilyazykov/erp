@@ -308,6 +308,7 @@ function renderChart(id) {
       ]), CONFIG);
     Plotly.newPlot('plot_targetweights', DATA.targetWeights, DATA.targetWeightsLayout, CONFIG);
     mpChartOnClick('plot_targetweights');
+    Plotly.newPlot('plot_ru_sectors', DATA.ruSectors, DATA.ruSectorsLayout, CONFIG);
   } else if (id === 'usstocks') {
     Plotly.newPlot('plot_us_zscore', DATA.usZscore,
       layoutWith('Z-score', [
@@ -550,11 +551,11 @@ function twTableHtml(rows, colors) {
   `;
 }
 
-// The US basket by sector: the target weights donut's geometry (angle = base, radius = target / base),
+// A basket by sector: the target weights donut's geometry (angle = base, radius = target / base),
 // a sector's hover lists its stocks; no click, a sector has no price chart.
-function usSectorDonut(rows) {
+function sectorDonut(rows, sectorMap) {
   const byTicker = Object.fromEntries(rows.map(r => [r.ticker, r]));
-  const sectors = Object.entries(US_SECTORS).map(([ticker, tickers]) => {
+  const sectors = Object.entries(sectorMap).map(([ticker, tickers]) => {
     const held = tickers.map(t => byTicker[t]).filter(Boolean).sort((a, b) => b.target - a.target);
     return { ticker, held, base: held.reduce((s, r) => s + r.base, 0), target: held.reduce((s, r) => s + r.target, 0), z: null };
   }).filter(r => r.base > 0).sort((a, b) => b.target - a.target);
@@ -663,6 +664,16 @@ const US_SECTORS = {
   Materials: ['LIN', 'SHW', 'FCX'],
   Utilities: ['NEE', 'DUK', 'SO'],
   'Real Estate': ['PLD', 'AMT', 'EQIX'],
+};
+// the Russian basket likewise; the funds aren't split by what they hold
+const RU_SECTORS = {
+  Financials: ['SBER', 'T', 'DOMRF', 'VTBR'],
+  'Communication Services': ['YDEX'],
+  'Consumer Discretionary': ['OZON'],
+  Energy: ['ROSN'],
+  Materials: ['GMKN', 'PLZL'],
+  Utilities: ['IRAO'],
+  Funds: ['TRND', 'AKME', 'AKFN'],
 };
 const US_COLORS = [
   '#4da8c8','#f0b429','#3dd68c','#22d3ee','#e05252','#a78bfa','#fb923c',
@@ -990,7 +1001,7 @@ function usTargetCharts(usTargetWeightsData, usTargetAllocationData) {
   const usTickerColor = {};
   US_TICKERS.forEach(([ticker], i) => { usTickerColor[ticker] = US_COLORS[i % US_COLORS.length]; });
   const { traces: usTargetWeights, layout: usTargetWeightsLayout } = twDonut(usTwRows, usTickerColor, 9);
-  const { traces: usSectors, layout: usSectorsLayout } = usSectorDonut(usTwRows);
+  const { traces: usSectors, layout: usSectorsLayout } = sectorDonut(usTwRows, US_SECTORS);
 
   document.getElementById('us_targetweights_note').innerHTML = `
     <b>EXPERIMENTAL</b> — same illustrative donut as the Russian portfolio's Target Weights
@@ -1210,6 +1221,7 @@ function ruTargetCharts(targetWeightsData, targetAllocationData) {
   // weight, radial extent = R_BASE * (target/base) (twDonut).
   const twRows = targetWeightsData.weights;
   const { traces: targetWeights, layout: targetWeightsLayout } = twDonut(twRows, TICKER_COLORS, 10);
+  const { traces: ruSectors, layout: ruSectorsLayout } = sectorDonut(twRows, RU_SECTORS);
 
   document.getElementById('targetweights_note').innerHTML = `
     Each sector's <b>angular width</b> is its <b>base</b> (strategic) weight — so sectors tile the
@@ -1256,7 +1268,7 @@ function ruTargetCharts(targetWeightsData, targetAllocationData) {
 
   document.getElementById('alloc_target_table_wrap').innerHTML = allocTableHtml(allocNames, allocBase, allocTarget, allocZ,
     allocAdjustment, ALLOC_COLORS, { label: 'Key Rate', value: targetAllocationData.key_rate }, false);
-  return { twRows, targetWeights, targetWeightsLayout, allocTargetTrace, allocTargetLayout, allocBase, allocTarget };
+  return { twRows, targetWeights, targetWeightsLayout, ruSectors, ruSectorsLayout, allocTargetTrace, allocTargetLayout, allocBase, allocTarget };
 }
 
 // Every chart of the valuation tabs from data/* (written there by the daily
@@ -1299,7 +1311,7 @@ async function loadData() {
            usAllocTargetRaw: usT.usAllocTarget,
            sigmoidAmp: sig.sigmoidAmp, sigmoidAmpShapes: sig.sigmoidAmpShapes, sigmoidAmpAnnotations: sig.sigmoidAmpAnnotations,
            wCny5yCombined: sig.wCny5yCombined, wCny5yZones: sig.wCny5yZones,
-           targetWeights: ruT.targetWeights, targetWeightsLayout: ruT.targetWeightsLayout, allocTarget: ruT.allocTargetTrace, allocTargetLayout: ruT.allocTargetLayout,
+           targetWeights: ruT.targetWeights, targetWeightsLayout: ruT.targetWeightsLayout, ruSectors: ruT.ruSectors, ruSectorsLayout: ruT.ruSectorsLayout, allocTarget: ruT.allocTargetTrace, allocTargetLayout: ruT.allocTargetLayout,
            sigmoidAxisRange: sig.sigmoidAxisRange,
            // Raw (non-chart-trace) target figures, reused by the My Portfolio
            // pie charts to compare against the user's actual holdings —
