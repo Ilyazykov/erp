@@ -313,6 +313,9 @@ Deno.serve(async (req) => {
       if (rows.length) fxDone.push(`${ccy}:${rows.length}`);
     }
     report.fx = fxDone;
+    // Yahoo's dinar has bad quotes on some days: those of the last weeks set back to RSD/EUR's median (migration ...250)
+    const { error: rsdErr } = await db.rpc('clean_rsd_fx', { p_from: addDays(today(), -40) });
+    if (rsdErr) console.error(`clean_rsd_fx: ${rsdErr.message}`);   // not worth losing the day's prices over
     // FX in memory for converting prices (LOCF).
     const fx = new Map<string, [string, number][]>();
     const fxOn = async (ccy: string, day: string) => {

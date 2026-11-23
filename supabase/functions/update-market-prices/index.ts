@@ -818,6 +818,9 @@ async function fetchWesternEtfPrice(ticker: string): Promise<YahooHit | null> {
 
 const fxCache: Record<string, number | null> = {};
 
+// RSD per euro from the cleaned history: Yahoo's live RSD comes rounded to 0.0094, about 1% off (migration ...250)
+let rsdPerEur: number | null = null;
+
 async function fxRateToUsd(currency: string, usdRubRate: number | null): Promise<number | null> {
   // Returns how many USD one unit of `currency` is worth. RUB uses the
   // freshly-fetched CBR rate. Any other currency (EUR, CNY, GBP, ...) is
@@ -829,6 +832,10 @@ async function fxRateToUsd(currency: string, usdRubRate: number | null): Promise
   if (c === 'USD') return 1.0;
   if (c === 'RUB' || c === 'SUR') return usdRubRate ? 1.0 / usdRubRate : null;
   if (c in fxCache) return fxCache[c];
+  if (c === 'RSD' && rsdPerEur) {
+    const eur = await fxRateToUsd('EUR', usdRubRate);
+    if (eur) { fxCache[c] = eur / rsdPerEur; return fxCache[c]; }
+  }
   // A single transient failure (network blip, rate limit) shouldn't
   // permanently blank out every asset in this currency for the rest of the
   // run -- only a null result is cached after retrying a few times, not on
@@ -989,6 +996,8 @@ async function runUpdate(): Promise<Record<string, unknown>> {
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const supabase = createClient(supabaseUrl, serviceKey);
+  const { data: rsdRate } = await supabase.rpc('rsd_per_eur');
+  rsdPerEur = Number(rsdRate) > 0 ? Number(rsdRate) : null;
 
   log('Fetching distinct tickers from Supabase trades...');
   let tickers = await fetchDistinctTickers(supabase);
