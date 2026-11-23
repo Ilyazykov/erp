@@ -18,7 +18,7 @@ const MP_COLORS = {
     RSD: '#4f7dff', GEL: '#00aeef', CHF: '#e3242b', CAD: '#ff8a80', TWD: '#3d6bff', KRW: '#6fa8ff', HKD: '#ff6f61', AUD: '#ffd000',
     INR: '#ff9933', BRL: '#00c853', ZAR: '#7cd322', SGD: '#ff5c5c', SAR: '#00a86b', ILS: '#3f8cff', MXN: '#00b86b',
     AED: '#c08457', MYR: '#5a78ff',
-    XAU: '#f5c542', BTC: '#ff7a1a', ETH: '#9b6bff', SOL: '#00d9a3', GRAM: '#29b6f6', TON: '#29b6f6', TAO: '#c3c9d1',
+    Altcoins: '#2dd4bf', XAU: '#f5c542', BTC: '#ff7a1a', ETH: '#9b6bff', SOL: '#00d9a3', GRAM: '#29b6f6', TON: '#29b6f6', TAO: '#c3c9d1',
   },
   broker: {
     Freedom24: '#00d1b2', 'Bank of Cyprus': '#4fc3f7', Revolut: '#8e8e93', Wise: '#9fe870', Raiffeisen: '#c9a400',
@@ -44,6 +44,8 @@ const MP_COLORS = {
 };
 // a currency's colour by its label ("EUR 🇪🇺"): the same on every chart
 const mpCurrencyColor = l => MP_COLORS.currency[l.split(' ')[0]] || null;
+// a label of a fiat currency: it carries a flag (or the globe of "others"); gold and coins don't
+const mpIsFiatLabel = l => /[\u{1F1E6}-\u{1F1FF}]|🌍/u.test(l);
 function mpSliceColor(label, colorOf) {
   if (/^other\b/.test(label)) return MP_OTHER_COLOR;
   const c = colorOf(label);

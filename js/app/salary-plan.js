@@ -628,7 +628,7 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
     ['bond', 'CNY'], ['deposit', 'CNY'], ['liquid', 'CNY'], ['cash', 'CNY'], ['stock', 'CNY']]
     .map(([t, c]) => `${MP_RU_INFRA_LABELS[t]} ${MP_RU_INFRA_CURRENCIES[c]}`);
   // Currencies carry a flag; crypto tickers don't.
-  const isFiatLabel = l => /[\u{1F1E6}-\u{1F1FF}]|🌍/u.test(l);
+  const isFiatLabel = mpIsFiatLabel;
   // Colours by what a label names (labels carry flags / emoji, so look the
   // key up from its first word, or from the maps the labels were built from).
   const key = l => l.split(' ')[0];

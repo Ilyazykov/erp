@@ -396,16 +396,24 @@ async function mpAccountCurrencySeries(account) {
   // the main currencies, gold, BTC and ETH always on their own, however small; the rest up to 8 layers, then "other"
   const named = new Set(ranked.filter(r => MP_MAIN_CURRENCIES.has(r.label.split(' ')[0]) || ['XAU', 'BTC', 'ETH'].includes(r.label.split(' ')[0])));
   for (const r of ranked) { if (named.size >= 8) break; named.add(r); }
-  const out = ranked.filter(r => named.has(r));
-  const rest = ranked.filter(r => !named.has(r));
-  if (rest.length) {
+  const fold = (list, label) => {
+    if (!list.length) return [];
     const byDay = new Map(), cashByDay = new Map();
-    for (const r of rest) {
+    for (const r of list) {
       for (const [d, v] of r.byDay) add(byDay, d, v);
       for (const [d, v] of r.cashByDay) add(cashByDay, d, v);
     }
-    out.push({ label: 'other', byDay, cashByDay });
-  }
+    return [{ label, byDay, cashByDay }];
+  };
+  // fiat first, its small ones as "other" right after it; then gold, the coins and the small coins together
+  const isFiat = r => mpIsFiatLabel(r.label), isGold = r => r.label === 'XAU';
+  const out = [
+    ...ranked.filter(r => named.has(r) && isFiat(r)),
+    ...fold(ranked.filter(r => !named.has(r) && isFiat(r)), 'other'),
+    ...ranked.filter(r => named.has(r) && isGold(r)),
+    ...ranked.filter(r => named.has(r) && !isFiat(r) && !isGold(r)),
+    ...fold(ranked.filter(r => !named.has(r) && !isFiat(r)), 'Altcoins'),
+  ];
   mpAccountSeries.set(account, out);
   return out;
 }
