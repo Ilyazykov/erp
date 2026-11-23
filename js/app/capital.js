@@ -489,11 +489,15 @@ function mpStackLayerAt(layers, i, y) {
 async function mpOpenAccountChart(account) {
   const { dlg, head, plot, note } = mpChartDialog('mp_account', account === MP_ALL_ACCOUNTS ? 'All banks and brokers' : mpEscapeHtml(MP_BROKER_SHORT_NAMES[account] || account),
     `<label style="margin-left:12px"><input type="checkbox" id="mp_account_rub"> in RUB</label>
-     <label style="margin-left:12px;display:none" id="mp_account_fade_box"><input type="checkbox" id="mp_account_fade"> grey out estimates</label>`);
+     <label style="margin-left:12px;display:none" id="mp_account_fade_box"><input type="checkbox" id="mp_account_fade"> grey out estimates</label>
+     <label style="margin-left:12px;display:none" id="mp_account_pct_box"><input type="checkbox" id="mp_account_pct"> as % of the total</label>`);
   const rubBox = dlg.querySelector('#mp_account_rub');
   // estimates greyed out or drawn like the rest (remembered); the box where there are any
   const fadeBox = dlg.querySelector('#mp_account_fade');
   try { fadeBox.checked = localStorage.getItem('mp_account_fade') !== '0'; } catch { fadeBox.checked = true; }
+  // stretched to 100% (remembered); the box where there are several layers
+  const pctBox = dlg.querySelector('#mp_account_pct');
+  try { pctBox.checked = localStorage.getItem('mp_account_pct') === '1'; } catch { /* no storage */ }
   try {
     await mpEnsureBrokerRows();
     await mpEnsureExactData(account === 'cash');
@@ -526,9 +530,10 @@ async function mpOpenAccountChart(account) {
     const t = mpStackLayerAt(shownLayers, i, fl.yaxis.p2l(py));
     if (!t) { hideTip(); return; }
     const same = shownLayers.filter(x => x.legendgroup === t.legendgroup && x.stackgroup === t.stackgroup);
-    const whole = same.reduce((s, x) => s + (x.y[i] || 0), 0), total = view.full[i];
+    // (customdata: a layer's money, its y being a share when stretched to 100%)
+    const value = t.customdata[i], whole = same.reduce((s, x) => s + (x.customdata[i] || 0), 0), total = view.full[i];
     // "(exact)" only on a day that also has an estimate of this currency
-    const name = Math.abs(whole - t.y[i]) >= 0.005 && t.name === t.legendgroup ? `${t.name} (exact)` : t.name;
+    const name = Math.abs(whole - value) >= 0.005 && t.name === t.legendgroup ? `${t.name} (exact)` : t.name;
     const date = new Date(view.ms[i]).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
     // the amount in the currency itself (or in coins), at that day's rate; not for USD or a mixed layer
     const code = view.byCurrency ? String(t.legendgroup).split(' ')[0] : null;
@@ -536,11 +541,11 @@ async function mpOpenAccountChart(account) {
     let nativeText = '';
     if (code && !['USD', 'other', 'Altcoins'].includes(code) && !(view.rub && code === 'RUB')) {
       const fiat = mpIsFiatLabel(t.legendgroup), rate = mpUnitPriceOn(code, fiat, mpDayNumber(day));
-      if (rate) nativeText = ` · ${mpNativeAmount(t.y[i] / view.conv(day, 1) / rate, code, fiat)}`;
+      if (rate) nativeText = ` · ${mpNativeAmount(value / view.conv(day, 1) / rate, code, fiat)}`;
     }
-    tip.innerHTML = `${date}<br><span style="color:${t.fillcolor}">■</span> <b>${mpEscapeHtml(name)}: ${view.fmt(t.y[i])}</b>${nativeText}`
-      + (same.length > 1 && Math.abs(whole - t.y[i]) >= 0.005 ? `<br>${mpEscapeHtml(t.legendgroup)} in all: ${view.fmt(whole)}` : '')
-      + (total ? `<br><span style="color:#8b949e">${(t.y[i] / total * 100).toFixed(1)}% of ${view.fmt(total)}</span>` : '');
+    tip.innerHTML = `${date}<br><span style="color:${t.fillcolor}">■</span> <b>${mpEscapeHtml(name)}: ${view.fmt(value)}</b>${nativeText}`
+      + (same.length > 1 && Math.abs(whole - value) >= 0.005 ? `<br>${mpEscapeHtml(t.legendgroup)} in all: ${view.fmt(whole)}` : '')
+      + (total ? `<br><span style="color:#8b949e">${(view.pct ? t.y[i] : value / total * 100).toFixed(1)}% of ${view.fmt(total)}</span>` : '');
     tip.style.display = '';
     const w = tip.offsetWidth, h = tip.offsetHeight;
     tip.style.left = `${ev.clientX + 14 + w > innerWidth ? ev.clientX - w - 14 : ev.clientX + 14}px`;
@@ -602,15 +607,26 @@ async function mpOpenAccountChart(account) {
     head.innerHTML = `<span style="font-size:2em;font-weight:700">${fmt(last)}</span><span class="${diff >= 0 ? 'pos' : 'neg'}">${diff >= 0 ? '+' : '−'}${fmt(Math.abs(diff))}${pct}</span><span class="muted">over ${period}</span>`;
     // several layers are read as shares of the stack: from zero, or the lowest would be cut off; one is fitted
     const fit = mpAccountYRange(layers);
-    const yRange = fit && layers.filter(t => t.showlegend).length > 1 ? [Math.min(0, fit[0]), fit[1]] : fit;
-    Plotly.react(plot, layers,
+    const several = layers.filter(t => t.showlegend).length > 1;
+    const yRange = fit && several ? [Math.min(0, fit[0]), fit[1]] : fit;
+    dlg.querySelector('#mp_account_pct_box').style.display = several ? '' : 'none';
+    const pctOn = several && pctBox.checked;
+    view.pct = pctOn;
+    layers.forEach(t => { t.customdata = t.y; });
+    // as %: each layer's share of what's held that day (a debt below zero isn't a holding: not drawn then)
+    const held = days.map((_, i) => layers.reduce((s, t) => s + (t.stackgroup === 'assets' ? t.y[i] : 0), 0));
+    const drawn = pctOn ? layers.filter(t => t.stackgroup === 'assets')
+      .map(t => ({ ...t, y: t.y.map((v, i) => (held[i] > 0 ? v / held[i] * 100 : 0)) })) : layers;
+    Plotly.react(plot, drawn,
     Object.assign({}, LAYOUT_BASE, { showlegend: layers.some(t => t.showlegend), hovermode: false, shapes,
       xaxis: { gridcolor: '#1e2830', linecolor: '#1e2830', type: 'date', tickangle: -45, range: [days[0], days[days.length - 1]] },
-      yaxis: Object.assign({}, LAYOUT_BASE.yaxis, rub ? { tickformat: cents ? ',.2~f' : ',.0f', ticksuffix: ' ₽' } : { tickformat: cents ? '$,.2~f' : '$,.0f' }, yRange ? { range: yRange, autorange: false } : {}),
+      yaxis: Object.assign({}, LAYOUT_BASE.yaxis, rub ? { tickformat: cents ? ',.2~f' : ',.0f', ticksuffix: ' ₽' } : { tickformat: cents ? '$,.2~f' : '$,.0f' }, yRange ? { range: yRange, autorange: false } : {},
+        pctOn ? { tickformat: '.0f', ticksuffix: '%', tickprefix: '', range: [0, 100], autorange: false } : {}),
       margin: { t: 10, r: 20, b: 60, l: 80 } }), CONFIG);
     note.textContent = `${!fadeOn ? '' : totalEstimated ? 'Faded: estimates. ' : parts.known || parts.extrapolated ? `${series ? 'Shaded' : 'Faded'}: estimates. ` : ''}Includes money moved in and out, not only gains.`;
   };
   mpBindPeriods(dlg, p => { period = p; draw(); });
+  pctBox.onchange = () => { mpSave('mp_account_pct', pctBox.checked ? '1' : '0'); draw(); };
   fadeBox.onchange = () => { mpSave('mp_account_fade', fadeBox.checked ? '1' : '0'); draw(); };
   rubBox.onchange = async () => {
     if (rubBox.checked && !mpCapitalRub) {
