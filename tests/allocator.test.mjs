@@ -8,7 +8,7 @@ const src = readFileSync(new URL('../js/app/portfolio-pies.js', import.meta.url)
 const pick = n => src.match(new RegExp(`^function ${n}\\([^]*?\\n}\\n`, 'm'))[0];
 const ctx = {};
 vm.createContext(ctx);
-vm.runInContext(['mpSectorFactors', 'mpWeightedShares', 'mpAllocatePoolByZPriorityLegacy', 'mpAllocatePoolByZPriorityWithLots']
+vm.runInContext(['const MP_EXPENSIVE_FROM = 0.2, MP_EXPENSIVE_TO = 0.4, MP_EXPENSIVE_BUDGET = 0.5;\n'].join('') + ['mpSectorFactors', 'mpWeightedShares', 'mpAllocatePoolByZPriorityLegacy', 'mpAllocatePoolByZPriorityWithLots']
   .map(pick).join('\n') + '\nthis.legacy = mpAllocatePoolByZPriorityLegacy; this.lots = mpAllocatePoolByZPriorityWithLots;', ctx);
 
 let failed = 0;
@@ -46,6 +46,19 @@ check('without sectors the split is by shortfall alone', () => {
   const a = item('A', undefined, 50, 30), b = item('B', undefined, 50, 70);
   const r = ctx.legacy([a, b], 1000, 100);
   assert.ok(Math.abs(got(r, a) - 100) < 1e-6);
+});
+check('prefer expensive: one share of a dear stock a plain split would skip', () => {
+  const mk = () => [item('X', 'A', 10, 0, 0, 1500), item('Y', 'B', 90, 0, 0, 10)];
+  const off = mk(), on = mk();
+  assert.equal(got(ctx.lots(off, 0, 5000), off[0]), 0);
+  assert.equal(got(ctx.lots(on, 0, 5000, { preferExpensive: true }), on[0]), 1500);
+});
+check('prefer expensive: never a Z < -1.5 stock, and within half the budget', () => {
+  const its = [item('R', 'A', 30, 0, -2, 1500), item('P', 'B', 30, 0, 0, 1500), item('Q', 'C', 30, 0, 0, 1500), item('Z', 'D', 10, 0, 0, 10)];
+  const r = ctx.lots(its, 0, 5000, { preferExpensive: true });
+  assert.ok(got(r, its[1]) + got(r, its[2]) >= 1500);
+  assert.ok(got(r, its[0]) <= 1500);
+  assert.ok(its.reduce((s, it) => s + got(r, it), 0) <= 5000);
 });
 if (failed) process.exit(1);
 console.log('\nall ok');

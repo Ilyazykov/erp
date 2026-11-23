@@ -353,7 +353,7 @@ function mpUpdateAuthUi(session) {
   const el = document.getElementById(id);
   if (el) el.addEventListener('input', () => { mpRenderPortfolioPies(); });
 });
-['mp_ru_stocks_respect_lots', 'mp_us_stocks_respect_lots', 'mp_us_stocks_use_sectors'].forEach(id => {
+['mp_ru_stocks_respect_lots', 'mp_us_stocks_respect_lots', 'mp_us_stocks_use_sectors', 'mp_us_stocks_prefer_expensive'].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener('change', () => { mpRenderPortfolioPies(); });
 });
