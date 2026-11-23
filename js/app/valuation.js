@@ -836,7 +836,9 @@ function ruErpCharts(rows, eyRows, vkcoRows, vkcoRevenueRows, vkcoPredicted) {
 
 // The US basket's Z-scores (us_zscore.csv), a line a ticker, the first five shown.
 function usZscoreChart(usZscoreRows) {
-  const usZDates = [...new Set(usZscoreRows.map(r => r.date + '-01'))];
+  // the axis starts at the first month with a Z-score: before it there's too little history
+  const usFirstZ = usZscoreRows.filter(r => r.z_score).map(r => r.date + '-01').sort()[0];
+  const usZDates = [...new Set(usZscoreRows.map(r => r.date + '-01'))].filter(d => !usFirstZ || d >= usFirstZ);
   const usByTicker = {};
   usZscoreRows.forEach(r => {
     (usByTicker[r.ticker] = usByTicker[r.ticker] || []).push(r);
