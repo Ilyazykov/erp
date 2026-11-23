@@ -87,6 +87,10 @@ const MP_FX_RULES = {
 // -- T-Capital's TGLD, bought on T-Bank's brokerage account (May-June 2026); securities / fund_holdings
 // don't list it, so it's named here
 const MP_GOLD_FUNDS = [{ fund: 'TGLD', weight: 1 }];
+// An index fund's chart marks the buys of a broader fund too (23.11.2026): part of FTSE All-World is the S&P 500
+// (60.3% by weight) and STOXX Europe 600 (14.2%). The weight: what the broad fund holds of this fund's papers.
+const MP_INDEX_FUNDS = new Set(['CSPX', 'VUAA', 'SXR8', 'VOO', 'SPY', 'IVV', 'TSPX', 'XSX6']);
+const MP_BROAD_FUNDS = ['VWRA', 'VWCE'];   // one fund, two listings: one list of holdings
 async function mpOpenPriceDialog(asset, title, opts = {}) {
   if (asset === 'XAU' && !opts.via?.length) opts = { ...opts, via: MP_GOLD_FUNDS };
   const dealTickers = [asset, ...(opts.also || [])];
@@ -444,6 +448,15 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   // buy / sale of the fund is one of this paper -- the money (the fund's USD price that day x its
   // units) x the paper's weight in the fund, over the paper's USD price that day
   // (a map tile in "as held" or merged passes an empty list: looked up here too)
+  if (!opts.via?.length && !rateNote && dealTickers.some(t => MP_INDEX_FUNDS.has(t))) {
+    try {
+      const own = await mpFetchAll(() => sb.from('fund_holdings').select('security_id').in('fund', dealTickers.filter(t => MP_INDEX_FUNDS.has(t))).order('fund').order('security_id'));
+      const broad = await mpFetchAll(() => sb.from('fund_holdings').select('security_id, weight').eq('fund', MP_BROAD_FUNDS[0]).order('security_id'));
+      const ids = new Set(own.map(r => r.security_id));
+      const weight = broad.reduce((a, r) => a + (ids.has(r.security_id) ? Number(r.weight) || 0 : 0), 0) / 100;
+      if (weight > 0) opts = { ...opts, indexVia: true, via: MP_BROAD_FUNDS.map(fund => ({ fund, weight })) };
+    } catch (err) { console.warn('broad funds holding it:', err); }
+  }
   if (!opts.via?.length && !rateNote && !(await cryptoKnown)) {
     try {
       const { data: secs } = await sb.from('securities').select('id, name').or(dealTickers.map(t => `ticker.eq.${t},market_ticker.eq.${t}`).join(','));
@@ -471,8 +484,8 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         const fUsd = lastOn(pxOf.get(d.ticker) || [], d.trade_date), pUsd = lastOn(prices, d.trade_date);
         if (!(w > 0) || !(fUsd > 0) || !(pUsd > 0)) continue;
         const money = Number(d.quantity) * fUsd * w;
-        deals.push({ trade_date: d.trade_date, side: d.side, quantity: Math.round(money / pUsd * 1e6) / 1e6, ticker: asset, via: true,
-          account: `${d.account || '—'}, via ${d.ticker} ($${money.toFixed(money < 10 ? 2 : 0)})` });
+        deals.push({ trade_date: d.trade_date, side: d.side, quantity: Math.round(money / pUsd * 1e6) / 1e6, ticker: asset, via: true, indexVia: !!opts.indexVia, money,
+          account: `${d.account || '—'}, via ${d.ticker}` });
       }
       deals.sort((a, b) => a.trade_date.localeCompare(b.trade_date));
     } catch (err) { console.warn('fund deals:', err); }
@@ -533,6 +546,16 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     // "house" (a box with a pointed end) just off the line -- a buy under it pointing up at it, a sale over
     // it pointing down; drawn as shapes in pixels around the deal's point, an invisible dot there for the hover
     const dealShapes = [];
+    // a mark's hover: units to two decimals (a coin's small amount to four significant digits), and what the
+    // deal came to in its own currency; a fund's share in dollars; no price stored: about, at the day's price
+    const dealQty = q => Number(q).toLocaleString('en-US', Math.abs(Number(q)) >= 1 ? { maximumFractionDigits: 2 } : { maximumSignificantDigits: 4 });
+    const dealMoney = d => {
+      const sum = (v, c) => (c === 'USD' ? `$${v.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : `${v.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${c}`);
+      if (d.money != null) return sum(d.money, 'USD');
+      if (Number(d.price) > 0) return sum(Number(d.quantity) * Number(d.price), String(d.currency || ccy).toUpperCase());
+      const at = priceOn(d.trade_date);
+      return at == null ? '—' : `~${fmt(Number(d.quantity) * at)}`;
+    };
     const house = (up, k) => {
       const g = 3, w = 3.5 * k, sh = g + 4 * k, b = g + 11 * k, sg = up ? -1 : 1;   // gap, half-width, shoulders, base
       const P = (x, y) => `${x.toFixed(1)},${(sg * y).toFixed(1)}`;
@@ -551,7 +574,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
           fillcolor: fill, line: { color: '#000000', width: 0.6 }, layer: 'above' });
         traces.push({ x: ds.map(d => d.trade_date), y: ds.map(d => priceOn(d.trade_date)), type: 'scatter', mode: 'markers', name: `${side}${via ? ' via a fund' : ''}`,
           marker: { color: fill, size: 14, opacity: 0 },
-          text: ds.map(d => `${side} ${Number(d.quantity)}${dealTickers.length > 1 ? ` ${d.ticker}` : ''} at ${d.account}`), hovertemplate: '%{x}: %{text}<extra></extra>' });
+          text: ds.map(d => `${side} ${dealMoney(d)}<br>${dealQty(d.quantity)} ${d.ticker || asset}<br>${d.account}`), hovertemplate: '%{x}:<br>%{text}<extra></extra>' });
       }
     }
     // a currency's exchanges: a mark at the rate each got (off the line by how much better or worse than the day's)
@@ -609,7 +632,9 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     if (!rateNote) {
       const chartOn = day => { let v = null; for (const p of prices) { if (p.day > day) break; v = p.price_usd; } return v == null ? null : val(day, v); };
       const pos = { qty: 0, cost: 0 };
-      for (const d of deals.filter(x => (viaOn || !x.via) && (avgAll || x.trade_date >= from))) {   // the funds' buys too when they're shown (the box)
+      // the funds' buys too when they're shown (the box) -- but on an index fund's own chart its average stays
+      // that of the units one holds of it: a broad fund's buy is a mark only
+      for (const d of deals.filter(x => (viaOn || !x.via) && !x.indexVia && (avgAll || x.trade_date >= from))) {
         const q = Number(d.quantity); if (!(q > 0)) continue;
         if (d.side === 'buy') {
           const at = chartOn(d.trade_date);

@@ -242,6 +242,7 @@
     <div class="form-row" style="gap:16px">
       <label>by <select id="invested_by_group"><option value="asset">asset</option><option value="type">type</option></select></label>
       <label title="The funds of one index as one row (VWRA and VWCE: FTSE All-World; CSPX and VUAA: S&amp;P 500)"><input type="checkbox" id="invested_merge_funds" checked> merge funds</label>
+      <label title="XAU, XAUT and TGLD as one row"><input type="checkbox" id="invested_merge_gold" checked> merge gold</label>
       <label>show <select id="invested_by_mode"><option value="contrib">contribution (pp)</option><option value="xirrp">MWR</option><option value="pct">dividends kept (%)</option><option value="xirr">XIRR (a year)</option><option value="money">money</option></select></label>
       <label title="The period's last day (empty: the zoom's end); moves the zoom of the charts above too">to <input type="date" id="invested_to"></label>
       <span id="invested_by_period" class="note" style="margin:0"></span>
@@ -608,8 +609,8 @@
 <script src="./js/app/expenses-data.js?v=20261121b"></script>
 <script src="./js/app/expenses-edit.js?v=20261121b"></script>
 <script src="./js/app/expenses-render.js?v=20261122a"></script>
-<script src="./js/app/invested.js?v=20261121b"></script>
-<script src="./js/app/price-chart.js?v=20261123r"></script>
+<script src="./js/app/invested.js?v=20261123a"></script>
+<script src="./js/app/price-chart.js?v=20261123u"></script>
 <script src="./js/app/capital.js?v=20261121b"></script>
 <script src="./js/app/boot.js?v=20261121b"></script>
 <script type="module">

@@ -310,6 +310,7 @@ function mpGroupAssetsByKind(rows, from, to, keyOf = mpKindKey) {
     };
   });
 }
+const MP_INVESTED_GOLD = ['XAU', 'XAUT', 'TGLD'];
 // What each asset earned over the chart's period (investment_by_asset, migration 062).
 let mpInvestedAssetsTimer = null, mpInvestedAssetsKey = '', mpInvestedAssetsRows = null;
 function mpInvestedAssetsSoon() {
@@ -352,13 +353,16 @@ async function mpRenderInvestedAssets() {
   // dollars and in euros, are "FTSE All-World funds" -- their money summed and their flows merged by day
   const mergeFunds = document.getElementById('invested_merge_funds').checked;
   const fundGroupOf = new Map(Object.entries(window.mpFundIndexGroups || {}).flatMap(([g, ts]) => ts.map(t => [t, g])));
+  // merge gold (its own box, on by default): the metal, the token and T-Capital's gold fund as one row
+  const mergeGold = document.getElementById('invested_merge_gold').checked;
+  const groupOf = new Map([...(mergeFunds ? fundGroupOf : []), ...(mergeGold ? MP_INVESTED_GOLD.map(t => [t, 'Gold']) : [])]);
   const byAsset = () => {
-    if (!mergeFunds) return mpInvestedAssetsRows;
-    const merged = mpInvestedAssetsRows.filter(r => fundGroupOf.has(String(r.asset).toUpperCase()));
-    const counts = new Map(); for (const r of merged) { const g = fundGroupOf.get(String(r.asset).toUpperCase()); counts.set(g, (counts.get(g) || 0) + 1); }
-    const many = merged.filter(r => counts.get(fundGroupOf.get(String(r.asset).toUpperCase())) > 1);
+    if (!groupOf.size) return mpInvestedAssetsRows;
+    const merged = mpInvestedAssetsRows.filter(r => groupOf.has(String(r.asset).toUpperCase()));
+    const counts = new Map(); for (const r of merged) { const g = groupOf.get(String(r.asset).toUpperCase()); counts.set(g, (counts.get(g) || 0) + 1); }
+    const many = merged.filter(r => counts.get(groupOf.get(String(r.asset).toUpperCase())) > 1);
     if (!many.length) return mpInvestedAssetsRows;
-    const groups = mpGroupAssetsByKind(many, from, to, r => fundGroupOf.get(String(r.asset).toUpperCase()));
+    const groups = mpGroupAssetsByKind(many, from, to, r => groupOf.get(String(r.asset).toUpperCase()));
     // the group's name, its biggest fund first (the price chart's ticker, the others with it)
     for (const g of groups) { g.name = g.asset = g.kind; g.members = [...g.members].sort((a, b) => Number(many.find(r => r.asset === b).value_end) - Number(many.find(r => r.asset === a).value_end)); }
     return [...mpInvestedAssetsRows.filter(r => !many.includes(r)), ...groups];
@@ -409,7 +413,9 @@ async function mpRenderInvestedAssets() {
   // an asset's name or bar: its price chart (not the groups of the "type" view)
   if (group === 'asset') {
     // a merged fund group: its biggest fund's price, the deals of all of them
-    const byLabel = new Map(rows.map(r => [label(r), r.members ? { a: r.members[0], also: r.members.slice(1) } : { a: r.asset, also: [] }]));
+    // (merged gold: the metal's price and the token's deals; the chart marks TGLD's itself, as a gold fund)
+    const byLabel = new Map(rows.map(r => [label(r), r.asset === 'Gold' && r.members ? { a: 'XAU', also: ['XAUT'] }
+      : r.members ? { a: r.members[0], also: r.members.slice(1) } : { a: r.asset, also: [] }]));
     const open = (x, title) => mpOpenPriceDialog(x.a, title, { also: x.also });
     el.removeAllListeners?.('plotly_click');
     el.on('plotly_click', ev => { const x = byLabel.get(ev.points?.[0]?.y); if (x) open(x, ev.points[0].y); });
@@ -431,6 +437,11 @@ try { const v = localStorage.getItem('mp_invested_by_group'); if (v) document.ge
 try { const v = localStorage.getItem('mp_invested_merge_funds'); if (v) document.getElementById('invested_merge_funds').checked = v !== '0'; } catch { /* no storage */ }
 document.getElementById('invested_merge_funds').addEventListener('change', e => {
   mpSave('mp_invested_merge_funds', e.target.checked ? '1' : '0');
+  if (mpIsSignedIn) mpRenderInvestedAssets();
+});
+try { const v = localStorage.getItem('mp_invested_merge_gold'); if (v) document.getElementById('invested_merge_gold').checked = v !== '0'; } catch { /* no storage */ }
+document.getElementById('invested_merge_gold').addEventListener('change', e => {
+  mpSave('mp_invested_merge_gold', e.target.checked ? '1' : '0');
   if (mpIsSignedIn) mpRenderInvestedAssets();
 });
 document.getElementById('invested_by_group').addEventListener('change', e => {
