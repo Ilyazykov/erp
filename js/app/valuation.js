@@ -317,6 +317,7 @@ function renderChart(id) {
       ]), CONFIG);
     Plotly.newPlot('plot_us_targetweights', DATA.usTargetWeights, DATA.usTargetWeightsLayout, CONFIG);
     mpChartOnClick('plot_us_targetweights');
+    Plotly.newPlot('plot_us_sectors', DATA.usSectors, DATA.usSectorsLayout, CONFIG);
   } else if (id === 'userp') {
     // "from 2016" (on by default): the charts get only the months from 2016 -- the
     // years before are neither drawn nor in the range slider; off -- the whole history
@@ -549,6 +550,29 @@ function twTableHtml(rows, colors) {
   `;
 }
 
+// The US basket by sector: the target weights donut's geometry (angle = base, radius = target / base),
+// a sector's hover lists its stocks; no click, a sector has no price chart.
+function usSectorDonut(rows) {
+  const byTicker = Object.fromEntries(rows.map(r => [r.ticker, r]));
+  const sectors = Object.entries(US_SECTORS).map(([ticker, tickers]) => {
+    const held = tickers.map(t => byTicker[t]).filter(Boolean).sort((a, b) => b.target - a.target);
+    return { ticker, held, base: held.reduce((s, r) => s + r.base, 0), target: held.reduce((s, r) => s + r.target, 0), z: null };
+  }).filter(r => r.base > 0).sort((a, b) => b.target - a.target);
+  const { traces, layout } = twDonut(sectors, MP_SECTOR_COLORS, 11);
+  traces[0].customdata = undefined;
+  traces[0].hovertemplate = sectors.map(r => {
+    const diff = r.target - r.base;
+    return `<b>${r.ticker}</b><br>Base: ${r.base.toFixed(2)}%<br>Target: <b>${r.target.toFixed(2)}%</b> (${diff >= 0 ? '+' : ''}${diff.toFixed(2)} pp)<br>`
+      + `${r.held.map(h => `${h.ticker} ${h.target.toFixed(2)}%`).join('<br>')}<extra></extra>`;
+  });
+  // the sector names are long: further out than the tickers', clear of the widest slice
+  const maxR = layout.polar.radialaxis.range[1] / 1.25;
+  traces[2].r = sectors.map(() => maxR * 1.3);
+  layout.polar.radialaxis.range = [0, maxR * 1.5];
+  layout.title = { text: 'By economic sector', font: { size: 13, color: '#c9d1d9' }, x: 0.5, y: 0.985 };
+  return { traces, layout };
+}
+
 // The stocks vs bonds donut (the Russian portfolio's, the US one's): the same
 // geometry as the target weights donut -- angular width = base %, one common
 // reference circle, radial extent = R_BASE * (target/base). names: the
@@ -626,6 +650,20 @@ const US_TICKERS = [
   ['SOFI', 1.5],  ['XYZ', 1.5],  ['INTC', 1],   ['SPCX', 1],   ['FCX', 1],
   ['SO', 1],      ['EQIX', 1],
 ];
+// the same sectors as public.securities (kept here: the tab also opens signed out)
+const US_SECTORS = {
+  'Information Technology': ['NVDA', 'MSFT', 'AAPL', 'INTC'],
+  Financials: ['JPM', 'BRK-B', 'V', 'MA', 'HOOD', 'SOFI', 'XYZ'],
+  'Health Care': ['LLY', 'JNJ', 'ABBV'],
+  Industrials: ['CAT', 'GE'],
+  'Communication Services': ['GOOGL', 'META', 'SPCX'],
+  'Consumer Discretionary': ['AMZN', 'TSLA', 'HD'],
+  'Consumer Staples': ['WMT', 'PG', 'KO'],
+  Energy: ['XOM', 'SHEL', 'CVX'],
+  Materials: ['LIN', 'SHW', 'FCX'],
+  Utilities: ['NEE', 'DUK', 'SO'],
+  'Real Estate': ['PLD', 'AMT', 'EQIX'],
+};
 const US_COLORS = [
   '#4da8c8','#f0b429','#3dd68c','#22d3ee','#e05252','#a78bfa','#fb923c',
   '#34d399','#fbbf24','#f472b6','#60a5fa','#facc15','#c084fc','#fb7185',
@@ -950,6 +988,7 @@ function usTargetCharts(usTargetWeightsData, usTargetAllocationData) {
   const usTickerColor = {};
   US_TICKERS.forEach(([ticker], i) => { usTickerColor[ticker] = US_COLORS[i % US_COLORS.length]; });
   const { traces: usTargetWeights, layout: usTargetWeightsLayout } = twDonut(usTwRows, usTickerColor, 9);
+  const { traces: usSectors, layout: usSectorsLayout } = usSectorDonut(usTwRows);
 
   document.getElementById('us_targetweights_note').innerHTML = `
     <b>EXPERIMENTAL</b> — same illustrative donut as the Russian portfolio's Target Weights
@@ -998,7 +1037,7 @@ function usTargetCharts(usTargetWeightsData, usTargetAllocationData) {
 
   document.getElementById('us_alloc_target_table_wrap').innerHTML = allocTableHtml(usAllocNames, usAllocBase, usAllocTarget, usAllocZ,
     usAllocAdjustment, ALLOC_COLORS, { label: 'Fed Rate', value: usTargetAllocationData.fed_rate }, true);
-  return { usTwRows, usTargetWeights, usTargetWeightsLayout, usAllocTargetTrace, usAllocTargetLayout, usAllocTarget };
+  return { usTwRows, usTargetWeights, usTargetWeightsLayout, usSectors, usSectorsLayout, usAllocTargetTrace, usAllocTargetLayout, usAllocTarget };
 }
 
 // rows: [day, value]: the value as of a day (the last one on or before it), null before the first
@@ -1250,6 +1289,7 @@ async function loadData() {
   return { layer1: ru.layer1, layer1_individual: ru.layer1Individual, layer2_rebal: ru.layer2Rebal,
            layer2_alloc: ru.layer2Alloc, revYield: ru.revYield, fcfYield: ru.fcfYield, vkcoRevenueV2: ru.vkcoRevenueV2, usZscore,
            usTargetWeights: usT.usTargetWeights, usTargetWeightsLayout: usT.usTargetWeightsLayout,
+           usSectors: usT.usSectors, usSectorsLayout: usT.usSectorsLayout,
            usErp: us.usErp, usErpZChart: us.usErpZChart, usErpDefaultRange: us.usErpDefaultRange, damodaranZChart: us.damodaranZChart,
            usAllocTarget: usT.usAllocTargetTrace, usAllocTargetLayout: usT.usAllocTargetLayout,
            usAllocHistory: usHist.usAllocHistory, usAllocHistoryRange: usHist.usAllocHistoryRange,

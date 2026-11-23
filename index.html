@@ -109,7 +109,10 @@
 
 <div id="usstocks" class="chart-wrap"><div id="plot_us_zscore" style="height:640px"></div>
 <p class="note"><b>EXPERIMENTAL</b> — Z-score of 37 US stocks vs their own history, for information only. <b>Above +1.5</b> — cheap, <b>below −1.5</b> — expensive.</p>
-<div id="plot_us_targetweights" style="height:760px; max-width:820px; margin:8px auto 0"></div>
+<div style="display:flex; flex-wrap:wrap; justify-content:center; gap:16px; margin-top:8px">
+  <div id="plot_us_targetweights" style="height:760px; flex:1 1 480px; min-width:0; max-width:820px"></div>
+  <div id="plot_us_sectors" style="height:760px; flex:1 1 480px; min-width:0; max-width:820px"></div>
+</div>
 <p class="note" id="us_targetweights_note">
   <span class="loading">Loading current values…</span>
 </p>
@@ -595,7 +598,7 @@
 </div>
 
 <script src="./js/app/common.js?v=20261121b"></script>
-<script src="./js/app/valuation.js?v=20261123v"></script>
+<script src="./js/app/valuation.js?v=20261123x"></script>
 <script src="./js/app/portfolio-import.js?v=20261123j"></script>
 <script src="./js/app/exports.js?v=20261121b"></script>
 <script src="./js/app/portfolio-tables.js?v=20261123e"></script>
