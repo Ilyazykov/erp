@@ -7,16 +7,14 @@ erp_full.py, WEIGHTS, target_weights_base.json).
 
 Mirrors the metric-selection logic of composite_valuation.py's LAYER2_METRIC
 (SBER/T/VTBR/DOMRF/IRAO -> EY; ROSN/GMKN/PLZL -> FCF; YDEX/OZON -> Revenue),
-but unlike the Russian pipeline, EY here is computed from ANNUAL net income
-rather than TTM (quarterly) net income: Yahoo's free quarterly-fundamentals
-endpoint only returns the ~5 most recent quarters, which gives barely 4-5
-months of valid TTM history -- nowhere near enough for a 36-month rolling
-Z-score. Annual net income (via the same endpoint that already serves
-Revenue/FCF) gives the same ~4-year window as the other two metrics, so EY
-updates once a year (a step function) just like Revenue/FCF do here, not
-every quarter as it does for the Russian tickers.
-    - EY: latest annual net income / market cap -- updates once a year.
-      For stable, consistently profitable businesses.
+and, like the Russian pipeline, EY is on the last twelve months' net income.
+Yahoo's free endpoint gives only ~5 recent quarters, too few for a 36-month
+Z-score, so the 12-month earnings come from two kinds of points: each fiscal
+year's total (exact at its end) and the sum of four consecutive quarters.
+    - EY: 12-month net income / market cap. A past month is interpolated between
+      the points, 45 days back (the reporting lag); the current month takes the
+      latest point already reported, so nothing unpublished gets in. A one-off
+      quarter (far from the ticker's median) counts as that median.
     - Revenue Yield: latest annual revenue / market cap -- updates once a
       year. For unprofitable or volatile-earnings businesses.
     - FCF Yield: latest annual free cash flow / market cap -- updates once a
@@ -29,18 +27,17 @@ Data source (no auth required): Yahoo Finance public endpoints
       query2.finance.yahoo.com/ws/fundamentals-timeseries
       (this free endpoint only returns the ~4 most recent fiscal years,
       unlike the 9-18 years of annual history available for the Russian
-      tickers via Smart-Lab). Quarterly net income / shares are also fetched
-      and saved (data/us_quarterly.csv) for possible future use, but are NOT
-      currently used in the Yield/Z-score computation -- see above.
+      tickers via Smart-Lab). Quarterly net income / shares are saved to
+      data/us_quarterly.csv; the net income feeds EY -- see above.
 
 See TICKERS below for the full ticker -> metric assignment.
 
 Outputs:
     data/us_prices.csv        (ticker, date, close)
-    data/us_annual.csv        (ticker, year, revenue_bln, net_income_bln,
+    data/us_annual.csv        (ticker, year, end_date, revenue_bln, net_income_bln,
                                 fcf_bln, diluted_shares_bln)  [USD, not RUB]
     data/us_quarterly.csv     (ticker, quarter, net_income_bln,
-                                diluted_shares_bln)  -- fetched, unused
+                                diluted_shares_bln)
     data/us_zscore.csv        (ticker, date, metric, yield_pct, z_score)
 
 Run:
@@ -61,6 +58,10 @@ DATA_DIR = REPO_ROOT / "data"
 PRICES_PATH = DATA_DIR / "us_prices.csv"
 ANNUAL_PATH = DATA_DIR / "us_annual.csv"
 QUARTERLY_PATH = DATA_DIR / "us_quarterly.csv"
+# quarters recovered from this file's git history: Yahoo keeps only ~5, stored ones are never dropped
+QUARTERLY_HISTORY_PATH = DATA_DIR / "us_quarterly_history.csv"
+# a quarter this far from the ticker's median (share of it) counts as one-off
+ONE_OFF_SHARE = 0.75
 OUT_PATH = DATA_DIR / "us_zscore.csv"
 
 ZSCORE_WINDOW = 36
@@ -169,7 +170,8 @@ def fetch_annual_fundamentals(ticker: str) -> list[dict]:
         for item in series[stype]:
             year = int(item["asOfDate"][:4])
             raw = item["reportedValue"]["raw"]
-            by_year.setdefault(year, {"year": year})[field] = raw / 1e9
+            entry = by_year.setdefault(year, {"year": year, "end_date": item["asOfDate"]})
+            entry[field] = raw / 1e9
     return sorted(by_year.values(), key=lambda r: r["year"])
 
 
@@ -248,7 +250,16 @@ def update_quarterly() -> None:
             })
         print(f"  {ticker}: {len(rows)} quarters")
         time.sleep(0.2)
-    all_rows.sort(key=lambda r: (r["ticker"], r["quarter"]))
+    stored: dict[tuple[str, str], dict] = {}
+    for path in (QUARTERLY_HISTORY_PATH, QUARTERLY_PATH):
+        if path.exists():
+            for r in read_csv(path):
+                stored[(r["ticker"], r["end_date"])] = r
+    for r in all_rows:
+        key = (r["ticker"], r["end_date"])
+        stored[key] = {**stored.get(key, {}), **{k: v for k, v in r.items() if v != ""}}
+    all_rows = [{f: r.get(f, "") for f in ("ticker", "quarter", "end_date", "net_income_bln", "diluted_shares_bln")}
+                for _, r in sorted(stored.items())]
     write_csv(
         QUARTERLY_PATH,
         ["ticker", "quarter", "end_date", "net_income_bln", "diluted_shares_bln"],
@@ -269,6 +280,7 @@ def update_annual() -> None:
             all_rows.append({
                 "ticker": ticker,
                 "year": r["year"],
+                "end_date": r["end_date"],
                 "revenue_bln": round(r.get("revenue_bln"), 4) if r.get("revenue_bln") is not None else "",
                 "net_income_bln": round(r.get("net_income_bln"), 4) if r.get("net_income_bln") is not None else "",
                 "fcf_bln": round(r.get("fcf_bln"), 4) if r.get("fcf_bln") is not None else "",
@@ -279,17 +291,17 @@ def update_annual() -> None:
     all_rows.sort(key=lambda r: (r["ticker"], r["year"]))
     write_csv(
         ANNUAL_PATH,
-        ["ticker", "year", "revenue_bln", "net_income_bln", "fcf_bln", "diluted_shares_bln"],
+        ["ticker", "year", "end_date", "revenue_bln", "net_income_bln", "fcf_bln", "diluted_shares_bln"],
         all_rows,
     )
     print(f"Saved {ANNUAL_PATH}")
 
 
-def annual_report_date(year: int) -> date:
-    # US 10-K filings for fiscal year Y typically finalize within ~3 months
-    # after fiscal year-end. Yahoo's asOfDate is the fiscal year-end date, so
-    # approximate the "known as of" date as 3 months after that.
-    return date(year, 1, 1) + timedelta(days=90)
+def annual_report_date(row: dict) -> date:
+    # US 10-K filings finalize within ~3 months after the fiscal year-end
+    # (Yahoo's asOfDate, stored as end_date); without it, a calendar fiscal year
+    end = date.fromisoformat(row["end_date"]) if row.get("end_date") else date(row["year"], 12, 31)
+    return end + timedelta(days=90)
 
 
 def quarter_end_to_report_date(end_date_str: str) -> date:
@@ -310,6 +322,53 @@ def get_ttm_ni(quarterly_data: list[dict], as_of: date) -> float | None:
         return None
     available.sort(key=lambda r: r["quarter"])
     return sum(r["net_income_bln"] for r in available[-4:])
+
+
+def without_one_offs(quarters: list[tuple[date, float]]) -> list[tuple[date, float]]:
+    """A quarter far from the ticker's median (a revaluation, a write-off) takes the median."""
+    if len(quarters) < 4:
+        return quarters
+    values = sorted(v for _, v in quarters)
+    mid = len(values) // 2
+    median = values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2
+    if median <= 0:
+        return quarters
+    return [(d, median if abs(v - median) > ONE_OFF_SHARE * median else v) for d, v in quarters]
+
+
+def ttm_points(annual_data: list[dict], quarterly_data: list[dict]) -> list[tuple[date, float]]:
+    """(period end, 12-month net income): fiscal years, then sums of four
+    consecutive quarters, which win on a shared date."""
+    points = {
+        date.fromisoformat(r["end_date"]): r["net_income_bln"]
+        for r in annual_data
+        if r.get("end_date") and r.get("net_income_bln") is not None
+    }
+    quarters = without_one_offs(sorted(
+        (date.fromisoformat(r["end_date"]), r["net_income_bln"])
+        for r in quarterly_data
+        if r.get("net_income_bln") is not None
+    ))
+    for i in range(3, len(quarters)):
+        window = quarters[i - 3:i + 1]
+        if 240 <= (window[-1][0] - window[0][0]).days <= 300:
+            points[window[-1][0]] = sum(v for _, v in window)
+    return sorted(points.items())
+
+
+def ttm_earnings_at(points: list[tuple[date, float]], as_of: date, current: bool) -> float | None:
+    """12-month net income known 45 days before as_of. A past month is
+    interpolated between the points; the current one takes the last reported."""
+    known_by = as_of - timedelta(days=45)
+    before = [p for p in points if p[0] <= known_by]
+    if not before:
+        return None
+    d0, v0 = before[-1]
+    after = [p for p in points if p[0] > known_by]
+    if current or not after:
+        return v0
+    d1, v1 = after[0]
+    return v0 + (v1 - v0) * (known_by - d0).days / (d1 - d0).days
 
 
 def get_latest_quarterly_shares(quarterly_data: list[dict], as_of: date) -> float | None:
@@ -337,7 +396,7 @@ def get_latest_annual(annual_data: list[dict], field: str, as_of: date) -> float
     available = [
         (r["year"], r[field])
         for r in annual_data
-        if annual_report_date(r["year"]) <= as_of and r.get(field) not in (None, "")
+        if annual_report_date(r) <= as_of and r.get(field) not in (None, "")
     ]
     if not available:
         return None
@@ -367,7 +426,7 @@ def rolling_zscore(series: list[float | None], window: int = ZSCORE_WINDOW) -> l
 def main() -> int:
     print("Updating US ticker prices...")
     update_prices()
-    print("Updating US quarterly fundamentals (fetched for future use, not used in Yield calc)...")
+    print("Updating US quarterly fundamentals (the recent 12-month earnings for EY)...")
     update_quarterly()
     print("Updating US annual fundamentals (Revenue/Net Income/FCF)...")
     update_annual()
@@ -382,10 +441,18 @@ def main() -> int:
     for r in annual_rows:
         annual_by_ticker.setdefault(r["ticker"], []).append({
             "year": int(r["year"]),
+            "end_date": r.get("end_date") or None,
             "revenue_bln": float(r["revenue_bln"]) if r["revenue_bln"] else None,
             "net_income_bln": float(r["net_income_bln"]) if r["net_income_bln"] else None,
             "fcf_bln": float(r["fcf_bln"]) if r["fcf_bln"] else None,
             "diluted_shares_bln": float(r["diluted_shares_bln"]) if r["diluted_shares_bln"] else None,
+        })
+
+    quarterly_by_ticker: dict[str, list[dict]] = {}
+    for r in read_csv(QUARTERLY_PATH):
+        quarterly_by_ticker.setdefault(r["ticker"], []).append({
+            "end_date": r["end_date"],
+            "net_income_bln": float(r["net_income_bln"]) if r["net_income_bln"] else None,
         })
 
     annual_field = {"EY": "net_income_bln", "Revenue": "revenue_bln", "FCF": "fcf_bln"}
@@ -407,6 +474,7 @@ def main() -> int:
             print(f"  {ticker}: no data, skipping")
             continue
 
+        points = ttm_points(annual_data, quarterly_by_ticker.get(ticker, [])) if metric == "EY" else []
         yields = []
         dates_ = []
         for y, m in months:
@@ -423,7 +491,11 @@ def main() -> int:
                 continue
             mcap = price * shares  # bln USD
 
-            numerator = get_latest_annual(annual_data, annual_field[metric], as_of)
+            numerator = (
+                ttm_earnings_at(points, as_of, (y, m) == (today.year, today.month))
+                if metric == "EY"
+                else get_latest_annual(annual_data, annual_field[metric], as_of)
+            )
             yields.append(numerator / mcap * 100 if (numerator is not None and mcap > 0) else None)
 
         zscores = rolling_zscore(yields)

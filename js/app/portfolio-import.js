@@ -1421,11 +1421,11 @@ const mpPartPeriod = p => {
 // Where each account's statements come from (the row's tooltip). "As is":
 // the bank's own file goes straight into Upload; "to Claude": a PDF /
 // screenshots turned into this project's CSV first.
-// Money-transfer services used in 2017-2023 whose own history is to be looked at (TODO.md 35): shown in
-// "Latest data per account" with "Days to check" -1 as a reminder; the text, the popup on the name
-const MP_CHECK_HISTORY = {
-  KoronaPay: 'Korona app → «Переводы»: the transfers from the cards *3263 (Pochta Bank), *2372 (QIWI), T-Bank — where the roubles went (TODO.md 35).',
-  Unistream: 'Unistream: the transfer of 06.03.2023 (81 508 ₽ from T-Bank) — how many lira came (TODO.md 35).',
+// Money-transfer services used in 2017-2023: no account rows of their own, the transfers sit in the
+// banks' statements and were matched to these receipts. Closed: the day of the last transfer, the popup text
+const MP_TRANSFER_SERVICES = {
+  KoronaPay: { day: '2023-03-28', source: 'Receipts: statements/korona' },
+  Unistream: { day: '2023-03-06', source: 'Receipt: statements/unistream' },
 };
 const MP_ACCOUNT_SOURCE = {
   Revolut: 'Revolut app → avatar → Documents & statements → by type: account, Flexible Cash Funds, savings, stocks, crypto, gold -- CSV each. Upload as is.',
@@ -2156,10 +2156,8 @@ async function mpRenderLatestSources() {
       const all = [own, ...ps.map(p => p.left)].filter(x => x !== null && x !== undefined);
       a.toCheck = a.every === 'closed' || !all.length ? null : Math.min(...all);
     }
-    // reminders (23.11.2026, TODO.md 35): money-transfer services whose history is still to be looked
-    // at -- no data of their own, -1 to stand on top until filled in or taken out of MP_CHECK_HISTORY
-    for (const [name, what] of Object.entries(MP_CHECK_HISTORY)) {
-      if (!acc.has(name)) acc.set(name, { day: '', every: 'check history', record: '—', uploaded: '', toCheck: -1, reminder: what });
+    for (const [name, { day, source }] of Object.entries(MP_TRANSFER_SERVICES)) {
+      if (!acc.has(name)) acc.set(name, { day, every: 'closed', record: day, uploaded: day, toCheck: null, source });
     }
     // sorted by it; without one after the rest, closed accounts at the bottom
     const actIn = a => a.every === 'closed' ? 2e9 : a.toCheck ?? 1e9;
@@ -2189,7 +2187,7 @@ async function mpRenderLatestSources() {
         const style = a.every === 'closed' ? ' style="color:#6a7381"' : late ? ' style="color:#ff9500"' : '';
         // where the statements come from: a popup drawn by the page on hover
         // (the browser's own title tooltip didn't show)
-        const src = a.reminder || MP_ACCOUNT_SOURCE[name];
+        const src = a.source || MP_ACCOUNT_SOURCE[name];
         // a synced account: "auto" (orange after a failed run) and its key's
         // end in a column of its own -- orange within a week of it or past it;
         // one that could sync by itself but doesn't yet: "TODO auto"
@@ -2211,7 +2209,7 @@ async function mpRenderLatestSources() {
         // (the others keep its place empty, so every name starts in one line)
         const toggle = split ? `<span class="mp-toggle" data-acc="${esc(name)}" style="cursor:pointer;display:inline-block;width:16px;user-select:none">${mpOpenAccounts.has(name) ? '▾' : '▸'}</span>`
           : '<span style="display:inline-block;width:16px"></span>';
-        return `<tr${style}><td>${toggle}${src ? `<span class="mp-src" data-src="${esc(src)}">${esc(name)}</span>` : esc(name)}</td><td>${update}</td><td>${expires}</td><td>${a.record}</td><td>${a.uploaded || '—'}</td><td>${a.reminder ? '—' : split ? Math.max(...parts.get(name).map(p => daysAgo(p.day))) : d}</td>${toCheckCell(a.toCheck)}</tr>`
+        return `<tr${style}><td>${toggle}${src ? `<span class="mp-src" data-src="${esc(src)}">${esc(name)}</span>` : esc(name)}</td><td>${update}</td><td>${expires}</td><td>${a.record}</td><td>${a.uploaded || '—'}</td><td>${split ? Math.max(...parts.get(name).map(p => daysAgo(p.day))) : d}</td>${toCheckCell(a.toCheck)}</tr>`
           + (split ? partRowsHtml(name, a.every === 'closed') : '');
       }).join('')}</tbody></table>`;
     for (const t of wrap.querySelectorAll('.mp-toggle')) {
