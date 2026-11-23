@@ -396,24 +396,8 @@ async function mpAccountCurrencySeries(account) {
   return out;
 }
 
-// Every bank and broker as a layer of the Total's chart, the largest at the bottom, each in its own colour.
-function mpAllAccountsSeries() {
-  const byAccount = new Map();
-  for (const r of mpCapitalBrokerRows) {
-    const n = mpDayNumber(r.day);
-    for (const [a, v] of Object.entries(r.accounts || {})) {
-      if (!byAccount.has(a)) byAccount.set(a, new Map());
-      byAccount.get(a).set(n, Number(v || 0));
-    }
-  }
-  return [...byAccount].map(([a, byDay]) => ({ account: a, label: MP_BROKER_SHORT_NAMES[a] || a, byDay,
-    size: [...byDay.values()].reduce((s, v) => s + Math.abs(v), 0) }))
-    .sort((x, y) => y.size - x.size)
-    .map((c, i) => ({ ...c, color: MP_COLORS.broker[c.account] || MP_BROKER_FALLBACK_COLORS[i % MP_BROKER_FALLBACK_COLORS.length] }));
-}
-
 // A bank's or broker's money over time, in a chart window (a click on its name in the broker tables);
-// MP_ALL_ACCOUNTS (a click on Total): all of them, by bank instead of by currency.
+// MP_ALL_ACCOUNTS (a click on Total): all of them together, by currency too.
 async function mpOpenAccountChart(account) {
   const { dlg, head, plot, note } = mpChartDialog('mp_account', account === MP_ALL_ACCOUNTS ? 'All banks and brokers' : mpEscapeHtml(MP_BROKER_SHORT_NAMES[account] || account),
     '<label style="margin-left:12px"><input type="checkbox" id="mp_account_rub"> in RUB</label>');
@@ -422,7 +406,7 @@ async function mpOpenAccountChart(account) {
     await mpEnsureBrokerRows();
     await mpEnsureExactData(account === 'cash');
   } catch (error) { note.textContent = error.message; return; }
-  const series = account === MP_ALL_ACCOUNTS ? mpAllAccountsSeries() : await mpAccountCurrencySeries(account).catch(() => null);
+  const series = await mpAccountCurrencySeries(account).catch(() => null);
   const firstHeld = mpCapitalBrokerRows.findIndex(r => Math.abs(mpAccountFull(account, r)) >= 1);
   if (firstHeld < 0) { note.textContent = 'No history for this account.'; return; }
   const rows = mpCapitalBrokerRows.slice(firstHeld);
@@ -444,9 +428,9 @@ async function mpOpenAccountChart(account) {
     let hover = full.map((v, i) => `${fmt(v)}${Math.max(0, v) - parts.solid[i] > 0.5 ? ` (exact: ${fmt(parts.solid[i])})` : ''}`);
     let shapes = [];
     if (series) {
-      // by currency (the Total: by bank); an account's days that are estimates shaded over all of them
+      // by currency; an account's days that are estimates shaded over all of them
       const nums = shown.map(r => mpDayNumber(r.day));
-      const lines = series.map(c => ({ label: c.label, color: c.color || mpSliceColor(c.label, mpCurrencyColor),
+      const lines = series.map(c => ({ label: c.label, color: mpSliceColor(c.label, mpCurrencyColor),
         y: shown.map((r, i) => conv(r.day, c.byDay.get(nums[i]) || 0)) })).filter(c => c.y.some(v => Math.abs(v) >= 0.5));
       for (const c of lines) layers.push(area(c.y.map(v => Math.max(0, v)), c.color, 'assets', { name: c.label, legendgroup: c.label, showlegend: lines.length > 1 }));
       for (const c of lines) if (c.y.some(v => v < -0.5)) layers.push(area(c.y.map(v => Math.min(0, v)), c.color, 'debt', { name: c.label, legendgroup: c.label }));
