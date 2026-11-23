@@ -984,8 +984,10 @@ async function mpMatBuyPlan(c) {
           <tr style="border-top:2px solid #30363d"><td ${td} colspan="8"><b>Итого к покупке</b>${money ? ` · не потрачено ${rub(left)}` : ''}</td><td ${tdr}><b>${rub(spent)}</b></td><td colspan="3"></td></tr>
           ${dep ? `<tr><td ${td} colspan="8" style="color:#8b949e">из вклада: ${mpEscapeHtml(dep.row.name)}${dep.usd < dep.row.usd - 1e-6 ? ` (часть; остаётся ${rub(dep.row.usd - dep.usd)})` : ''}${money * rubUsd > dep.usd + 1e-6 ? ` · новых денег ${rub(money * rubUsd - dep.usd)}` : ''}</td><td ${tdr} style="color:#f85149">−${rub(dep.usd)}</td><td colspan="3"></td></tr>` : ''}
           </tbody></table></div>
-        <p class="note">${money ? 'Деньги раскладываются по одной облигации: каждая — туда, где больше всего «недостача в рублях × доля цели, которой не хватает» (цели — с учётом вложенного: юани и рубли по w_CNY, в рублях флоатеры по своей доле, остальное — лесенка).'
-        : 'Введи сумму — появится, что на неё купить.'} Зелёным — что купить. Стоимость и цели — по рыночной цене, в рублях; цена покупки — прошлого дня с НКД.</p>`;
+        <p class="note">${money ? 'Зелёным — что купить.' : 'Введи сумму — появится, что на неё купить.'}</p>`;
+    // (the money goes one bond at a time to where "the rouble shortfall × the share of the target missing" is the
+    // largest -- the targets with what's put in: yuan and roubles by w_CNY, the floaters by their share, the rest
+    // the ladder; values and targets at the market price in roubles, a buy at the day before's price with its NKD)
     box.querySelector('#mat_invest').addEventListener('change', e => {
       money = Math.max(0, Number(e.target.value) || 0);
       draw();

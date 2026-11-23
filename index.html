@@ -39,22 +39,9 @@
 </div>
 
 <div id="sigmoid" class="chart-wrap"><div id="plot_sigmoid_amp" style="height:480px"></div>
-<p class="note" id="sigmoid_amp_note">
-  w_CNY(x) = 0.20 + 0.60 / (1 + exp(k_eff·(x−m)/m)), k_eff = 15 · (σ₉₀/m) / 0.0209
-  (σ₉₀ = 90-day rolling std dev of the rate). At typical volatility k_eff ≈ 15 (matches
-  the fixed-k formula); in high-volatility regimes the signal is sharper, in calm
-  regimes it's smoother.<br>
-  <span class="loading">Loading current values…</span>
-</p>
+<p class="note" id="sigmoid_amp_note">Target yuan share by USD/RUB against its 1-year average.<br> <span class="loading">Loading current values…</span></p>
 <div id="plot_wcny5y_combined" style="height:480px; margin-top:8px"></div>
-<p class="note">
-  w_CNY(t) computed daily: x(t) is that day's USD/RUB rate, m(t) is the trailing 365-day average
-  USD/RUB rate as of that day. <b>Purple</b> — the target.
-  <b>Green / orange dashed</b> — the buy / sell lines as targets (the curve's value at their rates):
-  purple above the green — the dollar's under the buy line, yuan are bought up to the target; purple under the orange — sold;
-  in between — nothing. <b>Shaded</b> — the days it's so: green — yuan may be bought, orange — sold.
-  USD/RUB rate (gray) on the right axis.
-</p>
+<p class="note"><b>Purple</b> — target; <b>green / orange dashed</b> — buy / sell lines; shaded — days to buy (green) or sell (orange); grey — USD/RUB.</p>
 <h3 class="section-title" id="mp_pie_deposits_title" style="display:none">Your current portfolio — bonds &amp; deposits, RUB vs non-RUB</h3>
 <div id="plot_mp_pie_deposits" style="height:420px; max-width:520px; margin:8px auto 0; display:none"></div>
 <p class="note" id="mp_pie_deposits_note" style="display:none">
@@ -65,11 +52,7 @@
 </div>
 
 <div id="layer2a" class="chart-wrap"><div id="plot_layer1" style="height:480px"></div>
-<p class="note">
-  <b>Blue</b> — Portfolio Earnings Yield (TTM Net Income / Market Cap for all 7 stocks, portfolio-weighted).<br>
-  <b>Orange</b> — OFZ 10Y (risk-free rate).<br>
-  <b>Green</b> — ERP = EY − OFZ. Green zone: stocks yield more than bonds. Red zone: bonds yield more.
-</p>
+<p class="note"><b>Blue</b> — portfolio earnings yield, <b>orange</b> — OFZ 10Y, <b>green</b> — ERP, their gap.</p>
 <div id="plot_layer2a" style="height:480px; margin-top:8px"></div>
 <p class="note">
   <b>Green (Composite ERP Z)</b> = Portfolio Z − OFZ Z.<br>
@@ -82,12 +65,7 @@
 </p>
 <div id="alloc_target_table_wrap"></div>
 <div id="plot_alloc_history" style="height:420px; margin-top:16px"></div>
-<p class="note">
-  The stock share of the target above, month by month, with that month's own inputs: <b>by the CBR
-  key rate alone</b> (violet dotted: w(r) above, which is this allocation's base; the rate itself in
-  the hover) and the <b>target</b> (solid: the base with the composite ERP Z-score's correction;
-  the Z-score from 2019-07, before it the base alone). Bonds are the rest to 100%. From 2016.
-</p>
+<p class="note">Stock share by month: <b>violet dotted</b> — by the key rate alone, <b>solid</b> — the target. Bonds are the rest.</p>
 <h3 class="section-title" id="mp_pie_stocksbonds_title" style="display:none">Your current portfolio — stocks vs bonds</h3>
 <div id="plot_mp_pie_stocksbonds" style="height:420px; max-width:520px; margin:8px auto 0; display:none"></div>
 <p class="note" id="mp_pie_stocksbonds_note" style="display:none">
@@ -98,10 +76,7 @@
 </div>
 
 <div id="layer2r" class="chart-wrap"><div id="plot_layer1i" style="height:480px"></div>
-<p class="note">
-  Earnings Yield per stock. YDEX and OZON have low EY due to high market cap (growth premium).<br>
-  OZON until 2025 — negative EY (loss-making). VKCO (hidden by default) — consistently negative, loss-making.
-</p>
+<p class="note">Earnings yield per stock. VKCO is hidden: loss-making.</p>
 <div id="plot_rev_yield" style="height:420px; margin-top:8px"></div>
 <p class="note">
   Revenue Yield — the actual Layer 2 Z-score metric for YDEX/OZON (and the experimental VKCO line),
@@ -112,35 +87,11 @@
   FCF Yield — the actual Layer 2 Z-score metric for ROSN/GMKN/PLZL, not Earnings Yield.
 </p>
 <div id="plot_vkco_revenue_v2" style="height:480px; margin-top:8px"></div>
-<p class="note">
-  <b>EXPERIMENTAL</b> — VKCO Revenue Yield numerator, old vs new. VKCO is not in the
-  portfolio; this is a standalone comparison of two ways to compute the Revenue Yield
-  numerator between annual report dates.<br>
-  <b>Dotted</b> — current production method: last reported annual revenue held flat until
-  the next report (a step function).<br>
-  <b>Solid</b> — proposed replacement: a natural cubic spline through every real reported
-  point (<b>white dots</b>) plus one predicted point for the next not-yet-reported year
-  (<b>pink star</b> — recency-weighted linear regression, weight = 0.75<sup>years ago</sup>).
-  Once the real report publishes, the predicted point is replaced by the actual value and
-  the whole spline is refit.
-</p>
+<p class="note"><b>EXPERIMENTAL</b> — VKCO revenue: <b>dotted</b> — held flat between reports, <b>solid</b> — a spline with the next year predicted (<b>pink star</b>).</p>
 <div id="plot_layer2r" style="height:480px; margin-top:8px"></div>
-<p class="note">
-  Z-score of each stock vs its own 3-year history (36-month rolling window).<br>
-  Metrics: SBER/T/VTBR/DOMRF — Earnings Yield; ROSN — FCF Yield; YDEX/OZON — Revenue Yield.<br>
-  <b>Above +1.5</b> → stock cheaper than its norm → buy. <b>Below −1.5</b> → more expensive → trim.
-</p>
+<p class="note">Z-score vs each stock's own 3 years. <b>Above +1.5</b> — buy, <b>below −1.5</b> — trim.</p>
 <div id="plot_targetweights" style="height:760px; max-width:820px; margin:8px auto 0"></div>
-<p class="note" id="targetweights_note">
-  Each sector's <b>angular width</b> is its <b>base</b> (strategic) weight — so sectors tile the
-  full circle like a normal portfolio donut, and even 1% positions show as thin slices. Every
-  sector shares one common dotted <b>base reference circle</b>. The sector's <b>radial extent</b>
-  shows its <b>target</b> weight after the Z-score correction
-  (<code>base + 3&middot;sqrt(|Z|&minus;1.5)&middot;sign(Z)</code>, applied only when |Z| &gt; 1.5,
-  then renormalized across all 10 positions to sum to 100%), relative to base.<br>
-  Sector extends past the dotted circle → overweight vs base. Sector ends short of it → underweight vs base.
-  <span class="loading">Loading current values…</span>
-</p>
+<p class="note" id="targetweights_note">Width — base weight, length — target weight; past the dotted circle — overweight. <span class="loading">Loading current values…</span></p>
 <div id="targetweights_table_wrap"></div>
 <h3 class="section-title" id="mp_pie_ru_stocks_title" style="display:none">Your current portfolio — Russian stocks breakdown</h3>
 <div id="plot_mp_pie_ru_stocks" style="height:420px; max-width:520px; margin:8px auto 0; display:none"></div>
@@ -157,20 +108,7 @@
 </div>
 
 <div id="usstocks" class="chart-wrap"><div id="plot_us_zscore" style="height:640px"></div>
-<p class="note">
-  <b>EXPERIMENTAL</b> — Z-score (vs each stock's own 36-month rolling history) for a basket of
-  37 major US stocks. This is NOT part of the Russian-stock ERP portfolio — purely an
-  informational overlay, no rebalancing logic applied. Data: Yahoo Finance (free, no auth),
-  annual financials only (~4 fiscal years of history per ticker), so Z-scores use whatever
-  window is available rather than a strict 36-month cutoff.<br>
-  Numerator per ticker: <b>EY</b> (net income) for stable profitable businesses,
-  <b>Revenue Yield</b> for unprofitable/volatile-earnings businesses,
-  <b>FCF Yield</b> for capital-intensive/cyclical businesses (energy, mining, REITs,
-  utilities) — same reasoning as ROSN/GMKN/PLZL (FCF) and YDEX/OZON (Revenue) in the main
-  portfolio. All lines hidden by default except the top few by weight — click the legend to
-  toggle. <b>Above +1.5</b> → cheaper than its own norm. <b>Below −1.5</b> → more expensive.
-  SPCX (SpaceX, IPO June 2026) has no Z-score yet — too little history.
-</p>
+<p class="note"><b>EXPERIMENTAL</b> — Z-score of 37 US stocks vs their own history, for information only. <b>Above +1.5</b> — cheap, <b>below −1.5</b> — expensive.</p>
 <div id="plot_us_targetweights" style="height:760px; max-width:820px; margin:8px auto 0"></div>
 <p class="note" id="us_targetweights_note">
   <span class="loading">Loading current values…</span>
@@ -207,11 +145,7 @@
       their keys and status — are on the <a href="#" onclick="showTab('automation');return false">Automation</a> tab.</p>
 
     <div class="section-title">Export to Numbers (.xlsx)</div>
-    <p class="note">The capital as of the 6th of each month (and today), laid out like money.numbers: a sheet per month —
-      accounts × currencies (in each currency, at that day's rate), the total in USD, by asset type, the shares by index
-      (S&amp;P 500 / 400 / 600, STOXX 600, MOEX, world), the Russian bonds and deposits, the flat — with pie charts by
-      currency, asset type and account; and a summary sheet first, with the history by asset type, currency and account as
-      stacked areas (in USD and in shares of the total). Opens in Numbers (File → Open), and saves from there as .numbers.</p>
+    <p class="note">The capital on the 6th of each month, as a Numbers file.</p>
     <div class="form-row">
       <label>From <input type="month" id="mp_xlsx_from" value="2024-11"></label>
       <button class="btn primary" id="mp_xlsx_export">Download .xlsx</button>
@@ -231,9 +165,7 @@
     <p class="empty-note" id="mp_cash_snowball_status"></p>
 
     <div class="section-title">Real estate</div>
-    <p class="note">A property is valued by its city's average price per m² (ready housing):
-      current value = purchase price × (latest price per m² ÷ price per m² in the purchase month).
-      Nizhny Novgorod — gipernn.ru, refreshed on the server on the 1st of each month.</p>
+    <p class="note">Value = purchase price × the change of the city's price per m² (gipernn.ru, monthly).</p>
     <div class="form-row">
       <input type="text" id="mp_re_name" placeholder="Name (e.g. Flat, Ilyinskaya)" size="24">
       <select id="mp_re_city"><option value="nizhny_novgorod">Nizhny Novgorod</option></select>
@@ -256,11 +188,7 @@
     <div class="section-title">Russian infrastructure 🇷🇺</div>
     <div id="mp_bond_subtype_wrap"></div>
     <div class="section-title">Latest data per account</div>
-    <p class="note">The date of the newest real record of each bank / broker account (bank rows and broker
-      trades or payouts from any of its sources; synthetic rows -- extrapolated, data gaps, snapshots -- left out),
-      to see when a fresh statement is due -- dated by the later of the newest record and the end of the latest statement uploaded for it (an account with no movements stays fresh once its statement is in): a broker monthly, a bank in active use weekly, one in little use monthly; the Russian banks' and Revolut's parts each on a period set by how active the part has been (over 40 records a month — a broker over 20 — every 2 weeks, 2+ monthly, any in half a year every 2 months, none yearly), the account due with its most overdue part;
-      an account synced by itself "auto", with its key's end date (orange within a week of it); Binance and Revolut's crypto "auto check" -- only their balances checked every morning, set against the stored export, orange when they differ; one that could be synced but isn't yet "TODO auto";
-      cash, Credo Bank, Yandex Bank, Binance and Walt (Telegram) yearly, crypto exchanges monthly, on-chain wallets (synced by themselves) dated by their last sync; closed accounts greyed out. Overdue in orange. Hover an account's name for where its statements come from.</p>
+    <p class="note">When each account's next statement is due; orange — overdue. Hover a name for where to get its statements.</p>
     <div id="mp_latest_sources"><div class="empty-note">Loading…</div></div>
   </div>
 </div>
@@ -269,12 +197,7 @@
   <div id="crypto_signed_out" class="empty-note">Sign in with Google (top of page) to see your crypto wallets and exchange accounts.</div>
   <div id="crypto_signed_in" style="display:none">
     <div class="section-title">Crypto wallets</div>
-    <p class="note">Non-custodial wallets (Trust Wallet, …): balances and full transaction history come straight
-      from the blockchain — Ethereum (ETH and every token), TRON (TRX incl. staked, TRC-20 tokens), Bitcoin and
-      Solana (SOL, SPL tokens). Paste any address — the network is recognised from the address itself. The address
-      is stored privately (only you can read it) and is only ever sent to the explorers from the server. Synced
-      daily and with the button below. Tokens without a market price (usually airdropped spam) are kept but not
-      counted in the portfolio.</p>
+    <p class="note">Paste a wallet address (ETH, TRON, BTC, SOL) — balances and history come from the blockchain every day.</p>
     <div class="form-row">
       <input type="text" id="mp_wallet_address" placeholder="Wallet address (0x…, T…, bc1…, Solana)" size="50" autocomplete="off" spellcheck="false">
       <span class="note" id="mp_wallet_detected" style="margin-top:0"></span>
@@ -286,12 +209,7 @@
     <div id="mp_wallets_wrap"></div>
 
     <div class="section-title">Exchange accounts</div>
-    <p class="note">Custodial exchange accounts (Binance, Bybit, Crypto.com, Walt in Telegram): there's no blockchain address to read, so they're
-      updated by uploading the exchange's own export in <b>Import CSV</b> on the My Portfolio tab (Binance: Orders → Assets History →
-      Export → Export Transaction Records; Bybit: Data Export → Transaction Log →
-      Account Change Details, each Funding and Unified Trading file; Crypto.com App: Accounts → History → Export →
-      Crypto Wallet; Walt (ex. Wallet) in Telegram: this project's own CSV built from its history). The Sync button above
-      doesn't touch them.</p>
+    <p class="note">Exchanges (Binance, Bybit, Crypto.com, Telegram): upload their export in Import CSV on My Portfolio.</p>
     <div class="form-row">
       <button class="btn" id="mp_exchange_recalc" title="Recompute balances from the transaction history already stored">Recalculate</button>
     </div>
@@ -304,14 +222,7 @@
   <div id="invested_signed_out" class="empty-note">Sign in with Google (top of page) to see what your investments earned.</div>
   <div id="invested_signed_in" style="display:none">
     <div class="section-title">Invested vs earned</div>
-    <p class="note">The investments only -- shares, bonds, funds, deposits, savings accounts, gold, ЦФА and crypto (money on cards,
-      cash and real estate stay out). <b>Invested</b>: your own money put in -- buys less sells and redemptions, top-ups of deposits and
-      savings less withdrawals, money and coins brought onto the crypto exchanges / wallets less taken out -- each at that day's
-      rate; dividends, coupons, interest and a bank's payouts for investing (Alfa's promotions) that were reinvested are not your money and stay out. <b>Value</b>: what it was worth
-      that day. Both less what's owed on the credit cards that day (money borrowed, much of it moved onto savings accounts), so
-      they're own money; the gap is untouched. The gap is what was earned: price growth, exchange rates, dividends, coupons, interest. With a period chosen -- or
-      a day set in "count from" (or clicked on the chart) -- invested starts from the value on that first day and adds only what was put in after it, so
-      the gap is what that period earned. Worked out in the database with every capital rebuild.</p>
+    <p class="note"><b>Invested</b> — your own money put in, <b>Value</b> — what it's worth; the gap is what was earned.</p>
     <div class="form-row" style="gap:16px;flex-wrap:wrap">
       <label>in <select id="invested_ccy"><option value="USD">USD $</option><option value="RUB">RUB ₽</option></select></label>
       <label title="Counted from this day: invested starts at the value that day and adds only what was put in after">count from <input type="date" id="invested_from"></label>
@@ -322,21 +233,11 @@
     <div id="invested_status" class="empty-note"></div>
     <div id="plot_capital_invested" style="height:560px"></div>
     <div class="section-title" style="margin-top:24px">Earned over time</div>
-    <p class="note">The gap between the two lines above: what the investments had earned by each day, from the same day counted
-      from to the zoom's end. <b>%</b> is that over the capital that worked on average (Modified Dietz: the value at the start plus
-      each put-in / taken-out weighted by how much of the period was left after it).</p>
+    <p class="note">What the investments earned; <b>%</b> — over the average capital at work.</p>
     <div class="form-row"><label title="Each day: what was earned by then over the capital that worked on average from the period's first day to it (Modified Dietz) -- the last day's is the title's"><input type="checkbox" id="invested_earned_pct"> in %</label></div>
     <div id="plot_invested_earned" style="height:360px"></div>
     <div class="section-title" style="margin-top:24px">Earned by asset</div>
-    <p class="note">Over the same period as the chart above (from the day counted from, or the zoom's start, to its end): each
-      asset's value at the end less its value at the start and the money put in between -- dividends, coupons and interest count as
-      earned. <b>Contribution</b>: that over the whole portfolio's capital at work on average, in percentage points -- the bars add
-      up to the portfolio's return; a dividend is the payer's, what it earns after is the paper it bought. <b>MWR</b> (money-weighted return): the return of the money put in and
-      taken out (a dividend is money back) over the time held -- XIRR over the period; <b>XIRR (a year)</b> the same made yearly.
-      <b>Dividends kept</b>: that over the capital that worked on average (Modified Dietz), a dividend staying in it as idle cash: the value at the start plus each
-      put-in and taken-out weighted by how much of the asset's own time was left after it (from the period start, or its first
-      buy, to the period end, or its last sale) -- money back early (amortisation, a sale) counts for less. An asset is its ticker across accounts; crypto goes
-      coin by coin (a trade on an exchange moves money from one coin to another), stablecoins (USDT, USDC, DAI...) are dollars: one row, USD, with an exchange's USD Earn.</p>
+    <p class="note">Each asset over the period: <b>Contribution</b> — to the portfolio's return, <b>MWR</b> — its money-weighted return.</p>
     <div class="form-row" id="invested_periods" style="gap:6px"><button class="btn" type="button" data-period="1d">1d</button><button class="btn" type="button" data-period="2d">2d</button><button class="btn" type="button" data-period="3d">3d</button><button class="btn" type="button" data-period="4d">4d</button><button class="btn" type="button" data-period="7d">7d</button><button class="btn" type="button" data-period="1m">1m</button><button class="btn" type="button" data-period="3m">3m</button><button class="btn" type="button" data-period="6m">6m</button><button class="btn" type="button" data-period="ytd">YTD</button><button class="btn" type="button" data-period="1y">1y</button><button class="btn" type="button" data-period="5y">5y</button><button class="btn" type="button" data-period="all">all</button><button class="btn" type="button" data-period="snowball" title="From the Snowball portfolio's first deal (2025-08-28)">Snowball</button></div>
     <div class="form-row" style="gap:16px">
       <label>by <select id="invested_by_group"><option value="asset">asset</option><option value="type">type</option></select></label>
@@ -354,11 +255,7 @@
   <div id="expenses_signed_out" class="empty-note">Sign in with Google (top of page) to see your expenses.</div>
   <div id="expenses_signed_in" style="display:none">
     <div class="section-title">Expenses</div>
-    <p class="note">Money out of the bank accounts, cards and cash over the period, each row at its day's rate. Not counted:
-      transfers between your own accounts (the pairs on the Capital tab), currency exchanges, buying investments, funds, savings
-      and crypto, and top-ups of a broker or another own card -- they're listed below the income, each with the row in it became.
-      A refund takes off its purchase's category (a minus row). The database sorts each row
-      (bank_transactions.expense_category: set by hand, or by the rules in expense_rules) with every capital rebuild.</p>
+    <p class="note">Spending from accounts, cards and cash. Transfers between own accounts, exchanges and investments aren't counted.</p>
     <div class="form-row" style="gap:12px">
       <button class="btn" id="exp_prev" type="button" title="Previous period">‹</button>
       <select id="exp_period">
@@ -415,9 +312,7 @@
   <div id="capitalbrokers_signed_out" class="empty-note">Sign in with Google (top of page) to see your capital by bank and broker.</div>
   <div id="capitalbrokers_signed_in" style="display:none">
     <div class="section-title">Capital by bank / broker</div>
-    <p class="note">Every day since the first transaction, stacked by where it's held, top down: cash, Bank of Cyprus, Revolut, IBKR, Freedom, UniCredit,
-      T-Bank, Sber, Finuslugi, Ozon, Yandex, Alfa, the rest, Raiffeisen, Ziraat.
-      A bank's credit-card debt is netted within that bank; a bank in the red as a whole is drawn below zero.</p>
+    <p class="note">Capital every day, by where it's held.</p>
     <div class="form-row" style="gap:16px;flex-wrap:wrap">
       <label>in <select id="brokers_ccy"><option value="USD">USD $</option><option value="RUB">RUB ₽</option></select></label>
       <label><input type="checkbox" id="brokers_re"> real estate (at the bottom)</label>
@@ -431,10 +326,7 @@
 
 <div id="maturities" class="chart-wrap">
   <div class="section-title">Погашения облигаций и вкладов</div>
-  <p class="note">Каждая облигация и вклад — полоса от сегодня до погашения: синяя — постоянный купон, розовая — в юанях, фиолетовая — переменный (флоатеры), бирюзовая — вклад; оферта — оранжевая часть до её даты.
-    Толщина полосы — сколько в ней денег; справа — штук и сумма. Даты погашений и оферт — с MOEX.
-    Фонды облигаций (TBRU, SBBY, …) без срока не показаны. Срок вклада выписка не даёт: клик по вкладу — указать дату окончания.
-    Рублёвая лесенка — только постоянный купон и вклады, по ключевой ставке ЦБ; юаневые облигации — своя лесенка ниже, по ставке Банка Китая.</p>
+  <p class="note">Облигации и вклады до погашения: синие — постоянный купон, розовые — юани, фиолетовые — флоатеры, бирюзовые — вклады. Клик по вкладу — указать дату окончания.</p>
   <p class="empty-note" id="mat_status"></p>
   <div id="mat_metrics" style="margin-bottom:16px"></div>
   <div class="pie-grid" style="margin-bottom:16px"><div id="mat_pies" style="display:contents"></div></div>
@@ -474,18 +366,7 @@
 
 <div id="cryptostrat" class="chart-wrap">
   <div class="section-title">Crypto strategy: AHR999</div>
-  <p class="note">Доля всей крипты в портфеле (цель 5%) ведётся по индексу BTC AHR999, раз в месяц после зарплаты.
-    🔴 <b>Красная зона</b> (&lt; 0.45; с галочкой ниже &lt; 0.516): докупать на 1% портфеля в месяц, не выше 5%; после неё в нейтральной зоне — так же, пока не 5%, потом держать 5% пополнениями.
-    🟢 <b>Зелёная зона</b> (&gt; 1.2): продавать в месяц 1% портфеля при доле 1–10%, 2% при 10–20%, 3% при 20–30%; не ниже 1%.
-    🟡 <b>Нейтральная после зелёной</b>: ничего не делать до следующей красной.
-    AHR999 = (цена / средняя геометрическая 200 дневных закрытий) × (цена / 10<sup>5.84·log₁₀(дней с 03.01.2009) − 17.01</sup>),
-    считается здесь каждое утро по BTC-USD с Yahoo — с CoinGlass может расходиться в сотых.
-    С галочкой «справедливая по всей истории» вместо 5.84 и −17.01 — та же прямая
-    log₁₀(цена) от log₁₀(возраст), подогнанная по каждому дню с 18.07.2010 (первая цена) по вчера
-    (CoinMetrics) и пересчитываемая каждое утро (коэффициенты — у галочки): «а» — вся история по последним, «б» — каждый день по своим, подогнанным
-    только по ценам до него, как было бы видно тогда (порог красной в обоих — последний), — справедливая сегодня ~$146k вместо ~$185k, индекс выше в ~1.2–1.27 раза, поэтому порог красной
-    зоны сдвинут так, чтобы дней в ней было столько же, сколько по формуле автора (0.516 вместо 0.45;
-    зелёная — та же, 1.2); меняются зоны, план и бэктест. Без галочки — как у автора индекса и на CoinGlass.</p>
+  <p class="note">Доля всей крипты в портфеле (цель 5%) ведётся по индексу BTC AHR999, раз в месяц после зарплаты. 🔴 <b>Красная зона</b> (&lt; 0.45; с галочкой ниже &lt; 0.516): докупать на 1% портфеля в месяц, не выше 5%; после неё в нейтральной зоне — так же, пока не 5%, потом держать 5% пополнениями. 🟢 <b>Зелёная зона</b> (&gt; 1.2): продавать в месяц 1% портфеля при доле 1–10%, 2% при 10–20%, 3% при 20–30%; не ниже 1%. 🟡 <b>Нейтральная после зелёной</b>: ничего не делать до следующей красной. AHR999 = (цена / средняя геометрическая 200 дневных закрытий) × (цена / 10<sup>5.84·log₁₀(дней с 03.01.2009) − 17.01</sup>), считается здесь каждое утро по BTC-USD с Yahoo — с CoinGlass может расходиться в сотых. С галочкой «справедливая по всей истории» вместо 5.84 и −17.01 — та же прямая log₁₀(цена) от log₁₀(возраст), подогнанная по каждому дню с 18.07.2010 (первая цена) по вчера (CoinMetrics) и пересчитываемая каждое утро (коэффициенты — у галочки): «а» — вся история по последним, «б» — каждый день по своим, подогнанным только по ценам до него, как было бы видно тогда (порог красной в обоих — последний), — справедливая сегодня ~$146k вместо ~$185k, индекс выше в ~1.2–1.27 раза, поэтому порог красной зоны сдвинут так, чтобы дней в ней было столько же, сколько по формуле автора (0.516 вместо 0.45; зелёная — та же, 1.2); меняются зоны, план и бэктест. Без галочки — как у автора индекса и на CoinGlass.</p>
   <div class="form-row"><label title="Off: AHR999's own 5.84 / -17.01, as on CoinGlass"><input type="checkbox" id="cs_fair_refit"> справедливая по всей истории BTC (<span id="cs_fair_refit_coef">5.633 / −16.32</span>)</label>
     <label title="a: today's coefficients for every past day too; b: each day its own, fitted only on the prices before it -- as one would have seen it then">коэффициенты: <select id="cs_fair_mode"><option value="b">б — на каждый день свои (по ценам до него)</option><option value="a">а — последние для всей истории</option></select></label>
     <label title="Оригинал: 0.45 / 1.2. Текущий: с галочкой красная сдвинута на ту же долю красных дней, зелёная 1.2. Вся история а: треть дней красных, треть нейтральных, треть зелёных по всем дням с 2015-04. Вся история б: те же трети на каждый день только по дням до него (первый год — 0.45 / 1.2). Четверти: четверть дней красных (ниже нижней четверти), четверть зелёных (выше верхней), нейтральные делятся сами примерно поровну на после красной и после зелёной; а и б — так же, как у третей. Микс: на каждый день медиана порогов оригинала, текущего, третей б и четвертей б">пороги зон: <select id="cs_zone_mode"><option value="orig">оригинал (0.45 / 1.2)</option><option value="cur">текущий вариант</option><option value="ter_a">вся история а — по трети дней</option><option value="ter_b">вся история б — по трети дней до каждого дня</option><option value="qrt_a">четверти а — по всей истории</option><option value="qrt_b">четверти б — по дням до каждого дня</option><option value="mix">микс — медиана: оригинал, текущий, трети б, четверти б</option></select></label></div>
@@ -511,10 +392,7 @@
     <p class="empty-note" id="capital_status"></p>
     <div id="plot_capital" style="height:560px"></div>
     <div class="section-title">By asset type</div>
-    <p class="note">Stacked from the bottom, the steadiest first: deposits, bonds, gold, crypto, stocks, liquid assets, cash. Credit-card debt is
-      netted within its infrastructure first (Russian debt against Russian holdings) — against liquid assets, then cash,
-      bonds, stocks — and what that leaves against the other infrastructure's holdings; only debt beyond everything is
-      drawn below zero.</p>
+    <p class="note">Capital by asset type, the steadiest at the bottom.</p>
     <div class="form-row" style="gap:16px;flex-wrap:wrap">
       <label><input type="checkbox" id="capital_types_re"> real estate (at the bottom)</label>
       <label><input type="checkbox" id="capital_types_pct"> as % of the total</label>
@@ -576,9 +454,7 @@
     </div>
     </div>
     <div class="section-title">What the funds hold</div>
-    <p class="note">Shares held directly plus each fund's share of its own holdings (fund value × weight), matched
-      by ISIN across funds — the real exposure to each company. Fund lists come from the issuers (monthly refresh);
-      TRND's is from its February 2026 report.</p>
+    <p class="note">Real exposure to each company: shares held plus their part inside funds.</p>
     <div id="mp_lookthrough_wrap"></div>
   </div>
 </div>
@@ -586,53 +462,18 @@
 <div id="userp" class="chart-wrap">
 <div class="form-row"><label title="Off: the whole history, from 1881 (Damodaran's from 2008); the Z-scores are computed on the whole history either way"><input type="checkbox" id="us_erp_from2016" checked> from 2016</label></div>
 <div id="plot_us_erp" style="height:420px"></div>
-<p class="note">
-  <b>Blue</b> — the S&amp;P 500's cyclically-adjusted earnings yield (1 / CAPE).
-  <b>Orange</b> — the real 10-year Treasury rate (the 10-year yield less the last 10 years' inflation).
-  <b>Green</b> — the gap between them, Shiller's Excess CAPE Yield.<br>
-  <b>EXPERIMENTAL</b> — US market-wide Equity Risk Premium, using Robert Shiller's own
-  published <b>Excess CAPE Yield</b> (green, monthly, 1871–present, updated directly from his
-  maintained spreadsheet — not recomputed from this site's 37-ticker basket).
-  Excess CAPE Yield = (1 / CAPE) − real long-term interest rate, i.e. the S&amp;P 500's
-  cyclically-adjusted earnings yield minus the real 10-year rate — conceptually the same idea
-  as the Russian portfolio's Layer 1 (Portfolio EY − OFZ 10Y), just for the whole US market.
-  This is NOT the same figure as <b>Damodaran's Implied ERP (T12m)</b> (dotted line — a
-  different, DCF-based methodology): a genuine monthly series Damodaran has recomputed and
-  published every month since September 2008, using trailing-12-month dividends + buybacks
-  against the current S&amp;P 500 level and Treasury rate (i.e. NOT his once-a-year headline
-  figure held flat — it moves every month on its own data). Shown from 2016; with "from 2016"
-  off, the full Shiller history (1871–present) — drag the range slider below the chart to zoom
-  into any period, it opens on the last 10 years (Damodaran's series only goes back to 2008-09).
-</p>
+<p class="note"><b>Blue</b> — S&amp;P 500 earnings yield (1 / CAPE), <b>orange</b> — real 10Y rate, <b>green</b> — their gap; dotted — Damodaran's implied ERP.</p>
 <div id="plot_us_erp_z" style="height:420px; margin-top:8px"></div>
-<p class="note">
-  Z-score of Shiller's Excess CAPE Yield vs its own 36-month rolling history (computed on the
-  full 1871–present series). <b>Above +1.5</b> → stocks unusually cheap vs
-  (real) rates → historically a buy signal. <b>Below −1.5</b> → stocks unusually expensive vs
-  rates → historically a trim signal. This is the Z-score that drives the allocation donut below.
-  <b>Blue</b> and <b>orange</b> — each side's own Z-score (the stocks' 1/CAPE, the real 10-year rate), on the same 36-month window, as Portfolio Z / OFZ Z on the RU ERP tab; shown only. Unlike there, the green is the Z-score of the gap itself, not blue minus orange.
-</p>
+<p class="note">Z-score of the green line above. <b>Above +1.5</b> — cheap, <b>below −1.5</b> — expensive. Drives the donut below.</p>
 <div id="plot_damodaran_z" style="height:340px; margin-top:8px"></div>
-<p class="note">
-  <b>INFORMATIONAL ONLY</b> — the same 36-month rolling Z-score, computed instead on
-  <b>Damodaran's Implied ERP (T12m)</b> and on its own (much shorter, 2008-09–present) history.
-  A second, independent read of the same "cheap vs expensive" question, using forward-looking
-  DCF assumptions rather than Shiller's backward-looking earnings yield — shown for comparison
-  only. It does <b>not</b> feed into the allocation donut below, which uses Shiller's Z-score only.
-</p>
+<p class="note"><b>INFORMATIONAL ONLY</b> — the same Z-score on Damodaran's ERP; not used in the donut.</p>
 <div id="plot_us_alloc_target" style="height:420px; margin-top:8px"></div>
 <p class="note" id="us_alloc_target_note">
   <span class="loading">Loading current allocation…</span>
 </p>
 <div id="us_alloc_target_table_wrap"></div>
 <div id="plot_us_alloc_history" style="height:420px; margin-top:16px"></div>
-<p class="note">
-  The stock share of the target above, month by month, at each step of the same formula with that
-  month's own inputs: <b>by age alone</b> (grey dotted: 100 &minus; (age &minus; 10)), <b>by the Fed
-  funds rate alone</b> (violet dotted: w(r) above; the rate itself in the hover), the <b>base</b>
-  (dashed: the average of the two) and the <b>target</b> (solid:
-  the base with the ERP Z-score's correction -- all three inputs). Bonds are the rest to 100%. From 2016.
-</p>
+<p class="note">Stock share by month: by age, by the Fed rate, the base and the <b>target</b> (solid). Bonds are the rest.</p>
 </div>
 
 <!-- The accounts that sync or are checked by themselves: their keys, tokens
@@ -649,11 +490,7 @@
   <div id="auto_signed_out" class="empty-note">Sign in with Google (top of page) to set up the automatic syncs.</div>
   <div id="auto_signed_in" style="display:none">
     <div class="section-title">IBKR automatic sync</div>
-    <p class="note">Instead of uploading the Activity Statement: an Activity Flex Query (Performance &amp; Reports → Flex Queries;
-      sections Trades, Cash Transactions, Cash Report; XML; Last 365 Calendar Days) and the Flex Web Service token
-      (Flex Web Service Configuration), with its Activation Period pasted as IBKR shows it (or just the date it ends — a
-      year at most). Pulled every morning; each run replaces IBKR's rows of the statement's period. The token is read-only on IBKR's
-      side and stays on the server — once saved, this page can't show it again. Leave the token empty to keep the one saved.</p>
+    <p class="note">IBKR: an Activity Flex Query (Trades, Cash Transactions, Cash Report; XML) and the Flex Web Service token. Synced every morning.</p>
     <div class="form-row">
       <label>Query ID <input type="text" id="mp_ibkr_query_id" inputmode="numeric" autocomplete="off"></label>
       <label>Token <input type="password" id="mp_ibkr_token" autocomplete="off"></label>
@@ -667,10 +504,7 @@
     <div class="empty-note" id="mp_ibkr_status"></div>
 
     <div class="section-title">Bybit automatic sync</div>
-    <p class="note">Instead of uploading the Data Export logs: a Bybit API key (API Management → Create New Key →
-      System-generated, API Transaction, <b>Read-Only</b>, no IP). Pulled every morning, the last 30 days; each run replaces
-      Bybit's rows of those days. A key that can trade or withdraw is refused. The secret stays on the server — once saved,
-      this page can't show it again; leave it empty to keep the one saved. The key's end date comes from Bybit by itself.</p>
+    <p class="note">Bybit: an API key, <b>read-only</b> (API Management → Create New Key). Synced every morning.</p>
     <div class="form-row">
       <label>API key <input type="text" id="mp_bybit_key" autocomplete="off"></label>
       <label>API secret <input type="password" id="mp_bybit_secret" autocomplete="off"></label>
@@ -682,11 +516,7 @@
     <div class="empty-note" id="mp_bybit_status"></div>
 
     <div class="section-title">Freedom24 automatic sync</div>
-    <p class="note">Instead of uploading the cash-movement table: a Tradernet API key pair (freedom24.com → Tradernet API →
-      API key → Generate a new key pair). Freedom24 has no read-only keys — a pair can place orders (not withdraw); this
-      site only reads the cash movements with it. Pulled every morning, the whole history; each run replaces Freedom24's
-      rows (the shares credited as gifts still come from the broker report JSON, uploaded by hand). The private key stays
-      on the server — once saved, this page can't show it again; leave it empty to keep the one saved.</p>
+    <p class="note">Freedom24: a Tradernet API key pair (freedom24.com → Tradernet API). Synced every morning.</p>
     <div class="form-row">
       <label>Public key <input type="text" id="mp_f24_public" autocomplete="off"></label>
       <label>Private key <input type="password" id="mp_f24_private" autocomplete="off"></label>
@@ -698,13 +528,7 @@
     <div class="empty-note" id="mp_f24_status"></div>
 
     <div class="section-title">T-Bank broker automatic sync</div>
-    <p class="note">Instead of uploading the weekly broker report: a T-Invest API token (T-Investments → settings →
-      T-Invest API tokens → <b>read-only</b>, all accounts). A token that can trade is refused. Pulled every morning: the days
-      after each agreement's latest report, checked first against the month before that report's end — nothing is
-      replaced unless the API agrees with it (ЦФА: against the Atomyze report). A report uploaded later takes its
-      period back. Cards, credit card and deposits aren't in the API — still statements. The token stays on the server; it lives three months from
-      its last use, which the daily sync keeps renewing. T-Bank's certificate chains to the Russian Trusted Root CA,
-      trusted only for this connection.</p>
+    <p class="note">T-Bank: a T-Invest API token, <b>read-only</b>, all accounts. Synced every morning.</p>
     <div class="form-row">
       <label>Token <input type="password" id="mp_tbank_token" autocomplete="off"></label>
       <button class="btn primary" id="mp_tbank_save">Save</button>
@@ -715,12 +539,7 @@
     <div class="empty-note" id="mp_tbank_status"></div>
 
     <div class="section-title">Binance automatic check</div>
-    <p class="note">Binance's history still comes from its export (Upload); this checks it every morning: a read-only API
-      key (API Management → Create API → System generated, only <b>Enable Reading</b>, no IP) lets the server read the coins
-      on the account — Spot, Funding, Simple Earn — and set them against the balances stored from the export. If they
-      differ, the account was used since the last export: the row in "Latest data per account" turns orange — upload a new
-      export. A key that can trade, withdraw or transfer is refused. The secret stays on the server; leave it empty to keep
-      the one saved.</p>
+    <p class="note">Binance: an API key with only <b>Enable Reading</b> — checks the balances every morning against the uploaded export.</p>
     <div class="form-row">
       <label>API key <input type="text" id="mp_binance_key" autocomplete="off"></label>
       <label>Secret key <input type="password" id="mp_binance_secret" autocomplete="off"></label>
@@ -732,13 +551,7 @@
     <div class="empty-note" id="mp_binance_status"></div>
 
     <div class="section-title">Revolut crypto automatic check</div>
-    <p class="note">Revolut's crypto history still comes from its crypto statement (Upload); this checks it every morning:
-      Revolut shows one crypto balance in the app and on Revolut X, and a read-only Revolut X API key lets the server read
-      it and set it against the coins stored from the statement. If they differ, crypto was bought, sold or received since:
-      the Crypto row of Revolut in "Latest data per account" turns orange — upload a new crypto statement. The key: press
-      <b>Make a key pair</b>, copy the public key, and in the Revolut X web app (Profile → API keys → create, <b>read-only</b>,
-      no IP) paste it; paste the API key it gives here and Save. The private key goes to the server with Save and stays
-      there — it isn't shown again; a new pair replaces it.</p>
+    <p class="note">Revolut X: <b>Make a key pair</b>, paste the public key in Revolut X (Profile → API keys, <b>read-only</b>), paste its API key here — checks the crypto balances every morning.</p>
     <div class="form-row">
       <button class="btn" id="mp_revx_pair">Make a key pair</button>
       <label>API key <input type="text" id="mp_revx_key" autocomplete="off"></label>
@@ -751,10 +564,7 @@
     <div class="empty-note" id="mp_revx_status"></div>
 
     <div class="section-title">Wise API token (kept for later)</div>
-    <p class="note">Wise is synced through Open Banking below: Wise no longer lets personal accounts sign the strong
-      customer authentication its statements need, so its own API can't read them. A read-only personal token (Wise →
-      Settings → API tokens) can still be kept here, in case Wise opens statements again — nothing runs with it. It stays
-      on the server; leave the field empty to keep the one saved.</p>
+    <p class="note">Wise syncs through Open Banking below; this token isn't used.</p>
     <div class="form-row">
       <label>API token <input type="password" id="mp_wise_token" autocomplete="off"></label>
       <button class="btn primary" id="mp_wise_save">Save</button>
@@ -762,17 +572,7 @@
     <div class="empty-note" id="mp_wise_status"></div>
 
     <div class="section-title">Revolut, Bank of Cyprus &amp; Wise (Open Banking)</div>
-    <p class="note">Through Enable Banking (enablebanking.com → Control Panel → API applications): an application
-      registered there in restricted mode — only your own accounts linked to it — with its id and the private key it
-      generated (drop the downloaded <code>&lt;id&gt;.pem</code> file below — the id is filled in from its name). The key stays on the server. Then connect each
-      bank: you're sent to its consent page and back here; the consent lasts up to 180 days, renewed the same way (the end
-      date shows below and in "Latest data per account", orange a week before). Every morning the transactions after
-      each bank's latest statement are pulled in (pending ones too, marked PENDING and rewritten each morning until
-      booked) — checked first against that statement's last month and against the bank's balance; nothing is replaced
-      unless they agree. A statement uploaded later takes its period back. Revolut's
-      funds, savings, Invest and metals aren't in Open Banking — still statements; until they come, the account's transfers to
-      the funds / savings / Invest account, its gold purchases (at the day's market price) and the funds' daily return and
-      fee are estimated (marked ESTIMATED) and replaced by the statement.</p>
+    <p class="note">Enable Banking: the app id and its private key (.pem), then connect each bank (consent up to 180 days). Synced every morning.</p>
     <div class="form-row">
       <label>Application ID <input type="text" id="mp_eb_app" size="36" autocomplete="off"></label>
       <button class="btn primary" id="mp_eb_save">Save</button>
@@ -799,7 +599,7 @@
 <script src="./js/app/exports.js?v=20261121b"></script>
 <script src="./js/app/portfolio-tables.js?v=20261123e"></script>
 <script src="./js/app/charts-pies.js?v=20261123a"></script>
-<script src="./js/app/maturities.js?v=20261121b"></script>
+<script src="./js/app/maturities.js?v=20261123a"></script>
 <script src="./js/app/crypto-strategy.js?v=20261121b"></script>
 <script src="./js/app/salary-plan.js?v=20261123a"></script>
 <script src="./js/app/portfolio-pies.js?v=20261121b"></script>
@@ -809,7 +609,7 @@
 <script src="./js/app/expenses-edit.js?v=20261121b"></script>
 <script src="./js/app/expenses-render.js?v=20261122a"></script>
 <script src="./js/app/invested.js?v=20261121b"></script>
-<script src="./js/app/price-chart.js?v=20261123m"></script>
+<script src="./js/app/price-chart.js?v=20261123n"></script>
 <script src="./js/app/capital.js?v=20261121b"></script>
 <script src="./js/app/boot.js?v=20261121b"></script>
 <script type="module">

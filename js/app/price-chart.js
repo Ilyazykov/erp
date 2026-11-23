@@ -79,9 +79,9 @@ document.addEventListener('click', ev => {
 // (weekdays, no times) -- dollars ~0.4%, euros ~0.9-1.15%; over 2 500 GEL its app offers to ask for a better
 // rate (Entrepreneur Georgia); nothing found on its weekends.
 const MP_FX_RULES = {
-  TRY: 'Ziraat: change in its app on a weekday 11:00–17:30 Tbilisi time (10:00–16:30 Istanbul) — ~1% off the market; in the evening, at night or on a weekend ~3%.',
-  GEL: 'TBC: dollars to lari ~0.4% off the market, euros ~0.9–1.15% — change dollars; over 2 500 GEL its app offers "ask for a better rate": ask (more than once). Weekends: unknown — compare the app\'s rate with the NBG\'s banks table first.',
-  RUB: 'T-Bank: change on a weekday 10:00–19:00 Moscow time — ~1% off the market; from 19:00 ~6%, at night ~3%, on a weekend ~6%.',
+  TRY: 'Ziraat: weekdays 11:00–17:30 Tbilisi ~1%, evenings and weekends ~3%.',
+  GEL: 'TBC: dollars ~0.4%, euros ~1%; over 2 500 GEL ask for a better rate.',
+  RUB: 'T-Bank: weekdays 10:00–19:00 Moscow ~1%, evenings and weekends ~6%.',
 };
 // Gold funds, their deals marked on gold's chart as buys through a fund (the weight: their share of gold)
 // -- T-Capital's TGLD, bought on T-Bank's brokerage account (May-June 2026); securities / fund_holdings
