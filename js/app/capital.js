@@ -442,19 +442,26 @@ async function mpAccountCurrencySeries(account) {
   return out;
 }
 
-// A currency's or coin's USD price on a day (the last known), one row asked for and kept: for the hover's amount.
-const mpNativeRates = new Map();
-function mpNativeRate(code, fiat, day) {
-  const key = `${code}|${day}`;
-  if (!mpNativeRates.has(key)) {
-    const query = fiat ? sb.from('fx_history').select('v:usd_per_unit').eq('currency', code)
-      : sb.from('price_history').select('v:price_usd').eq('ticker', code);
-    mpNativeRates.set(key, Promise.resolve(query.lte('day', day).order('day', { ascending: false }).limit(1)).then(({ data, error }) => {
-      if (error) { mpNativeRates.delete(key); return null; }
-      return Number(data?.[0]?.v) || null;
-    }, () => { mpNativeRates.delete(key); return null; }));
-  }
-  return mpNativeRates.get(key);
+// The daily USD prices of a chart's currencies and coins, loaded once with the window: the hover's amount
+// in the currency itself is then there at once. code|fiat -> {days, prices}.
+const mpUnitPrices = new Map();
+async function mpLoadUnitPrices(series) {
+  const codes = (series || []).map(c => ({ code: c.label.split(' ')[0], fiat: mpIsFiatLabel(c.label) }))
+    .filter(c => !['USD', 'other', 'Altcoins'].includes(c.code) && !mpUnitPrices.has(`${c.code}|${c.fiat}`));
+  if (!codes.length) return;
+  const { data, error } = await sb.rpc('capital_unit_prices', {
+    p_currencies: codes.filter(c => c.fiat).map(c => c.code), p_tickers: codes.filter(c => !c.fiat).map(c => c.code),
+  });
+  if (error) return;
+  for (const r of data || []) mpUnitPrices.set(`${r.code}|${r.is_fiat}`, { days: r.days, prices: r.prices.map(Number) });
+}
+// the price on a day number: the last one known
+function mpUnitPriceOn(code, fiat, n) {
+  const e = mpUnitPrices.get(`${code}|${fiat}`);
+  if (!e || !e.days.length || e.days[0] > n) return null;
+  let lo = 0, hi = e.days.length - 1;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (e.days[m] <= n) lo = m; else hi = m - 1; }
+  return e.prices[lo] || null;
 }
 const mpNativeAmount = (v, code, fiat) => `${v.toLocaleString('en-US', { maximumFractionDigits: fiat ? (Math.abs(v) >= 100 ? 0 : 2) : (Math.abs(v) >= 1 ? 4 : 6) })} ${code}`;
 
@@ -494,6 +501,7 @@ async function mpOpenAccountChart(account) {
   // the split by currency, once more if the database was busy (a capital recount running); without it, one colour
   const loadSeries = () => mpAccountCurrencySeries(account).catch(() => null);
   const series = await loadSeries() ?? await new Promise(ok => setTimeout(ok, 1500)).then(loadSeries);
+  await mpLoadUnitPrices(series).catch(() => {});
   const firstHeld = mpCapitalBrokerRows.findIndex(r => Math.abs(mpAccountFull(account, r)) >= 1);
   if (firstHeld < 0) { note.textContent = 'No history for this account.'; return; }
   const rows = mpCapitalBrokerRows.slice(firstHeld);
@@ -505,8 +513,8 @@ async function mpOpenAccountChart(account) {
   tip.id = 'mp_account_tip';
   tip.style.cssText = 'position:fixed;display:none;pointer-events:none;z-index:10;background:#13191f;border:1px solid #30363d;border-radius:4px;padding:6px 9px;font-size:12px;line-height:1.5;color:#e6edf3;white-space:nowrap';
   dlg.appendChild(tip);
-  let view = null, nativeToken = null, nativeText = '', nativeTimer = 0;
-  const hideTip = () => { tip.style.display = 'none'; clearTimeout(nativeTimer); nativeToken = null; nativeText = ''; };
+  let view = null;
+  const hideTip = () => { tip.style.display = 'none'; };
   plot.addEventListener('mouseleave', hideTip);
   plot.addEventListener('mousemove', ev => {
     const fl = plot._fullLayout;
@@ -525,25 +533,12 @@ async function mpOpenAccountChart(account) {
     // the amount in the currency itself (or in coins), at that day's rate; not for USD or a mixed layer
     const code = view.byCurrency ? String(t.legendgroup).split(' ')[0] : null;
     const day = new Date(view.ms[i]).toISOString().slice(0, 10);
-    const token = code && !['USD', 'other', 'Altcoins'].includes(code) && !(view.rub && code === 'RUB') ? `${code}|${day}|${t.name}|${t.y[i]}` : null;
-    if (token !== nativeToken) {
-      nativeToken = token;
-      nativeText = '';
-      clearTimeout(nativeTimer);
-      if (token) {
-        const usd = t.y[i] / view.conv(day, 1), fiat = mpIsFiatLabel(t.legendgroup);
-        nativeTimer = setTimeout(async () => {
-          const rate = await mpNativeRate(code, fiat, day);
-          if (nativeToken !== token || !rate) return;
-          nativeText = ` · ${mpNativeAmount(usd / rate, code, fiat)}`;
-          const el = tip.querySelector('[data-native]');
-          if (el) el.textContent = nativeText;
-          const right = tip.getBoundingClientRect().right;
-          if (right > innerWidth) tip.style.left = `${Math.max(4, parseFloat(tip.style.left) - (right - innerWidth) - 6)}px`;
-        }, 100);
-      }
+    let nativeText = '';
+    if (code && !['USD', 'other', 'Altcoins'].includes(code) && !(view.rub && code === 'RUB')) {
+      const fiat = mpIsFiatLabel(t.legendgroup), rate = mpUnitPriceOn(code, fiat, mpDayNumber(day));
+      if (rate) nativeText = ` · ${mpNativeAmount(t.y[i] / view.conv(day, 1) / rate, code, fiat)}`;
     }
-    tip.innerHTML = `${date}<br><span style="color:${t.fillcolor}">■</span> <b>${mpEscapeHtml(name)}: ${view.fmt(t.y[i])}</b><span data-native>${nativeText}</span>`
+    tip.innerHTML = `${date}<br><span style="color:${t.fillcolor}">■</span> <b>${mpEscapeHtml(name)}: ${view.fmt(t.y[i])}</b>${nativeText}`
       + (same.length > 1 && Math.abs(whole - t.y[i]) >= 0.005 ? `<br>${mpEscapeHtml(t.legendgroup)} in all: ${view.fmt(whole)}` : '')
       + (total ? `<br><span style="color:#8b949e">${(t.y[i] / total * 100).toFixed(1)}% of ${view.fmt(total)}</span>` : '');
     tip.style.display = '';
