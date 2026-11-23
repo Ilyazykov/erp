@@ -13,6 +13,8 @@ function mpTxLayerFilter(layer) {
   return { label: layer.label, fiat, codes, tickers, any: [...new Set([...codes, ...tickers])] };
 }
 
+// A PlayStation purchase's name, the platform once and at the end: "Outer Wilds (PS5)".
+const mpTxPs5 = name => `${String(name).replace(/\s*\(?PS4™? & PS5®?\)?|\s+PS5\b/g, '').trim()} (PS5)`;
 // A bank row's name in plain words: the shop out of the statement's line; a game store's purchase by the
 // note that names the game (any other note goes under the name).
 function mpTxNamed(description, note) {
@@ -20,7 +22,7 @@ function mpTxNamed(description, note) {
   const name = /^PLAYSTATION/i.test(shop) ? 'PlayStation' : /^STEAM/i.test(shop) ? 'Steam'
     : /APPLE\.COM\/BILL|ITUNES\.COM/i.test(shop) ? 'Apple' : shop;
   const game = (name === 'PlayStation' || name === 'Steam') && !!note;
-  return { text: game ? note : name, full: description, noteLine: game ? '' : note || '', store: ['Apple', 'PlayStation', 'Steam'].includes(name) };
+  return { text: game ? (name === 'PlayStation' ? mpTxPs5(note) : note) : name, ps: name === 'PlayStation', full: description, noteLine: game ? '' : note || '', store: ['Apple', 'PlayStation', 'Steam'].includes(name) };
 }
 // Apple's and the game stores' charges by what they paid for (their purchase history, imported as receipts):
 // "YouTube Premium", a subscription; a game's name over a note that guessed it.
@@ -44,6 +46,7 @@ async function mpTxAddStoreNames(rows) {
     const items = (lines || []).filter(l => l.receipt_id === order?.id && !l.is_other);
     if (!items.length) continue;
     r.text = items.slice(0, 2).map(l => l.name_printed).join(', ') + (items.length > 2 ? ` +${items.length - 2}` : '');
+    if (r.ps) r.text = mpTxPs5(r.text);
     if (items.some(l => /^(\d{1,2} [A-Za-z]+\.? \d{4} - |Renews|Renewed|Expires|Expired)/.test(l.note || ''))) r.type = 'subscription';
     // bought on sale: the list price is on the receipt
     const full = items.reduce((s, l) => s + Number(l.unit_price_list ?? l.line_total), 0), paid = items.reduce((s, l) => s + Number(l.line_total), 0);
