@@ -336,7 +336,7 @@ function mpUpdateAuthUi(session) {
     Plotly.purge('plot_invested_earned');
     document.getElementById('mp_charts_grid').innerHTML = '';
     document.getElementById('mp_lookthrough_wrap').innerHTML = '';
-    ['plot_mp_pie_us_stocks', 'plot_mp_pie_ru_stocks', 'plot_mp_pie_stocksbonds', 'plot_mp_pie_deposits']
+    ['plot_mp_pie_us_stocks', 'plot_mp_pie_us_sectors', 'plot_mp_pie_ru_stocks', 'plot_mp_pie_stocksbonds', 'plot_mp_pie_deposits']
       .forEach(id => { document.getElementById(id).style.display = 'none'; });
     ['mp_pie_us_stocks_note', 'mp_pie_ru_stocks_note', 'mp_pie_stocksbonds_note', 'mp_pie_deposits_note',
      'mp_pie_us_stocks_title', 'mp_pie_ru_stocks_title', 'mp_pie_stocksbonds_title', 'mp_pie_deposits_title']

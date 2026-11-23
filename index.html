@@ -118,7 +118,10 @@
 </p>
 <div id="us_targetweights_table_wrap"></div>
 <h3 class="section-title" id="mp_pie_us_stocks_title" style="display:none">Your current portfolio — US stocks breakdown</h3>
-<div id="plot_mp_pie_us_stocks" style="height:420px; max-width:520px; margin:8px auto 0; display:none"></div>
+<div style="display:flex; flex-wrap:wrap; justify-content:center; gap:16px; margin-top:8px">
+  <div id="plot_mp_pie_us_stocks" style="height:420px; flex:1 1 380px; min-width:0; max-width:520px; display:none"></div>
+  <div id="plot_mp_pie_us_sectors" style="height:420px; flex:1 1 380px; min-width:0; max-width:520px; display:none"></div>
+</div>
 <p class="note" id="mp_pie_us_stocks_note" style="display:none">
   Based on the trades you imported in the My Portfolio tab: breakdown across the US stocks in
   this portfolio's target list, by current USD value.
@@ -606,9 +609,9 @@
 <script src="./js/app/maturities.js?v=20261123a"></script>
 <script src="./js/app/crypto-strategy.js?v=20261121b"></script>
 <script src="./js/app/salary-plan.js?v=20261123a"></script>
-<script src="./js/app/portfolio-pies.js?v=20261121b"></script>
+<script src="./js/app/portfolio-pies.js?v=20261123b"></script>
 <script src="./js/app/automation.js?v=20261121b"></script>
-<script src="./js/app/reminders-auth.js?v=20261123a"></script>
+<script src="./js/app/reminders-auth.js?v=20261123b"></script>
 <script src="./js/app/expenses-data.js?v=20261121b"></script>
 <script src="./js/app/expenses-edit.js?v=20261121b"></script>
 <script src="./js/app/expenses-render.js?v=20261122a"></script>

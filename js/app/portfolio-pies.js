@@ -358,6 +358,8 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
       }
     }
   }
+  // a donut drawn from another one's shares (sectors from stocks) follows its simulated allocation
+  if (opts?.displayPct) displayPctByItem = new Map(usable.map(it => [it, opts.displayPct.get(it.label) || 0]));
   const pctOf = (it) => (displayPctByItem ? displayPctByItem.get(it) : it.current);
 
   // Sector angular WIDTH = actual (or, with a pending allocation, New)
@@ -580,7 +582,7 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
       hovertemplate: usable.map((it, i) => {
         const pct = totalTarget > 0 ? (it.target / totalTarget * 100) : 0;
         return `${it.label}<br>Actual: <b>${it.current.toFixed(2)}%</b> (sector angle)<br>` +
-               `Target: <b>${pct.toFixed(2)}%</b><extra></extra>`;
+               `Target: <b>${pct.toFixed(2)}%</b>${it.detail ? `<br>${it.detail}` : ''}<extra></extra>`;
       }),
     },
     {
@@ -593,16 +595,25 @@ function mpDrawTargetDonut(divId, noteId, items, sharedTotalUsd, actionColLabel,
     },
     {
       type: 'scatterpolar', mode: 'text',
-      r: usable.map(() => maxR * 1.14),
+      r: usable.map(() => maxR * (opts?.labelR || 1.14)),
       theta,
-      text: usable.map(it => it.label),
+      // long names (opts.labelR): only the slices that exist, each growing outward from its slice
+      text: usable.map(it => (opts?.labelR && !(pctOf(it) > 0) ? '' : it.label)),
+      ...(opts?.labelR ? { textposition: theta.map(t => (t < 180 ? 'middle right' : 'middle left')) } : {}),
       textfont: { color: usable.map(it => it.color), size: 10 },
       showlegend: false,
       hoverinfo: 'skip',
     },
   ];
-  Plotly.newPlot(divId, traces, mpDonutLayout(maxR), { displayModeBar: false, responsive: true });
+  const layout = mpDonutLayout(maxR);
+  if (opts?.labelR) {
+    layout.polar.radialaxis.range = [0, maxR * (opts.labelR + 0.08)];
+    layout.polar.domain.x = [0.24, 0.76];
+  }
+  if (opts?.plotTitle) layout.title = { text: opts.plotTitle, font: { size: 12, color: '#c9d1d9' }, x: 0.5, y: 0.985 };
+  Plotly.newPlot(divId, traces, layout, { displayModeBar: false, responsive: true });
   mpChartOnClick(divId);
+  return new Map(usable.map(it => [it.label, pctOf(it)]));
 }
 
 async function mpRenderPortfolioPies() {
@@ -642,7 +653,7 @@ async function mpRenderPortfolioPies() {
   const usUserInjectionUsd = usInvestInputEl ? (parseFloat(usInvestInputEl.value) || 0) : 0;
   const usRespectLotsEl = document.getElementById('mp_us_stocks_respect_lots');
   const usRespectLotSize = usRespectLotsEl ? usRespectLotsEl.checked : true;
-  mpDrawTargetDonut('plot_mp_pie_us_stocks', 'mp_pie_us_stocks_note',
+  const usShownPct = mpDrawTargetDonut('plot_mp_pie_us_stocks', 'mp_pie_us_stocks_note',
     (DATA.usTargetWeightsRaw || []).map((r, i) => ({
       label: r.ticker, target: r.target, current: (valueByTicker[r.ticker] || 0) / (usTotal || 1) * 100,
       color: (DATA.usTickerColors || [])[i % (DATA.usTickerColors || [1]).length],
@@ -653,6 +664,21 @@ async function mpRenderPortfolioPies() {
       investRowId: 'mp_us_stocks_invest_row', displayCurrency: 'USD',
       respectLotSize: usRespectLotSize,
     });
+  // the same stocks by economic sector, to the right of it
+  const usRaw = Object.fromEntries((DATA.usTargetWeightsRaw || []).map(r => [r.ticker, r]));
+  const usPct = t => (valueByTicker[t] || 0) / (usTotal || 1) * 100;
+  const usSectorItems = Object.entries(US_SECTORS).map(([label, tickers]) => ({
+    label, color: MP_SECTOR_COLORS[label],
+    target: tickers.reduce((s, t) => s + (usRaw[t]?.target || 0), 0),
+    current: tickers.reduce((s, t) => s + usPct(t), 0),
+    detail: tickers.filter(t => usPct(t) > 0).sort((a, b) => usPct(b) - usPct(a))
+      .map(t => `${t} ${usPct(t).toFixed(2)}%`).join('<br>'),
+  })).sort((a, b) => b.target - a.target);
+  mpDrawTargetDonut('plot_mp_pie_us_sectors', 'mp_pie_us_sectors_note', usSectorItems, usTotal, null, {
+    labelR: 1.05, plotTitle: 'By economic sector',
+    displayPct: usShownPct && new Map(Object.entries(US_SECTORS).map(([label, tickers]) =>
+      [label, tickers.reduce((s, t) => s + (usShownPct.get(t) || 0), 0)])),
+  });
 
   // 2. Russian stocks: same idea, using the target list (equities + TRND/AKME/AKFN) and its
   //    own Z-score-adjusted Target column.
