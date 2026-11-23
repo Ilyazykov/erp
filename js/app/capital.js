@@ -458,15 +458,18 @@ async function mpOpenAccountChart(account) {
       const nums = shown.map(r => mpDayNumber(r.day));
       const lines = series.map(c => {
         const y = shown.map((r, i) => conv(r.day, c.byDay.get(nums[i]) || 0));
-        // the Total: the cash of the days it's an estimate, faded on top of the stack
+        // the Total: the cash of the days it's an estimate, faded
         const est = shown.map((r, i) => (fadeOn && account === MP_ALL_ACCOUNTS && mpAccountMasked('cash', r.day)
           ? Math.min(Math.max(0, y[i]), Math.max(0, conv(r.day, c.cashByDay.get(nums[i]) || 0))) : 0));
         return { label: c.label, color: mpSliceColor(c.label, mpCurrencyColor), y, est };
       }).filter(c => c.y.some(v => Math.abs(v) >= tiny));
-      for (const c of lines) layers.push(area(c.y.map((v, i) => Math.max(0, v) - c.est[i]), c.color, 'assets', { name: c.label, legendgroup: c.label, showlegend: lines.length > 1 }));
-      for (const c of lines) if (c.est.some(v => v >= tiny)) {
-        cashEstimated = true;
-        layers.push(area(c.est, mpFade(c.color, 0.45), 'assets', { name: `${c.label} (estimate)`, legendgroup: c.label }));
+      // each currency's estimate right on top of its own exact part
+      for (const c of lines) {
+        layers.push(area(c.y.map((v, i) => Math.max(0, v) - c.est[i]), c.color, 'assets', { name: c.label, legendgroup: c.label, showlegend: lines.length > 1 }));
+        if (c.est.some(v => v >= tiny)) {
+          cashEstimated = true;
+          layers.push(area(c.est, mpFade(c.color, 0.45), 'assets', { name: `${c.label} (estimate)`, legendgroup: c.label }));
+        }
       }
       for (const c of lines) if (c.y.some(v => v < -tiny)) layers.push(area(c.y.map(v => Math.min(0, v)), c.color, 'debt', { name: c.label, legendgroup: c.label }));
       hover = days.map((_, i) => `<b>${fmt(full[i])}</b>${lines.map(c => [c, c.y[i]]).filter(([, v]) => Math.abs(v) >= tiny).sort((a, b) => b[1] - a[1])
