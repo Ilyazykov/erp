@@ -34,6 +34,8 @@
     background: #222c38; color: #e6edf3; border: 1px solid #3a4656; border-radius: 6px;
     padding: 8px 10px; font-size: 0.8rem; font-weight: normal; line-height: 1.4; box-shadow: 0 4px 14px rgba(0,0,0,.4);
   }
+  /* a table's mixed column: one line per currency or coin, opening to the left (these columns are on the right) */
+  .mp-inside:hover::after { left: auto; right: 0; white-space: pre; font-variant-numeric: tabular-nums; }
   .data-table .zero { color: #4b5560; font-size: 0.78rem; }
   .data-table .zero-held { font-size: 0.78rem; }   /* a zero where the account once held something */
   .data-table th:last-child, .data-table td:last-child { background: #171d25; }

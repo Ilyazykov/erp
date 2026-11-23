@@ -266,6 +266,26 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
     cell[key] = (cell[key] || 0) + r.value_usd;
     if (!r.excluded) counted[key] = (counted[key] || 0) + r.value_usd;
   }
+  // the mixed columns ("others", Altcoins): what's inside, for a popup on the column's name, its total and each cell
+  const inside = {};
+  const addInside = (key, label, usd) => {
+    inside[key] ??= new Map();
+    inside[key].set(label, (inside[key].get(label) || 0) + usd);
+  };
+  if (fxByCurrency) {
+    for (const r of priced) {
+      const c = r[categoryField];
+      if (c !== MP_OTHER_CURRENCIES_COLUMN && c !== MP_ALTCOINS_COLUMN) continue;
+      const label = mpCurrencySliceLabel(r);
+      addInside(`${r.account} ${c}`, label, r.value_usd);
+      if (!r.excluded) addInside(c, label, r.value_usd);
+    }
+  }
+  const withInside = (html, key) => {
+    const lines = [...(inside[key] || [])].filter(([, usd]) => Math.abs(usd) >= 0.005).sort((a, b) => b[1] - a[1])
+      .map(([label, usd]) => `${label}: ${String(money(usd)).replace(/<[^>]*>/g, '')}`);
+    return lines.length ? `<span class="mp-src mp-inside" data-src="${mpEscapeHtml(lines.join('\n'))}">${html}</span>` : html;
+  };
   const dimmed = new Set(accounts.filter(a => priced.filter(r => r.account === a).every(r => r.excluded)));
   const rowTotal = a => categories.reduce((s, c) => s + (cell[`${a} ${c}`] || 0), 0);
   const colTotal = c => accounts.reduce((s, a) => s + (counted[`${a} ${c}`] || 0), 0);
@@ -283,7 +303,7 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
   };
   const nativeTotalRow = fxByCurrency
     ? `<tr class="total-row"><td class="ticker" data-account="${MP_ALL_ACCOUNTS}" style="cursor:pointer" title="Open the chart of all banks and brokers"><b>Total (native)</b></td>
-        ${categories.map(c => `<td><b>${cellDisplay(colTotal(c), c)}</b></td>`).join('')}
+        ${categories.map(c => `<td><b>${withInside(cellDisplay(colTotal(c), c), c)}</b></td>`).join('')}
         <td class="muted">—</td>
       </tr>`
     : '';
@@ -301,15 +321,15 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
     return a in MP_BROKER_FLAGS ? `${name} ${MP_BROKER_FLAGS[a]}` : name;
   };
   wrap.innerHTML = `<table class="data-table"><thead><tr>
-    <th class="corner">Broker</th>${categories.map(c => `<th${fxByCurrency && mpCurrencyChart(c) ? ` data-ccy="${mpEscapeHtml(c)}" style="cursor:pointer" title="Open its chart"` : ''}>${headerLabel(c)}</th>`).join('')}<th class="corner">Total</th>
+    <th class="corner">Broker</th>${categories.map(c => `<th${fxByCurrency && mpCurrencyChart(c) ? ` data-ccy="${mpEscapeHtml(c)}" style="cursor:pointer" title="Open its chart"` : ''}>${withInside(headerLabel(c), c)}</th>`).join('')}<th class="corner">Total</th>
   </tr></thead><tbody>${accounts.map(a => `<tr${dimmed.has(a) ? ' style="opacity:0.45" title="Not included in the totals"' : ''}>
     <td class="ticker" data-account="${mpEscapeHtml(a)}" style="cursor:pointer" title="Open its chart">${brokerLabel(a)}</td>
-    ${categories.map(c => `<td>${!cell[`${a} ${c}`] && everHeld.has(`${a} ${c}`) ? heldZero(c) : cellDisplay(cell[`${a} ${c}`] || 0, c)}</td>`).join('')}
+    ${categories.map(c => `<td>${!cell[`${a} ${c}`] && everHeld.has(`${a} ${c}`) ? heldZero(c) : withInside(cellDisplay(cell[`${a} ${c}`] || 0, c), `${a} ${c}`)}</td>`).join('')}
     <td><b>${money(rowTotal(a))}</b></td>
   </tr>`).join('')}
   ${nativeTotalRow}
   <tr class="total-row"><td class="ticker" data-account="${MP_ALL_ACCOUNTS}" style="cursor:pointer" title="Open the chart of all banks and brokers"><b>Total (${money.unit || 'USD'})</b></td>
-    ${categories.map(c => `<td${c === 'cushion' && colTotal(c) < MP_CUSHION_USD - 0.005 ? ' class="neg" title="under its $10,000"' : ''}><b>${money(colTotal(c))}</b></td>`).join('')}
+    ${categories.map(c => `<td${c === 'cushion' && colTotal(c) < MP_CUSHION_USD - 0.005 ? ' class="neg" title="under its $10,000"' : ''}><b>${withInside(money(colTotal(c)), c)}</b></td>`).join('')}
     <td><b>${money(grandTotal)}</b></td>
   </tr></tbody></table>
   ${anyMissing ? '<p class="empty-note">Some tickers have no price yet — totals are a partial sum.</p>' : ''}`;
