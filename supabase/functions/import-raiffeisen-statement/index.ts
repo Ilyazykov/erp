@@ -256,20 +256,15 @@ Deno.serve(async (req) => {
     if (from && rows.some(r => r.tx_date.slice(0, 10) < from || r.tx_date.slice(0, 10) > to!)) {
       return new Response(JSON.stringify({ error: `rows outside the statement's period ${from} - ${to}` }), { status: 400, headers: corsHeaders });
     }
-    let del = supabase.from('bank_transactions').delete()
-      .eq('user_id', user.id).eq('external_source', 'raiffeisen_csv').in('currency', currencies);
-    if (from) del = del.gte('tx_date', `${from}T00:00:00Z`).lte('tx_date', `${to}T23:59:59Z`);
-    const { error: delErr } = await del;
-    if (delErr) {
-      return new Response(JSON.stringify({ error: delErr.message }), { status: 500, headers: corsHeaders });
-    }
-
-    const { error: upsertErr, count } = await supabase
-      .from('bank_transactions')
-      .upsert(rows, { onConflict: 'user_id,external_source,external_id', count: 'exact' });
-
-    if (upsertErr) {
-      return new Response(JSON.stringify({ error: upsertErr.message }),
+    // the old rows out and the file's in, in one transaction: on any error the old rows stay
+    const { data: count, error: replaceErr } = await supabase.rpc('replace_raiffeisen_rows', {
+      p_rows: rows.map(({ tx_date, description, amount, currency, category, balance_after, external_id }) =>
+        ({ tx_date, description, amount, currency, category, balance_after, external_id })),
+      p_from: from,
+      p_to: to,
+    });
+    if (replaceErr) {
+      return new Response(JSON.stringify({ error: replaceErr.message }),
         { status: 500, headers: corsHeaders });
     }
 
