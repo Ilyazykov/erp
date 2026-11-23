@@ -371,15 +371,12 @@ function mpAccountYRange(layers) {
 // One account's history by currency, split as the Currencies pie is: {label, byDay: Map(day number -> USD)},
 // the largest first, the small non-main ones under "other". null until the migration is there (the chart is then one colour).
 const mpAccountSeries = new Map();
-// Two currencies of nearly one colour not side by side in the stack: `move` goes one layer past `other`.
-function mpKeepApart(list, move, other) {
+// The order of the fiat layers, fixed (the user's); any other currency after them, by size.
+const MP_FIAT_ORDER = ['USD', 'EUR', 'GBP', 'RUB', 'TRY', 'GEL', 'CNY', 'RSD'];
+function mpFiatOrder(list) {
   const code = r => r.label.split(' ')[0];
-  const m = list.findIndex(r => code(r) === move), o = list.findIndex(r => code(r) === other);
-  if (m < 0 || o < 0 || Math.abs(m - o) !== 1 || list.length < 3) return list;
-  const out = list.filter((_, i) => i !== m);
-  const g = out.findIndex(r => code(r) === other);
-  out.splice(g + 1 < out.length ? g + 2 : g - 1, 0, list[m]);
-  return out;
+  return [...MP_FIAT_ORDER.map(c => list.find(r => code(r) === c)).filter(Boolean),
+    ...list.filter(r => !MP_FIAT_ORDER.includes(code(r)))];
 }
 const mpDayNumber = day => Math.round((Date.parse(`${day}T00:00:00Z`) - Date.UTC(2000, 0, 1)) / 864e5);
 async function mpAccountCurrencySeries(account) {
@@ -418,7 +415,7 @@ async function mpAccountCurrencySeries(account) {
   // fiat first, its small ones as "other" right after it; then gold, the coins and the small coins together
   const isFiat = r => mpIsFiatLabel(r.label), isGold = r => r.label === 'XAU';
   const out = [
-    ...mpKeepApart(ranked.filter(r => named.has(r) && isFiat(r)), 'TRY', 'GBP'),
+    ...mpFiatOrder(ranked.filter(r => named.has(r) && isFiat(r))),
     ...fold(ranked.filter(r => !named.has(r) && isFiat(r)), 'other'),
     ...ranked.filter(r => named.has(r) && isGold(r)),
     ...ranked.filter(r => named.has(r) && !isFiat(r) && !isGold(r)),
