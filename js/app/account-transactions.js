@@ -38,7 +38,7 @@ function mpTxSources(account, filter, wallets) {
     if (filter) q = filter.fiat ? q.in('currency', filter.codes) : q.in('ticker', filter.tickers);
     return (await page(q.order('trade_date', { ascending: false }).order('id'), offset)).map(r => {
       const payout = MP_TX_PAYOUTS.has(r.side);
-      return { day: r.trade_date, at: r.trade_date, account: r.account, text: MP_SHORT_NAMES[r.ticker] || r.ticker, type: r.side.replace(/_/g, ' '), side: r.side,
+      return { day: r.trade_date, at: r.trade_date, account: r.account, text: MP_SHORT_NAMES[r.ticker] || r.ticker, type: r.side.replace(/_/g, ' '), side: r.side, bond: /^RU[A-Z0-9]{10}$/.test(r.ticker),
         amount: payout ? Number(r.quantity) : null, qty: payout ? null : Number(r.quantity), price: payout ? null : Number(r.price), unit: r.currency, approx: !!r.estimated };
     });
   };
@@ -120,6 +120,32 @@ function mpTxArrangeDay(rows) {
   return chrono.reverse();
 }
 
+// One unit of a row's currency in dollars on its day (null: no rate known).
+function mpTxUnitUsd(r) {
+  const code = String(r.unit || '').toUpperCase();
+  if (code === 'USD' || MP_USD_STABLES.has(code)) return 1;
+  return mpUnitPriceOn(code, !r.coin && code !== 'XAU', mpDayNumber(r.day));
+}
+async function mpTxEnsureRates(rows, display) {
+  if (!display) return;
+  const seen = new Map();
+  for (const r of rows) {
+    const code = String(r.unit || '').toUpperCase();
+    if (code && code !== 'USD' && !MP_USD_STABLES.has(code)) seen.set(code, { code, fiat: !r.coin && code !== 'XAU' });
+  }
+  await mpLoadUnitCodes([...seen.values()]).catch(() => {});
+}
+// A row's value in the chart's currency, or null: it's in that currency already, or there's no rate.
+function mpTxConverted(v, r, display) {
+  if (!display || String(r.unit || '').toUpperCase() === display.code) return null;
+  const rate = mpTxUnitUsd(r);
+  return rate ? display.conv(r.day, v * rate) : null;
+}
+function mpTxInDisplay(v, code) {
+  const a = Math.abs(v), n = a.toLocaleString('en-US', { maximumFractionDigits: a < 1 ? 4 : 2 });
+  return code === 'USD' ? `$${n}` : code === 'RUB' ? `${n} ₽` : `${n} ${code}`;
+}
+
 // The next rows over all sources, newest first: at least `n`, up to the end of a day (its order needs all of it).
 async function mpTxNext(sources, n) {
   const out = [];
@@ -141,18 +167,25 @@ async function mpTxNext(sources, n) {
   return [...days.values()].flatMap(mpTxArrangeDay);
 }
 
-function mpTxRowHtml(r, withAccount) {
+function mpTxRowHtml(r, withAccount, display) {
   const number = (v, digits) => Math.abs(v).toLocaleString('en-US', { maximumFractionDigits: digits });
+  const own = (v, digits) => `${number(v, digits)} ${mpEscapeHtml(r.unit || '')}`;
+  // converted: the operation's own amount on hover. A bond's price can be % of face: left as it is
+  const shown = (v, digits) => {
+    const c = r.bond ? null : mpTxConverted(v, r, display);
+    return c == null ? own(v, digits) : `<span title="${own(v, digits)}">${mpTxInDisplay(c, display.code)}</span>`;
+  };
   const right = r.amount != null
-    ? `<span class="${r.amount < 0 ? 'neg' : 'pos'}">${r.approx ? '≈ ' : ''}${r.amount < 0 ? '−' : '+'}${number(r.amount, r.coin ? 8 : 2)} ${mpEscapeHtml(r.unit || '')}</span>`
-    : `<span>${r.approx ? '≈ ' : ''}${r.qty < 0 ? '−' : ''}${number(r.qty, 8)}${r.price ? ` @ ${number(r.price, 4)} ${mpEscapeHtml(r.unit || '')}` : ''}</span>`;
+    ? `<span class="${r.amount < 0 ? 'neg' : 'pos'}">${r.approx ? '≈ ' : ''}${r.amount < 0 ? '−' : '+'}${shown(r.amount, r.coin ? 8 : 2)}</span>`
+    : `<span>${r.approx ? '≈ ' : ''}${r.qty < 0 ? '−' : ''}${number(r.qty, 8)}${r.price ? ` @ ${shown(r.price, 4)}` : ''}</span>`;
   const sub = [r.type, withAccount ? MP_BROKER_SHORT_NAMES[r.account] || r.account : ''].filter(Boolean).join(' · ');
   // (a deal or a coin move has no spending category: the grey mark, to keep the column)
   return `<div class="mp-tx-row${r.approx ? ' approx' : ''}"><span title="${mpEscapeHtml(r.category || '')}">${mpExpDot(r.meta || mpExpMeta())}</span><div class="mp-tx-body"><div class="mp-tx-main"><span class="mp-tx-name" title="${mpEscapeHtml(r.text)}">${mpEscapeHtml(r.text)}</span>${right}</div>${sub ? `<div class="mp-tx-sub">${mpEscapeHtml(sub)}</div>` : ''}</div></div>`;
 }
 
-// Puts the feed beside `plot`. Returns { toggle(layer) }: show only that chart layer, or all again.
-function mpAccountTxFeed(dlg, plot, account) {
+// Puts the feed beside `plot`. display: {code, conv(day, usd)} to show amounts in, null: each in its own currency.
+// Returns { toggle(layer) }: show only that chart layer, or all again; { setDisplay(display) }.
+function mpAccountTxFeed(dlg, plot, account, startDisplay = null) {
   const body = document.createElement('div');
   body.className = 'mp-account-body';
   plot.before(body);
@@ -165,6 +198,18 @@ function mpAccountTxFeed(dlg, plot, account) {
   const end = document.createElement('p');
   end.className = 'note mp-tx-end';
   let filter = null, sources = null, wallets = null, busy = false, finished = false, lastDay = null, ticket = 0;
+  let display = startDisplay, shownRows = [];
+  const rowsHtml = rows => {
+    let html = '';
+    for (const r of rows) {
+      if (r.day !== lastDay) {
+        lastDay = r.day;
+        html += `<div class="mp-tx-day">${new Date(`${r.day}T00:00:00Z`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })}</div>`;
+      }
+      html += mpTxRowHtml(r, account === MP_ALL_ACCOUNTS, display);
+    }
+    return html;
+  };
 
   const more = async () => {
     if (busy || finished) return;
@@ -181,16 +226,10 @@ function mpAccountTxFeed(dlg, plot, account) {
       }
       sources ||= mpTxSources(account, filter, wallets);
       const rows = await mpTxNext(sources, MP_TX_STEP);
+      for (let asked; asked !== display;) { asked = display; await mpTxEnsureRates(rows, asked); }
       if (mine !== ticket) return;
-      let html = '';
-      for (const r of rows) {
-        if (r.day !== lastDay) {
-          lastDay = r.day;
-          html += `<div class="mp-tx-day">${new Date(`${r.day}T00:00:00Z`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })}</div>`;
-        }
-        html += mpTxRowHtml(r, account === MP_ALL_ACCOUNTS);
-      }
-      end.insertAdjacentHTML('beforebegin', html);
+      shownRows.push(...rows);
+      end.insertAdjacentHTML('beforebegin', rowsHtml(rows));
       finished = rows.length < MP_TX_STEP;
       end.textContent = !finished ? '' : list.querySelector('.mp-tx-row') ? 'That is all.' : 'No transactions.';
     } catch (error) {
@@ -207,7 +246,7 @@ function mpAccountTxFeed(dlg, plot, account) {
   list.addEventListener('scroll', nearEnd, { passive: true });
   const restart = () => {
     ticket++;
-    sources = null; busy = false; finished = false; lastDay = null;
+    sources = null; busy = false; finished = false; lastDay = null; shownRows = [];
     list.replaceChildren(end);
     list.scrollTop = 0;
     end.textContent = '';
@@ -222,6 +261,19 @@ function mpAccountTxFeed(dlg, plot, account) {
     toggle(layer) {
       filter = filter?.label === layer.label ? null : mpTxLayerFilter(layer);
       restart();
+    },
+    async setDisplay(next) {
+      const same = (next?.code ?? null) === (display?.code ?? null);
+      display = next;
+      if (same) return;
+      const mine = ticket;
+      await mpTxEnsureRates(shownRows, next);
+      if (mine !== ticket || display !== next) return;
+      const top = list.scrollTop;
+      lastDay = null;
+      list.replaceChildren(end);
+      end.insertAdjacentHTML('beforebegin', rowsHtml(shownRows));
+      list.scrollTop = top;
     },
   };
 }

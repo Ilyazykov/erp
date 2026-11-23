@@ -450,8 +450,10 @@ async function mpAccountCurrencySeries(account) {
 // in the currency itself is then there at once. code|fiat -> {days, prices}.
 const mpUnitPrices = new Map();
 async function mpLoadUnitPrices(series) {
-  const codes = (series || []).map(c => ({ code: c.label.split(' ')[0], fiat: mpIsFiatLabel(c.label) }))
-    .filter(c => !['USD', 'other', 'Altcoins'].includes(c.code) && !mpUnitPrices.has(`${c.code}|${c.fiat}`));
+  await mpLoadUnitCodes((series || []).map(c => ({ code: c.label.split(' ')[0], fiat: mpIsFiatLabel(c.label) })));
+}
+async function mpLoadUnitCodes(list) {
+  const codes = list.filter(c => !['USD', 'other', 'Altcoins'].includes(c.code) && !mpUnitPrices.has(`${c.code}|${c.fiat}`));
   if (!codes.length) return;
   const { data, error } = await sb.rpc('capital_unit_prices', {
     p_currencies: codes.filter(c => c.fiat).map(c => c.code), p_tickers: codes.filter(c => !c.fiat).map(c => c.code),
@@ -493,6 +495,8 @@ function mpStackLayerAt(layers, i, y) {
 const MP_SERIES_RETRY_MS = 15000;
 // An account's own currency, where it's neither USD nor RUB (those have the chart's default and "in RUB")
 const MP_ACCOUNT_HOME = { Raiffeisen: 'RSD', UniCredit: 'RSD', 'Bank of Cyprus': 'EUR', Revolut: 'EUR', Wise: 'EUR', 'Credo Bank': 'GEL', 'TBC Bank': 'GEL', 'Ziraat Bank': 'TRY' };
+// ...and the banks whose own currency is the rouble: "in RUB" is their default
+const MP_ACCOUNT_RUB = new Set(['T-Bank', 'Sber', 'Alfa', 'Ozon Bank', 'Yandex Bank', 'Finuslugi', 'QIWI', 'YooMoney']);
 async function mpOpenAccountChart(account) {
   const { dlg, head, plot, note } = mpChartDialog('mp_account', account === MP_ALL_ACCOUNTS ? 'All banks and brokers' : mpEscapeHtml(MP_BROKER_SHORT_NAMES[account] || account),
     `<label style="margin-left:12px"><input type="checkbox" id="mp_account_rub"> in RUB</label>
@@ -506,7 +510,8 @@ async function mpOpenAccountChart(account) {
   // stretched to 100% (remembered); the box where there are several layers
   const pctBox = dlg.querySelector('#mp_account_pct');
   try { pctBox.checked = localStorage.getItem('mp_account_pct') === '1'; } catch { /* no storage */ }
-  const txFeed = mpAccountTxFeed(dlg, plot, account);
+  const ownCurrency = !!homeCode || MP_ACCOUNT_RUB.has(account);
+  const txFeed = mpAccountTxFeed(dlg, plot, account, ownCurrency ? null : { code: 'USD', conv: (_, usd) => usd });
   try {
     await mpEnsureBrokerRows();
     await mpEnsureExactData(account === 'cash');
@@ -515,6 +520,13 @@ async function mpOpenAccountChart(account) {
   const loadSeries = () => mpAccountCurrencySeries(account).catch(() => null);
   let series = await loadSeries() ?? await new Promise(ok => setTimeout(ok, 1500)).then(loadSeries);
   await mpLoadUnitPrices(series).catch(() => {});
+  // opens in the account's own currency (in dollars if its rates didn't load)
+  if (homeBox) {
+    await mpLoadUnitPrices([{ label: mpCurrencyLabel(homeCode) }]).catch(() => {});
+    homeBox.checked = !!mpUnitPrices.get(`${homeCode}|true`)?.prices.length;
+  } else if (MP_ACCOUNT_RUB.has(account)) {
+    try { mpCapitalRub ||= await mpLoadRubRates(); rubBox.checked = true; } catch { rubBox.checked = false; }
+  }
   const firstHeld = mpCapitalBrokerRows.findIndex(r => Math.abs(mpAccountFull(account, r)) >= 1);
   if (firstHeld < 0) { note.textContent = 'No history for this account.'; return; }
   const rows = mpCapitalBrokerRows.slice(firstHeld);
@@ -580,6 +592,7 @@ async function mpOpenAccountChart(account) {
     hideTip();
     const rub = rubBox.checked, home = !!homeBox?.checked, fadeOn = fadeBox.checked;
     const shownCode = rub ? 'RUB' : home ? homeCode : 'USD', unit = rub ? '₽' : home ? homeCode : null;
+    const inOwn = home || (rub && MP_ACCOUNT_RUB.has(account));
     // the account's own currency at each day's rate (before the first known rate, at that first one)
     const conv = home ? (d, usd) => Number(usd || 0) / (mpUnitPriceOn(homeCode, true, mpDayNumber(d)) || mpUnitPrices.get(`${homeCode}|true`).prices[0])
       : mpCapitalConverter(rub ? 'RUB' : 'USD');
@@ -630,6 +643,8 @@ async function mpOpenAccountChart(account) {
       if (full.some(v => v < -0.5)) layers.push(area(full.map(v => Math.min(0, v)), color, 'debt', { ...group, name: own }));
     }
     view = { ms: days.map(d => Date.parse(`${d}T00:00:00Z`)), full, fmt, conv, shown: shownCode, byCurrency: !!series };
+    // the feed: each operation's own currency when the chart is in the account's, else the chart's
+    txFeed.setDisplay(inOwn ? null : { code: shownCode, conv });
     const first = full[0], last = full[full.length - 1], diff = last - first;
     const pct = first > 0 ? ` · ${diff >= 0 ? '+' : ''}${(diff / first * 100).toFixed(1)}%` : '';
     head.innerHTML = `<span style="font-size:2em;font-weight:700">${fmt(last)}</span><span class="${diff >= 0 ? 'pos' : 'neg'}">${diff >= 0 ? '+' : '−'}${fmt(Math.abs(diff))}${pct}</span><span class="muted">over ${period}</span>`;

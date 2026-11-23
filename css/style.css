@@ -40,12 +40,14 @@
   .data-table .zero-held { font-size: 0.78rem; }   /* a zero where the account once held something */
   .data-table th:last-child, .data-table td:last-child { background: #171d25; }
   .data-table tbody tr:hover { background: #13191f; }
+  html:has(dialog.mp-chart-dialog[open]) { overflow: hidden; scrollbar-gutter: stable; }
+  dialog.mp-chart-dialog::backdrop { background: rgba(1, 4, 9, 0.72); backdrop-filter: blur(2px); }
   .mp-account-body { display: flex; gap: 12px; }
   .mp-account-body > :first-child { flex: 1; min-width: 0; }
   .mp-tx-feed { flex: none; width: 370px; height: min(60vh, 600px); display: flex; flex-direction: column; border: 1px solid #30363d; border-radius: 6px; background: #0d1117; }
   .mp-tx-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 30px; padding: 6px 10px; border-bottom: 1px solid #30363d; font-size: 0.85rem; }
   .mp-tx-head .btn { padding: 2px 8px; font-size: 0.78rem; }
-  .mp-tx-list { flex: 1; overflow-y: auto; font-size: 0.82rem; }
+  .mp-tx-list { flex: 1; overflow-y: auto; overscroll-behavior: contain; font-size: 0.82rem; }
   .mp-tx-day { position: sticky; top: 0; padding: 4px 10px; background: #171d25; color: #8b949e; font-size: 0.75rem; font-weight: 600; }
   .mp-tx-row { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid #1e2830; }
   .mp-tx-body { flex: 1; min-width: 0; }

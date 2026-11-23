@@ -113,6 +113,7 @@ const MP_BROAD_FUNDS = ['VWRA', 'VWCE'];   // one fund, two listings: one list o
 // (Plotly measures a closed dialog as empty); removed however it's closed.
 function mpChartDialog(prefix, titleHtml, controlsHtml = '') {
   const dlg = document.createElement('dialog');
+  dlg.className = 'mp-chart-dialog';
   dlg.style.cssText = 'background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:16px 18px;min-width:320px;width:min(94vw,1400px)';
   dlg.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><b>${titleHtml}</b><button type="button" data-act="close">✕</button></div>
@@ -126,6 +127,14 @@ function mpChartDialog(prefix, titleHtml, controlsHtml = '') {
   dlg.addEventListener('close', () => dlg.remove());
   dlg.showModal();
   dlg.querySelector('[data-act=close]').onclick = () => dlg.close();
+  // a click on the shade closes it (pressed there too: a drag out of the chart doesn't)
+  const onShade = e => {
+    const box = dlg.getBoundingClientRect();
+    return e.clientX < box.left || e.clientX > box.right || e.clientY < box.top || e.clientY > box.bottom;
+  };
+  let pressedOnShade = false;
+  dlg.addEventListener('mousedown', e => { pressedOnShade = onShade(e); });
+  dlg.addEventListener('click', e => { if (pressedOnShade && onShade(e)) dlg.close(); pressedOnShade = false; });
   return { dlg, head: dlg.querySelector(`#${prefix}_head`), plot: dlg.querySelector(`#${prefix}_chart`), note: dlg.querySelector(`#${prefix}_note`) };
 }
 // The period buttons of such a window: the one pressed lit, onPick(its label).

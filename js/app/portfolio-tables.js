@@ -67,6 +67,7 @@ function mpFormatCurrency(n, currency, withCode = false, unitPriceUsd = null, ke
   }
 }
 const MP_ISO_CURRENCIES = new Set(['USD', 'EUR', 'GBP', 'RUB', 'TRY', 'RSD', 'GEL', 'CNY']);
+const MP_USD_STABLES = new Set(['USDT', 'USDC', 'DAI', 'USDS', 'USDE', 'FDUSD', 'PYUSD', 'TUSD', 'BUSD', 'USDP']);
 
 // Builds a broker(row) x category(column) pivot table from an array of
 // {account, [categoryField], value_usd} rows -- shared by
@@ -199,9 +200,8 @@ async function mpEverHeld(field) {
     // US-dollar stablecoins count as dollars wherever they're held (as in
     // update-market-prices) -- also those no price row exists for (Bybit's
     // DAI, USDS); a wallet coin without one is a coin (Altcoins)
-    const STABLE = new Set(['USDT', 'USDC', 'DAI', 'USDS', 'USDE', 'FDUSD', 'PYUSD', 'TUSD', 'BUSD', 'USDP']);
     mpEverHeldRows = rows.map(r => {
-      const m = info.get(r.ticker) || (STABLE.has(r.ticker) ? { asset_class: 'stablecoin', underlying_currency: 'USD', instrument_type: 'cash' }
+      const m = info.get(r.ticker) || (MP_USD_STABLES.has(r.ticker) ? { asset_class: 'stablecoin', underlying_currency: 'USD', instrument_type: 'cash' }
         : r.instrument_type === 'crypto' ? { asset_class: 'crypto', instrument_type: 'crypto' } : {});
       const cash = /^CASH:([^:]+):/.exec(r.ticker || '');
       const row = { ticker: r.ticker, asset_class: m.asset_class, underlying_currency: cash ? cash[1] : m.underlying_currency,
