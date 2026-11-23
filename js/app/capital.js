@@ -490,6 +490,7 @@ function mpStackLayerAt(layers, i, y) {
 
 // A bank's or broker's money over time, in a chart window (a click on its name in the broker tables);
 // MP_ALL_ACCOUNTS (a click on Total): all of them together, by currency too.
+const MP_SERIES_RETRY_MS = 15000;
 async function mpOpenAccountChart(account) {
   const { dlg, head, plot, note } = mpChartDialog('mp_account', account === MP_ALL_ACCOUNTS ? 'All banks and brokers' : mpEscapeHtml(MP_BROKER_SHORT_NAMES[account] || account),
     `<label style="margin-left:12px"><input type="checkbox" id="mp_account_rub"> in RUB</label>
@@ -509,7 +510,7 @@ async function mpOpenAccountChart(account) {
   } catch (error) { note.textContent = error.message; return; }
   // the split by currency, once more if the database was busy (a capital recount running); without it, one colour
   const loadSeries = () => mpAccountCurrencySeries(account).catch(() => null);
-  const series = await loadSeries() ?? await new Promise(ok => setTimeout(ok, 1500)).then(loadSeries);
+  let series = await loadSeries() ?? await new Promise(ok => setTimeout(ok, 1500)).then(loadSeries);
   await mpLoadUnitPrices(series).catch(() => {});
   const firstHeld = mpCapitalBrokerRows.findIndex(r => Math.abs(mpAccountFull(account, r)) >= 1);
   if (firstHeld < 0) { note.textContent = 'No history for this account.'; return; }
@@ -643,7 +644,7 @@ async function mpOpenAccountChart(account) {
       yaxis: Object.assign({}, LAYOUT_BASE.yaxis, rub ? { tickformat: cents ? ',.2~f' : ',.0f', ticksuffix: ' ₽' } : { tickformat: cents ? '$,.2~f' : '$,.0f' }, yRange ? { range: yRange, autorange: false } : {},
         pctOn ? { tickformat: '.0f', ticksuffix: '%', tickprefix: '', range: [0, 100], autorange: false } : {}),
       margin: { t: 10, r: 20, b: 60, l: 80 } }), CONFIG);
-    note.textContent = `${!fadeOn ? '' : totalEstimated ? 'Faded: estimates. ' : parts.known || parts.extrapolated ? `${series ? 'Shaded' : 'Faded'}: estimates. ` : ''}Includes money moved in and out, not only gains.`;
+    note.textContent = `${series ? '' : 'Database is recounting: currencies will appear when it ends. '}${!fadeOn ? '' : totalEstimated ? 'Faded: estimates. ' : parts.known || parts.extrapolated ? `${series ? 'Shaded' : 'Faded'}: estimates. ` : ''}Includes money moved in and out, not only gains.`;
   };
   mpBindPeriods(dlg, p => { period = p; draw(); });
   pctBox.onchange = () => { mpSave('mp_account_pct', pctBox.checked ? '1' : '0'); draw(); };
@@ -656,6 +657,16 @@ async function mpOpenAccountChart(account) {
     draw();
   };
   draw();
+  // No split (a capital recount makes it time out): while the window is open, ask the light queue row
+  // whether the recount is over, and only then the heavy series again
+  while (!series && dlg.open) {
+    await new Promise(ok => setTimeout(ok, MP_SERIES_RETRY_MS));
+    if (!dlg.open) return;
+    const { data: queue } = await sb.from('capital_refresh_queue').select('started_at, finished_at').maybeSingle();
+    if (queue?.started_at && !queue.finished_at) continue;
+    series = await loadSeries();
+    if (series && dlg.open) { await mpLoadUnitPrices(series).catch(() => {}); draw(); }
+  }
 }
 
 async function mpRenderCapitalBrokers() {
