@@ -439,7 +439,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     // the nearest of the ratios splits are made in, within 6%: the day moves too (PLZL's 10-for-1 on
     // 27.03.2025 came out 10.18, GOOGL's 20-for-1 on 18.07.2022 20.9 -- taken for 21 by the nearest
     // whole number); a crash of a bond (98 -> 64) is no split; a 3-for-2 can't be told from one, so none
-    const n = [2, 3, 4, 5, 6, 8, 10, 15, 20, 25, 30, 40, 50].reduce((b, x) => (Math.abs(k / x - 1) < Math.abs(k / b - 1) ? x : b), 2);
+    const n = [2, 3, 4, 5, 6, 8, 10, 15, 20, 25, 30, 40, 50, 100].reduce((b, x) => (Math.abs(k / x - 1) < Math.abs(k / b - 1) ? x : b), 2);
     if (Math.abs(k / n - 1) >= 0.06) { prices[i - 1] = { ...prices[i - 1], price_usd: raw[i - 1] / factor }; continue; }
     if (n && k >= 1.45) { factor *= r >= 1 ? n : 1 / n; splits.push(`${prices[i].day} ${r >= 1 ? `${n}-for-1` : `1-for-${n}`}`); }
     prices[i - 1] = { ...prices[i - 1], price_usd: raw[i - 1] / factor };
