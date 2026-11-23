@@ -91,7 +91,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   if (asset === 'XAU' && !opts.via?.length) opts = { ...opts, via: MP_GOLD_FUNDS };
   const dealTickers = [asset, ...(opts.also || [])];
   const dlg = document.createElement('dialog');
-  dlg.style.cssText = 'background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:16px 18px;min-width:320px;width:min(94vw,960px)';
+  dlg.style.cssText = 'background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:16px 18px;min-width:320px;width:min(94vw,1400px)';
   const numbered = mpCodeLike(asset);   // a number or an ISIN: its name instead
   if (numbered && MP_SHORT_NAMES[asset]) title = MP_SHORT_NAMES[asset];
   dlg.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px">
@@ -103,7 +103,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       <label style="margin-left:12px;display:none" id="mp_price_inv_box"><input type="checkbox" id="mp_price_inv"> <span></span></label>
       <label style="margin-left:12px;display:none" id="mp_price_rate_box"><input type="checkbox" id="mp_price_rate" checked> <span></span></label></div>
     <div id="mp_price_head" style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap"></div>
-    <div id="mp_price_chart" style="height:420px"></div>
+    <div id="mp_price_chart" style="height:min(60vh,600px)"></div>
     <p class="note" style="margin:0" id="mp_price_note">Loading…</p>
   </div>`;
   document.body.appendChild(dlg);
