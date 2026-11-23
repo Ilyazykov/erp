@@ -292,7 +292,8 @@ function mpRenderBrokerPivot(wrap, data, categoryField, emptyMessage, fxByCurren
   const grandTotal = categories.reduce((s, c) => s + colTotal(c), 0);
   const anyMissing = data.some(r => r.value_usd === null);
   // a zero where the account once held something keeps its currency ("€0.00")
-  const heldZero = category => (fxByCurrency && category in fxByCurrency
+  const heldZero = category => ([MP_OTHER_CURRENCIES_COLUMN, MP_ALTCOINS_COLUMN].includes(category) ? '<span class="zero-held">0</span>'
+    : fxByCurrency && category in fxByCurrency
     ? mpFormatCurrency(0, category, false, fxByCurrency[category], true) : money(0));
   const cellDisplay = (usd, category) => {
     if (fxByCurrency && category in fxByCurrency) {
@@ -605,13 +606,24 @@ const mpCurrencySliceLabel = r => (r.currency === MP_OTHER_CURRENCIES_COLUMN ? `
   : r.currency === MP_ALTCOINS_COLUMN ? (MP_CHART_COIN_OF[r.ticker] ? mpCurrencyLabel(mpChartCoin(r.ticker)) : r.ticker)
   : mpCurrencyLabel(r.currency));
 
+// A currency an account held that has no column now, as nobody holds it (Raiffeisen's dinars at 0):
+// its place is "others", so the account's zero there is a held one.
+function mpHeldUnderOthers(everHeld, rows) {
+  const columns = new Set(rows.filter(r => r.value_usd).map(r => r.currency));
+  for (const k of [...everHeld]) {
+    const at = k.lastIndexOf(' '), c = k.slice(at + 1);
+    if (MP_ISO_CURRENCIES.has(c) && !columns.has(c)) everHeld.add(`${k.slice(0, at)} ${MP_OTHER_CURRENCIES_COLUMN}`);
+  }
+  return everHeld;
+}
+
 async function mpRenderBrokerCurrency() {
   const wrap = document.getElementById('mp_broker_currency_wrap');
   let base;
   try { base = await mpLoadPortfolioBase(); }
   catch (error) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(error.message)}</p>`; return; }
   let rows = await mpCurrencyRows(base);
-  const everHeld = await mpEverHeld('currency');
+  const everHeld = mpHeldUnderOthers(await mpEverHeld('currency'), rows);
   const render = () => mpRenderBrokerPivot(wrap, rows, 'currency', 'No holdings yet — import trades above.', base.fxByCurrency, everHeld);
   render();
   // Too wide for the page: the column holding the least (in USD) folds into
