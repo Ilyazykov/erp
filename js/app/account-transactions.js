@@ -24,12 +24,13 @@ function mpTxSources(account, filter, wallets) {
     return data;
   };
   const money = async offset => {
-    let q = scoped(sb.from('bank_transactions').select('id, account, tx_date, description, counterparty, amount, currency, amount_approximate, expense_category, income_category'))
+    let q = scoped(sb.from('bank_transactions').select('id, account, tx_date, description, counterparty, amount, currency, amount_approximate, expense_category, income_category, balance_after, product, external_source'))
       .or('synthetic.is.null,synthetic.eq.false');
     if (filter) q = q.in('currency', filter.any);
     return (await page(q.order('tx_date', { ascending: false }).order('id'), offset)).map(r => ({
       day: r.tx_date.slice(0, 10), at: r.tx_date, account: r.account, text: plain(r.description) || r.counterparty || '', type: '',
       amount: Number(r.amount), unit: r.currency, approx: !!r.amount_approximate || /^ESTIMATED:/.test(r.description || ''),
+      balance: r.balance_after == null ? null : Number(r.balance_after), chain: `${r.account}|${r.currency}|${r.product || ''}|${r.external_source}`,
       category: r.income_category || r.expense_category || '', meta: r.income_category ? mpIncomeMeta(r.income_category) : mpExpMeta(r.expense_category) }));
   };
   const deals = async offset => {
@@ -37,7 +38,7 @@ function mpTxSources(account, filter, wallets) {
     if (filter) q = filter.fiat ? q.in('currency', filter.codes) : q.in('ticker', filter.tickers);
     return (await page(q.order('trade_date', { ascending: false }).order('id'), offset)).map(r => {
       const payout = MP_TX_PAYOUTS.has(r.side);
-      return { day: r.trade_date, at: r.trade_date, account: r.account, text: MP_SHORT_NAMES[r.ticker] || r.ticker, type: r.side.replace(/_/g, ' '),
+      return { day: r.trade_date, at: r.trade_date, account: r.account, text: MP_SHORT_NAMES[r.ticker] || r.ticker, type: r.side.replace(/_/g, ' '), side: r.side,
         amount: payout ? Number(r.quantity) : null, qty: payout ? null : Number(r.quantity), price: payout ? null : Number(r.price), unit: r.currency, approx: !!r.estimated };
     });
   };
@@ -51,10 +52,78 @@ function mpTxSources(account, filter, wallets) {
   return [money, deals, ...(wallets.size ? [crypto] : [])].map(load => ({ load, buf: [], offset: 0, done: false }));
 }
 
-// The next `n` rows over all sources, newest first.
+// One balance chain's rows of a day, earliest first: rows of the same moment in the order their balances
+// follow, then an income pulled ahead of a spending the balance couldn't have covered without it.
+function mpTxChainOrder(rows) {
+  const cents = v => Math.round(v * 100);
+  if (rows.some(r => r.balance == null)) return rows;
+  const out = [];
+  for (let i = 0; i < rows.length;) {
+    let j = i;
+    while (j < rows.length && rows[j].at === rows[i].at) j++;
+    let block = rows.slice(i, j);
+    if (block.length > 1) {
+      const afters = new Set(block.map(r => cents(r.balance)));
+      const starts = block.filter(r => !afters.has(cents(r.balance - r.amount)));
+      if (starts.length === 1) {
+        const walk = [starts[0]], left = new Set(block);
+        left.delete(starts[0]);
+        while (left.size) {
+          const next = [...left].find(r => cents(r.balance - r.amount) === cents(walk[walk.length - 1].balance));
+          if (!next) break;
+          walk.push(next);
+          left.delete(next);
+        }
+        if (!left.size) block = walk;
+      }
+    }
+    out.push(...block);
+    i = j;
+  }
+  let balance = out[0].balance - out[0].amount;
+  if (balance < -0.005) return out;   // already in debt that morning: an overdraft, not an order to fix
+  const rest = [...out], done = [];
+  while (rest.length) {
+    const income = balance + rest[0].amount < -0.005 ? rest.findIndex(r => r.amount > 0) : 0;
+    const [r] = rest.splice(Math.max(income, 0), 1);
+    balance += r.amount;
+    done.push(r);
+  }
+  return done;
+}
+
+// A day's rows, newest first. A deal stands next to its money (same account, currency and sum):
+// the sale before the money it brought, the purchase after the money it took.
+function mpTxArrangeDay(rows) {
+  const isDeal = r => r.side != null;
+  const line = rows.filter(r => !isDeal(r)).sort((x, y) => (x.at < y.at ? -1 : x.at > y.at ? 1 : 0));
+  const chains = new Map();
+  line.forEach((r, i) => { if (r.chain) chains.set(r.chain, [...(chains.get(r.chain) || []), i]); });
+  for (const places of chains.values()) {
+    const ordered = mpTxChainOrder(places.map(i => line[i]));
+    places.forEach((i, k) => { line[i] = ordered[k]; });
+  }
+  const before = new Map(), after = new Map(), alone = [];
+  const taken = new Set();
+  for (const d of rows.filter(isDeal)) {
+    const sum = d.amount != null ? Math.abs(d.amount) : Math.abs(d.qty * d.price);
+    const wantIn = d.side === 'buy' ? false : d.amount != null ? d.amount > 0 : true;
+    const money = line.find(r => !taken.has(r) && r.chain && r.account === d.account && r.unit === d.unit
+      && r.amount > 0 === wantIn && Math.abs(Math.abs(r.amount) - sum) < 0.01);
+    if (!money) { alone.push(d); continue; }
+    taken.add(money);
+    const side = d.side === 'buy' ? after : before;
+    side.set(money, [...(side.get(money) || []), d]);
+  }
+  const chrono = [...alone];
+  for (const r of line) chrono.push(...(before.get(r) || []), r, ...(after.get(r) || []));
+  return chrono.reverse();
+}
+
+// The next rows over all sources, newest first: at least `n`, up to the end of a day (its order needs all of it).
 async function mpTxNext(sources, n) {
   const out = [];
-  while (out.length < n) {
+  for (;;) {
     await Promise.all(sources.filter(s => !s.buf.length && !s.done).map(async s => {
       const rows = await s.load(s.offset);
       s.offset += rows.length;
@@ -64,9 +133,12 @@ async function mpTxNext(sources, n) {
     const ready = sources.filter(s => s.buf.length);
     if (!ready.length) break;
     const newest = ready.reduce((a, b) => (b.buf[0].day > a.buf[0].day || (b.buf[0].day === a.buf[0].day && b.buf[0].at > a.buf[0].at) ? b : a));
+    if (out.length >= n && newest.buf[0].day !== out[out.length - 1].day) break;
     out.push(newest.buf.shift());
   }
-  return out;
+  const days = new Map();
+  for (const r of out) days.set(r.day, [...(days.get(r.day) || []), r]);
+  return [...days.values()].flatMap(mpTxArrangeDay);
 }
 
 function mpTxRowHtml(r, withAccount) {
