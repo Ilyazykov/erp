@@ -58,6 +58,23 @@ const MP_PRICE_PERIODS = [['1m', 1], ['3m', 3], ['6m', 6], ['YTD', 'ytd'], ['1y'
 // opts.also: other tickers of the same thing whose deals are marked too (the
 // portfolio map's merged gold: XAU's price, the deals of XAU and XAUT)
 // a chart's sector or bar whose point carries a ticker (customdata): its price chart
+// A chart's deal marks: one a day per account, paper and currency. An order filled in parts is several
+// trades on one spot, and the hover showed only the top one. Marks only: the average counts each trade.
+function mpMergeDayDeals(deals) {
+  const byKey = new Map();
+  for (const d of deals) {
+    const key = [d.trade_date, d.side, d.account, d.ticker, d.currency].join('|');
+    const m = byKey.get(key);
+    const q = Number(d.quantity), p = Number(d.price);
+    if (!m) { byKey.set(key, { ...d, quantity: q, n: 1, cost: p > 0 ? q * p : null }); continue; }
+    m.quantity += q;
+    m.n += 1;
+    m.cost = m.cost != null && p > 0 ? m.cost + q * p : null;
+    if (m.money != null) m.money += Number(d.money) || 0;
+  }
+  return [...byKey.values()].map(({ cost, ...m }) => ({ ...m, price: cost != null && m.quantity > 0 ? cost / m.quantity : null }));
+}
+
 function mpChartOnClick(id) {
   const el = typeof id === 'string' ? document.getElementById(id) : id;
   if (!el?.on) return;
@@ -563,7 +580,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     };
     for (const via of [true, false]) {
       for (const [side, color] of [['buy', '#3fb950'], ['sell', '#f85149']]) {
-        const ds = shown.filter(d => d.side === side && !!d.via === via);
+        const ds = mpMergeDayDeals(shown.filter(d => d.side === side && !!d.via === via));
         if (!ds.length) continue;
         // one's own: a mark of the line's own colour goes light (a buy on a green line, a sale on a red one),
         // of the other colour stays bright (a buy on a red line, a sale on a green one)
@@ -574,7 +591,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
           fillcolor: fill, line: { color: '#000000', width: 0.6 }, layer: 'above' });
         traces.push({ x: ds.map(d => d.trade_date), y: ds.map(d => priceOn(d.trade_date)), type: 'scatter', mode: 'markers', name: `${side}${via ? ' via a fund' : ''}`,
           marker: { color: fill, size: 14, opacity: 0 },
-          text: ds.map(d => `${side} ${dealMoney(d)}<br>${dealQty(d.quantity)} ${d.ticker || asset}<br>${d.account}`), hovertemplate: '%{x}:<br>%{text}<extra></extra>' });
+          text: ds.map(d => `${side} ${dealMoney(d)}<br>${dealQty(d.quantity)} ${d.ticker || asset}<br>${d.account}${d.n > 1 ? ` (${d.n} trades)` : ''}`), hovertemplate: '%{x}:<br>%{text}<extra></extra>' });
       }
     }
     // a currency's exchanges: a mark at the rate each got (off the line by how much better or worse than the day's)
