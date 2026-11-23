@@ -24,12 +24,13 @@ function mpTxSources(account, filter, wallets) {
     return data;
   };
   const money = async offset => {
-    let q = scoped(sb.from('bank_transactions').select('id, account, tx_date, description, counterparty, amount, currency, amount_approximate'))
+    let q = scoped(sb.from('bank_transactions').select('id, account, tx_date, description, counterparty, amount, currency, amount_approximate, expense_category, income_category'))
       .or('synthetic.is.null,synthetic.eq.false');
     if (filter) q = q.in('currency', filter.any);
     return (await page(q.order('tx_date', { ascending: false }).order('id'), offset)).map(r => ({
       day: r.tx_date.slice(0, 10), at: r.tx_date, account: r.account, text: plain(r.description) || r.counterparty || '', type: '',
-      amount: Number(r.amount), unit: r.currency, approx: !!r.amount_approximate || /^ESTIMATED:/.test(r.description || '') }));
+      amount: Number(r.amount), unit: r.currency, approx: !!r.amount_approximate || /^ESTIMATED:/.test(r.description || ''),
+      category: r.income_category || r.expense_category || '', meta: r.income_category ? mpIncomeMeta(r.income_category) : mpExpMeta(r.expense_category) }));
   };
   const deals = async offset => {
     let q = scoped(sb.from('trades').select('id, account, trade_date, side, ticker, quantity, price, currency, note, estimated'));
@@ -74,7 +75,8 @@ function mpTxRowHtml(r, withAccount) {
     ? `<span class="${r.amount < 0 ? 'neg' : 'pos'}">${r.approx ? '≈ ' : ''}${r.amount < 0 ? '−' : '+'}${number(r.amount, r.coin ? 8 : 2)} ${mpEscapeHtml(r.unit || '')}</span>`
     : `<span>${r.approx ? '≈ ' : ''}${r.qty < 0 ? '−' : ''}${number(r.qty, 8)}${r.price ? ` @ ${number(r.price, 4)} ${mpEscapeHtml(r.unit || '')}` : ''}</span>`;
   const sub = [r.type, withAccount ? MP_BROKER_SHORT_NAMES[r.account] || r.account : ''].filter(Boolean).join(' · ');
-  return `<div class="mp-tx-row${r.approx ? ' approx' : ''}"><div class="mp-tx-main"><span class="mp-tx-name" title="${mpEscapeHtml(r.text)}">${mpEscapeHtml(r.text)}</span>${right}</div>${sub ? `<div class="mp-tx-sub">${mpEscapeHtml(sub)}</div>` : ''}</div>`;
+  // (a deal or a coin move has no spending category: the grey mark, to keep the column)
+  return `<div class="mp-tx-row${r.approx ? ' approx' : ''}"><span title="${mpEscapeHtml(r.category || '')}">${mpExpDot(r.meta || mpExpMeta())}</span><div class="mp-tx-body"><div class="mp-tx-main"><span class="mp-tx-name" title="${mpEscapeHtml(r.text)}">${mpEscapeHtml(r.text)}</span>${right}</div>${sub ? `<div class="mp-tx-sub">${mpEscapeHtml(sub)}</div>` : ''}</div></div>`;
 }
 
 // Puts the feed beside `plot`. Returns { toggle(layer) }: show only that chart layer, or all again.

@@ -89,7 +89,7 @@ async function mpExpDrawSpent(c) {
   // rows are under them; folded or not stays across re-renders
   const folded = c => c.group && mpExpFolded.has(c.group);
   catList.innerHTML = items.length ? items.map((c, i) => `<div class="exp-cat${c.group ? ' exp-sub' : ''}" data-i="${i}"${c.group ? ` data-g="${c.group}"` : ''}${c.header ? ` data-head="${c.cat}"` : ''}${folded(c) ? ' style="display:none"' : ''}>
-      <div class="exp-dot" style="background:${meta[c.cat].color}33;color:${meta[c.cat].color}">${meta[c.cat].icon}</div>
+      ${mpExpDot(meta[c.cat])}
       <div class="exp-name"><b>${c.header ? `<span class="exp-caret">${mpExpFolded.has(c.cat) ? '▸' : '▾'}</span> ` : ''}${c.cat}</b><span>${c.rows.length} transaction${c.rows.length === 1 ? '' : 's'}</span></div>
       <div class="exp-amt"><b>${money(c.total)}</b><span>${total ? Math.round(c.total / total * 100) : 0}%</span></div>
     </div><div class="exp-open" data-i="${i}" style="display:none"></div>`).join('')
@@ -132,8 +132,7 @@ async function mpExpDrawIncome(c) {
     return m;
   }, new Map()).values()].sort((x, y) => y.total - x.total);
   const incTotal = incCats.reduce((t, c) => t + c.total, 0);
-  const incColor = k => MP_INCOME_COLORS[k] ?? '#8b949e';
-  const incIcon = k => ({ Salary: '💼', 'Flat rent': '🏠' })[k] ?? '💰';
+  const incColor = k => mpIncomeMeta(k).color;
   await Plotly.react(document.getElementById('plot_inc_donut'), incCats.length ? [{
     type: 'pie', hole: 0.78, sort: false, direction: 'clockwise',
     labels: incCats.map(c => c.cat), values: incCats.map(c => c.total),
@@ -161,7 +160,7 @@ async function mpExpDrawIncome(c) {
       <td style="text-align:left">${esc(r.account)}</td>
       <td>${Number(r.amount).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${esc(r.currency || '')}</td><td>${rowMoney(incConv(r))}</td></tr>`).join('')}</tbody></table></div>`;
   incList.innerHTML = incCats.length ? incCats.map((c, i) => `<div class="exp-cat" data-i="${i}">
-      <div class="exp-dot" style="background:${incColor(c.cat)}33;color:${incColor(c.cat)}">${incIcon(c.cat)}</div>
+      ${mpExpDot(mpIncomeMeta(c.cat))}
       <div class="exp-name"><b>${esc(c.cat)}</b><span>${c.rows.length} transaction${c.rows.length === 1 ? '' : 's'}</span></div>
       <div class="exp-amt"><b>${money(c.total)}</b><span>${incTotal ? Math.round(c.total / incTotal * 100) : 0}%</span></div>
     </div><div class="exp-open" data-i="${i}" style="display:none"></div>`).join('')
@@ -741,9 +740,8 @@ async function mpRenderExpenses() {
   const esc = s => String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
   const inPeriod = list => list.filter(r => r.day >= from && r.day <= to && Number.isFinite(r.usd));
   const rows = inPeriod(spent);
-  const known = Object.fromEntries(MP_EXP_CATS.map(c => [c[0], { icon: c[1], color: c[2] }]));
-  // a category the page doesn't know yet (a new rule's): grey, like Other
-  const meta = new Proxy(known, { get: (t, k) => t[k] ?? MP_EXP_GROUP_META[k] ?? { icon: '•', color: '#4b5560' } });
+  const known = MP_EXP_META;
+  const meta = new Proxy({}, { get: (_, k) => mpExpMeta(k) });
   // by group: the categories of one group (MP_EXP_GROUPS) as one line
   const groupedTop = document.getElementById('exp_grouped_top').checked;
   const group = (list, byGroup = false) => {

@@ -47,7 +47,8 @@
   .mp-tx-head .btn { padding: 2px 8px; font-size: 0.78rem; }
   .mp-tx-list { flex: 1; overflow-y: auto; font-size: 0.82rem; }
   .mp-tx-day { position: sticky; top: 0; padding: 4px 10px; background: #171d25; color: #8b949e; font-size: 0.75rem; font-weight: 600; }
-  .mp-tx-row { padding: 6px 10px; border-bottom: 1px solid #1e2830; }
+  .mp-tx-row { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid #1e2830; }
+  .mp-tx-body { flex: 1; min-width: 0; }
   .mp-tx-row.approx { opacity: 0.65; }
   .mp-tx-main { display: flex; justify-content: space-between; gap: 10px; }
   .mp-tx-main > :last-child { flex: none; }

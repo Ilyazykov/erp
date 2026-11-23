@@ -83,6 +83,12 @@ const MP_EXP_GROUP_META = Object.fromEntries(Object.entries({
   Housing: ['🏠', 'Rent & housing'], Food: ['🍽', 'Restaurants & cafés'], Transport: ['🚕', 'Public transport'],
   Travel: ['✈️', 'Visas'], Fun: ['🎟', 'Entertainment'], Shopping: ['🛍', 'Clothes'], Health: ['💊', 'Health & sport'],
 }).map(([g, [icon, main]]) => [g, { icon, color: MP_EXP_CATS.find(c => c[0] === main)[2] }]));
+// A category's icon and colour (one the page doesn't know yet, or a label of what isn't spending: grey, like Other),
+// an income kind's, and the round mark of either: the Expenses list and the account window's feed.
+const MP_EXP_META = Object.fromEntries(MP_EXP_CATS.map(c => [c[0], { icon: c[1], color: c[2] }]));
+const mpExpMeta = k => MP_EXP_META[k] ?? MP_EXP_GROUP_META[k] ?? { icon: '•', color: '#4b5560' };
+const mpIncomeMeta = k => ({ icon: ({ Salary: '💼', 'Flat rent': '🏠' })[k] ?? '💰', color: MP_INCOME_COLORS[k] ?? '#8b949e' });
+const mpExpDot = ({ icon, color }) => `<div class="exp-dot" style="background:${color}33;color:${color}">${icon}</div>`;
 let mpExpCache = null;
 // receipt_lines' columns (migration ...179): the tab's bulk load and the Items dialog's fresh read
 const MP_RECEIPT_LINE_COLS = 'receipt_id, line_no, name_printed, name_en, product_id, qty, unit, unit_price_list, unit_price_paid, line_total, note, is_other';
