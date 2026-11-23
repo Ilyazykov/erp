@@ -11,6 +11,7 @@
 const RU_STOCK_TICKERS = ['SBER', 'YDEX', 'T', 'DOMRF', 'TRND', 'OZON', 'AKME', 'AKFN', 'ROSN', 'VTBR', 'GMKN', 'PLZL', 'IRAO'];
 // the US basket's tickers (valuation.js's US_TICKERS, without the weights)
 const US_STOCK_TICKERS = US_TICKERS.map(([t]) => t);
+const MP_US_SECTOR_OF = Object.fromEntries(Object.entries(US_SECTORS).flatMap(([s, ts]) => ts.map(t => [t, s])));
 
 
 
@@ -46,7 +47,38 @@ function mpDonutLayout(maxR) {
 // "Target CNY sale (RUB)" for the RUB/CNY donut) instead of the generic
 // default, since the same function backs 4 differently-themed tables.
 
-// LEGACY, unmodified: allocates a user-supplied cash injection (plus
+// The sector as the allocators' second factor: within one Z group, a stock of an underweight sector
+// gets more. item -> sector target / sector held, from 0.25 to 4; 1 for an item with no sector.
+function mpSectorFactors(usable, targetUsdOf, heldUsdOf) {
+  const target = {}, held = {};
+  for (const it of usable) {
+    if (!it.sector) continue;
+    target[it.sector] = (target[it.sector] || 0) + targetUsdOf(it);
+    held[it.sector] = (held[it.sector] || 0) + heldUsdOf(it);
+  }
+  return new Map(usable.map(it => {
+    if (!it.sector) return [it, 1];
+    const h = held[it.sector];
+    return [it, h > 0 ? Math.min(4, Math.max(0.25, target[it.sector] / h)) : 4];
+  }));
+}
+
+// `pool` split by shortfall x factor, no item above its own shortfall (what one can't take goes to the rest).
+function mpWeightedShares(group, pool, shortfallOf, factors) {
+  const out = new Map(group.map(it => [it, 0]));
+  const room = it => shortfallOf(it) - out.get(it);
+  let left = pool;
+  for (let i = 0; i < 20 && left > 1e-9; i++) {
+    const open = group.filter(it => room(it) > 1e-9);
+    const total = open.reduce((s, it) => s + room(it) * factors.get(it), 0);
+    if (total <= 0) break;
+    const adds = open.map(it => [it, Math.min(room(it), room(it) * factors.get(it) / total * left)]);
+    adds.forEach(([it, add]) => { out.set(it, out.get(it) + add); left -= add; });
+  }
+  return out;
+}
+
+// LEGACY: allocates a user-supplied cash injection (plus
 // proceeds from selling down overweight Z<-1.5 tickers) across the
 // portfolio in fractional dollar amounts -- no whole-share rounding at
 // all. Kept exactly as it was before whole-share support was added, so
@@ -109,7 +141,9 @@ function mpAllocatePoolByZPriorityLegacy(usable, totalUsd, userInjectionUsd) {
       group.forEach(it => deltaUsdByItem.set(it, deltaUsdByItem.get(it) + shortfallOf(it)));
       pool -= totalShortfall;
     } else {
-      group.forEach(it => deltaUsdByItem.set(it, deltaUsdByItem.get(it) + shortfallOf(it) / totalShortfall * pool));
+      const factors = mpSectorFactors(usable, targetUsdOf, it => currentUsdOf(it) + deltaUsdByItem.get(it));
+      const shares = mpWeightedShares(group, pool, shortfallOf, factors);
+      group.forEach(it => deltaUsdByItem.set(it, deltaUsdByItem.get(it) + shares.get(it)));
       pool = 0;
     }
   }
@@ -224,8 +258,11 @@ function mpAllocatePoolByZPriorityWithLots(usable, totalUsd, userInjectionUsd) {
       if (totalShortfall <= 0) break;
       let placedThisPass = 0;
       let remainingPool = pool;
+      const heldUsdOf = it => currentUsdOf(it) + deltaUsdByItem.get(it);
+      const shares = pool >= totalShortfall ? null
+        : mpWeightedShares(group, pool, shortfallOf, mpSectorFactors(usable, targetUsdOf, heldUsdOf));
       group.forEach(it => {
-        const share = pool >= totalShortfall ? shortfallOf(it) : shortfallOf(it) / totalShortfall * pool;
+        const share = shares ? shares.get(it) : shortfallOf(it);
         // remainingPool (not the pre-pass `pool`) is what's actually still
         // uncommitted at this point in the loop -- overshoot spends real
         // money, so it must be checked/deducted against the running
@@ -259,9 +296,11 @@ function mpAllocatePoolByZPriorityWithLots(usable, totalUsd, userInjectionUsd) {
       // pool that pro-rata would otherwise have stranded.
       let placedFallback = 0;
       for (;;) {
+        // the most underweight sector first, the cheapest within it
+        const factors = mpSectorFactors(usable, targetUsdOf, heldUsdOf);
         const candidates = usable
           .filter(it => groupFilter(it) && isBelowTarget(it) && it.priceUsd > 0)
-          .sort((a, b) => a.priceUsd - b.priceUsd);
+          .sort((a, b) => factors.get(b) - factors.get(a) || a.priceUsd - b.priceUsd);
         let placedThisRound = 0;
         for (const it of candidates) {
           if (pool <= 0) break;
@@ -291,9 +330,10 @@ function mpAllocatePoolByZPriorityWithLots(usable, totalUsd, userInjectionUsd) {
       // rounds down, full stop.
       let placedOvershootLastResort = 0;
       if (placedThisPass <= 0 && placedFallback <= 0 && !isGreenGroup && groupIdx === 1) {
+        const factors = mpSectorFactors(usable, targetUsdOf, heldUsdOf);
         const cheapest = usable
           .filter(it => groupFilter(it) && isBelowTarget(it) && it.priceUsd > 0 && it.priceUsd <= pool)
-          .sort((a, b) => a.priceUsd - b.priceUsd)[0];
+          .sort((a, b) => factors.get(b) - factors.get(a) || a.priceUsd - b.priceUsd)[0];
         if (cheapest) {
           deltaUsdByItem.set(cheapest, deltaUsdByItem.get(cheapest) + cheapest.priceUsd);
           pool -= cheapest.priceUsd;
@@ -653,9 +693,12 @@ async function mpRenderPortfolioPies() {
   const usUserInjectionUsd = usInvestInputEl ? (parseFloat(usInvestInputEl.value) || 0) : 0;
   const usRespectLotsEl = document.getElementById('mp_us_stocks_respect_lots');
   const usRespectLotSize = usRespectLotsEl ? usRespectLotsEl.checked : true;
+  // off: the allocator as it was before the sector factor, to compare
+  const usUseSectors = document.getElementById('mp_us_stocks_use_sectors')?.checked !== false;
   const usShownPct = mpDrawTargetDonut('plot_mp_pie_us_stocks', 'mp_pie_us_stocks_note',
     (DATA.usTargetWeightsRaw || []).map((r, i) => ({
       label: r.ticker, target: r.target, current: (valueByTicker[r.ticker] || 0) / (usTotal || 1) * 100,
+      sector: usUseSectors ? MP_US_SECTOR_OF[r.ticker] : undefined,
       color: (DATA.usTickerColors || [])[i % (DATA.usTickerColors || [1]).length],
       z: r.z,
       priceUsd: priceUsdByTicker[r.ticker] || null,

@@ -338,6 +338,7 @@ function mpSalaryAllocate(weights, totalUsd, usd, c, exact = false, allowSells =
     label: r.ticker, target: r.target, z: allowSells || r.z === null || r.z === undefined ? r.z : Math.max(r.z, -1.5),
     priceUsd: c.priceUsdByTicker[r.ticker] || null,
     current: (c.valueByTicker[r.ticker] || 0) / (totalUsd || 1) * 100,
+    sector: MP_US_SECTOR_OF[r.ticker],
   }));
   const { deltaUsdByItem } = (exact ? mpAllocatePoolByZPriorityLegacy : mpAllocatePoolByZPriorityWithLots)(items, totalUsd, usd);
   return items.map(it => ({ ticker: it.label, usd: deltaUsdByItem.get(it) || 0, price: it.priceUsd }))
