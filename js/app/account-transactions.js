@@ -252,7 +252,7 @@ function mpTxRowHtml(r, withAccount, display) {
     : `<span>${r.approx ? '≈ ' : ''}${r.qty < 0 ? '−' : ''}${number(r.qty, 8)}${r.price ? ` @ ${shown(r.price, 4)}` : ''}</span>`;
   const sub = [r.type, r.saleLine, r.noteLine, withAccount ? MP_BROKER_SHORT_NAMES[r.account] || r.account : ''].filter(Boolean).join(' · ');
   // (a deal or a coin move has no spending category: the grey mark, to keep the column)
-  return `<div class="mp-tx-row${r.approx ? ' approx' : ''}"><span title="${mpEscapeHtml(r.category || '')}">${mpExpDot(r.meta || mpExpMeta())}</span><div class="mp-tx-body"><div class="mp-tx-main"><span class="mp-tx-name" title="${mpEscapeHtml(r.full || r.text)}">${mpEscapeHtml(r.text)}</span>${right}</div>${sub ? `<div class="mp-tx-sub">${mpEscapeHtml(sub)}</div>` : ''}</div></div>`;
+  return `<div class="mp-tx-row${r.approx ? ' approx' : ''}" data-day="${r.day}"><span title="${mpEscapeHtml(r.category || '')}">${mpExpDot(r.meta || mpExpMeta())}</span><div class="mp-tx-body"><div class="mp-tx-main"><span class="mp-tx-name" title="${mpEscapeHtml(r.full || r.text)}">${mpEscapeHtml(r.text)}</span>${right}</div>${sub ? `<div class="mp-tx-sub">${mpEscapeHtml(sub)}</div>` : ''}</div></div>`;
 }
 
 // Puts the feed beside `plot`. display: {code, conv(day, usd)} to show amounts in, null: each in its own currency.
@@ -271,6 +271,10 @@ function mpAccountTxFeed(dlg, plot, account, startDisplay = null) {
   end.className = 'note mp-tx-end';
   let filter = null, sources = null, wallets = null, busy = false, finished = false, lastDay = null, ticket = 0;
   let display = startDisplay, shownRows = [];
+  // the row under the mouse: its day, for the mark on the chart
+  let onDay = () => {};
+  list.addEventListener('mouseover', e => onDay(e.target.closest('.mp-tx-row')?.dataset.day || null));
+  list.addEventListener('mouseleave', () => onDay(null));
   const rowsHtml = rows => {
     let html = '';
     for (const r of rows) {
@@ -335,6 +339,7 @@ function mpAccountTxFeed(dlg, plot, account, startDisplay = null) {
       filter = filter?.label === layer.label ? null : mpTxLayerFilter(layer);
       restart();
     },
+    onRowDay(fn) { onDay = fn; },
     async setDisplay(next) {
       const same = (next?.code ?? null) === (display?.code ?? null);
       display = next;

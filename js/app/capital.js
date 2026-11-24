@@ -540,6 +540,20 @@ async function mpOpenAccountChart(account) {
   dlg.appendChild(tip);
   let view = null;
   const hideTip = () => { tip.style.display = 'none'; };
+  // a thin line on the day of the feed's row under the mouse (none if that day isn't on the chart)
+  const dayMark = document.createElement('div');
+  dayMark.className = 'mp-day-mark';
+  plot.parentElement.appendChild(dayMark);
+  const showDay = day => {
+    const fl = plot._fullLayout;
+    const px = day && view && fl ? fl.xaxis.d2p(day) : NaN;
+    if (!(px >= 0 && px <= fl?._size.w)) { dayMark.style.display = 'none'; return; }
+    dayMark.style.left = `${plot.offsetLeft + fl._size.l + px}px`;
+    dayMark.style.top = `${plot.offsetTop + fl._size.t}px`;
+    dayMark.style.height = `${fl._size.h}px`;
+    dayMark.style.display = 'block';
+  };
+  txFeed.onRowDay(showDay);
   plot.addEventListener('mouseleave', hideTip);
   // the layer under the cursor, if any
   const layerAt = ev => {
@@ -590,6 +604,7 @@ async function mpOpenAccountChart(account) {
   let period = '1y';
   const draw = () => {
     hideTip();
+    showDay(null);
     const rub = rubBox.checked, home = !!homeBox?.checked, fadeOn = fadeBox.checked;
     const shownCode = rub ? 'RUB' : home ? homeCode : 'USD', unit = rub ? '₽' : home ? homeCode : null;
     const inOwn = home || (rub && MP_ACCOUNT_RUB.has(account));

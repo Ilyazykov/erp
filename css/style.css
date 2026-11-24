@@ -42,7 +42,8 @@
   .data-table tbody tr:hover { background: #13191f; }
   html:has(dialog.mp-chart-dialog[open]) { overflow: hidden; scrollbar-gutter: stable; }
   dialog.mp-chart-dialog::backdrop { background: rgba(1, 4, 9, 0.72); backdrop-filter: blur(2px); }
-  .mp-account-body { display: flex; gap: 12px; }
+  .mp-account-body { position: relative; display: flex; gap: 12px; }
+  .mp-day-mark { display: none; position: absolute; width: 0; border-left: 1px dashed rgba(230, 237, 243, 0.75); pointer-events: none; z-index: 2; }
   .mp-account-body > :first-child { flex: 1; min-width: 0; }
   .mp-tx-feed { flex: none; width: 370px; height: min(60vh, 600px); display: flex; flex-direction: column; border: 1px solid #30363d; border-radius: 6px; background: #0d1117; }
   .mp-tx-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 30px; padding: 6px 10px; border-bottom: 1px solid #30363d; font-size: 0.85rem; }
