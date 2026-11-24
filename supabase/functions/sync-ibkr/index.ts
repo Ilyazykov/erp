@@ -208,9 +208,10 @@ function parse(xml: string) {
 
 // Pulls one user's statement and replaces the period's IBKR rows with it.
 // deno-lint-ignore no-explicit-any
-// The prices-only window: 15:00-19:59 UTC on weekdays (inside the US session in winter and summer).
-const PRICE_WINDOW_START_MIN = 15 * 60;
-const PRICE_WINDOW_MINUTES = 300;
+// The prices-only window: 14:40-15:09 UTC on weekdays, soon after the US open (14:30 UTC in winter, 13:30 in
+// summer) -- 15:00-19:59 put the day's price as late as 19:59 (the user, 24.11.2026). Cron: migration ...253.
+const PRICE_WINDOW_START_MIN = 14 * 60 + 40;
+const PRICE_WINDOW_MINUTES = 30;
 
 // The open positions' mark prices from a Flex report (Summary rows, the report date's day), in USD, into the
 // price history as source 'ibkr'. Returns how many rows were written.
@@ -349,7 +350,9 @@ Deno.serve(async (req) => {
           if (mark.last && new Date(mark.last) >= todayStart) continue;   // today's prices are in
           // today's minute, drawn at random once a day: from the first run of the day that finds no minute for today
           let due = mark.due ? new Date(mark.due) : null;
-          if (!due || due < todayStart) {
+          // (a minute drawn for today in an older, later window is drawn again)
+          const windowEnd = new Date(todayStart.getTime() + (PRICE_WINDOW_START_MIN + PRICE_WINDOW_MINUTES) * 60000);
+          if (!due || due < todayStart || due >= windowEnd) {
             const minute = PRICE_WINDOW_START_MIN + Math.floor(Math.random() * PRICE_WINDOW_MINUTES);
             due = new Date(todayStart.getTime() + minute * 60000);
             await db.from('broker_credentials').update({ prices_due_at: due.toISOString() })

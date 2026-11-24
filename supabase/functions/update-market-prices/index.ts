@@ -1235,165 +1235,183 @@ async function runUpdate(): Promise<Record<string, unknown>> {
     }
   }
 
-  // --- MOEX (shares, ETFs, corp bonds, OFZ) ---
-  // A ticker already priced by Yahoo (AAPL, VWCE, ...) isn't searched on MOEX
-  // again: one search each, ~90 of them, with MOEX hanging now and then, was
-  // most of the run and put it past the function's 150 s (27.10.2026). It
-  // falls through to Yahoo below, as a MOEX miss does.
-  const { data: onYahoo } = await supabase.from('market_prices').select('ticker').eq('source', 'yahoo_finance');
-  const elsewhere = new Set((onYahoo ?? []).map((r: { ticker: string }) => r.ticker));
-  const moexHits = await fetchMoexPrices(moexCandidates.filter((t) => !elsewhere.has(t)));
-  for (const [ticker, info] of Object.entries(moexHits)) {
-    const priceNative = info.price_rub;
-    const quoteCurrency = normalizeCurrency(info.currency) ?? 'RUB';
-    const priceUsd = await toUsd(priceNative, quoteCurrency, usdRubRate);
-    if (priceUsd === null) {
-      log(`  ${ticker}: MOEX price found but could not convert ${quoteCurrency} -> USD, skipping`);
-      continue;
-    }
-    // `currency` is always the honest MOEX quote currency. MOEX prices
-    // some funds' units in RUB even though the fund's actual holdings are
-    // foreign-currency bonds (e.g. SBBY/TLCB hold CNY bonds but their
-    // per-unit price on MOEX is quoted in RUB) -- that distinction is
-    // captured separately in `underlying_currency`, not by changing
-    // `currency` itself.
-    const instrumentType: InstrumentType =
-      info.asset_class === 'money_market_fund' ? 'liquid'
-      : info.asset_class === 'gold' ? 'gold'
-      : (info.asset_class === 'moex_bond' || info.asset_class === 'moex_ofz' || info.asset_class === 'moex_bond_etf')
-        ? 'bond'
-        : 'stock';
-    const underlyingCurrency = UNDERLYING_CURRENCY_BY_TICKER[ticker.toUpperCase()] ?? quoteCurrency;
-    rowsOut.push({
-      ticker,
-      price_usd: Math.round(priceUsd * 1e6) / 1e6,
-      native_price: priceNative,
-      currency: quoteCurrency,
-      asset_class: info.asset_class,
-      infra_region: 'ru',
-      instrument_type: instrumentType,
-      underlying_currency: underlyingCurrency,
-      source: 'moex_iss',
-      as_of: info.as_of,
-    });
-    resolved.add(ticker);
+  // MOEX and Yahoo run side by side and are written separately: one source down
+  // or slow must not hold up or lose the other's prices. On 23-24.11.2026 MOEX
+  // was unreachable (its new certificate), all ~70 MOEX tickers fell through to
+  // the Yahoo loop after it, the run was killed at 150 s, and nothing was
+  // written -- the S&P 500 and other Yahoo prices included. Which source a
+  // ticker belongs to is the one that priced it last (market_prices.source):
+  // a MOEX ticker is never asked of Yahoo, a Yahoo one never of MOEX; only a
+  // ticker neither has priced yet is tried on MOEX and then on Yahoo.
+  const { data: lastSources } = await supabase.from('market_prices').select('ticker, source');
+  const onYahoo = new Set<string>(), onMoex = new Set<string>();
+  for (const r of (lastSources ?? []) as { ticker: string; source: string }[]) {
+    if (r.source === 'yahoo_finance') onYahoo.add(r.ticker);
+    if (r.source === 'moex_iss') onMoex.add(r.ticker);
   }
-
-  // --- crypto / metals ---
-  for (const ticker of cryptoCandidates) {
-    const hit = await fetchCryptoPrice(ticker);
-    if (hit === null) {
-      log(`  ${ticker}: no Bybit or Yahoo quote found -- no price for it today`);
-      continue;
-    }
-    const priceUsd = await toUsd(hit.price, hit.currency ?? 'USD', usdRubRate);
-    if (priceUsd === null) {
-      await sleep(150);
-      continue;
-    }
-    const cryptoCurrency = normalizeMinorUnitCurrency(hit.currency);
-    const isGold = ticker.toUpperCase() === 'XAU' || ticker.toUpperCase() === 'XAUT';
-    rowsOut.push({
-      ticker,
-      price_usd: Math.round(priceUsd * 1e6) / 1e6,
-      native_price: hit.price,
-      currency: cryptoCurrency,
-      asset_class: isGold ? 'gold' : 'crypto',
-      infra_region: 'foreign',
-      instrument_type: isGold ? 'gold' : 'crypto',
-      underlying_currency: cryptoCurrency,
-      source: 'yahoo_finance',
-      as_of: hit.as_of,
-    });
-    resolved.add(ticker);
-    await sleep(150);
-  }
-
-  // --- tsTON (Tonstakers, on TON): median of three keyless sources (GeckoTerminal, CoinGecko, and the
-  //     deepest pool on DEX Screener, so a thin pool can't set the price). Used by the wallet sync. ---
-  const TSTON = 'EQC98_qAmNEptUtPc7W6xdHh_ZHrBUFpw5Ft_IzNU20QAJav';
-  const [tstonGecko, tstonCg, tstonDex] = await Promise.all([
-    fetchJson(`https://api.geckoterminal.com/api/v2/networks/ton/tokens/${TSTON}`),
-    fetchJson('https://api.coingecko.com/api/v3/simple/price?ids=tonstakers&vs_currencies=usd'),
-    fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${TSTON}`),
-  ]);
-  const tstonPrices: number[] = [];
-  const g = Number(tstonGecko?.data?.attributes?.price_usd);
-  if (Number.isFinite(g) && g > 0) tstonPrices.push(g);
-  const c = Number(tstonCg?.tonstakers?.usd);
-  if (Number.isFinite(c) && c > 0) tstonPrices.push(c);
-  // the pool with the most liquidity: its price, not an average over thin pools
-  const deepest = (tstonDex?.pairs ?? []).filter((p: any) => p.baseToken?.address === TSTON)
-    .sort((a: any, b: any) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))[0];
-  const d = Number(deepest?.priceUsd);
-  if (Number.isFinite(d) && d > 0) tstonPrices.push(d);
-  if (tstonPrices.length) {
-    tstonPrices.sort((x, y) => x - y);
-    const mid = Math.floor(tstonPrices.length / 2);
-    const tstonUsd = tstonPrices.length % 2 ? tstonPrices[mid] : (tstonPrices[mid - 1] + tstonPrices[mid]) / 2;
-    rowsOut.push({
-      ticker: 'TSTON', price_usd: Math.round(tstonUsd * 1e6) / 1e6, native_price: tstonUsd, currency: 'USD',
-      asset_class: 'crypto', infra_region: 'foreign', instrument_type: 'crypto', underlying_currency: 'tsTON',
-      source: `median(${tstonPrices.length})`, as_of: new Date().toISOString().slice(0, 10),
-    });
-    resolved.add('TSTON');
-  } else {
-    log('  TSTON: no price from any source');
-  }
-
-  // What is found so far is written before the leftover loop: that loop asks
-  // Yahoo two or three ways per ticker, ~12 s each when nothing answers, and
-  // with MOEX unreachable (23-24.11.2026) all ~70 MOEX tickers fell through to
-  // it, the run was killed at 150 s, and nothing was written -- not even the
-  // US stocks and crypto it had.
-  await writeNew();
 
   // --- everything left over: try as a plain US stock, then as a
   //     Western-exchange ETF with common suffixes; none started past
-  //     LEFTOVER_BUDGET_MS, so the second write below still happens ---
-  const leftover = tickers.filter(
-    (t) => !resolved.has(t) && classifyTicker(t) === 'moex_share_or_etf_or_other' && !(t in moexHits),
-  );
-  for (const [n, ticker] of leftover.entries()) {
-    if (Date.now() - runStarted > LEFTOVER_BUDGET_MS) {
-      log(`Out of time, ${leftover.length - n} left at their last price: ${leftover.slice(n).join(', ')}`);
-      break;
-    }
-    let hit = await fetchUsStockPrice(ticker);
-    let assetClass = 'us_stock';
-    let sourceSymbol = ticker;
-    if (hit === null) {
-      hit = await fetchWesternEtfPrice(ticker);
-      assetClass = 'western_etf';
-      if (hit !== null) sourceSymbol = hit.symbol ?? ticker;
-    }
-    if (hit === null) {
-      log(`  ${ticker}: no price found on MOEX or Yahoo (US/Western-ETF) -- skipping`);
+  //     LEFTOVER_BUDGET_MS, so the write after it still happens ---
+  const yahooLeftover = async (leftover: string[]) => {
+    for (const [n, ticker] of leftover.entries()) {
+      if (Date.now() - runStarted > LEFTOVER_BUDGET_MS) {
+        log(`Yahoo: out of time, ${leftover.length - n} left at their last price: ${leftover.slice(n).join(', ')}`);
+        break;
+      }
+      let hit = await fetchUsStockPrice(ticker);
+      let assetClass = 'us_stock';
+      let sourceSymbol = ticker;
+      if (hit === null) {
+        hit = await fetchWesternEtfPrice(ticker);
+        assetClass = 'western_etf';
+        if (hit !== null) sourceSymbol = hit.symbol ?? ticker;
+      }
+      if (hit === null) {
+        log(`  ${ticker}: no price found on MOEX or Yahoo (US/Western-ETF) -- skipping`);
+        await sleep(150);
+        continue;
+      }
+      const priceUsd = await toUsd(hit.price, hit.currency ?? 'USD', usdRubRate);
+      if (priceUsd === null) {
+        log(`  ${ticker}: found ${sourceSymbol} but could not convert ${hit.currency} -> USD`);
+        await sleep(150);
+        continue;
+      }
+      const leftoverCurrency = normalizeMinorUnitCurrency(hit.currency);
+      rowsOut.push({
+        ticker,
+        price_usd: Math.round(priceUsd * 1e6) / 1e6,
+        native_price: hit.price,
+        currency: leftoverCurrency,
+        asset_class: assetClass,
+        infra_region: 'foreign',
+        instrument_type: 'stock',
+        underlying_currency: leftoverCurrency,
+        source: 'yahoo_finance',
+        as_of: hit.as_of,
+      });
+      resolved.add(ticker);
       await sleep(150);
-      continue;
     }
-    const priceUsd = await toUsd(hit.price, hit.currency ?? 'USD', usdRubRate);
-    if (priceUsd === null) {
-      log(`  ${ticker}: found ${sourceSymbol} but could not convert ${hit.currency} -> USD`);
+  };
+  const leftoverCandidates = () => tickers!.filter((t) => !resolved.has(t) && classifyTicker(t) === 'moex_share_or_etf_or_other');
+
+  const moexPart = (async () => {
+    // --- MOEX (shares, ETFs, corp bonds, OFZ) ---
+    // A ticker already priced by Yahoo (AAPL, VWCE, ...) isn't searched on MOEX
+    // again: one search each, ~90 of them, with MOEX hanging now and then, was
+    // most of the run and put it past the function's 150 s (27.10.2026).
+    const moexHits = await fetchMoexPrices(moexCandidates.filter((t) => !onYahoo.has(t)));
+    for (const [ticker, info] of Object.entries(moexHits)) {
+      const priceNative = info.price_rub;
+      const quoteCurrency = normalizeCurrency(info.currency) ?? 'RUB';
+      const priceUsd = await toUsd(priceNative, quoteCurrency, usdRubRate);
+      if (priceUsd === null) {
+        log(`  ${ticker}: MOEX price found but could not convert ${quoteCurrency} -> USD, skipping`);
+        continue;
+      }
+      // `currency` is always the honest MOEX quote currency. MOEX prices
+      // some funds' units in RUB even though the fund's actual holdings are
+      // foreign-currency bonds (e.g. SBBY/TLCB hold CNY bonds but their
+      // per-unit price on MOEX is quoted in RUB) -- that distinction is
+      // captured separately in `underlying_currency`, not by changing
+      // `currency` itself.
+      const instrumentType: InstrumentType =
+        info.asset_class === 'money_market_fund' ? 'liquid'
+        : info.asset_class === 'gold' ? 'gold'
+        : (info.asset_class === 'moex_bond' || info.asset_class === 'moex_ofz' || info.asset_class === 'moex_bond_etf')
+          ? 'bond'
+          : 'stock';
+      const underlyingCurrency = UNDERLYING_CURRENCY_BY_TICKER[ticker.toUpperCase()] ?? quoteCurrency;
+      rowsOut.push({
+        ticker,
+        price_usd: Math.round(priceUsd * 1e6) / 1e6,
+        native_price: priceNative,
+        currency: quoteCurrency,
+        asset_class: info.asset_class,
+        infra_region: 'ru',
+        instrument_type: instrumentType,
+        underlying_currency: underlyingCurrency,
+        source: 'moex_iss',
+        as_of: info.as_of,
+      });
+      resolved.add(ticker);
+    }
+    await writeNew();
+    return moexHits;
+  })();
+
+  const yahooPart = (async () => {
+    // --- crypto / metals ---
+    for (const ticker of cryptoCandidates) {
+      const hit = await fetchCryptoPrice(ticker);
+      if (hit === null) {
+        log(`  ${ticker}: no Bybit or Yahoo quote found -- no price for it today`);
+        continue;
+      }
+      const priceUsd = await toUsd(hit.price, hit.currency ?? 'USD', usdRubRate);
+      if (priceUsd === null) {
+        await sleep(150);
+        continue;
+      }
+      const cryptoCurrency = normalizeMinorUnitCurrency(hit.currency);
+      const isGold = ticker.toUpperCase() === 'XAU' || ticker.toUpperCase() === 'XAUT';
+      rowsOut.push({
+        ticker,
+        price_usd: Math.round(priceUsd * 1e6) / 1e6,
+        native_price: hit.price,
+        currency: cryptoCurrency,
+        asset_class: isGold ? 'gold' : 'crypto',
+        infra_region: 'foreign',
+        instrument_type: isGold ? 'gold' : 'crypto',
+        underlying_currency: cryptoCurrency,
+        source: 'yahoo_finance',
+        as_of: hit.as_of,
+      });
+      resolved.add(ticker);
       await sleep(150);
-      continue;
     }
-    const leftoverCurrency = normalizeMinorUnitCurrency(hit.currency);
-    rowsOut.push({
-      ticker,
-      price_usd: Math.round(priceUsd * 1e6) / 1e6,
-      native_price: hit.price,
-      currency: leftoverCurrency,
-      asset_class: assetClass,
-      infra_region: 'foreign',
-      instrument_type: 'stock',
-      underlying_currency: leftoverCurrency,
-      source: 'yahoo_finance',
-      as_of: hit.as_of,
-    });
-    resolved.add(ticker);
-    await sleep(150);
-  }
+
+    // --- tsTON (Tonstakers, on TON): median of three keyless sources (GeckoTerminal, CoinGecko, and the
+    //     deepest pool on DEX Screener, so a thin pool can't set the price). Used by the wallet sync. ---
+    const TSTON = 'EQC98_qAmNEptUtPc7W6xdHh_ZHrBUFpw5Ft_IzNU20QAJav';
+    const [tstonGecko, tstonCg, tstonDex] = await Promise.all([
+      fetchJson(`https://api.geckoterminal.com/api/v2/networks/ton/tokens/${TSTON}`),
+      fetchJson('https://api.coingecko.com/api/v3/simple/price?ids=tonstakers&vs_currencies=usd'),
+      fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${TSTON}`),
+    ]);
+    const tstonPrices: number[] = [];
+    const g = Number(tstonGecko?.data?.attributes?.price_usd);
+    if (Number.isFinite(g) && g > 0) tstonPrices.push(g);
+    const c = Number(tstonCg?.tonstakers?.usd);
+    if (Number.isFinite(c) && c > 0) tstonPrices.push(c);
+    // the pool with the most liquidity: its price, not an average over thin pools
+    const deepest = (tstonDex?.pairs ?? []).filter((p: any) => p.baseToken?.address === TSTON)
+      .sort((a: any, b: any) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))[0];
+    const d = Number(deepest?.priceUsd);
+    if (Number.isFinite(d) && d > 0) tstonPrices.push(d);
+    if (tstonPrices.length) {
+      tstonPrices.sort((x, y) => x - y);
+      const mid = Math.floor(tstonPrices.length / 2);
+      const tstonUsd = tstonPrices.length % 2 ? tstonPrices[mid] : (tstonPrices[mid - 1] + tstonPrices[mid]) / 2;
+      rowsOut.push({
+        ticker: 'TSTON', price_usd: Math.round(tstonUsd * 1e6) / 1e6, native_price: tstonUsd, currency: 'USD',
+        asset_class: 'crypto', infra_region: 'foreign', instrument_type: 'crypto', underlying_currency: 'tsTON',
+        source: `median(${tstonPrices.length})`, as_of: new Date().toISOString().slice(0, 10),
+      });
+      resolved.add('TSTON');
+    } else {
+      log('  TSTON: no price from any source');
+    }
+    // the tickers Yahoo priced last time
+    await yahooLeftover(leftoverCandidates().filter((t) => onYahoo.has(t)));
+    await writeNew();
+  })();
+
+  const [moexHits] = await Promise.all([moexPart, yahooPart]);
+  // new tickers neither source has priced yet that MOEX didn't find: Yahoo
+  await yahooLeftover(leftoverCandidates().filter((t) => !onYahoo.has(t) && !onMoex.has(t) && !(t in moexHits)));
 
   const unresolved = tickers.filter((t) => !resolved.has(t));
   log(`Resolved ${resolved.size}/${tickers.length} tickers.`);
