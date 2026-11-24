@@ -83,6 +83,12 @@ async function mpTxAddStoreNames(rows) {
   }
 }
 
+// What a row's click opens the chart of: a deal's paper (not a savings account, a deposit or a blocked one, which
+// have no price chart), the paper named in a broker's money line ("Buy 5 VWRA @ 190.98", "BUY - MARKET 6.28 VWCE"), gold.
+const mpTxChartOfTicker = t => (!t || /^(SAVINGS|DEPOSIT|CFA|BLOCKED):/.test(t) ? null : t === 'XAUT' ? 'XAU' : t);
+const mpTxChartOfLine = s => String(s || '').match(/^(?:Buy|Sell) [\d.,]+ ([A-Z0-9.]+) @/i)?.[1]
+  ?? String(s || '').match(/^(?:BUY|SELL) - \w+ [\d.,]+ ([A-Z0-9.]+)/)?.[1] ?? null;
+
 // One source's next rows: [{day, at, ...}], from `offset`.
 function mpTxSources(account, filter, wallets, edge = null, kind = null) {
   // edge {day, newer}: only what's before that day, newest first; newer: from that day on, oldest first
@@ -107,7 +113,7 @@ function mpTxSources(account, filter, wallets, edge = null, kind = null) {
     if (kind) q = MP_TX_MONEY_KINDS[kind](q);
     return (await page(bounded(q, 'tx_date').order('tx_date', { ascending }).order('id'), offset)).map(r => ({
       day: r.tx_date.slice(0, 10), at: r.tx_date, account: r.account, ...mpTxNamed(plain(r.description) || r.counterparty || '', r.expense_note), type: '',
-      src: r.external_source, xid: r.external_id,
+      src: r.external_source, xid: r.external_id, chart: String(r.currency).toUpperCase() === 'XAU' ? 'XAU' : mpTxChartOfLine(r.description),
       amount: Number(r.amount), unit: r.currency, approx: !!r.amount_approximate || /^ESTIMATED:/.test(r.description || ''),
       balance: r.balance_after == null ? null : Number(r.balance_after), chain: `${r.account}|${r.currency}|${r.product || ''}|${r.external_source}`,
       category: r.income_category || r.expense_category || '', meta: r.income_category ? mpIncomeMeta(r.income_category) : mpExpMeta(r.expense_category) }));
@@ -118,7 +124,7 @@ function mpTxSources(account, filter, wallets, edge = null, kind = null) {
     if (kind) q = MP_TX_DEAL_KINDS[kind](q);
     return (await page(bounded(q, 'trade_date', true).order('trade_date', { ascending }).order('id'), offset)).map(r => {
       const payout = MP_TX_PAYOUTS.has(r.side);
-      return { day: r.trade_date, at: r.trade_date, account: r.account, text: MP_SHORT_NAMES[r.ticker] || r.ticker, type: r.side.replace(/_/g, ' '), side: r.side, bond: /^RU[A-Z0-9]{10}$/.test(r.ticker),
+      return { day: r.trade_date, at: r.trade_date, account: r.account, text: MP_SHORT_NAMES[r.ticker] || r.ticker, type: r.side.replace(/_/g, ' '), side: r.side, chart: mpTxChartOfTicker(r.ticker), bond: /^RU[A-Z0-9]{10}$/.test(r.ticker),
         amount: payout ? Number(r.quantity) : null, qty: payout ? null : Number(r.quantity), price: payout ? null : Number(r.price), unit: r.currency, approx: !!r.estimated };
     });
   };
@@ -308,7 +314,7 @@ function mpTxRowHtml(r, withAccount, display) {
     : `<span>${r.approx ? '≈ ' : ''}${r.qty < 0 ? '−' : ''}${number(r.qty, 8)}${r.price ? ` @ ${shown(r.price, 4)}` : ''}</span>`;
   const sub = [r.type, r.saleLine, r.noteLine, withAccount ? MP_BROKER_SHORT_NAMES[r.account] || r.account : ''].filter(Boolean).join(' · ');
   // (a deal or a coin move has no spending category: the grey mark, to keep the column)
-  return `<div class="mp-tx-row${r.approx ? ' approx' : ''}" data-day="${r.day}"><span title="${mpEscapeHtml(r.category || '')}">${mpExpDot(r.meta || mpExpMeta())}</span><div class="mp-tx-body"><div class="mp-tx-main"><span class="mp-tx-name" title="${mpEscapeHtml(r.full || r.text)}">${mpEscapeHtml(r.text)}</span>${right}</div>${sub ? `<div class="mp-tx-sub">${mpEscapeHtml(sub)}</div>` : ''}</div></div>`;
+  return `<div class="mp-tx-row${r.approx ? ' approx' : ''}${r.chart ? ' mp-tx-chart' : ''}" data-day="${r.day}"${r.chart ? ` data-tx-chart="${mpEscapeHtml(r.chart)}" title="Open its chart"` : ''}><span title="${mpEscapeHtml(r.category || '')}">${mpExpDot(r.meta || mpExpMeta())}</span><div class="mp-tx-body"><div class="mp-tx-main"><span class="mp-tx-name" title="${mpEscapeHtml(r.full || r.text)}">${mpEscapeHtml(r.text)}</span>${right}</div>${sub ? `<div class="mp-tx-sub">${mpEscapeHtml(sub)}</div>` : ''}</div></div>`;
 }
 
 // Puts the feed beside `plot`. display: {code, conv(day, usd)} to show amounts in, null: each in its own currency.
@@ -340,6 +346,10 @@ function mpAccountTxFeed(dlg, plot, account, startDisplay = null) {
     scrolling = setTimeout(() => { scrolling = null; }, 150);
   }, { passive: true });
   list.addEventListener('mouseleave', () => onDay(null));
+  list.addEventListener('click', e => {
+    const t = e.target.closest('[data-tx-chart]')?.dataset.txChart;
+    if (t) mpOpenPriceDialog(...(t === 'XAU' ? mpCurrencyChart('XAU') : [t, MP_SHORT_NAMES[t] || t]));
+  });
   const rowsHtml = rows => {
     let html = '';
     for (const r of rows) {
