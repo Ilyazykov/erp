@@ -140,7 +140,9 @@ async function syncUser(db: any, userId: string, token: string, checkOnly: boole
           const l = lastOf.get(p.instrumentUid) ?? lastOf.get(p.figi);
           const last = money(l?.price);
           if (!l || !(last > 0) || !l.time) continue;
-          const price = round(last + (inst.type === 'bond' ? inst.aci : 0), 6);
+          // a bond's last price is in % of its face: to money, plus the accrued coupon
+          if (inst.type === 'bond' && !(inst.nominal > 0)) continue;
+          const price = round(inst.type === 'bond' ? last * inst.nominal / 100 + inst.aci : last, 6);
           prices.push({ ticker: tickerFor(inst), day: msk(l.time).slice(0, 10), price,
             currency: String(p.currentPrice?.currency ?? '').toUpperCase() });
         }
