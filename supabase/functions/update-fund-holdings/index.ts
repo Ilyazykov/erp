@@ -54,6 +54,7 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { xlsxRows } from '../_shared/xlsx_rows.ts';
 import { fromCron, notFromCron } from '../_shared/cron_auth.ts';
+import { ruFetch } from '../_shared/russian_root_ca.ts';
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36';
 
@@ -64,7 +65,8 @@ interface Holding {
 interface FundList { as_of: string; source: string; holdings: Holding[] }
 
 async function fetchOk(url: string, init: RequestInit = {}) {
-  const res = await fetch(url, { ...init, headers: { 'User-Agent': UA, ...(init.headers ?? {}) } });
+  // (MOEX: its certificate is the Russian root's since 23.11.2026)
+  const res = await (url.startsWith('https://iss.moex.com/') ? ruFetch : fetch)(url, { ...init, headers: { 'User-Agent': UA, ...(init.headers ?? {}) } });
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
   return res;
 }

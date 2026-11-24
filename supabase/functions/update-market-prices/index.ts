@@ -81,6 +81,7 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { fromCron, notFromCron } from '../_shared/cron_auth.ts';
+import { ruFetch } from '../_shared/russian_root_ca.ts';
 
 const MOEX_ISS_BASE = 'https://iss.moex.com/iss';
 const YAHOO_CHART_BASE = 'https://query1.finance.yahoo.com/v8/finance/chart';
@@ -238,6 +239,9 @@ let runStarted = Date.now();
 // (60 s: a search in flight then may still take its ~20 s of retries, and
 // Yahoo and the writes come after)
 const MOEX_SEARCH_BUDGET_MS = 60_000;
+// The leftover Yahoo loop starts no ticker past this (one takes up to ~12 s,
+// then the last write): the function is killed at 150 s.
+const LEFTOVER_BUDGET_MS = 115_000;
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
@@ -252,7 +256,8 @@ async function fetchText(url: string, retries = 2): Promise<string | null> {
       // (the timer runs on through the body: MOEX sends the headers and then,
       // now and then, nothing -- with it cleared here a read hung for good and
       // the run was killed at 150 s, 29.10.2026)
-      const resp = await fetch(url, { headers: HTTP_HEADERS, signal: controller.signal });
+      // (MOEX: its certificate is the Russian root's since 23.11.2026)
+      const resp = await (url.startsWith(MOEX_ISS_BASE) ? ruFetch : fetch)(url, { headers: HTTP_HEADERS, signal: controller.signal });
       if (!resp.ok) {
         lastErr = new Error(`HTTP ${resp.status}`);
         await resp.body?.cancel();
@@ -1047,6 +1052,34 @@ async function runUpdate(): Promise<Record<string, unknown>> {
   }
 
   const rowsOut: PriceRow[] = [];
+  // Writes the rows found since the last write: market_prices, and today's
+  // price into price_history, so the portfolio map's 1-day change has a price
+  // for today (each run overwrites today's row; update-capital-history,
+  // nightly, writes the day's close over it). Called twice, so a run cut short
+  // in the leftover loop keeps what it found before it. Totals over the run.
+  let written = 0, upsertedTotal = 0;
+  let upsertError: string | null = null;
+  const writeNew = async () => {
+    const rows = rowsOut.slice(written);
+    written = rowsOut.length;
+    log(`Upserting ${rows.length} rows into market_prices...`);
+    const { upserted, error } = await upsertMarketPrices(supabase, rows);
+    upsertedTotal += upserted;
+    upsertError ??= error;
+    const todayUtc = new Date().toISOString().slice(0, 10);
+    const histRows = rows
+      .filter((r) => r.price_usd > 0 && r.asset_class !== 'blocked')
+      .map((r) => ({
+        ticker: r.ticker, day: todayUtc, price_usd: r.price_usd,
+        // where the price came from: MOEX, Yahoo, or the market-wide fallbacks ('market')
+        source: r.source === 'moex_iss' ? 'moex' : r.source === 'yahoo_finance' ? 'yahoo' : 'market',
+      }));
+    for (let i = 0; i < histRows.length; i += 200) {
+      const { error: histErr } = await supabase.from('price_history').upsert(histRows.slice(i, i + 200), { onConflict: 'ticker,day' });
+      if (histErr) { log(`price_history: ${histErr.message}`); break; }
+    }
+    return { upserted: upsertedTotal, error: upsertError };
+  };
   const resolved = new Set<string>();
 
   // --- FX rates (<CCY>->USD), published as their own synthetic tickers
@@ -1308,12 +1341,24 @@ async function runUpdate(): Promise<Record<string, unknown>> {
     log('  TSTON: no price from any source');
   }
 
+  // What is found so far is written before the leftover loop: that loop asks
+  // Yahoo two or three ways per ticker, ~12 s each when nothing answers, and
+  // with MOEX unreachable (23-24.11.2026) all ~70 MOEX tickers fell through to
+  // it, the run was killed at 150 s, and nothing was written -- not even the
+  // US stocks and crypto it had.
+  await writeNew();
+
   // --- everything left over: try as a plain US stock, then as a
-  //     Western-exchange ETF with common suffixes ---
+  //     Western-exchange ETF with common suffixes; none started past
+  //     LEFTOVER_BUDGET_MS, so the second write below still happens ---
   const leftover = tickers.filter(
     (t) => !resolved.has(t) && classifyTicker(t) === 'moex_share_or_etf_or_other' && !(t in moexHits),
   );
-  for (const ticker of leftover) {
+  for (const [n, ticker] of leftover.entries()) {
+    if (Date.now() - runStarted > LEFTOVER_BUDGET_MS) {
+      log(`Out of time, ${leftover.length - n} left at their last price: ${leftover.slice(n).join(', ')}`);
+      break;
+    }
     let hit = await fetchUsStockPrice(ticker);
     let assetClass = 'us_stock';
     let sourceSymbol = ticker;
@@ -1359,23 +1404,7 @@ async function runUpdate(): Promise<Record<string, unknown>> {
     if (noApiPrice.length) console.warn(`market prices: no price from Bybit/Yahoo/MOEX for ${noApiPrice.length}: ${noApiPrice.sort().join(', ')}`);
   }
 
-  log(`Upserting ${rowsOut.length} rows into market_prices...`);
-  const { upserted, error } = await upsertMarketPrices(supabase, rowsOut);
-
-  // Today's price goes into price_history too, so the portfolio map's 1-day change has a price for today.
-  // Each run overwrites today's row; update-capital-history (nightly) writes the day's close over it.
-  const todayUtc = new Date().toISOString().slice(0, 10);
-  const histRows = rowsOut
-    .filter((r) => r.price_usd > 0 && r.asset_class !== 'blocked')
-    .map((r) => ({
-      ticker: r.ticker, day: todayUtc, price_usd: r.price_usd,
-      // where the price came from: MOEX, Yahoo, or the market-wide fallbacks ('market')
-      source: r.source === 'moex_iss' ? 'moex' : r.source === 'yahoo_finance' ? 'yahoo' : 'market',
-    }));
-  for (let i = 0; i < histRows.length; i += 200) {
-    const { error: histErr } = await supabase.from('price_history').upsert(histRows.slice(i, i + 200), { onConflict: 'ticker,day' });
-    if (histErr) { log(`price_history: ${histErr.message}`); break; }
-  }
+  const { upserted, error } = await writeNew();
 
   return {
     total_tickers: tickers.length,

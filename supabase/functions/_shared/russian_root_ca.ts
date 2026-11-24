@@ -1,8 +1,10 @@
 // The Russian Trusted Root CA (the Ministry of Digital Development), which
-// T-Bank's API certificate chains to -- not in the usual trust stores. Trusted
-// only by the one HTTP client sync-tbank makes for invest-public-api.tbank.ru
-// (Deno.createHttpClient caCerts): every other request of every function
-// verifies against the default roots only.
+// T-Bank's API certificate chains to, and MOEX ISS's since 23.11.2026 19:00 UTC
+// (every MOEX request failed with "invalid peer certificate: UnknownIssuer"
+// and the prices stopped) -- not in the usual trust stores. Trusted only by
+// the HTTP clients made for those hosts (Deno.createHttpClient caCerts:
+// tinvest.ts, ruFetch below): every other request verifies against the
+// default roots only.
 //
 // Taken from gosuslugi (gu-st.ru/content/Other/doc/russian_trusted_root_ca.cer)
 // and checked 2026-10-23 against the root T-Bank's server sends:
@@ -43,3 +45,11 @@ EYVMxjh8zNbFuoc7fzvvrFILLe7ifvEIUqSVIC/AzplM/Jxw7buXFeGP1qVCBEHq
 391d/9RAfaZ12zkwFsl+IKwE/OZxW8AHa9i1p4GO0YSNuczzEm4=
 -----END CERTIFICATE-----
 `;
+
+// fetch for a host whose certificate chains to the Russian root (iss.moex.com):
+// the default roots plus this one, for these requests only.
+let ruClient: Deno.HttpClient | null = null;
+export function ruFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  ruClient ??= Deno.createHttpClient({ caCerts: [RUSSIAN_TRUSTED_ROOT_CA] });
+  return fetch(url, { ...init, client: ruClient } as RequestInit);
+}

@@ -32,6 +32,7 @@
 
 import { earnPositions, recomputeExchange, type BalanceRow, type ExchangeWallet } from './exchange_balances.ts';
 import { money, tinvest } from './tinvest.ts';
+import { ruFetch } from './russian_root_ca.ts';
 
 // The Telegram Wallet's balance rules, shared with import-telegram-wallet.
 export const TELEGRAM_RULES = {
@@ -87,7 +88,7 @@ async function moexJson(url: string) {
   let last: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+      const res = await ruFetch(url, { signal: AbortSignal.timeout(6000) }); // the Russian root's certificate (23.11.2026)
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return await res.json();
     } catch (err) { last = err; }

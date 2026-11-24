@@ -27,6 +27,7 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { fromCron, notFromCron } from '../_shared/cron_auth.ts';
+import { ruFetch } from '../_shared/russian_root_ca.ts';
 
 // Price fetching stops here (the function has ~150 s in all).
 const TIME_BUDGET_MS = 100_000;
@@ -64,7 +65,8 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const UA_TIMED = () => ({ headers: UA, signal: AbortSignal.timeout(15_000) });
 async function getJson(url: string) {
   try {
-    const res = await fetch(url, UA_TIMED());
+    // (MOEX: its certificate is the Russian root's since 23.11.2026)
+    const res = await (url.startsWith(ISS) ? ruFetch : fetch)(url, UA_TIMED());
     return res.ok ? await res.json() : null;
   } catch { return null; }
 }
