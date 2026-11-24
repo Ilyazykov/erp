@@ -273,14 +273,21 @@ function mpAccountTxFeed(dlg, plot, account, startDisplay = null) {
   let display = startDisplay, shownRows = [];
   // the row under the mouse: its day, for the mark on the chart
   let onDay = () => {};
-  list.addEventListener('mouseover', e => onDay(e.target.closest('.mp-tx-row')?.dataset.day || null));
+  // (not while scrolling: rows passing under a still mouse would make the line jump and blink)
+  let scrolling = null;
+  list.addEventListener('mouseover', e => { if (!scrolling) onDay(e.target.closest('[data-day]')?.dataset.day || null); });
+  list.addEventListener('scroll', () => {
+    if (!scrolling) onDay(null);
+    clearTimeout(scrolling);
+    scrolling = setTimeout(() => { scrolling = null; }, 150);
+  }, { passive: true });
   list.addEventListener('mouseleave', () => onDay(null));
   const rowsHtml = rows => {
     let html = '';
     for (const r of rows) {
       if (r.day !== lastDay) {
         lastDay = r.day;
-        html += `<div class="mp-tx-day">${new Date(`${r.day}T00:00:00Z`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })}</div>`;
+        html += `<div class="mp-tx-day" data-day="${r.day}">${new Date(`${r.day}T00:00:00Z`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })}</div>`;
       }
       html += mpTxRowHtml(r, account === MP_ALL_ACCOUNTS, display);
     }

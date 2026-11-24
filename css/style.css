@@ -41,7 +41,7 @@
   .data-table th:last-child, .data-table td:last-child { background: #171d25; }
   .data-table tbody tr:hover { background: #13191f; }
   html:has(dialog.mp-chart-dialog[open]) { overflow: hidden; scrollbar-gutter: stable; }
-  dialog.mp-chart-dialog::backdrop { background: rgba(1, 4, 9, 0.72); backdrop-filter: blur(2px); }
+  dialog.mp-chart-dialog::backdrop { background: rgba(1, 4, 9, 0.78); }
   .mp-account-body { position: relative; display: flex; gap: 12px; }
   .mp-day-mark { display: none; position: absolute; width: 0; border-left: 1px dashed rgba(230, 237, 243, 0.75); pointer-events: none; z-index: 2; }
   .mp-account-body > :first-child { flex: 1; min-width: 0; }
@@ -49,7 +49,7 @@
   .mp-tx-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 30px; padding: 6px 10px; border-bottom: 1px solid #30363d; font-size: 0.85rem; }
   .mp-tx-head .btn { padding: 2px 8px; font-size: 0.78rem; }
   .mp-tx-list { flex: 1; overflow-y: auto; overscroll-behavior: contain; font-size: 0.82rem; }
-  .mp-tx-day { position: sticky; top: 0; padding: 4px 10px; background: #171d25; color: #8b949e; font-size: 0.75rem; font-weight: 600; }
+  .mp-tx-day { position: sticky; top: 0; z-index: 1; padding: 4px 10px; background: #171d25; color: #8b949e; font-size: 0.75rem; font-weight: 600; }
   .mp-tx-row { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid #1e2830; }
   .mp-tx-body { flex: 1; min-width: 0; }
   .mp-tx-row.approx { opacity: 0.65; }
@@ -59,7 +59,7 @@
   .mp-tx-main .neg { color: #e05252; }
   .mp-tx-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mp-tx-sub { color: #6a7381; font-size: 0.74rem; }
-  .mp-tx-end { min-height: 1px; margin: 0; padding: 6px 10px; text-align: center; }
+  .mp-tx-end { box-sizing: border-box; min-height: 32px; margin: 0; padding: 6px 10px; text-align: center; }
   @media (max-width: 900px) { .mp-account-body { flex-direction: column; } .mp-tx-feed { width: 100%; height: 50vh; } .mp-account-body > :first-child { flex: none; } }
   .data-table tbody tr:hover td.ticker, .data-table tbody tr:hover td:last-child { background: #1a222b; }
   .data-table tr.total-row td { border-top: 2px solid #2a3540; border-bottom: none; background: #1c242e; }
