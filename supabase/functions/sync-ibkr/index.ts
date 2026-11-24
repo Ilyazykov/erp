@@ -37,6 +37,7 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { fromCron, notFromCron } from '../_shared/cron_auth.ts';
 import { removeCoveredSnowball } from '../_shared/statement_priority.ts';
+import { requestCapitalRefreshAll } from '../_shared/capital_refresh.ts';
 
 const ACCOUNT = 'IBKR';
 const SOURCE = 'ibkr_csv';
@@ -369,6 +370,8 @@ Deno.serve(async (req) => {
           console.warn(`ibkr prices not updated for ${c.user_id.slice(0, 8)}: ${String(err)}`);
         }
       }
+      // the prices into the capital history (the 1-day map reads it)
+      if (Object.values(written).some(v => typeof v === 'number' && v > 0)) await requestCapitalRefreshAll(db);
       return json({ users: Object.keys(written).length, written });
     }
     // The daily job (every 10 minutes, 04:00-07:50 UTC -- migration ...095)

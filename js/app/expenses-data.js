@@ -15,6 +15,7 @@ const MP_EXP_CATS = [
   ['Nizhny flat bills', '🏢', '#c4501b'],
   ['Bills & utilities', '💡', '#ffb020'],
   ['Phone & internet', '📱', '#ffa657'],
+  ['Household', '🧽', '#e8590c'],
   ['Food delivery', '🛵', '#7ee787'],
   ['Restaurants & cafés', '🍽', '#3fb950'],
   ['Groceries', '🛒', '#1a7f37'],
@@ -41,6 +42,7 @@ const MP_EXP_CATS = [
   ['Shopping', '🛍', '#d29922'],
   ['Health & sport', '💊', '#db61a2'],
   ['Psychotherapy', '🛋', '#a0457e'],
+  ['Personal care', '🪥', '#f0a3c8'],
   ['Education', '🎓', '#ffa198'],
   ['Subscriptions & services', '🧾', '#ffdf5d'],
   ['Relationships', '💝', '#ff6b9d'],
@@ -54,14 +56,14 @@ const MP_EXP_CATS = [
 // transport: of one blue; the travel: of one purple; the fun: of one teal; the shopping: of one gold; the housing: of one orange; the health: of one pink) --
 // in the donut and the list, ordered by the group's total, then each one's.
 const MP_EXP_GROUPS = { 'Travel restaurants': 'Food', 'Travel groceries': 'Food', 'Travel food delivery': 'Food', 'Rent & housing': 'Housing', 'Nizhny flat bills': 'Housing', 'Bills & utilities': 'Housing',
-  'Phone & internet': 'Housing',
+  'Phone & internet': 'Housing', 'Household': 'Housing',
   'Food delivery': 'Food', 'Restaurants & cafés': 'Food', 'Groceries': 'Food',
   'Taxi': 'Transport', 'Public transport': 'Transport', 'Other transport': 'Transport',
   'Flights': 'Travel', 'Hotels': 'Travel', 'Visas': 'Travel', 'Travel entertainment': 'Travel',
   'Travel taxi': 'Travel', 'Travel public transport': 'Travel', 'Travel souvenirs': 'Travel', 'Other travel': 'Travel',
   'Entertainment': 'Fun', 'Games': 'Fun', 'Cinema': 'Fun',
   'Clothes': 'Shopping', 'Electronics': 'Shopping', 'Gifts': 'Shopping', 'Shopping': 'Shopping',
-  'Health & sport': 'Health', 'Psychotherapy': 'Health' };
+  'Health & sport': 'Health', 'Psychotherapy': 'Health', 'Personal care': 'Health' };
 // The income bars' kinds (income_rules' categories), bottom to top
 const MP_INCOME_COLORS = { Salary: '#56d4a0', 'Flat rent': '#79c0ff', Interest: '#39c5cf', Coupons: '#e3b341',
   Cashback: '#ff7b72', Other: '#d2a8ff' };

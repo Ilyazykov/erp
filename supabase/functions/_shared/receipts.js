@@ -115,6 +115,9 @@ export function parseReceiptCsv(text) {
       unitPriceList: parseNum(cell(cells, 'unit_price_list')),
       unitPricePaid: parseNum(cell(cells, 'unit_price_paid')),
       lineTotal, barcode: cell(cells, 'barcode') || null, note: cell(cells, 'note') || null,
+      // optional: the line's expense category when it isn't the purchase's (socks on a grocery
+      // receipt: Household) -- refresh_expenses moves its share there (migration ...255)
+      category: cell(cells, 'category') || null,
       // optional: where a delivery service brought it from (Wolt's restaurant) -- the place
       venue: cell(cells, 'venue') || null,
       // optional: paid online (MyMagti's top-ups) -- no place
@@ -165,7 +168,7 @@ export function parseReceiptCsv(text) {
       lines: lines2.map(r => ({
         lineNo: r.lineNo, namePrinted: r.item, nameEn: r.itemEn, qty: r.qty, unit: r.unit,
         unitPriceList: r.unitPriceList, unitPricePaid: r.unitPricePaid, lineTotal: r.lineTotal,
-        barcode: r.barcode, note: r.note,
+        barcode: r.barcode, note: r.note, category: r.category,
       })),
       warnings, otherAmount: other,
     });

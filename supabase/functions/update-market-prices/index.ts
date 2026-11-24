@@ -82,6 +82,7 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { fromCron, notFromCron } from '../_shared/cron_auth.ts';
 import { ruFetch } from '../_shared/russian_root_ca.ts';
+import { requestCapitalRefreshAll } from '../_shared/capital_refresh.ts';
 
 const MOEX_ISS_BASE = 'https://iss.moex.com/iss';
 const YAHOO_CHART_BASE = 'https://query1.finance.yahoo.com/v8/finance/chart';
@@ -1423,6 +1424,8 @@ async function runUpdate(): Promise<Record<string, unknown>> {
   }
 
   const { upserted, error } = await writeNew();
+  // today's prices: rebuild the capital history (the 1-day map reads it)
+  if (upsertedTotal) await requestCapitalRefreshAll(supabase);
 
   return {
     total_tickers: tickers.length,

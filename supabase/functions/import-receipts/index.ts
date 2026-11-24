@@ -9,7 +9,7 @@
 //
 // CSV shape (this project's own, not a bank or shop export):
 //   receipt,date,time,store,chain,city,country,currency,total,line,item,
-//   item_en,qty,unit,unit_price_list,unit_price_paid,line_total,barcode,note
+//   item_en,qty,unit,unit_price_list,unit_price_paid,line_total,barcode,note[,category]
 // Parsing, per-receipt consistency, warnings and the idempotency key
 // (`<date>|<printed receipt>|<total>`) all live in _shared/receipts.js,
 // shared with tests/receipts.test.mjs so the rule is tested once, not
@@ -93,7 +93,7 @@ Deno.serve(async (req) => {
         const part = (parts ?? [])[0];
         if (part) {
           const { data: old, error: oErr } = await supabase.from('receipt_items')
-            .select('line_no, name_printed, name_en, product_id, qty, unit, unit_price_list, unit_price_paid, line_total, barcode, note')
+            .select('line_no, name_printed, name_en, product_id, qty, unit, unit_price_list, unit_price_paid, line_total, barcode, note, category')
             .eq('receipt_id', part.id);
           if (oErr) throw new Error(oErr.message);
           const hasVenue = r.lines.some(l => l.lineNo <= 100), hasWolt = r.lines.some(l => l.lineNo > 100);
@@ -175,7 +175,7 @@ Deno.serve(async (req) => {
         rows.push({
           user_id: user.id, receipt_id: receiptId, line_no: l.lineNo, name_printed: l.namePrinted, name_en: l.nameEn,
           product_id: productId, qty: l.qty, unit: l.unit, unit_price_list: l.unitPriceList, unit_price_paid: l.unitPricePaid,
-          line_total: l.lineTotal, barcode: l.barcode, note: l.note,
+          line_total: l.lineTotal, barcode: l.barcode, note: l.note, category: l.category,
         });
       }
       rows.push(...keptRows);

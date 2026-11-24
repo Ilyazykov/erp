@@ -33,6 +33,7 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { fromCron, notFromCron } from '../_shared/cron_auth.ts';
 import { removeCoveredSnowball } from '../_shared/statement_priority.ts';
 import { ACCOUNT, buildFromCashRows, type CashRow, SOURCE } from '../_shared/freedom24.ts';
+import { requestCapitalRefreshAll } from '../_shared/capital_refresh.ts';
 
 // Keys work only in the cabinet that issued them.
 const API = 'https://freedom24.com/api/';
@@ -331,6 +332,8 @@ Deno.serve(async (req) => {
           console.warn(`freedom24 prices not updated for ${c.user_id.slice(0, 8)}: ${String(err)}`);
         }
       }
+      // the prices into the capital history (the 1-day map reads it)
+      if (Object.values(written).some(v => typeof v === 'number' && v > 0)) await requestCapitalRefreshAll(db);
       return json({ users: Object.keys(written).length, written });
     }
     // The daily job: users whose slot has come and who aren't synced today; a
