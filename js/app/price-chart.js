@@ -60,6 +60,7 @@ const MP_PRICE_PERIODS = [['1m', 1], ['3m', 3], ['6m', 6], ['YTD', 'ytd'], ['1y'
 // a chart's sector or bar whose point carries a ticker (customdata): its price chart
 // A chart's deal marks: one a day per account, paper and currency. An order filled in parts is several
 // trades on one spot, and the hover showed only the top one. Marks only: the average counts each trade.
+const MP_NKD_PER_DEAL = ['sber_broker_html', 'tbank_broker_xlsx'];   // the others' accrued is a bond's
 function mpMergeDayDeals(deals) {
   const byKey = new Map();
   for (const d of deals) {
@@ -67,6 +68,9 @@ function mpMergeDayDeals(deals) {
     const m = byKey.get(key);
     const q = Number(d.quantity), p = Number(d.price);
     if (!m) { byKey.set(key, { ...d, quantity: q, n: 1, cost: p > 0 ? q * p : null }); continue; }
+    const was = m.quantity, nkd = Number(d.nkd) || 0, mNkd = Number(m.nkd) || 0;
+    m.nkd = MP_NKD_PER_DEAL.includes(d.external_source) ? mNkd + nkd : (mNkd * was + nkd * q) / (was + q);
+    m.fee_tax = (Number(m.fee_tax) || 0) + (Number(d.fee_tax) || 0);
     m.quantity += q;
     m.n += 1;
     m.cost = m.cost != null && p > 0 ? m.cost + q * p : null;
@@ -75,17 +79,18 @@ function mpMergeDayDeals(deals) {
   return [...byKey.values()].map(({ cost, ...m }) => ({ ...m, price: cost != null && m.quantity > 0 ? cost / m.quantity : null }));
 }
 
-// What a bond's buy cost a unit, in the deal's currency: the price, the accrued coupon paid and the fee -- as the
+// What a bond's deal came to a unit, in the deal's currency: the price, the accrued coupon and the fee (paid on a buy,
+// taken off a sale) -- as the
 // chart's line, which has the accrued in it. T-Bank's and Sber's reports give the price in % of the face and the
 // accrued for the whole deal, Alfa's the price in money and the accrued a bond. atNative: the chart's price that day
 // in the deal's currency, to tell % from money and to see the face (1000, or what's left after amortisations).
 // null: not a bond.
-function mpBondBuyCost(d, atNative) {
+function mpBondUnitMoney(d, atNative) {
   const q = Number(d.quantity), price = Number(d.price);
   if (!/^(SU|RU)[0-9A-Z]{10}$/.test(String(d.ticker)) || !(q > 0) || !(price > 0)) return null;
-  const nkd = (Number(d.nkd) || 0) / (['sber_broker_html', 'tbank_broker_xlsx'].includes(d.external_source) ? q : 1);
+  const nkd = (Number(d.nkd) || 0) / (MP_NKD_PER_DEAL.includes(d.external_source) ? q : 1);
   const dc = String(d.currency || '').toUpperCase();
-  const fee = String(d.fee_currency || dc).toUpperCase() === dc ? (Number(d.fee_tax) || 0) / q : 0;
+  const fee = (String(d.fee_currency || dc).toUpperCase() === dc ? (Number(d.fee_tax) || 0) / q : 0) * (d.side === 'sell' ? -1 : 1);
   const inPercent = atNative > 0 ? price / atNative < 0.5 : price < 300;
   if (!inPercent) return price + nkd + fee;
   let face = 1000;
@@ -607,6 +612,8 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     const from = startOf(period);
     const pts = prices.filter(p => p.day >= from).map(p => ({ day: p.day, v: val(p.day, p.price_usd) })).filter(p => p.v != null);
     const priceOn = day => { const p = [...pts].reverse().find(x => x.day <= day) ?? pts[0]; return p?.v ?? null; };
+    // the chart's price of a day in a deal's currency (null: the chart is in another one)
+    const nativeAt = (day, at, dc) => (at == null ? null : dc === unit ? at : unit === 'USD' && dc === ccy && rateOn(day) ? at / rateOn(day) : null);
     // a money-market fund's or a deposit's "buys" and "sales" are the money moved in and out of it
     // (a withdrawal to the account is no sale): none on its currency's rate
     const viaOn = dlg.querySelector('#mp_price_via').checked;
@@ -659,7 +666,10 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     const dealMoney = d => {
       const sum = (v, c) => (c === 'USD' ? `$${v.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : `${v.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${c}`);
       if (d.money != null) return sum(d.money, 'USD');
-      if (Number(d.price) > 0) return sum(Number(d.quantity) * Number(d.price), String(d.currency || ccy).toUpperCase());
+      const dc = String(d.currency || ccy).toUpperCase();
+      const bond = mpBondUnitMoney(d, nativeAt(d.trade_date, priceOn(d.trade_date), dc));
+      if (bond != null) return sum(Number(d.quantity) * bond, dc);
+      if (Number(d.price) > 0) return sum(Number(d.quantity) * Number(d.price), dc);
       const at = priceOn(d.trade_date);
       return at == null ? '—' : `~${fmt(Number(d.quantity) * at)}`;
     };
@@ -760,9 +770,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
           const dc = String(d.currency || ccy).toUpperCase();
           // the broker's fee is in the cost (Sber's 297.99 for SBER is the prices and the fees over 91 shares)
           const fee = String(d.fee_currency || dc).toUpperCase() === dc ? Number(d.fee_tax) || 0 : 0;
-          const dayRate = fx.length ? rateOn(d.trade_date) : null;
-          const atNative = at == null ? null : dc === unit ? at : unit === 'USD' && dc === ccy && dayRate ? at / dayRate : null;
-          const bondCost = mpBondBuyCost(d, atNative);
+          const bondCost = mpBondUnitMoney(d, nativeAt(d.trade_date, at, dc));
           let px = bondCost ?? (Number(d.price) > 0 ? Number(d.price) + fee / q : null);
           if (px != null && dc !== unit) {
             const r = fx.length ? rateOn(d.trade_date) : null;   // USD per unit of the paper's currency

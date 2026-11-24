@@ -113,9 +113,12 @@ async function yahooSplits(symbol: string, from: string): Promise<{ day: string;
   })).filter(x => x.ratio > 0 && x.ratio !== 1);
 }
 
-// ---- MOEX ISS history: per trading day the most-traded board's close ----
+// ---- MOEX ISS history: per trading day the most-traded board's close. A bond: of the boards in its face's
+// currency -- ACCINT is in the board's (a yuan bond on the rouble board TQCB: 230.58 for TQOY's 21.04 CNY);
+// only another board that day: its % of the face, without the accrued ----
 async function moexHistory(secid: string, market: 'shares' | 'bonds', from: string) {
-  const best = new Map<string, { vol: number; price: number; currency: string }>();
+  const best = new Map<string, { vol: number; price: number; currency: string; own: boolean }>();
+  const ccyOf = (x: unknown) => { const v = String(x ?? 'RUB'); return v === 'SUR' || v === 'RUR' ? 'RUB' : v; };
   for (let start = 0; start < 20000 && timeLeft() > 5000; start += 100) {
     const j = await getJson(`${ISS}/history/engines/stock/markets/${market}/securities/${encodeURIComponent(secid)}.json`
       + `?from=${from}&start=${start}&iss.meta=off`);
@@ -129,16 +132,18 @@ async function moexHistory(secid: string, market: 'shares' | 'bonds', from: stri
       if (close === null || close === undefined) continue;
       const vol = Number(row[c('VOLUME')] ?? 0);
       let price = Number(close);
-      let currency = String(row[c('CURRENCYID')] ?? row[c('FACEUNIT')] ?? 'RUB');
+      let currency = ccyOf(row[c('CURRENCYID')] ?? row[c('FACEUNIT')]);
+      let own = true;
       if (market === 'bonds') {
         const face = Number(row[c('FACEVALUE')] ?? 0);
         if (!face) continue;
-        price = face * price / 100 + Number(row[c('ACCINT')] ?? 0);
-        currency = String(row[c('FACEUNIT')] ?? row[c('CURRENCYID')] ?? 'RUB');
+        const faceCcy = ccyOf(row[c('FACEUNIT')] ?? row[c('CURRENCYID')]);
+        own = currency === faceCcy;
+        price = face * price / 100 + (own ? Number(row[c('ACCINT')] ?? 0) : 0);
+        currency = faceCcy;
       }
-      if (currency === 'SUR') currency = 'RUB';
       const cur = best.get(day);
-      if (!cur || vol > cur.vol) best.set(day, { vol, price, currency });
+      if (!cur || (own && !cur.own) || (own === cur.own && vol > cur.vol)) best.set(day, { vol, price, currency, own });
     }
     if (rows.length < 100) break;
     await sleep(80);
