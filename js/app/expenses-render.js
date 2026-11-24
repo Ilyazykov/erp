@@ -65,7 +65,7 @@ async function mpExpDrawSpent(c) {
     // newest first, to the second -- rows with no time in their statement too,
     // by the importer's 00:00:SS (their order within the day)
     list.slice().sort((a, b) => b.day.localeCompare(a.day) || String(b.ts).localeCompare(String(a.ts))).map(r => `<tr><td style="white-space:nowrap">${r.day}${mpTimeHtml(r)}</td><td style="text-align:left"${mpShortDesc(r.description) !== r.description ? ` title="${esc(r.description)}"` : ''}>${esc(mpShortDesc(r.description))} ${mpLinkHtml(r)}</td>
-      <td class="exp-cat-set" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to change the category" style="text-align:left;cursor:pointer;color:#c9d1d9">${esc(r.cat || '—')}</td>
+      <td class="exp-cat-set" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}"${r.split ? ' data-split="1" title="Set on the receipt\'s lines: click to open it"' : ' title="Click to change the category"'} style="text-align:left;cursor:pointer;color:#c9d1d9">${esc(r.cat || '—')}</td>
       <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to set the place" style="text-align:left;max-width:180px;cursor:pointer">${mpPlaceHtml(r.place, r.deliveredTo)}</td>
       <td class="exp-items" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to see / add items" style="text-align:left;cursor:pointer">${mpItemsHtml(mpExpCache?.receiptOf?.get(`${r.src}|${r.xid}`))}</td>
       ${r.src === 'receipt_csv'

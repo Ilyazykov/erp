@@ -18,7 +18,7 @@ function mpStoreKey(chain, storePrinted) {
 // match_receipts). Editing a manual receipt again replaces all its lines.
 async function mpEditItems(src, xid) {
   const rows = mpExpRowsOf(src, xid);
-  const r = rows[0];
+  const r = rows.find(x => !x.split) || rows[0];
   if (!r) return;
   const receipt = mpExpCache?.receiptOf?.get(`${src}|${xid}`);
   // The lines come fresh from the database every time the dialog opens: the
@@ -52,12 +52,13 @@ async function mpEditItems(src, xid) {
         <td>${l.unit_price_paid != null ? mpFormatCurrency(l.unit_price_paid, receipt.currency || r.ccy, true) : '—'}</td>
         <td>${mpFormatCurrency(l.line_total, receipt.currency || r.ccy, true)}</td>
         <td>${usdOf(Number(l.line_total))}</td>
+        <td style="text-align:left">${l.is_other || receipt.source === 'apple' ? '' : `<select class="item-cat" data-item="${l.line_no}" title="The line's category; none: the purchase's" style="width:auto;color:${l.category ? '#c9d1d9' : '#6a7381'}"><option value="">${mpEscapeHtml(r.cat || '—')}</option>${MP_EXP_CATS.map(([name]) => `<option${name === l.category ? ' selected' : ''}>${mpEscapeHtml(name)}</option>`).join('')}</select>`}</td>
         <td class="item-note" data-item="${l.line_no}" style="cursor:pointer;color:#8b949e">${mpNoteHtml(l.note)}</td></tr>`;
     const form = mpDialog(`Items · ${r.day} · ${mpShortDesc(r.description)}`, `
       <p class="note" style="margin:0">${receipt.source === 'apple'
         ? `From Apple's purchase history · order ${mpEscapeHtml(receipt.key || '')}, ${mpEscapeHtml(receipt.day || '')}`
         : `${mpEscapeHtml(receipt.source === 'receipt_csv' ? 'From a receipt' : 'From the statement')}${receipt.chain ? ` · ${mpEscapeHtml(receipt.chain)}` : ''}${receipt.store ? ` · ${mpEscapeHtml(receipt.store)}` : ''}`}</p>
-      <table class="data-table"><thead><tr><th style="text-align:left">Item</th><th>Qty</th><th>Price</th><th>Line</th><th>USD</th><th style="text-align:left">Note</th></tr></thead>
+      <table class="data-table"><thead><tr><th style="text-align:left">Item</th><th>Qty</th><th>Price</th><th>Line</th><th>USD</th><th style="text-align:left">Category</th><th style="text-align:left">Note</th></tr></thead>
         <tbody>${real.map(lineRow).join('')}${other ? lineRow(other) : ''}</tbody></table>
       <label>Receipt note <input name="rnote" value="${mpEscapeHtml(receipt.note || '')}" style="${MP_FIELD}"></label>`);
     form.querySelector('[data-act=save]').textContent = 'Close';
@@ -69,6 +70,18 @@ async function mpEditItems(src, xid) {
       }
       form.closest('dialog').close();
     });
+    // a line's own category (migration ...255): its share of the purchase moves there when the
+    // expenses are rebuilt -- within a minute (the database asks for it on the change)
+    form.querySelectorAll('.item-cat').forEach(sel => sel.addEventListener('change', async () => {
+      const lineNo = Number(sel.dataset.item);
+      const line = receipt.lines.find(l => l.line_no === lineNo);
+      const cat = sel.value || null;
+      const { error } = await sb.from('receipt_items').update({ category: cat }).eq('receipt_id', receipt.id).eq('line_no', lineNo);
+      if (error) { alert(error.message); sel.value = line?.category || ''; return; }
+      if (line) line.category = cat;
+      sel.style.color = cat ? '#c9d1d9' : '#6a7381';
+      sel.title = 'Saved: the expenses show it within a minute';
+    }));
     form.querySelectorAll('.item-note').forEach(cell => cell.addEventListener('click', async () => {
       const lineNo = Number(cell.dataset.item);
       const line = receipt.lines.find(l => l.line_no === lineNo);
@@ -450,7 +463,9 @@ async function mpOpenProductView(productId) {
 }
 // The category of a row, set by hand (expense_manual): it stays on re-uploads (manual_categories).
 function mpEditCategory(src, xid) {
-  const rows = mpExpRowsOf(src, xid);
+  // the purchase's own rows: not its lines split off by category (migration ...255), not what
+  // the exchange lost on it (Fees), not a refund of it -- those keep theirs
+  const rows = mpExpRowsOf(src, xid).filter(x => x.id != null && !x.split && !/^(Lost on the exchange|Refund): /.test(x.description || ''));
   const r = rows[0];
   if (!r) return;
   const opts = MP_EXP_CATS.map(([name]) => `<option${name === r.cat ? ' selected' : ''}>${mpEscapeHtml(name)}</option>`).join('');
@@ -464,7 +479,7 @@ function mpEditCategory(src, xid) {
     if (error) { alert(error.message); return; }
     // the expenses tab's own copy too (refresh_expenses sets it the same way): without it
     // a reload showed the old category until the next run (16.11.2026)
-    const { error: eErr } = await sb.from('expenses').update({ category: cat }).eq('external_source', src).eq('external_id', xid);
+    const { error: eErr } = await sb.from('expenses').update({ category: cat }).in('id', rows.map(x => x.id));
     if (eErr) { alert(eErr.message); return; }
     rows.forEach(x => { x.cat = cat; });
     form.closest('dialog').close();
@@ -593,6 +608,7 @@ function mpEditIncomeType(src, xid) {
 document.getElementById('expenses').addEventListener('click', e => {
   if (!mpIsSignedIn || e.target.closest('a')) return;
   const catCell = e.target.closest('.exp-cat-set');
+  if (catCell?.dataset.split) { e.stopPropagation(); mpEditItems(catCell.dataset.src, catCell.dataset.xid); return; }
   if (catCell?.dataset.src) { e.stopPropagation(); mpEditCategory(catCell.dataset.src, catCell.dataset.xid); return; }
   const link = e.target.closest('.exp-link');
   if (link?.dataset.src) { e.stopPropagation(); mpLinkTransfer(link.dataset.src, link.dataset.xid); return; }

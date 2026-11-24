@@ -93,7 +93,7 @@ const mpIncomeMeta = k => ({ icon: ({ Salary: '💼', 'Flat rent': '🏠' })[k] 
 const mpExpDot = ({ icon, color }) => `<div class="exp-dot" style="background:${color}33;color:${color}">${icon}</div>`;
 let mpExpCache = null;
 // receipt_lines' columns (migration ...179): the tab's bulk load and the Items dialog's fresh read
-const MP_RECEIPT_LINE_COLS = 'receipt_id, line_no, name_printed, name_en, product_id, qty, unit, unit_price_list, unit_price_paid, line_total, note, is_other';
+const MP_RECEIPT_LINE_COLS = 'receipt_id, line_no, name_printed, name_en, product_id, qty, unit, unit_price_list, unit_price_paid, line_total, note, is_other, category';
 const mpExpFolded = new Set();  // groups folded in the list of the expenses tab
 const mpExpOpen = new Set();    // categories open onto their rows -- kept across re-renders
 // range {from, to} (YYYY-MM-DD): only the rows of that period; null: the whole history
@@ -115,7 +115,7 @@ async function mpExpLoad(range) {
   };
   const [rows, eur, rub] = await Promise.all([
     page(() => within(sb.from('expenses')
-      .select('id, day, paid_day, paid_at, account, description, amount, currency, usd, category, counted, extrapolated, note, external_source, external_id'), 'day')
+      .select('id, day, paid_day, paid_at, account, description, amount, currency, usd, category, counted, extrapolated, note, external_source, external_id, receipt_split'), 'day')
       .order('day').order('id')),
     // for showing in euros or roubles
     ...['EUR', 'RUB'].map(c => page(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', c).order('day'))),
@@ -138,7 +138,9 @@ async function mpExpLoad(range) {
     const at = r.paid_at ? r.paid_at.slice(11, 16) : '';
     const row = { id: r.id, day: r.day, paid_day: r.paid_day, tx_date: r.day, at: at === '00:00' ? '' : at, ts: r.paid_at || r.day, account: r.account, description: r.description,
       amt: Number(r.amount), ccy: r.currency, usd: r.usd == null ? NaN : Number(r.usd), cat: r.category,
-      extrapolated: r.extrapolated, note: r.note, src: r.external_source, xid: r.external_id };
+      extrapolated: r.extrapolated, note: r.note, src: r.external_source, xid: r.external_id,
+      // a receipt's lines of another category, split off the purchase (migration ...255)
+      split: !!r.receipt_split };
     (r.counted ? spent : skipped).push(row);
   }
   // income (migration 141): none yet or no table -- no line
