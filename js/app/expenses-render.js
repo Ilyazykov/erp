@@ -783,8 +783,15 @@ for (const id of ['exp_from', 'exp_to']) {
   });
 }
 // the page always opens on the calendar month (the first paint loads only it): the period chosen
-// last time isn't restored -- a saved "from – to" opened the month under that label (25.11.2026)
-document.getElementById('exp_period').value = 'cmonth';
+// last time isn't restored -- a saved "from – to" opened the month under that label, and Chrome
+// put back the last year with its dates on a reload (its form restore; autocomplete="off" too)
+function mpExpOpenOnMonth() {
+  document.getElementById('exp_period').value = 'cmonth';
+  mpExpSetPeriod('cmonth', new Date().toISOString().slice(0, 10));
+}
+mpExpOpenOnMonth();
+// back / forward from the browser's page cache: the page as it was left, the month again
+window.addEventListener?.('pageshow', e => { if (e.persisted) { mpExpOpenOnMonth(); if (mpIsSignedIn) mpRenderExpenses(); } });
 try { const saved = localStorage.getItem('mp_exp_ccy'); if (saved) document.getElementById('exp_ccy').value = saved; } catch { /* no storage */ }
 document.getElementById('exp_period').addEventListener('change', e => {
   const today = new Date().toISOString().slice(0, 10);

@@ -271,7 +271,7 @@
     <p class="note">Spending from accounts, cards and cash. Transfers between own accounts, exchanges and investments aren't counted.</p>
     <div class="form-row" style="gap:12px">
       <button class="btn" id="exp_prev" type="button" title="Previous period">‹</button>
-      <select id="exp_period">
+      <select id="exp_period" autocomplete="off">
         <option value="cmonth">this month</option>
         <option value="month">month to today</option>
         <option value="3m">3 months</option>
@@ -280,7 +280,7 @@
         <option value="custom">from – to</option>
       </select>
       <button class="btn" id="exp_next" type="button" title="Next period">›</button>
-      <input type="date" id="exp_from"> – <input type="date" id="exp_to">
+      <input type="date" id="exp_from" autocomplete="off"> – <input type="date" id="exp_to" autocomplete="off">
       <label title="Periods of life_periods: where you lived or travelled, and with whom">where I was <select id="exp_life"><option value="">—</option></select></label>
       <label title="Rent paid for several months at once (Antalya 2022, Novi Sad 01-03.2024): a share in each month it paid for, or all on the day it was paid"><input type="checkbox" id="exp_spread" checked> spread prepaid rent over its months</label>
       <label title="Spending worked out rather than recorded: the cash that left no trace (cash ledger, 2022-2025), card payments of months with no statement"><input type="checkbox" id="exp_extrapolated" checked> extrapolated spending</label>
@@ -619,9 +619,9 @@
 <script src="./js/app/portfolio-pies.js?v=20261123j"></script>
 <script src="./js/app/automation.js?v=20261121b"></script>
 <script src="./js/app/reminders-auth.js?v=20261123f"></script>
-<script src="./js/app/expenses-data.js?v=20261124a"></script>
-<script src="./js/app/expenses-edit.js?v=20261121b"></script>
-<script src="./js/app/expenses-render.js?v=20261124a"></script>
+<script src="./js/app/expenses-data.js?v=20261125a"></script>
+<script src="./js/app/expenses-edit.js?v=20261125a"></script>
+<script src="./js/app/expenses-render.js?v=20261125a"></script>
 <script src="./js/app/invested.js?v=20261123a"></script>
 <script src="./js/app/price-chart.js?v=20261124h"></script>
 <script src="./js/app/account-transactions.js?v=20261124v"></script>
