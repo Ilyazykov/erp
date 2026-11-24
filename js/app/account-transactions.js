@@ -325,7 +325,7 @@ function mpTxRowHtml(r, withAccount, display) {
   // an exchange: the currency's window, the dollar's other side if it's the dollar (one leg alone, as under a currency filter: by its words)
   const isFx = !r.chart && !r.side && !r.coin && (r.fxWith || /döviz|exchange|menjac|otkup|kupoprodaj|конверт|обмен|forex/i.test(r.full || ''));
   const fxWindow = isFx ? (r.unit === 'USD' && r.fxWith ? r.fxWith : r.unit) : null;
-  const opens = r.chart ? ` data-tx-chart="${mpEscapeHtml(r.chart)}" data-tx-side="${focusSide}" data-tx-account="${mpEscapeHtml(r.account || '')}" title="Open its chart"`
+  const opens = r.chart ? ` data-tx-chart="${mpEscapeHtml(r.chart)}" data-tx-side="${focusSide}" data-tx-account="${mpEscapeHtml(r.account || '')}"${r.side === 'dividend' ? ` data-tx-pay="${r.amount}" data-tx-unit="${mpEscapeHtml(String(r.unit || '').toUpperCase())}"` : ''} title="Open its chart"`
     : fxWindow ? ` data-tx-fx="${mpEscapeHtml(fxWindow)}" data-tx-unit="${mpEscapeHtml(r.unit)}" data-tx-amount="${Math.abs(r.amount)}" title="Open the currency's chart"` : '';
   return `<div class="mp-tx-row${r.approx ? ' approx' : ''}${opens ? ' mp-tx-chart' : ''}" data-day="${r.day}"${opens}><span title="${mpEscapeHtml(r.category || '')}">${mpExpDot(r.meta || mpExpMeta())}</span><div class="mp-tx-body"><div class="mp-tx-main"><span class="mp-tx-name" title="${mpEscapeHtml(r.full || r.text)}">${mpEscapeHtml(r.text)}</span>${right}</div>${sub ? `<div class="mp-tx-sub">${mpEscapeHtml(sub)}</div>` : ''}</div></div>`;
 }
@@ -376,7 +376,8 @@ function mpAccountTxFeed(dlg, plot, account, startDisplay = null) {
       : listings.length > 1 ? [listings[0], group[0], { also: listings.slice(1) }] : [t, MP_SHORT_NAMES[t] || t, {}];
     const focus = row.dataset.txSide ? { day: row.dataset.day, side: row.dataset.txSide, account: row.dataset.txAccount,
       ...(listings.length > 1 ? { ticker: t } : {}) } : null;
-    mpOpenPriceDialog(asset, title, { ...opts, focus });
+    const focusPay = row.dataset.txPay ? { day: row.dataset.day, amount: Number(row.dataset.txPay), ccy: row.dataset.txUnit, account: row.dataset.txAccount } : null;
+    mpOpenPriceDialog(asset, title, { ...opts, focus, focusPay });
   });
   const rowsHtml = rows => {
     let html = '';

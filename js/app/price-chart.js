@@ -92,6 +92,12 @@ function mpFocusExchange(list, focus) {
   const near = list.filter(d => off(d) <= 1 && (same(d.soldCcy, d.soldAmount) || same(d.boughtCcy, d.boughtAmount)));
   return near.length ? near.reduce((a, b) => (off(b) < off(a) ? b : a)) : null;
 }
+// The payout a window was opened for: {day, amount, ccy, account}.
+function mpFocusPayout(list, focus) {
+  if (!focus) return null;
+  return list.find(p => p.day === focus.day && p.ccy === focus.ccy && Math.abs(p.amount - focus.amount) < 0.005
+    && String(p.account).startsWith(focus.account)) ?? null;
+}
 // The period to open on so that a day is in it: `period` if it is, else the shortest longer one.
 function mpPeriodWith(day, period, first, last) {
   if (mpPeriodStart(period, first, last) <= day) return period;
@@ -566,8 +572,9 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   const today = prices[prices.length - 1].day;
   const startOf = p => mpPeriodStart(p, prices[0].day, today);
   // opened from a deal or an exchange in an account's feed: it's marked, in a period that has it
-  const focusDeal = mpFocusDeal(deals, opts.focus), focusFx = mpFocusExchange(fxDeals, opts.focusFx);
-  const focusDay = focusDeal?.trade_date ?? focusFx?.day;
+  const focusDeal = mpFocusDeal(deals, opts.focus), focusFx = mpFocusExchange(fxDeals, opts.focusFx),
+    focusPay = mpFocusPayout(payouts, opts.focusPay);
+  const focusDay = focusDeal?.trade_date ?? focusFx?.day ?? focusPay?.day;
   let period = focusDay ? mpPeriodWith(focusDay, '1y', prices[0].day, today) : '1y';
   dlg.querySelectorAll('[data-p]').forEach(b => b.classList.toggle('primary', b.dataset.p === period));
   const draw = () => {
@@ -588,7 +595,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       name: 'price', hovertemplate: `%{x}: %{y:,.4~f} ${unit}<extra></extra>` }];
     // the payouts (yellow dots on the line): each, or a month's together when there are many (Revolut's
     // funds pay every day); a fund's fee taken off its return nets within the month
-    let payTrace = null, payShapes = [], avgNote = '';
+    let payTrace = null, payFocus = null, payShapes = [], avgNote = '';
     if (dlg.querySelector('#mp_price_pay').checked) {
       let ps = payouts.filter(p => p.day >= from);
       if (ps.length > 24) {
@@ -609,6 +616,15 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         marker: { color: '#8b949e', size: 7, symbol: 'circle' },
         text: ps.map(p => `${p.what} ${fmtAmt(p.amount, p.ccy)}${p.n > 1 ? ` (${p.day.slice(0, 7)}, ${p.n} payments)` : ''} at ${p.account}`),
         hovertemplate: '%{x}: %{text}<extra></extra>' };
+      // the payout the window was opened for (or its month, where they're shown by the month): in gold
+      const mark = focusPay && ps.find(p => p === focusPay
+        || (p.n && p.day.slice(0, 7) === focusPay.day.slice(0, 7) && p.ccy === focusPay.ccy && p.what === focusPay.what));
+      if (mark) {
+        payShapes.push({ type: 'line', xref: 'x', yref: 'paper', x0: mark.day, x1: mark.day, y0: 0, y1: 0.96, line: { color: '#ffd33d', width: 1.5 }, layer: 'above' });
+        payFocus = { x: [mark.day], y: [0.96], yaxis: 'y2', type: 'scatter', mode: 'markers', name: 'this payout', cliponaxis: false,
+          marker: { color: '#ffd33d', size: 13, line: { color: '#ffffff', width: 1.5 } },
+          text: [payTrace.text[ps.indexOf(mark)]], hovertemplate: '%{x}: %{text}<extra></extra>' };
+      }
     }
     // one's own deals drawn over the ones through a fund (via), and brighter. Sber's app's marks: a little
     // "house" (a box with a pointed end) just off the line -- a buy under it pointing up at it, a sale over
@@ -671,6 +687,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         fillcolor: '#ffd33d', line: { color: '#ffffff', width: 1.5 }, layer: 'above' });
     }
     if (payTrace) traces.push(payTrace);
+    if (payFocus) traces.push(payFocus);
     // the central bank's rate: a step line over the rate's, its own scale on the right (from the last change
     // before the period); the box hides it
     const fromIdx = policy.findLastIndex(r => r.day <= from);
@@ -822,6 +839,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   if (!rateNote && deals.some(d => d.via)) dlg.querySelector('#mp_price_via_box').style.display = '';
   const payBox = dlg.querySelector('#mp_price_pay');
   try { payBox.checked = localStorage.getItem('mp_price_pay') !== '0'; } catch { /* no storage */ }
+  if (focusPay) payBox.checked = true;   // opened for a payout: shown (the remembered choice stays)
   if (payouts.length) dlg.querySelector('#mp_price_pay_box').style.display = '';
   payBox.onchange = () => { mpSave('mp_price_pay', payBox.checked ? '1' : '0'); draw(); };
   // the central bank's rate over a currency's: on whenever the window opens (not remembered), the box hides it
