@@ -368,8 +368,14 @@ function mpAccountTxFeed(dlg, plot, account, startDisplay = null) {
       return;
     }
     const t = row.dataset.txChart;
-    const [asset, title, opts] = t === 'XAU' ? mpCurrencyChart('XAU') : [t, MP_SHORT_NAMES[t] || t, {}];
-    const focus = row.dataset.txSide ? { day: row.dataset.day, side: row.dataset.txSide, account: row.dataset.txAccount } : null;
+    // a fund listed several times (VWRA and VWCE are one fund): the whole fund's chart, with the deals of all its listings
+    // (T-Bank's TSPX is in the S&P group for the money, but it's "США 50", a fund of its own)
+    const group = Object.entries(window.mpFundIndexGroups || {}).find(([, list]) => t !== 'TSPX' && list.includes(t));
+    const listings = group ? group[1].filter(x => x !== 'TSPX') : [];
+    const [asset, title, opts] = t === 'XAU' ? mpCurrencyChart('XAU')
+      : listings.length > 1 ? [listings[0], group[0], { also: listings.slice(1) }] : [t, MP_SHORT_NAMES[t] || t, {}];
+    const focus = row.dataset.txSide ? { day: row.dataset.day, side: row.dataset.txSide, account: row.dataset.txAccount,
+      ...(listings.length > 1 ? { ticker: t } : {}) } : null;
     mpOpenPriceDialog(asset, title, { ...opts, focus });
   });
   const rowsHtml = rows => {

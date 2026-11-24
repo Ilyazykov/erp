@@ -80,7 +80,8 @@ function mpMergeDayDeals(deals) {
 function mpFocusDeal(deals, focus) {
   if (!focus) return null;
   const off = d => Math.abs(Date.parse(`${d.trade_date}T00:00:00Z`) - Date.parse(`${focus.day}T00:00:00Z`)) / 864e5;
-  const near = deals.filter(d => !d.via && d.side === focus.side && String(d.account).startsWith(focus.account) && off(d) <= 5);
+  const near = deals.filter(d => !d.via && d.side === focus.side && String(d.account).startsWith(focus.account) && off(d) <= 5
+    && (!focus.ticker || d.ticker === focus.ticker));
   return near.length ? near.reduce((a, b) => (off(b) < off(a) ? b : a)) : null;
 }
 // The exchange a currency's window was opened for: {day, ccy, amount}, one of its two sides, within a day.
