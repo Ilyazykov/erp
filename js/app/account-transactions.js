@@ -314,7 +314,10 @@ function mpTxRowHtml(r, withAccount, display) {
     : `<span>${r.approx ? '≈ ' : ''}${r.qty < 0 ? '−' : ''}${number(r.qty, 8)}${r.price ? ` @ ${shown(r.price, 4)}` : ''}</span>`;
   const sub = [r.type, r.saleLine, r.noteLine, withAccount ? MP_BROKER_SHORT_NAMES[r.account] || r.account : ''].filter(Boolean).join(' · ');
   // (a deal or a coin move has no spending category: the grey mark, to keep the column)
-  return `<div class="mp-tx-row${r.approx ? ' approx' : ''}${r.chart ? ' mp-tx-chart' : ''}" data-day="${r.day}"${r.chart ? ` data-tx-chart="${mpEscapeHtml(r.chart)}" title="Open its chart"` : ''}><span title="${mpEscapeHtml(r.category || '')}">${mpExpDot(r.meta || mpExpMeta())}</span><div class="mp-tx-body"><div class="mp-tx-main"><span class="mp-tx-name" title="${mpEscapeHtml(r.full || r.text)}">${mpEscapeHtml(r.text)}</span>${right}</div>${sub ? `<div class="mp-tx-sub">${mpEscapeHtml(sub)}</div>` : ''}</div></div>`;
+  // the deal to mark on that chart: a deal's side; a money line's by its sign (money out: bought; gold in: bought)
+  const focusSide = !r.chart ? '' : r.side ? (['buy', 'sell'].includes(r.side) ? r.side : '')
+    : (String(r.unit).toUpperCase() === 'XAU' ? r.amount > 0 : r.amount < 0) ? 'buy' : 'sell';
+  return `<div class="mp-tx-row${r.approx ? ' approx' : ''}${r.chart ? ' mp-tx-chart' : ''}" data-day="${r.day}"${r.chart ? ` data-tx-chart="${mpEscapeHtml(r.chart)}" data-tx-side="${focusSide}" data-tx-account="${mpEscapeHtml(r.account || '')}" title="Open its chart"` : ''}><span title="${mpEscapeHtml(r.category || '')}">${mpExpDot(r.meta || mpExpMeta())}</span><div class="mp-tx-body"><div class="mp-tx-main"><span class="mp-tx-name" title="${mpEscapeHtml(r.full || r.text)}">${mpEscapeHtml(r.text)}</span>${right}</div>${sub ? `<div class="mp-tx-sub">${mpEscapeHtml(sub)}</div>` : ''}</div></div>`;
 }
 
 // Puts the feed beside `plot`. display: {code, conv(day, usd)} to show amounts in, null: each in its own currency.
@@ -347,8 +350,12 @@ function mpAccountTxFeed(dlg, plot, account, startDisplay = null) {
   }, { passive: true });
   list.addEventListener('mouseleave', () => onDay(null));
   list.addEventListener('click', e => {
-    const t = e.target.closest('[data-tx-chart]')?.dataset.txChart;
-    if (t) mpOpenPriceDialog(...(t === 'XAU' ? mpCurrencyChart('XAU') : [t, MP_SHORT_NAMES[t] || t]));
+    const row = e.target.closest('[data-tx-chart]');
+    if (!row) return;
+    const t = row.dataset.txChart;
+    const [asset, title, opts] = t === 'XAU' ? mpCurrencyChart('XAU') : [t, MP_SHORT_NAMES[t] || t, {}];
+    const focus = row.dataset.txSide ? { day: row.dataset.day, side: row.dataset.txSide, account: row.dataset.txAccount } : null;
+    mpOpenPriceDialog(asset, title, { ...opts, focus });
   });
   const rowsHtml = rows => {
     let html = '';

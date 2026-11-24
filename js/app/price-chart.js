@@ -75,6 +75,21 @@ function mpMergeDayDeals(deals) {
   return [...byKey.values()].map(({ cost, ...m }) => ({ ...m, price: cost != null && m.quantity > 0 ? cost / m.quantity : null }));
 }
 
+// The deal a window was opened for (a row of an account's feed: {day, side, account}): one's own, of that side and
+// account, on that day or the nearest within 5 (a bank books the money a few days off the trade). null: none.
+function mpFocusDeal(deals, focus) {
+  if (!focus) return null;
+  const off = d => Math.abs(Date.parse(`${d.trade_date}T00:00:00Z`) - Date.parse(`${focus.day}T00:00:00Z`)) / 864e5;
+  const near = deals.filter(d => !d.via && d.side === focus.side && String(d.account).startsWith(focus.account) && off(d) <= 5);
+  return near.length ? near.reduce((a, b) => (off(b) < off(a) ? b : a)) : null;
+}
+// The period to open on so that a day is in it: `period` if it is, else the shortest longer one.
+function mpPeriodWith(day, period, first, last) {
+  if (mpPeriodStart(period, first, last) <= day) return period;
+  const longer = MP_PRICE_PERIODS.slice(MP_PRICE_PERIODS.findIndex(([l]) => l === period) + 1);
+  return longer.find(([l]) => mpPeriodStart(l, first, last) <= day)?.[0] ?? 'all';
+}
+
 function mpChartOnClick(id) {
   const el = typeof id === 'string' ? document.getElementById(id) : id;
   if (!el?.on) return;
@@ -540,7 +555,10 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   const rateOn = day => { let lo = 0, hi = fx.length - 1, r = null; while (lo <= hi) { const m = (lo + hi) >> 1; if (fx[m].day <= day) { r = Number(fx[m].usd_per_unit); lo = m + 1; } else hi = m - 1; } return r; };
   const today = prices[prices.length - 1].day;
   const startOf = p => mpPeriodStart(p, prices[0].day, today);
-  let period = '1y';
+  // opened from a deal in an account's feed: that deal marked, in a period that has it
+  const focusDeal = mpFocusDeal(deals, opts.focus);
+  let period = focusDeal ? mpPeriodWith(focusDeal.trade_date, '1y', prices[0].day, today) : '1y';
+  dlg.querySelectorAll('[data-p]').forEach(b => b.classList.toggle('primary', b.dataset.p === period));
   const draw = () => {
     const usd = ccy === 'USD' || usdBox.checked;
     const unit = usd ? 'USD' : ccy;
@@ -615,6 +633,12 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
           marker: { color: fill, size: 14, opacity: 0 },
           text: ds.map(d => `${side} ${dealMoney(d)}<br>${dealQty(d.quantity)} ${d.ticker || asset}<br>${d.account}${d.n > 1 ? ` (${d.n} trades)` : ''}`), hovertemplate: '%{x}:<br>%{text}<extra></extra>' });
       }
+    }
+    // the deal the window was opened for: bigger, in gold, over the others
+    if (focusDeal && focusDeal.trade_date >= from) {
+      dealShapes.push({ type: 'path', xref: 'x', yref: 'y', xsizemode: 'pixel', ysizemode: 'pixel',
+        xanchor: focusDeal.trade_date, yanchor: priceOn(focusDeal.trade_date), path: house(focusDeal.side === 'buy', 1.6),
+        fillcolor: '#ffd33d', line: { color: '#ffffff', width: 1.5 }, layer: 'above' });
     }
     // a currency's exchanges: a mark at the rate each got (off the line by how much better or worse than the day's)
     const fxShown = fxDeals.filter(d => d.day >= from);
