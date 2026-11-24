@@ -91,7 +91,9 @@ function mpBondBuyCost(d, atNative) {
   let face = 1000;
   if (atNative > 0) {
     const seen = (atNative - nkd) / price * 100;
-    face = [100, 1000, 10000].find(f => Math.abs(seen / f - 1) < 0.12) ?? seen;
+    // (a day's price can be too high -- a yuan bond's accrued in roubles on MOEX's rouble board -- never the face:
+    // from just under a round face to half over it, it's that face; well under one, what's left of it)
+    face = [100, 1000, 10000].find(f => seen >= f * 0.97 && seen <= f * 1.5) ?? seen;
   }
   return price / 100 * face + nkd + fee;
 }
