@@ -566,13 +566,20 @@ async function mpOpenAccountChart(account) {
     const t = mpStackLayerAt(shownLayers, i, fl.yaxis.p2l(py));
     return t ? { i, t, shownLayers } : null;
   };
-  // a click (not a zoom drag) on a colour: the feed shows that currency. On window: Plotly covers the page while dragging
+  const dayAt = ev => {
+    const fl = plot._fullLayout;
+    if (!view || !fl) return null;
+    const box = plot.getBoundingClientRect(), px = ev.clientX - box.left - fl._size.l, py = ev.clientY - box.top - fl._size.t;
+    if (px < 0 || py < 0 || px > fl._size.w || py > fl._size.h) return null;
+    return new Date(view.ms[mpDayIndexAt(view.ms, fl.xaxis.p2l(px), account === MP_ALL_ACCOUNTS)]).toISOString().slice(0, 10);
+  };
+  // a click (not a zoom drag) on the chart: the feed moves to that day. On window: Plotly covers the page while dragging
   plot.addEventListener('mousedown', down => {
     if (down.target.closest('.modebar, .legend')) return;
     window.addEventListener('mouseup', up => {
-      if (Math.hypot(up.clientX - down.clientX, up.clientY - down.clientY) > 4 || !view?.byCurrency) return;
-      const layer = series.find(c => c.label === layerAt(up)?.t.legendgroup);
-      if (layer) txFeed.toggle(layer);
+      if (Math.hypot(up.clientX - down.clientX, up.clientY - down.clientY) > 4) return;
+      const day = dayAt(up);
+      if (day) txFeed.scrollToDay(day);
     }, { capture: true, once: true });
   });
   plot.addEventListener('mousemove', ev => {
@@ -703,6 +710,7 @@ async function mpOpenAccountChart(account) {
     }
     draw();
   };
+  txFeed.setLayers(series);
   draw();
   // No split (a capital recount makes it time out): while the window is open, ask the light queue row
   // whether the recount is over, and only then the heavy series again
@@ -712,7 +720,7 @@ async function mpOpenAccountChart(account) {
     const { data: queue } = await sb.from('capital_refresh_queue').select('started_at, finished_at').maybeSingle();
     if (queue?.started_at && !queue.finished_at) continue;
     series = await loadSeries();
-    if (series && dlg.open) { await mpLoadUnitPrices(series).catch(() => {}); draw(); }
+    if (series && dlg.open) { await mpLoadUnitPrices(series).catch(() => {}); txFeed.setLayers(series); draw(); }
   }
 }
 

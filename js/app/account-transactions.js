@@ -55,7 +55,14 @@ async function mpTxAddStoreNames(rows) {
 }
 
 // One source's next rows: [{day, at, ...}], from `offset`.
-function mpTxSources(account, filter, wallets) {
+function mpTxSources(account, filter, wallets, edge = null) {
+  // edge {day, newer}: only what's before that day, newest first; newer: from that day on, oldest first
+  const ascending = !!edge?.newer;
+  const bounded = (q, col, dateOnly) => {
+    if (!edge) return q;
+    const at = dateOnly ? edge.day : `${edge.day}T00:00:00Z`;
+    return edge.newer ? q.gte(col, at) : q.lt(col, at);
+  };
   const all = account === MP_ALL_ACCOUNTS;
   const scoped = q => (all ? q : q.eq('account', account));
   const plain = s => String(s || '').replace(/^ESTIMATED:\s*/, '');
@@ -68,7 +75,7 @@ function mpTxSources(account, filter, wallets) {
     let q = scoped(sb.from('bank_transactions').select('id, account, tx_date, description, counterparty, amount, currency, amount_approximate, expense_category, income_category, balance_after, product, external_source, external_id, expense_note'))
       .or('synthetic.is.null,synthetic.eq.false');
     if (filter) q = q.in('currency', filter.any);
-    return (await page(q.order('tx_date', { ascending: false }).order('id'), offset)).map(r => ({
+    return (await page(bounded(q, 'tx_date').order('tx_date', { ascending }).order('id'), offset)).map(r => ({
       day: r.tx_date.slice(0, 10), at: r.tx_date, account: r.account, ...mpTxNamed(plain(r.description) || r.counterparty || '', r.expense_note), type: '',
       src: r.external_source, xid: r.external_id,
       amount: Number(r.amount), unit: r.currency, approx: !!r.amount_approximate || /^ESTIMATED:/.test(r.description || ''),
@@ -78,7 +85,7 @@ function mpTxSources(account, filter, wallets) {
   const deals = async offset => {
     let q = scoped(sb.from('trades').select('id, account, trade_date, side, ticker, quantity, price, currency, note, estimated'));
     if (filter) q = filter.fiat ? q.in('currency', filter.codes) : q.in('ticker', filter.tickers);
-    return (await page(q.order('trade_date', { ascending: false }).order('id'), offset)).map(r => {
+    return (await page(bounded(q, 'trade_date', true).order('trade_date', { ascending }).order('id'), offset)).map(r => {
       const payout = MP_TX_PAYOUTS.has(r.side);
       return { day: r.trade_date, at: r.trade_date, account: r.account, text: MP_SHORT_NAMES[r.ticker] || r.ticker, type: r.side.replace(/_/g, ' '), side: r.side, bond: /^RU[A-Z0-9]{10}$/.test(r.ticker),
         amount: payout ? Number(r.quantity) : null, qty: payout ? null : Number(r.quantity), price: payout ? null : Number(r.price), unit: r.currency, approx: !!r.estimated };
@@ -87,7 +94,7 @@ function mpTxSources(account, filter, wallets) {
   const crypto = async offset => {
     let q = sb.from('wallet_transactions').select('wallet_id, tx_hash, seq, kind, tx_time, symbol, amount, status, estimated').in('wallet_id', [...wallets.keys()]);
     if (filter) q = q.in('symbol', filter.any);
-    return (await page(q.order('tx_time', { ascending: false }).order('tx_hash').order('seq').order('kind'), offset)).map(r => ({
+    return (await page(bounded(q, 'tx_time').order('tx_time', { ascending }).order('tx_hash').order('seq').order('kind'), offset)).map(r => ({
       day: r.tx_time.slice(0, 10), at: r.tx_time, account: wallets.get(r.wallet_id), text: ['ok', 'confirmed'].includes(r.status) ? r.symbol : r.status || r.symbol, type: r.kind.replace(/_/g, ' '),
       amount: Number(r.amount), unit: r.symbol, approx: !!r.estimated, coin: true }));
   };
@@ -134,33 +141,44 @@ function mpTxChainOrder(rows) {
   return done;
 }
 
-// An exchange's two legs (the same line in two currencies, as in the currency_exchanges view) side by side:
-// the currency sold first, then the one bought. Only moved where neither account's balance needs the old order.
+// An exchange's two legs: the same line in two currencies on one account, worth about the same at the day's
+// rates (the rule of the currency_exchanges view). Several in a day: the closest in value pair up first.
+// They stand side by side, the currency sold first, then the one bought.
 function mpTxPairExchanges(line) {
   const key = r => `${r.account}|${String(r.src).split(':')[0]}|${String(r.full || '').replace(/\s+/g, '')}`;
   const ms = r => Date.parse(r.at);
-  const used = new Set();
-  for (const sold of line.filter(r => r.chain && r.amount < 0 && r.category === 'Currency exchange')) {
-    const legs = line.filter(r => !used.has(r) && r.chain && r.amount > 0 && r.unit !== sold.unit && key(r) === key(sold));
-    if (!legs.length) continue;
-    const bought = legs.reduce((a, b) => (Math.abs(ms(b) - ms(sold)) < Math.abs(ms(a) - ms(sold)) ? b : a));
-    used.add(bought);
-    const from = line.indexOf(sold), to = line.indexOf(bought);
-    if (from < to) {
-      // spending later is always covered
-      line.splice(from, 1);
-      line.splice(line.indexOf(bought), 0, sold);
-      continue;
-    }
-    const between = line.slice(to + 1, from);
-    if (!between.some(r => r.chain === sold.chain && r.amount > 0)) {
-      line.splice(from, 1);
-      line.splice(to, 0, sold);
-    } else if (!between.some(r => r.chain === bought.chain && r.amount < 0)) {
-      line.splice(to, 1);
-      line.splice(line.indexOf(sold) + 1, 0, bought);
+  const gap = (sold, bought) => {
+    const a = mpTxUnitUsd(sold), b = mpTxUnitUsd(bought);
+    if (a && b) return Math.abs(Math.log(Math.abs(sold.amount) * a / (bought.amount * b)));
+    return sold.category === 'Currency exchange' ? 0.01 : Infinity;   // no rate: only what's labelled an exchange
+  };
+  const options = [];
+  for (const sold of line.filter(r => r.chain && r.amount < 0)) {
+    for (const bought of line.filter(r => r.chain && r.amount > 0 && r.unit !== sold.unit && key(r) === key(sold))) {
+      const g = gap(sold, bought);
+      if (g < 0.08) options.push({ sold, bought, g, dt: Math.abs(ms(sold) - ms(bought)) });
     }
   }
+  options.sort((x, y) => x.g - y.g || x.dt - y.dt);
+  const used = new Set(), boughtOf = new Map(), soldOf = new Map();
+  for (const { sold, bought } of options) {
+    if (used.has(sold) || used.has(bought)) continue;
+    used.add(sold);
+    used.add(bought);
+    boughtOf.set(sold, bought);
+    soldOf.set(bought, sold);
+    const from = line.indexOf(sold), to = line.indexOf(bought);
+    const between = from > to ? line.slice(to + 1, from) : [];
+    if (between.some(r => r.chain === sold.chain && r.amount > 0) && !between.some(r => r.chain === bought.chain && r.amount < 0)) {
+      // the sale needs an income that came in between: the purchase moves down to it instead
+      line.splice(to, 1);
+      line.splice(line.indexOf(sold) + 1, 0, bought);
+    } else {
+      line.splice(from, 1);
+      line.splice(line.indexOf(bought), 0, sold);
+    }
+  }
+  return { boughtOf, soldOf };
 }
 
 // A day's rows, newest first. A deal stands next to its money (same account, currency and sum):
@@ -174,7 +192,7 @@ function mpTxArrangeDay(rows) {
     const ordered = mpTxChainOrder(places.map(i => line[i]));
     places.forEach((i, k) => { line[i] = ordered[k]; });
   }
-  mpTxPairExchanges(line);
+  const { boughtOf, soldOf } = mpTxPairExchanges(line);
   const before = new Map(), after = new Map(), alone = [];
   const taken = new Set();
   for (const d of rows.filter(isDeal)) {
@@ -184,8 +202,10 @@ function mpTxArrangeDay(rows) {
       && r.amount > 0 === wantIn && Math.abs(Math.abs(r.amount) - sum) < 0.01);
     if (!money) { alone.push(d); continue; }
     taken.add(money);
+    // (outside an exchange's two legs, never between them)
     const side = d.side === 'buy' ? after : before;
-    side.set(money, [...(side.get(money) || []), d]);
+    const anchor = d.side === 'buy' ? boughtOf.get(money) || money : soldOf.get(money) || money;
+    side.set(anchor, [...(side.get(anchor) || []), d]);
   }
   const chrono = [...alone];
   for (const r of line) chrono.push(...(before.get(r) || []), r, ...(after.get(r) || []));
@@ -219,7 +239,8 @@ function mpTxInDisplay(v, code) {
 }
 
 // The next rows over all sources, newest first: at least `n`, up to the end of a day (its order needs all of it).
-async function mpTxNext(sources, n) {
+// newer: the sources run oldest first, towards today; the rows still come back newest on top.
+async function mpTxNext(sources, n, newer = false) {
   const out = [];
   for (;;) {
     await Promise.all(sources.filter(s => !s.buf.length && !s.done).map(async s => {
@@ -230,13 +251,15 @@ async function mpTxNext(sources, n) {
     }));
     const ready = sources.filter(s => s.buf.length);
     if (!ready.length) break;
-    const newest = ready.reduce((a, b) => (b.buf[0].day > a.buf[0].day || (b.buf[0].day === a.buf[0].day && b.buf[0].at > a.buf[0].at) ? b : a));
-    if (out.length >= n && newest.buf[0].day !== out[out.length - 1].day) break;
-    out.push(newest.buf.shift());
+    const later = (x, y) => x.day > y.day || (x.day === y.day && x.at > y.at);
+    const next = ready.reduce((a, b) => ((newer ? later(a.buf[0], b.buf[0]) : later(b.buf[0], a.buf[0])) ? b : a));
+    if (out.length >= n && next.buf[0].day !== out[out.length - 1].day) break;
+    out.push(next.buf.shift());
   }
+  await mpTxEnsureRates(out, true);   // the exchanges' legs are told by their value
   const days = new Map();
   for (const r of out) days.set(r.day, [...(days.get(r.day) || []), r]);
-  return [...days.values()].flatMap(mpTxArrangeDay);
+  return (newer ? [...days.values()].reverse() : [...days.values()]).flatMap(mpTxArrangeDay);
 }
 
 function mpTxRowHtml(r, withAccount, display) {
@@ -256,7 +279,7 @@ function mpTxRowHtml(r, withAccount, display) {
 }
 
 // Puts the feed beside `plot`. display: {code, conv(day, usd)} to show amounts in, null: each in its own currency.
-// Returns { toggle(layer) }: show only that chart layer, or all again; { setDisplay(display) }.
+// Returns { scrollToDay(day), setLayers(chart layers), onRowDay(fn), setDisplay(display) }.
 function mpAccountTxFeed(dlg, plot, account, startDisplay = null) {
   const body = document.createElement('div');
   body.className = 'mp-account-body';
@@ -264,13 +287,15 @@ function mpAccountTxFeed(dlg, plot, account, startDisplay = null) {
   body.appendChild(plot);
   const feed = document.createElement('div');
   feed.className = 'mp-tx-feed';
-  feed.innerHTML = '<div class="mp-tx-head"><b>Transactions</b><span data-tx-filter></span></div><div class="mp-tx-list" data-tx-list></div>';
+  feed.innerHTML = '<div class="mp-tx-head"><b>Transactions</b><select data-tx-ccy title="Currency" style="display:none"></select></div><div class="mp-tx-list" data-tx-list></div>';
   body.appendChild(feed);
-  const list = feed.querySelector('[data-tx-list]'), chip = feed.querySelector('[data-tx-filter]');
+  const list = feed.querySelector('[data-tx-list]'), ccy = feed.querySelector('[data-tx-ccy]');
   const end = document.createElement('p');
   end.className = 'note mp-tx-end';
   let filter = null, sources = null, wallets = null, busy = false, finished = false, lastDay = null, ticket = 0;
-  let display = startDisplay, shownRows = [];
+  let display = startDisplay, shownRows = [], layers = [];
+  // after a jump to a day: the older rows go on below, the newer ones are loaded above
+  let startEdge = null, upSources = null, upBusy = false, topDone = true;
   // the row under the mouse: its day, for the mark on the chart
   let onDay = () => {};
   // (not while scrolling: rows passing under a still mouse would make the line jump and blink)
@@ -294,20 +319,22 @@ function mpAccountTxFeed(dlg, plot, account, startDisplay = null) {
     return html;
   };
 
+  const loadWallets = async () => {
+    if (wallets) return;
+    let q = sb.from('crypto_wallets').select('id, account');
+    if (account !== MP_ALL_ACCOUNTS) q = q.eq('account', account);
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    wallets = new Map(data.map(w => [w.id, w.account]));
+  };
   const more = async () => {
     if (busy || finished) return;
     busy = true;
     const mine = ticket;
     end.textContent = 'Loading…';
     try {
-      if (!wallets) {
-        let q = sb.from('crypto_wallets').select('id, account');
-        if (account !== MP_ALL_ACCOUNTS) q = q.eq('account', account);
-        const { data, error } = await q;
-        if (error) throw new Error(error.message);
-        wallets = new Map(data.map(w => [w.id, w.account]));
-      }
-      sources ||= mpTxSources(account, filter, wallets);
+      await loadWallets();
+      sources ||= mpTxSources(account, filter, wallets, startEdge && { day: startEdge, newer: false });
       const rows = await mpTxNext(sources, MP_TX_STEP);
       await mpTxAddStoreNames(rows).catch(() => {});   // without them: "Apple", "PlayStation"
       for (let asked; asked !== display;) { asked = display; await mpTxEnsureRates(rows, asked); }
@@ -315,7 +342,7 @@ function mpAccountTxFeed(dlg, plot, account, startDisplay = null) {
       shownRows.push(...rows);
       end.insertAdjacentHTML('beforebegin', rowsHtml(rows));
       finished = rows.length < MP_TX_STEP;
-      end.textContent = !finished ? '' : list.querySelector('.mp-tx-row') ? 'That is all.' : 'No transactions.';
+      end.textContent = !finished ? '' : list.querySelector('.mp-tx-row') ? 'That is all.' : topDone ? 'No transactions.' : '';
     } catch (error) {
       if (mine === ticket) end.textContent = error.message;
     } finally {
@@ -328,23 +355,78 @@ function mpAccountTxFeed(dlg, plot, account, startDisplay = null) {
   };
   const nearEnd = () => { if (list.scrollHeight - list.scrollTop - list.clientHeight < 200) more(); };
   list.addEventListener('scroll', nearEnd, { passive: true });
-  const restart = () => {
+  // the newer days, put above what's on screen without moving it
+  const moreUp = async () => {
+    if (upBusy || topDone) return;
+    upBusy = true;
+    const mine = ticket;
+    try {
+      await loadWallets();
+      upSources ||= mpTxSources(account, filter, wallets, { day: startEdge, newer: true });
+      const rows = await mpTxNext(upSources, MP_TX_STEP, true);
+      await mpTxAddStoreNames(rows).catch(() => {});
+      for (let asked; asked !== display;) { asked = display; await mpTxEnsureRates(rows, asked); }
+      if (mine !== ticket) return;
+      topDone = rows.length < MP_TX_STEP;
+      if (rows.length) {
+        const top = list.scrollTop, height = list.scrollHeight, bottomDay = lastDay;
+        lastDay = null;
+        const html = rowsHtml(rows);
+        lastDay = bottomDay ?? rows[rows.length - 1].day;
+        list.insertAdjacentHTML('afterbegin', html);
+        shownRows.unshift(...rows);
+        list.scrollTop = top + list.scrollHeight - height;
+        if (finished && !end.textContent) end.textContent = 'That is all.';
+      }
+    } catch { /* the rows below stay; the next scroll up asks again */ } finally {
+      if (mine === ticket) {
+        upBusy = false;
+        nearTop();
+      }
+    }
+  };
+  const nearTop = () => { if (list.scrollTop < 200) moreUp(); };
+  list.addEventListener('scroll', nearTop, { passive: true });
+  // a loaded day at the top of the column (the day itself, or the nearest before it)
+  const showLoaded = day => {
+    const head = [...list.querySelectorAll('.mp-tx-day')].find(h => h.dataset.day <= day);
+    if (!head) { list.scrollTop = list.scrollHeight; return; }
+    // (by the row under it: a stuck header reports where it's stuck, not its place)
+    list.scrollTop += head.nextElementSibling.getBoundingClientRect().top - list.getBoundingClientRect().top - head.offsetHeight;
+  };
+  const restart = (edge = null) => {
     ticket++;
     sources = null; busy = false; finished = false; lastDay = null; shownRows = [];
+    startEdge = edge; upSources = null; upBusy = false; topDone = !edge;
     list.replaceChildren(end);
     list.scrollTop = 0;
     end.textContent = '';
-    chip.innerHTML = filter ? `<button class="btn" type="button" title="Show all">${mpEscapeHtml(filter.label)} ✕</button>` : '<span class="muted">click a colour to filter</span>';
-    const clear = chip.querySelector('button');
-    if (clear) clear.onclick = () => { filter = null; restart(); };
-    more();
+    return more();
+  };
+  ccy.onchange = () => {
+    filter = ccy.value === '' ? null : mpTxLayerFilter(layers[Number(ccy.value)]);
+    restart();
   };
   dlg.addEventListener('close', () => { ticket++; });
   restart();
   return {
-    toggle(layer) {
-      filter = filter?.label === layer.label ? null : mpTxLayerFilter(layer);
-      restart();
+    // a click on the chart: the feed moves to that day (or the nearest before it), loading it if it isn't yet
+    async scrollToDay(day) {
+      const newest = shownRows[0]?.day, oldest = shownRows[shownRows.length - 1]?.day;
+      if (newest && day > newest && topDone) { list.scrollTop = 0; return; }
+      if (newest && day <= newest && (day >= oldest || finished)) { showLoaded(day); return; }
+      const next = new Date(Date.parse(`${day}T00:00:00Z`) + 864e5).toISOString().slice(0, 10);
+      await restart(next);
+      moreUp();
+    },
+    // the chart's currencies, for the list in the header
+    setLayers(list) {
+      layers = list || [];
+      ccy.innerHTML = `<option value="">All currencies</option>${layers.map((l, i) => `<option value="${i}">${mpEscapeHtml(l.label)}</option>`).join('')}`;
+      ccy.style.display = layers.length > 1 ? '' : 'none';
+      const kept = layers.findIndex(l => l.label === filter?.label);
+      ccy.value = kept < 0 ? '' : String(kept);
+      if (filter && kept < 0) { filter = null; restart(); }
     },
     onRowDay(fn) { onDay = fn; },
     async setDisplay(next) {
