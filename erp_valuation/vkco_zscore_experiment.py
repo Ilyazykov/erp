@@ -60,6 +60,8 @@ from pathlib import Path
 import numpy as np
 from scipy.interpolate import CubicSpline
 
+from russian_ca import open_url
+
 TICKER = "VKCO"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = REPO_ROOT / "data"
@@ -96,7 +98,7 @@ def fetch_url(url: str, headers: dict | None = None) -> str:
     if headers:
         default_headers.update(headers)
     req = urllib.request.Request(url, headers=default_headers)
-    with urllib.request.urlopen(req, timeout=20) as r:
+    with open_url(req, timeout=20) as r:  # MOEX: the Russian root (russian_ca.py)
         return r.read().decode("utf-8", errors="replace")
 
 

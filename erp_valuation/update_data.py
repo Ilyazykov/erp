@@ -11,6 +11,8 @@ import csv, json, re, time, urllib.request, urllib.parse
 from datetime import date, timedelta
 from calendar import monthrange
 
+from russian_ca import open_url
+
 DATA_DIR = "./data"
 
 TICKERS = ['SBER', 'ROSN', 'VTBR', 'YDEX', 'T', 'OZON', 'DOMRF', 'GMKN', 'PLZL', 'IRAO']
@@ -70,7 +72,7 @@ def fetch_url(url, headers=None):
     if headers:
         default_headers.update(headers)
     req = urllib.request.Request(url, headers=default_headers)
-    with urllib.request.urlopen(req, timeout=20) as r:
+    with open_url(req, timeout=20) as r:  # MOEX: the Russian root (russian_ca.py)
         return r.read().decode('utf-8', errors='replace')
 
 def fetch_url_retry(url, attempts=3, pause=(2, 5)):
