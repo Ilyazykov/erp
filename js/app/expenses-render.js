@@ -782,14 +782,11 @@ for (const id of ['exp_from', 'exp_to']) {
     if (mpIsSignedIn) mpRenderExpenses();
   });
 }
-try {
-  const saved = localStorage.getItem('mp_exp_period'), sel = document.getElementById('exp_period');
-  // by default the calendar month on screen (the first paint loads only it)
-  sel.value = saved && [...sel.options].some(o => o.value === saved) ? saved : 'cmonth';
-} catch { /* no storage */ }
+// the page always opens on the calendar month (the first paint loads only it): the period chosen
+// last time isn't restored -- a saved "from – to" opened the month under that label (25.11.2026)
+document.getElementById('exp_period').value = 'cmonth';
 try { const saved = localStorage.getItem('mp_exp_ccy'); if (saved) document.getElementById('exp_ccy').value = saved; } catch { /* no storage */ }
 document.getElementById('exp_period').addEventListener('change', e => {
-  mpSave('mp_exp_period', e.target.value);
   const today = new Date().toISOString().slice(0, 10);
   if (e.target.value !== 'custom') mpExpSetPeriod(e.target.value, ['year', 'month', 'cmonth'].includes(e.target.value) ? today : document.getElementById('exp_to').value || today);
   if (mpIsSignedIn) mpRenderExpenses();
