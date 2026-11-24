@@ -75,6 +75,27 @@ function mpMergeDayDeals(deals) {
   return [...byKey.values()].map(({ cost, ...m }) => ({ ...m, price: cost != null && m.quantity > 0 ? cost / m.quantity : null }));
 }
 
+// What a bond's buy cost a unit, in the deal's currency: the price, the accrued coupon paid and the fee -- as the
+// chart's line, which has the accrued in it. T-Bank's and Sber's reports give the price in % of the face and the
+// accrued for the whole deal, Alfa's the price in money and the accrued a bond. atNative: the chart's price that day
+// in the deal's currency, to tell % from money and to see the face (1000, or what's left after amortisations).
+// null: not a bond.
+function mpBondBuyCost(d, atNative) {
+  const q = Number(d.quantity), price = Number(d.price);
+  if (!/^(SU|RU)[0-9A-Z]{10}$/.test(String(d.ticker)) || !(q > 0) || !(price > 0)) return null;
+  const nkd = (Number(d.nkd) || 0) / (['sber_broker_html', 'tbank_broker_xlsx'].includes(d.external_source) ? q : 1);
+  const dc = String(d.currency || '').toUpperCase();
+  const fee = String(d.fee_currency || dc).toUpperCase() === dc ? (Number(d.fee_tax) || 0) / q : 0;
+  const inPercent = atNative > 0 ? price / atNative < 0.5 : price < 300;
+  if (!inPercent) return price + nkd + fee;
+  let face = 1000;
+  if (atNative > 0) {
+    const seen = (atNative - nkd) / price * 100;
+    face = [100, 1000, 10000].find(f => Math.abs(seen / f - 1) < 0.12) ?? seen;
+  }
+  return price / 100 * face + nkd + fee;
+}
+
 // The deal a window was opened for (a row of an account's feed: {day, side, account}): one's own, of that side and
 // account, on that day or the nearest within 5 (a bank books the money a few days off the trade). null: none.
 function mpFocusDeal(deals, focus) {
@@ -234,7 +255,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     let wallet;
     [prices, deals, wallet] = await Promise.all([
       mpFetchAll(() => sb.from('price_history').select('ticker, day, price_usd').in('ticker', dealTickers).order('day')),
-      mpFetchAll(() => sb.from('trades').select('ticker, trade_date, side, quantity, price, currency, fee_tax, fee_currency, account, external_source').in('ticker', dealTickers).in('side', ['buy', 'sell']).order('trade_date')),
+      mpFetchAll(() => sb.from('trades').select('ticker, trade_date, side, quantity, price, nkd, currency, fee_tax, fee_currency, account, external_source').in('ticker', dealTickers).in('side', ['buy', 'sell']).order('trade_date')),
       // a coin's deals are its exchanges' and wallets' own rows: a buy (by card or for
       // another coin) and a sale; transfers, fees, interest and Earn moves aren't deals
       mpFetchAll(() => sb.from('wallet_transactions').select('symbol, tx_time, kind, amount, chain').or(dealTickers.map(t => `symbol.ilike.${t}`).join(','))
@@ -737,13 +758,16 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
           const dc = String(d.currency || ccy).toUpperCase();
           // the broker's fee is in the cost (Sber's 297.99 for SBER is the prices and the fees over 91 shares)
           const fee = String(d.fee_currency || dc).toUpperCase() === dc ? Number(d.fee_tax) || 0 : 0;
-          let px = Number(d.price) > 0 ? Number(d.price) + fee / q : null;
+          const dayRate = fx.length ? rateOn(d.trade_date) : null;
+          const atNative = at == null ? null : dc === unit ? at : unit === 'USD' && dc === ccy && dayRate ? at / dayRate : null;
+          const bondCost = mpBondBuyCost(d, atNative);
+          let px = bondCost ?? (Number(d.price) > 0 ? Number(d.price) + fee / q : null);
           if (px != null && dc !== unit) {
             const r = fx.length ? rateOn(d.trade_date) : null;   // USD per unit of the paper's currency
             px = unit === 'USD' && dc === ccy && r ? px * r : null;
           }
           // a price from before a split: to the chart's (split-adjusted) scale
-          if (px != null && at > 0) { const k = px / at; if (k > 1.45 || k < 1 / 1.45) { const n = Math.round(k >= 1 ? k : 1 / k); px = k >= 1 ? px / n : px * n; } }
+          if (bondCost == null && px != null && at > 0) { const k = px / at; if (k > 1.45 || k < 1 / 1.45) { const n = Math.round(k >= 1 ? k : 1 / k); px = k >= 1 ? px / n : px * n; } }
           px = px ?? at;
           if (px == null) continue;
           pos.qty += q; pos.cost += q * px;
