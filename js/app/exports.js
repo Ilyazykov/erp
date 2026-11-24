@@ -880,7 +880,11 @@ async function snowballFullRows(statusEl) {
     for (const ticker of customTickers) {
       const list = historyBy.get(ticker) || [];
       const cur = currencyOf.get(ticker) || 'USD';
-      list.forEach(([day, usd]) => {
+      // Today has no price yet, and a day without one is 0 in Snowball when that day's deal is in another currency
+      // (gold is in EUR, its XAUT deals in USD): the last price carries over.
+      const last = list.at(-1);
+      const days = last && last[0] < today ? [...list, [today, last[1]]] : list;
+      days.forEach(([day, usd]) => {
         if (day < MP_SNOWBALL_START) return;
         const price = inCurrency(usd, cur, day);
         if (price === null) return;
