@@ -83,6 +83,14 @@ function mpFocusDeal(deals, focus) {
   const near = deals.filter(d => !d.via && d.side === focus.side && String(d.account).startsWith(focus.account) && off(d) <= 5);
   return near.length ? near.reduce((a, b) => (off(b) < off(a) ? b : a)) : null;
 }
+// The exchange a currency's window was opened for: {day, ccy, amount}, one of its two sides, within a day.
+function mpFocusExchange(list, focus) {
+  if (!focus) return null;
+  const off = d => Math.abs(Date.parse(`${d.day}T00:00:00Z`) - Date.parse(`${focus.day}T00:00:00Z`)) / 864e5;
+  const same = (c, a) => c === focus.ccy && Math.abs(a - focus.amount) < 0.011;
+  const near = list.filter(d => off(d) <= 1 && (same(d.soldCcy, d.soldAmount) || same(d.boughtCcy, d.boughtAmount)));
+  return near.length ? near.reduce((a, b) => (off(b) < off(a) ? b : a)) : null;
+}
 // The period to open on so that a day is in it: `period` if it is, else the shortest longer one.
 function mpPeriodWith(day, period, first, last) {
   if (mpPeriodStart(period, first, last) <= day) return period;
@@ -455,7 +463,8 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
           : `${acct}, in-bank exchange`;
         // the mark as the chart's own asset's deal: on USD/RUB (the dollar's price in roubles) roubles bought
         // are the dollar sold -- a red sale; on RUB/USD (the rouble's price) a green buy
-        return { day: String(e.at).slice(0, 10), bought, mine, usd: otherUsd, card: e.kind === 'card', side: bought === !!opts.invert ? 'buy' : 'sell', rate,
+        return { day: String(e.at).slice(0, 10), soldCcy: e.sold_ccy, soldAmount: Number(e.sold_amount), boughtCcy: e.bought_ccy, boughtAmount: Number(e.bought_amount),
+          bought, mine, usd: otherUsd, card: e.kind === 'card', side: bought === !!opts.invert ? 'buy' : 'sell', rate,
           text: `${amt(e.sold_amount, e.sold_ccy)} → ${amt(e.bought_amount, e.bought_ccy)}${edge(e)}<br>${when(e.known_at)}${mpEscapeHtml(via)}` };
       }).filter(Boolean);
     } catch (err) { console.warn('currency exchanges:', err); }
@@ -555,9 +564,10 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   const rateOn = day => { let lo = 0, hi = fx.length - 1, r = null; while (lo <= hi) { const m = (lo + hi) >> 1; if (fx[m].day <= day) { r = Number(fx[m].usd_per_unit); lo = m + 1; } else hi = m - 1; } return r; };
   const today = prices[prices.length - 1].day;
   const startOf = p => mpPeriodStart(p, prices[0].day, today);
-  // opened from a deal in an account's feed: that deal marked, in a period that has it
-  const focusDeal = mpFocusDeal(deals, opts.focus);
-  let period = focusDeal ? mpPeriodWith(focusDeal.trade_date, '1y', prices[0].day, today) : '1y';
+  // opened from a deal or an exchange in an account's feed: it's marked, in a period that has it
+  const focusDeal = mpFocusDeal(deals, opts.focus), focusFx = mpFocusExchange(fxDeals, opts.focusFx);
+  const focusDay = focusDeal?.trade_date ?? focusFx?.day;
+  let period = focusDay ? mpPeriodWith(focusDay, '1y', prices[0].day, today) : '1y';
   dlg.querySelectorAll('[data-p]').forEach(b => b.classList.toggle('primary', b.dataset.p === period));
   const draw = () => {
     const usd = ccy === 'USD' || usdBox.checked;
@@ -653,6 +663,11 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       traces.push({ x: ds.map(d => d.day), y: ds.map(d => d.rate), type: 'scatter', mode: 'markers', name: side === 'buy' ? 'bought' : 'sold',
         marker: { color, size: 14, opacity: 0 }, text: ds.map(d => d.text),
         hovertemplate: '%{x}:<br>%{text}<extra></extra>' });
+    }
+    if (focusFx && focusFx.day >= from) {
+      dealShapes.push({ type: 'path', xref: 'x', yref: 'y', xsizemode: 'pixel', ysizemode: 'pixel',
+        xanchor: focusFx.day, yanchor: focusFx.rate, path: house(focusFx.side === 'buy', 1.6),
+        fillcolor: '#ffd33d', line: { color: '#ffffff', width: 1.5 }, layer: 'above' });
     }
     if (payTrace) traces.push(payTrace);
     // the central bank's rate: a step line over the rate's, its own scale on the right (from the last change

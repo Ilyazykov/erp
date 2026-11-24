@@ -206,6 +206,11 @@ function mpTxPairExchanges(line) {
     used.add(bought);
     boughtOf.set(sold, bought);
     soldOf.set(bought, sold);
+    // each leg knows the other's currency, for its chart; gold's other leg opens gold
+    sold.fxWith = bought.unit;
+    bought.fxWith = sold.unit;
+    if (String(bought.unit).toUpperCase() === 'XAU') sold.chart = 'XAU';
+    if (String(sold.unit).toUpperCase() === 'XAU') bought.chart = 'XAU';
     const from = line.indexOf(sold), to = line.indexOf(bought);
     const between = from > to ? line.slice(to + 1, from) : [];
     if (between.some(r => r.chain === sold.chain && r.amount > 0) && !between.some(r => r.chain === bought.chain && r.amount < 0)) {
@@ -317,7 +322,12 @@ function mpTxRowHtml(r, withAccount, display) {
   // the deal to mark on that chart: a deal's side; a money line's by its sign (money out: bought; gold in: bought)
   const focusSide = !r.chart ? '' : r.side ? (['buy', 'sell'].includes(r.side) ? r.side : '')
     : (String(r.unit).toUpperCase() === 'XAU' ? r.amount > 0 : r.amount < 0) ? 'buy' : 'sell';
-  return `<div class="mp-tx-row${r.approx ? ' approx' : ''}${r.chart ? ' mp-tx-chart' : ''}" data-day="${r.day}"${r.chart ? ` data-tx-chart="${mpEscapeHtml(r.chart)}" data-tx-side="${focusSide}" data-tx-account="${mpEscapeHtml(r.account || '')}" title="Open its chart"` : ''}><span title="${mpEscapeHtml(r.category || '')}">${mpExpDot(r.meta || mpExpMeta())}</span><div class="mp-tx-body"><div class="mp-tx-main"><span class="mp-tx-name" title="${mpEscapeHtml(r.full || r.text)}">${mpEscapeHtml(r.text)}</span>${right}</div>${sub ? `<div class="mp-tx-sub">${mpEscapeHtml(sub)}</div>` : ''}</div></div>`;
+  // an exchange: the currency's window, the dollar's other side if it's the dollar (one leg alone, as under a currency filter: by its words)
+  const isFx = !r.chart && !r.side && !r.coin && (r.fxWith || /döviz|exchange|menjac|otkup|kupoprodaj|конверт|обмен|forex/i.test(r.full || ''));
+  const fxWindow = isFx ? (r.unit === 'USD' && r.fxWith ? r.fxWith : r.unit) : null;
+  const opens = r.chart ? ` data-tx-chart="${mpEscapeHtml(r.chart)}" data-tx-side="${focusSide}" data-tx-account="${mpEscapeHtml(r.account || '')}" title="Open its chart"`
+    : fxWindow ? ` data-tx-fx="${mpEscapeHtml(fxWindow)}" data-tx-unit="${mpEscapeHtml(r.unit)}" data-tx-amount="${Math.abs(r.amount)}" title="Open the currency's chart"` : '';
+  return `<div class="mp-tx-row${r.approx ? ' approx' : ''}${opens ? ' mp-tx-chart' : ''}" data-day="${r.day}"${opens}><span title="${mpEscapeHtml(r.category || '')}">${mpExpDot(r.meta || mpExpMeta())}</span><div class="mp-tx-body"><div class="mp-tx-main"><span class="mp-tx-name" title="${mpEscapeHtml(r.full || r.text)}">${mpEscapeHtml(r.text)}</span>${right}</div>${sub ? `<div class="mp-tx-sub">${mpEscapeHtml(sub)}</div>` : ''}</div></div>`;
 }
 
 // Puts the feed beside `plot`. display: {code, conv(day, usd)} to show amounts in, null: each in its own currency.
@@ -350,8 +360,13 @@ function mpAccountTxFeed(dlg, plot, account, startDisplay = null) {
   }, { passive: true });
   list.addEventListener('mouseleave', () => onDay(null));
   list.addEventListener('click', e => {
-    const row = e.target.closest('[data-tx-chart]');
+    const row = e.target.closest('[data-tx-chart],[data-tx-fx]');
     if (!row) return;
+    if (row.dataset.txFx) {
+      const chart = mpCurrencyChart(row.dataset.txFx);
+      if (chart) mpOpenPriceDialog(chart[0], chart[1], { ...chart[2], focusFx: { day: row.dataset.day, ccy: row.dataset.txUnit, amount: Number(row.dataset.txAmount) } });
+      return;
+    }
     const t = row.dataset.txChart;
     const [asset, title, opts] = t === 'XAU' ? mpCurrencyChart('XAU') : [t, MP_SHORT_NAMES[t] || t, {}];
     const focus = row.dataset.txSide ? { day: row.dataset.day, side: row.dataset.txSide, account: row.dataset.txAccount } : null;
