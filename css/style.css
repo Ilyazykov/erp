@@ -49,7 +49,7 @@
   .mp-tx-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 30px; padding: 6px 10px; border-bottom: 1px solid #30363d; font-size: 0.85rem; }
   .mp-tx-head .btn { padding: 2px 8px; font-size: 0.78rem; }
   .mp-tx-head > b { margin-right: auto; }
-  .mp-tx-head select { max-width: 120px; padding: 2px 4px; background: #161b22; color: #c9d1d9; border: 1px solid #30363d; border-radius: 4px; font-size: 0.78rem; }
+  .mp-tx-head select { max-width: 108px; padding: 2px 4px; background: #161b22; color: #c9d1d9; border: 1px solid #30363d; border-radius: 4px; font-size: 0.78rem; }
   .mp-tx-list { flex: 1; overflow-y: auto; overscroll-behavior: contain; font-size: 0.82rem; }
   .mp-tx-day { position: sticky; top: 0; z-index: 1; padding: 4px 10px; background: #171d25; color: #8b949e; font-size: 0.75rem; font-weight: 600; }
   .mp-tx-row { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid #1e2830; }

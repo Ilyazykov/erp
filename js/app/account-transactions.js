@@ -6,6 +6,35 @@
 const MP_TX_STEP = 10, MP_TX_FETCH = 30;
 const MP_TX_PAYOUTS = new Set(['dividend', 'amortisation']);   // their `quantity` is the money paid
 
+// The feed's account types. Each operation is of exactly one: the bank rows by product and source, the deals
+// by what was traded, the wallets' moves are crypto. An IIS is known by its contract.
+const MP_TX_KINDS = [['current', 'Current account'], ['savings', 'Savings account'], ['deposit', 'Deposit'], ['credit', 'Credit card'],
+  ['broker', 'Brokerage'], ['iis', 'IIS'], ['crypto', 'Crypto'], ['gold', 'Gold'], ['cash', 'Cash']];
+const MP_TX_IIS = ['S23188F'];
+const MP_TX_BROKER_SOURCES = ['tbank_broker_xlsx', 'sber_broker_html', 'tbank_api', 'atomyze_xlsx', 'ibkr_csv', 'freedom24_xlsx', 'revolut_invest_csv', 'openbanking_revolut_invest'];
+const MP_TX_FUND_SOURCES = '(revolut_fund_csv,openbanking_revolut_fund)';
+const mpTxIisSources = () => `(${MP_TX_IIS.map(c => `"sber_broker_html:${c}"`).join(',')})`;
+const MP_TX_MONEY_KINDS = {
+  current: q => MP_TX_BROKER_SOURCES.reduce((x, s) => x.not('external_source', 'like', `${s}%`), q)
+    .or('product.is.null,product.not.in.(credit_card,cash,brokerage_cash)').neq('currency', 'XAU'),
+  credit: q => q.eq('product', 'credit_card'),
+  cash: q => q.eq('product', 'cash'),
+  gold: q => q.eq('currency', 'XAU'),
+  iis: q => q.in('external_source', MP_TX_IIS.map(c => `sber_broker_html:${c}`)),
+  broker: q => q.or(`${MP_TX_BROKER_SOURCES.map(s => `external_source.like.${s}*`).join(',')},product.eq.brokerage_cash`)
+    .not('external_source', 'in', mpTxIisSources()).neq('currency', 'XAU'),
+};
+const mpTxNotIis = q => MP_TX_IIS.reduce((x, c) => x.not('external_id', 'like', `${c}:%`), q);
+const MP_TX_DEAL_KINDS = {
+  savings: q => q.or(`ticker.like.SAVINGS*,external_source.in.${MP_TX_FUND_SOURCES}`),
+  deposit: q => q.like('ticker', 'DEPOSIT:%'),
+  gold: q => q.in('ticker', ['XAU', 'XAUT', 'TGLD']),
+  crypto: q => q.eq('external_source', 'revolut_crypto_csv'),
+  iis: q => q.or(MP_TX_IIS.map(c => `external_id.like.${c}*`).join(',')).not('ticker', 'in', '(XAU,XAUT,TGLD)'),
+  broker: q => mpTxNotIis(q.not('ticker', 'like', 'SAVINGS%').not('ticker', 'like', 'DEPOSIT:%').not('ticker', 'in', '(XAU,XAUT,TGLD)')
+    .not('external_source', 'in', '(revolut_fund_csv,openbanking_revolut_fund,revolut_crypto_csv)')),
+};
+
 // What a chart layer holds, for the queries. (byDay.codes / .tickers: mpAccountByLabel)
 function mpTxLayerFilter(layer) {
   const codes = [...(layer.byDay.codes || [])], tickers = [...(layer.byDay.tickers || [])];
@@ -55,7 +84,7 @@ async function mpTxAddStoreNames(rows) {
 }
 
 // One source's next rows: [{day, at, ...}], from `offset`.
-function mpTxSources(account, filter, wallets, edge = null) {
+function mpTxSources(account, filter, wallets, edge = null, kind = null) {
   // edge {day, newer}: only what's before that day, newest first; newer: from that day on, oldest first
   const ascending = !!edge?.newer;
   const bounded = (q, col, dateOnly) => {
@@ -75,6 +104,7 @@ function mpTxSources(account, filter, wallets, edge = null) {
     let q = scoped(sb.from('bank_transactions').select('id, account, tx_date, description, counterparty, amount, currency, amount_approximate, expense_category, income_category, balance_after, product, external_source, external_id, expense_note'))
       .or('synthetic.is.null,synthetic.eq.false');
     if (filter) q = q.in('currency', filter.any);
+    if (kind) q = MP_TX_MONEY_KINDS[kind](q);
     return (await page(bounded(q, 'tx_date').order('tx_date', { ascending }).order('id'), offset)).map(r => ({
       day: r.tx_date.slice(0, 10), at: r.tx_date, account: r.account, ...mpTxNamed(plain(r.description) || r.counterparty || '', r.expense_note), type: '',
       src: r.external_source, xid: r.external_id,
@@ -85,6 +115,7 @@ function mpTxSources(account, filter, wallets, edge = null) {
   const deals = async offset => {
     let q = scoped(sb.from('trades').select('id, account, trade_date, side, ticker, quantity, price, currency, note, estimated'));
     if (filter) q = filter.fiat ? q.in('currency', filter.codes) : q.in('ticker', filter.tickers);
+    if (kind) q = MP_TX_DEAL_KINDS[kind](q);
     return (await page(bounded(q, 'trade_date', true).order('trade_date', { ascending }).order('id'), offset)).map(r => {
       const payout = MP_TX_PAYOUTS.has(r.side);
       return { day: r.trade_date, at: r.trade_date, account: r.account, text: MP_SHORT_NAMES[r.ticker] || r.ticker, type: r.side.replace(/_/g, ' '), side: r.side, bond: /^RU[A-Z0-9]{10}$/.test(r.ticker),
@@ -98,7 +129,9 @@ function mpTxSources(account, filter, wallets, edge = null) {
       day: r.tx_time.slice(0, 10), at: r.tx_time, account: wallets.get(r.wallet_id), text: ['ok', 'confirmed'].includes(r.status) ? r.symbol : r.status || r.symbol, type: r.kind.replace(/_/g, ' '),
       amount: Number(r.amount), unit: r.symbol, approx: !!r.estimated, coin: true }));
   };
-  return [money, deals, ...(wallets.size ? [crypto] : [])].map(load => ({ load, buf: [], offset: 0, done: false }));
+  const loads = [...(!kind || MP_TX_MONEY_KINDS[kind] ? [money] : []), ...(!kind || MP_TX_DEAL_KINDS[kind] ? [deals] : []),
+    ...(wallets.size && (!kind || kind === 'crypto') ? [crypto] : [])];
+  return loads.map(load => ({ load, buf: [], offset: 0, done: false }));
 }
 
 // One balance chain's rows of a day, earliest first: rows of the same moment in the order their balances
@@ -287,13 +320,13 @@ function mpAccountTxFeed(dlg, plot, account, startDisplay = null) {
   body.appendChild(plot);
   const feed = document.createElement('div');
   feed.className = 'mp-tx-feed';
-  feed.innerHTML = '<div class="mp-tx-head"><b>Transactions</b><select data-tx-ccy title="Currency" style="display:none"></select></div><div class="mp-tx-list" data-tx-list></div>';
+  feed.innerHTML = '<div class="mp-tx-head"><b>Transactions</b><select data-tx-kind title="Account type" style="display:none"></select><select data-tx-ccy title="Currency" style="display:none"></select></div><div class="mp-tx-list" data-tx-list></div>';
   body.appendChild(feed);
-  const list = feed.querySelector('[data-tx-list]'), ccy = feed.querySelector('[data-tx-ccy]');
+  const list = feed.querySelector('[data-tx-list]'), ccy = feed.querySelector('[data-tx-ccy]'), kindBox = feed.querySelector('[data-tx-kind]');
   const end = document.createElement('p');
   end.className = 'note mp-tx-end';
   let filter = null, sources = null, wallets = null, busy = false, finished = false, lastDay = null, ticket = 0;
-  let display = startDisplay, shownRows = [], layers = [];
+  let display = startDisplay, shownRows = [], layers = [], kind = null;
   // after a jump to a day: the older rows go on below, the newer ones are loaded above
   let startEdge = null, upSources = null, upBusy = false, topDone = true;
   // the row under the mouse: its day, for the mark on the chart
@@ -334,7 +367,7 @@ function mpAccountTxFeed(dlg, plot, account, startDisplay = null) {
     end.textContent = 'Loading…';
     try {
       await loadWallets();
-      sources ||= mpTxSources(account, filter, wallets, startEdge && { day: startEdge, newer: false });
+      sources ||= mpTxSources(account, filter, wallets, startEdge && { day: startEdge, newer: false }, kind);
       const rows = await mpTxNext(sources, MP_TX_STEP);
       await mpTxAddStoreNames(rows).catch(() => {});   // without them: "Apple", "PlayStation"
       for (let asked; asked !== display;) { asked = display; await mpTxEnsureRates(rows, asked); }
@@ -362,7 +395,7 @@ function mpAccountTxFeed(dlg, plot, account, startDisplay = null) {
     const mine = ticket;
     try {
       await loadWallets();
-      upSources ||= mpTxSources(account, filter, wallets, { day: startEdge, newer: true });
+      upSources ||= mpTxSources(account, filter, wallets, { day: startEdge, newer: true }, kind);
       const rows = await mpTxNext(upSources, MP_TX_STEP, true);
       await mpTxAddStoreNames(rows).catch(() => {});
       for (let asked; asked !== display;) { asked = display; await mpTxEnsureRates(rows, asked); }
@@ -407,8 +440,26 @@ function mpAccountTxFeed(dlg, plot, account, startDisplay = null) {
     filter = ccy.value === '' ? null : mpTxLayerFilter(layers[Number(ccy.value)]);
     restart();
   };
+  kindBox.onchange = () => { kind = kindBox.value || null; restart(); };
+  // only the types this account has (asked one by one, after the first rows; a failed question keeps the type)
+  const findKinds = async () => {
+    try { await loadWallets(); } catch { return; }
+    const found = [];
+    for (const [key, label] of MP_TX_KINDS) {
+      if (!dlg.open) return;
+      let has = false;
+      for (const s of mpTxSources(account, null, wallets, null, key)) {
+        try { has = (await s.load(0)).length > 0; } catch { has = true; }
+        if (has) break;
+      }
+      if (has) found.push([key, label]);
+    }
+    if (!dlg.open) return;
+    kindBox.innerHTML = `<option value="">All types</option>${found.map(([key, label]) => `<option value="${key}">${label}</option>`).join('')}`;
+    kindBox.style.display = found.length > 1 ? '' : 'none';
+  };
   dlg.addEventListener('close', () => { ticket++; });
-  restart();
+  Promise.resolve(restart()).finally(findKinds);
   return {
     // a click on the chart: the feed moves to that day (or the nearest before it), loading it if it isn't yet
     async scrollToDay(day) {
