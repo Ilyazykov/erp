@@ -934,6 +934,39 @@ function mpMagtiPayments(rows) {
   }
   return out;
 }
+// Cyprus Tax Department's payment receipt (taxportal.mof.gov.cy -> "Payment of Due Amount", paid
+// by card through JCC, printed to PDF, 26.11.2026) as a receipt CSV of one line: the payment, in
+// euros, its category Government & taxes -- the whole purchase's (migration ...262), whatever the
+// bank's row is named. Only an approved payment; its number the Payment Reference Number.
+function mpIsCyTaxPdf(rows) {
+  const text = rows.map(r => r.cells.map(c => c.s).join(' ')).join('\n');
+  return /taxportal\.mof\.gov\.cy/.test(text) && /Payment Reference \(JCC\)/.test(text);
+}
+// -> { ref, jcc, day, time, amount, approved } or { error }
+function mpCyTaxPayment(rows) {
+  const lines = rows.map(r => r.cells.map(c => c.s).join(' '));
+  const after = re => lines.map(l => l.match(re)).find(Boolean)?.[1]?.trim() || '';
+  const ref = after(/^Payment Reference Number\s+(\S+)/);
+  const jcc = after(/^Payment Reference \(JCC\)\s+(\S+)/);
+  const status = after(/^Status\s+(\S+)/);
+  const date = after(/^Payment Date\s+(\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}(?::\d{2})?)/);
+  const amount = Number(after(/^Amount\s+([\d.,]+)/).replace(/,/g, ''));
+  if (!ref || !date || !(amount > 0)) return { error: 'the payment number, its date or its amount not found' };
+  const [d, t] = date.split(' ');
+  const [dd, mm, yyyy] = d.split('/');
+  return { ref, jcc, day: `${yyyy}-${mm}-${dd}`, time: t.slice(0, 5), amount, approved: status === 'Approved', status };
+}
+function mpCyTaxReceiptCsv(payments) {
+  const q = v => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+  const out = ['receipt,date,time,store,chain,city,country,currency,total,line,item,item_en,qty,unit,unit_price_list,unit_price_paid,line_total,barcode,note,category,online'];
+  for (const p of payments) {
+    const a = p.amount.toFixed(2);
+    out.push([`CYTAX-${p.ref}`, p.day, p.time, 'Cyprus Tax Department', 'Tax Department', '', 'CY', 'EUR', a, 1,
+      'Payment of Due Amount', 'Cyprus tax payment', 1, 'pcs', a, a, a, '',
+      `Tax portal payment ${p.ref}${p.jcc ? `, JCC ${p.jcc}` : ''}`, 'Government & taxes', 1].map(q).join(','));
+  }
+  return out.join('\n') + '\n';
+}
 // Magti's internet packages (MyMagti -> ინტერნეტი, 22.11.2026), by price in lari: a top-up of
 // exactly a package's price is that package bought (the line names it; the top-up in its note)
 const MP_MAGTI_PACKAGES = {
@@ -1321,6 +1354,22 @@ async function mpImportFiles(files) {
             mpImportedSinceRefresh = true;
           }
         }
+      }
+      // Cyprus Tax Department's payment receipts: a receipt CSV, one line each
+      const cyTax = docs.filter(d => mpIsCyTaxPdf(d.rows));
+      docs = docs.filter(d => !cyTax.includes(d));
+      if (cyTax.length) {
+        const ok = [];
+        for (const d of cyTax) {
+          const p = mpCyTaxPayment(d.rows);
+          const rl = document.createElement('div');
+          listEl.appendChild(rl);
+          if (p.error) { rl.textContent = `${d.name}: Cyprus tax payment, ${p.error} -- not loaded.`; continue; }
+          if (!p.approved) { rl.textContent = `${d.name}: Cyprus tax payment ${p.ref}, status ${p.status || 'unknown'}, not Approved -- not loaded.`; continue; }
+          rl.textContent = `${d.name}: Cyprus tax payment ${p.ref}, ${p.day} ${p.time}, ${p.amount.toFixed(2)} EUR (Government & taxes).`;
+          ok.push(p);
+        }
+        if (ok.length) files.push(new File([mpCyTaxReceiptCsv(ok)], `cytax_${ok.map(p => p.day).join('+')}.csv`, { type: 'text/csv' }));
       }
       // MyMagti's payment history: a receipt CSV of its payments
       const magti = docs.filter(d => mpIsMagtiPdf(d.rows));
