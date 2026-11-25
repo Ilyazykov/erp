@@ -702,8 +702,6 @@ async function mpExpLoadRest() {
       if (!mpExpCovers(want)) await mpRenderExpenses();
     }
     mpExpFull = true;
-    // the comparison chart draws once the whole history is in, not alongside the tab's own loads
-    mpRenderCumulative().catch(() => { /* the chart shows its own note */ });
     // the calendar modes are drawn already and do not change with the history: only the note goes
     if (/_td$/.test(document.getElementById('exp_step').value)) await mpRenderExpenses();
     else document.getElementById('exp_status').textContent = '';
@@ -866,6 +864,21 @@ function mpCmpTicks(span, curFrom, curFull) {
 }
 function mpCmpDay(day, k) { return mpDayShift(day, k); }
 function mpCmpMonths(day, k) { const [y, m, d] = day.split('-').map(Number); return new Date(Date.UTC(y, m - 1 + k, d)).toISOString().slice(0, 10); }
+// The spending rows of the days from..to: the day and the dollars, the rows the tab counts (counted).
+// Two years for the 'year' comparison, some 4 000 rows: pages of 1 000, four at a time.
+async function mpExpDaySums(from, to) {
+  const out = [];
+  for (let at = 0; ; at += 4000) {
+    const parts = await Promise.all([0, 1, 2, 3].map(i => sb.from('expenses').select('day, usd')
+      .eq('counted', true).gte('day', from).lte('day', to).order('day').order('id')
+      .range(at + i * 1000, at + i * 1000 + 999)));
+    for (const { data, error } of parts) {
+      if (error) throw new Error(error.message);
+      out.push(...data.map(r => ({ day: r.day, usd: r.usd == null ? NaN : Number(r.usd) })));
+      if (data.length < 1000) return out;
+    }
+  }
+}
 async function mpRenderCumulative() {
   const el = document.getElementById('plot_exp_cumulative');
   if (!el) return;
@@ -884,7 +897,10 @@ async function mpRenderCumulative() {
   const prevFrom = span === 'week' ? mpCmpDay(curFrom, -7) : mpCmpMonths(curFrom, -MP_CMP_STEP[span]);
   const prevTo = mpCmpDay(curFrom, -1);
   note.textContent = 'Loading…';
-  const [cur, prev] = await Promise.all([mpExpLoad({ from: curFrom, to: today }), mpExpLoad({ from: prevFrom, to: prevTo })]);
+  // the day and the dollars of the spending rows only (the tab's own loads read notes, places and
+  // rates of all the history twice over: the chart waited for them)
+  const rows = await mpExpDaySums(prevFrom, today);
+  const cur = { spent: rows.filter(r => r.day >= curFrom) }, prev = { spent: rows.filter(r => r.day <= prevTo) };
   const prevDays = Math.round((Date.parse(prevTo) - Date.parse(prevFrom)) / 86400000) + 1;
   const xMax = Math.max(curFull, prevDays);
   const running = (part, from, n) => {

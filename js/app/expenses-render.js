@@ -17,6 +17,8 @@ async function mpExpEnsureRows(status) {
     } catch (error) { status.textContent = error.message; return false; }
     mpExpFull = false;
     mpExpLoadRest();
+    // the comparison chart at once, from its own day sums: it waited for the whole history before (26.11.2026)
+    mpRenderCumulative().catch(() => { /* the chart shows its own note */ });
   }
   // a period whose rows are not in the cache yet is loaded before its figures are drawn:
   // the page shows none of them as zeros or as a part
