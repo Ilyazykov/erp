@@ -692,7 +692,7 @@ async function mpExpLoadRest() {
       end = new Date(Date.UTC(y - 3, 11, 31));
     }
     for (const [from, to] of spans) {
-      const part = await mpExpLoad({ from, to });
+      const part = await mpExpLoadFresh({ from, to });
       // the tab re-loaded meanwhile (an upload, a category set): this load is over
       if (mpExpCache !== cache) return;
       mpMergeExpCache(part);
@@ -721,6 +721,21 @@ async function mpExpLoadTotals() {
     .order('kind').order('basis').order('month').order('category').order('account').order('counted').order('extrapolated'));
 }
 // adds one span's rows to the cache: rows already there (the period on screen) are kept once
+// The periods re-read after an upload. refresh_expenses rebuilds the expenses table, so its
+// rows come back with new ids: a load begun before the upload (the rest of the history in the
+// background) has the old ids, and merged by id they showed every row of the period twice
+// (26.11.2026). Such a load leaves out the days re-read since it began: they are fresh already.
+const mpExpReloaded = [];
+function mpExpLoadFresh(range) {
+  const seen = mpExpReloaded.length;
+  return mpExpLoad(range).then(part => {
+    const since = mpExpReloaded.slice(seen);
+    if (!since.length) return part;
+    const fresh = r => since.some(p => r.day >= p.from && r.day <= p.to);
+    return { ...part, spent: part.spent.filter(r => !fresh(r)), skipped: part.skipped.filter(r => !fresh(r)),
+      incomeRows: (part.incomeRows || []).filter(r => !fresh(r)) };
+  });
+}
 function mpMergeExpCache(part) {
   const cur = mpExpCache;
   const union = (a, b, key) => {
@@ -801,6 +816,7 @@ async function mpReloadPeriodKeepingHistory() {
   if (!cache) return;   // not loaded yet: the tab's first load reads the database
   const from = document.getElementById('exp_from').value, to = document.getElementById('exp_to').value;
   const inPeriod = r => r.day >= from && r.day <= to;
+  mpExpReloaded.push({ from, to });
   try {
     const part = await mpExpLoad({ from, to });
     if (mpExpCache !== cache) return;   // the tab re-loaded meanwhile

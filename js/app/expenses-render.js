@@ -23,7 +23,7 @@ async function mpExpEnsureRows(status) {
   const want = { from: document.getElementById('exp_from').value, to: document.getElementById('exp_to').value };
   if (!mpExpFull && !mpExpCovers(want)) {
     status.textContent = 'Loading…';
-    try { mpMergeExpCache(await mpExpLoad(want)); } catch (error) { status.textContent = error.message; return false; }
+    try { mpMergeExpCache(await mpExpLoadFresh(want)); } catch (error) { status.textContent = error.message; return false; }
   }
   return true;
 }
