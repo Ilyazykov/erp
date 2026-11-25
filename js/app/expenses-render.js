@@ -47,7 +47,7 @@ async function mpExpDrawSpent(c) {
   await Plotly.react(donut, [{
     type: 'pie', hole: 0.78, sort: false, direction: 'clockwise',
     labels: cats.map(c => c.cat), values: cats.map(c => c.total),
-    marker: { colors: cats.map(c => meta[c.cat].color), line: { color: '#0d1117', width: 2 } },
+    marker: { colors: cats.map(c => meta[c.cat].color), line: { color: '#0d1117', width: 1 } },
     textinfo: 'none', hovertemplate: `%{label}: %{value:,.0f} ${sym} · %{percent}<extra></extra>`,
   }], {
     paper_bgcolor: '#0d1117', plot_bgcolor: '#0d1117', showlegend: false, margin: { t: 10, b: 10, l: 10, r: 10 },
@@ -136,7 +136,7 @@ async function mpExpDrawIncome(c) {
   await Plotly.react(document.getElementById('plot_inc_donut'), incCats.length ? [{
     type: 'pie', hole: 0.78, sort: false, direction: 'clockwise',
     labels: incCats.map(c => c.cat), values: incCats.map(c => c.total),
-    marker: { colors: incCats.map(c => incColor(c.cat)), line: { color: '#0d1117', width: 2 } },
+    marker: { colors: incCats.map(c => incColor(c.cat)), line: { color: '#0d1117', width: 1 } },
     textinfo: 'none', hovertemplate: `%{label}: %{value:,.0f} ${sym} · %{percent}<extra></extra>`,
   }] : [], {
     paper_bgcolor: '#0d1117', plot_bgcolor: '#0d1117', showlegend: false, margin: { t: 10, b: 10, l: 10, r: 10 },
