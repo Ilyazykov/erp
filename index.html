@@ -29,10 +29,11 @@
   <div class="tab" data-tab="expenses">Expenses</div>
   <div class="tab" data-tab="products">Products</div>
   <div class="tab" data-tab="sigmoid">USD/RUB → CNY Weight (current + 5Y)</div>
+  <div class="tab-break"></div>
   <div class="tab" data-tab="userp">US ERP</div>
+  <div class="tab" data-tab="usstocks">US Stocks</div>
   <div class="tab" data-tab="layer2a">RU ERP</div>
   <div class="tab" data-tab="layer2r">RU Stocks</div>
-  <div class="tab" data-tab="usstocks">US Stocks</div>
   <div class="tab" data-tab="cryptostrat">Crypto strategy</div>
   <div class="tab" data-tab="maturities">Bonds &amp; deposits</div>
   <div class="tab" data-tab="automation">Automation</div>
@@ -479,8 +480,11 @@
 <p class="note"><b>Blue</b> — S&amp;P 500 earnings yield (1 / CAPE), <b>orange</b> — real 10Y rate, <b>green</b> — their gap; dotted — Damodaran's implied ERP.</p>
 <div id="plot_us_erp_z" style="height:420px; margin-top:8px"></div>
 <p class="note">Z-score of the green line above. <b>Above +1.5</b> — cheap, <b>below −1.5</b> — expensive. Drives the donut below.</p>
+<details id="damodaran_z_details" style="margin-top:8px">
+<summary class="note" style="cursor:pointer">Damodaran's Z-score (informational, not used in the donut)</summary>
 <div id="plot_damodaran_z" style="height:340px; margin-top:8px"></div>
 <p class="note"><b>INFORMATIONAL ONLY</b> — the same Z-score on Damodaran's ERP; not used in the donut.</p>
+</details>
 <div id="plot_us_alloc_target" style="height:420px; margin-top:8px"></div>
 <p class="note" id="us_alloc_target_note">
   <span class="loading">Loading current allocation…</span>

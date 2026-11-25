@@ -5,6 +5,9 @@
   h1 { font-size: 1.3rem; font-weight: 600; color: #e6edf3; margin-bottom: 4px; }
   .subtitle { font-size: 0.85rem; color: #6a7381; margin-bottom: 24px; }
   .tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  /* the US and RU tabs start a row of their own: not split between two (26.11.2026); the
+     break is a row of no height, its margin takes back the gap above it */
+  .tabs .tab-break { flex-basis: 100%; height: 0; margin-top: -8px; }
   .tab { padding: 6px 16px; border-radius: 6px; border: 1px solid #1e2830; background: #13191f;
           color: #8b949e; cursor: pointer; font-size: 0.85rem; transition: all 0.15s; }
   .tab:hover { border-color: #4da8c8; color: #c9d1d9; }

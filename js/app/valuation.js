@@ -368,6 +368,12 @@ function renderChart(id) {
       }),
     });
     Plotly.newPlot('plot_damodaran_z', usErpCut(DATA.damodaranZChart), damodaranZLayout, CONFIG);
+    // under a spoiler, closed by default: drawn while hidden, it takes its width when opened
+    const dzDetails = document.getElementById('damodaran_z_details');
+    if (dzDetails && !dzDetails.dataset.bound) {
+      dzDetails.dataset.bound = '1';
+      dzDetails.addEventListener('toggle', () => { if (dzDetails.open) Plotly.Plots.resize('plot_damodaran_z'); });
+    }
     Plotly.newPlot('plot_us_alloc_target', DATA.usAllocTarget, DATA.usAllocTargetLayout, CONFIG);
     // the target split over time (calc_us_allocation.py's history); none yet -- no chart
     if (DATA.usAllocHistory.length) {
