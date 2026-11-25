@@ -70,8 +70,8 @@ async function mpEditItems(src, xid) {
       }
       form.closest('dialog').close();
     });
-    // a line's own category (migration ...255): its share of the purchase moves there when the
-    // expenses are rebuilt -- within a minute (the database asks for it on the change)
+    // a line's own category (migration ...255): its share of the purchase moves there at once --
+    // the database splits that one purchase again on the change (migration ...260)
     form.querySelectorAll('.item-cat').forEach(sel => sel.addEventListener('change', async () => {
       const lineNo = Number(sel.dataset.item);
       const line = receipt.lines.find(l => l.line_no === lineNo);
@@ -80,7 +80,8 @@ async function mpEditItems(src, xid) {
       if (error) { alert(error.message); sel.value = line?.category || ''; return; }
       if (line) line.category = cat;
       sel.style.color = cat ? '#c9d1d9' : '#6a7381';
-      sel.title = 'Saved: the expenses show it within a minute';
+      sel.title = 'Saved';
+      mpReloadPeriodKeepingHistory();
     }));
     form.querySelectorAll('.item-note').forEach(cell => cell.addEventListener('click', async () => {
       const lineNo = Number(cell.dataset.item);
