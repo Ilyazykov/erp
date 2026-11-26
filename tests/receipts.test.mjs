@@ -128,5 +128,27 @@ check(receiptNorm('Dardanel/ 160 გრ!!') === receiptNorm('dardanel 160 გრ
   }
 }
 
+
+// ---- a shared bill (Atlas, 27.11.2026): every line at its price, one tea of three mine ----
+{
+  const csv = `receipt,date,time,store,chain,city,country,currency,total,line,item,item_en,qty,unit,unit_price_list,unit_price_paid,line_total,barcode,note,category,bill_total,my_qty
+102025,2026-11-27,,Atlas,,Tbilisi,GE,GEL,15.00,1,Chilim Classic,Hookah classic,3,pcs,80.00,80.00,0.00,,,,397.00,0
+102025,2026-11-27,,Atlas,,Tbilisi,GE,GEL,15.00,2,English Breakfast BB,English Breakfast tea,3,pcs,15.00,15.00,15.00,,,Restaurants & cafés,397.00,1
+102025,2026-11-27,,Atlas,,Tbilisi,GE,GEL,15.00,3,Rest of the bill,Rest of the bill,1,pcs,112.00,112.00,0.00,,,,397.00,0`;
+  const out = parseReceiptCsv(csv);
+  const r = out.receipts?.[0];
+  check(!('error' in out), `a shared bill parses${'error' in out ? `: ${out.error}` : ''}`);
+  check(r?.billTotal === 397, `its bill_total 397 (got ${r?.billTotal})`);
+  check(r?.total === 15 && near(r?.otherAmount, 0), `its total is what I paid, 15, no "Other" (got ${r?.total}, ${r?.otherAmount})`);
+  check(r?.lines[0].myQty === 0 && r?.lines[1].myQty === 1, `my_qty read per line (got ${r?.lines.map(l => l.myQty)})`);
+  check(r?.warnings.length === 0, `no warnings: line_total = my_qty x price, the lines at their prices = the bill (got ${JSON.stringify(r?.warnings)})`);
+  const off = parseReceiptCsv(csv.replace(',15.00,15.00,15.00,,,Restaurants', ',15.00,15.00,30.00,,,Restaurants').replace(/,15\.00,(\d),/g, ',30.00,$1,'));
+  check(off.receipts?.[0]?.warnings.some(w => /my_qty × unit_price_paid = 15\.00, line_total = 30\.00/.test(w)), `a line_total off my_qty x price is warned of (got ${JSON.stringify(off.receipts?.[0]?.warnings)})`);
+  const wrongBill = parseReceiptCsv(csv.replace(/,397\.00,/g, ',400.00,'));
+  check(wrongBill.receipts?.[0]?.warnings.some(w => /add up to 397\.00, the bill's total is 400\.00/.test(w)), `lines not adding up to the bill are warned of (got ${JSON.stringify(wrongBill.receipts?.[0]?.warnings)})`);
+  const tooMany = parseReceiptCsv(csv.replace('15.00,15.00,15.00,,,Restaurants & cafés,397.00,1', '15.00,15.00,15.00,,,Restaurants & cafés,397.00,4'));
+  check('error' in tooMany && /my_qty/.test(tooMany.error), `my_qty over qty is an error (got ${tooMany.error})`);
+}
+
 console.log(failures ? `\n${failures} failed` : '\nall ok');
 process.exit(failures ? 1 : 0);

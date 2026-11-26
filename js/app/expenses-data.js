@@ -93,7 +93,9 @@ const mpIncomeMeta = k => ({ icon: ({ Salary: '💼', 'Flat rent': '🏠' })[k] 
 const mpExpDot = ({ icon, color }) => `<div class="exp-dot" style="background:${color}33;color:${color}">${icon}</div>`;
 let mpExpCache = null;
 // receipt_lines' columns (migration ...179): the tab's bulk load and the Items dialog's fresh read
-const MP_RECEIPT_LINE_COLS = 'receipt_id, line_no, name_printed, name_en, product_id, qty, unit, unit_price_list, unit_price_paid, line_total, note, is_other, category';
+// my_qty: of a shared bill's line, how many were mine (migration ...264); read without it while that's not in
+const MP_RECEIPT_LINE_COLS_BASE = 'receipt_id, line_no, name_printed, name_en, product_id, qty, unit, unit_price_list, unit_price_paid, line_total, note, is_other, category';
+const MP_RECEIPT_LINE_COLS = `${MP_RECEIPT_LINE_COLS_BASE}, my_qty`;
 const mpExpFolded = new Set();  // groups folded in the list of the expenses tab
 const mpExpOpen = new Set();    // categories open onto their rows -- kept across re-renders
 // range {from, to} (YYYY-MM-DD): only the rows of that period; null: the whole history
@@ -185,8 +187,11 @@ async function mpExpLoad(range) {
   // design: docs/items-design.md, not tracked in git): none yet or no table
   // -- the items cell just offers "add items"
   const [receiptsList, receiptLineRows] = await Promise.all([
-    page(() => sb.from('receipts_active').select('id, tx_source, tx_external_id, source, chain, store_printed, currency, note, receipt_key, purchased_on')).catch(() => []),
-    page(() => sb.from('receipt_lines').select(MP_RECEIPT_LINE_COLS).order('line_no')).catch(() => []),
+    // bill_total: a shared bill's printed total (migration ...264); read without it while that's not in
+    page(() => sb.from('receipts_active').select('id, tx_source, tx_external_id, source, chain, store_printed, currency, note, receipt_key, purchased_on, bill_total'))
+      .catch(() => page(() => sb.from('receipts_active').select('id, tx_source, tx_external_id, source, chain, store_printed, currency, note, receipt_key, purchased_on')).catch(() => [])),
+    page(() => sb.from('receipt_lines').select(MP_RECEIPT_LINE_COLS).order('line_no'))
+      .catch(() => page(() => sb.from('receipt_lines').select(MP_RECEIPT_LINE_COLS_BASE).order('line_no')).catch(() => [])),
   ]);
   const linesByReceipt = new Map();
   for (const l of receiptLineRows || []) {
@@ -194,7 +199,7 @@ async function mpExpLoad(range) {
     linesByReceipt.get(l.receipt_id).push(l);
   }
   const receiptOf = new Map((receiptsList || []).map(r => [`${r.tx_source}|${r.tx_external_id}`,
-    { id: r.id, source: r.source, chain: r.chain, store: r.store_printed, currency: r.currency, note: r.note, key: r.receipt_key, day: r.purchased_on, lines: linesByReceipt.get(r.id) || [] }]));
+    { id: r.id, source: r.source, chain: r.chain, store: r.store_printed, currency: r.currency, note: r.note, key: r.receipt_key, day: r.purchased_on, billTotal: r.bill_total ?? null, lines: linesByReceipt.get(r.id) || [] }]));
   // a place shown by its name, with as much of its address as tells it from another of that name
   for (const r of [...spent, ...skipped, ...(inc || [])]) {
     const from = placeList.find(p => p.id === r.placeId), to = placeList.find(p => p.id === r.deliveredToId);

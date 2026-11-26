@@ -10,6 +10,8 @@
 // CSV shape (this project's own, not a bank or shop export):
 //   receipt,date,time,store,chain,city,country,currency,total,line,item,
 //   item_en,qty,unit,unit_price_list,unit_price_paid,line_total,barcode,note[,category]
+//   [,bill_total,my_qty: a shared bill -- its printed total, and of a line's qty how many were
+//   mine; total and line_total stay what I paid (migration ...264)]
 // Parsing, per-receipt consistency, warnings and the idempotency key
 // (`<date>|<printed receipt>|<total>`) all live in _shared/receipts.js,
 // shared with tests/receipts.test.mjs so the rule is tested once, not
@@ -93,7 +95,7 @@ Deno.serve(async (req) => {
         const part = (parts ?? [])[0];
         if (part) {
           const { data: old, error: oErr } = await supabase.from('receipt_items')
-            .select('line_no, name_printed, name_en, product_id, qty, unit, unit_price_list, unit_price_paid, line_total, barcode, note, category')
+            .select('line_no, name_printed, name_en, product_id, qty, unit, unit_price_list, unit_price_paid, line_total, barcode, note, category, my_qty')
             .eq('receipt_id', part.id);
           if (oErr) throw new Error(oErr.message);
           const hasVenue = r.lines.some(l => l.lineNo <= 100), hasWolt = r.lines.some(l => l.lineNo > 100);
@@ -134,7 +136,7 @@ Deno.serve(async (req) => {
         const { error: upErr } = await supabase.from('receipts').update({
           store_printed: r.store, chain: r.chain, city: r.city, country: r.country,
           ...(r.venue ? { venue: r.venue } : {}),
-          online: r.online,
+          online: r.online, bill_total: r.billTotal,
           purchased_at: r.purchasedAt, note, updated_at: new Date().toISOString(),
         }).eq('id', receiptId);
         if (upErr) throw new Error(upErr.message);
@@ -145,7 +147,7 @@ Deno.serve(async (req) => {
           user_id: user.id, source: 'receipt_csv', receipt_key: r.receiptKey,
           purchased_at: r.purchasedAt, purchased_on: r.date,
           store_printed: r.store, chain: r.chain, city: r.city, country: r.country, venue: r.venue, online: r.online,
-          currency: r.currency, total: r.total, note: leftoverNote || null,
+          currency: r.currency, total: r.total, bill_total: r.billTotal, note: leftoverNote || null,
         }).select('id').single();
         if (insErr) throw new Error(insErr.message);
         receiptId = ins.id;
@@ -175,7 +177,7 @@ Deno.serve(async (req) => {
         rows.push({
           user_id: user.id, receipt_id: receiptId, line_no: l.lineNo, name_printed: l.namePrinted, name_en: l.nameEn,
           product_id: productId, qty: l.qty, unit: l.unit, unit_price_list: l.unitPriceList, unit_price_paid: l.unitPricePaid,
-          line_total: l.lineTotal, barcode: l.barcode, note: l.note, category: l.category,
+          line_total: l.lineTotal, barcode: l.barcode, note: l.note, category: l.category, my_qty: l.myQty,
         });
       }
       rows.push(...keptRows);

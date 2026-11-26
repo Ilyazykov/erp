@@ -106,6 +106,12 @@ export function parseReceiptCsv(text) {
     if (!itemEn) return { error: `Row ${rowNo}: empty "item_en"` };
     if (qty === null || qty <= 0) return { error: `Row ${rowNo}: "qty" doesn't parse as a positive number ("${cell(cells, 'qty')}")` };
     if (lineTotal === null) return { error: `Row ${rowNo}: "line_total" doesn't parse as a number ("${cell(cells, 'line_total')}")` };
+    // optional, a shared bill (migration ...264): the bill's printed total, and of a line's qty how
+    // many were mine (empty: all)
+    const billTotal = cell(cells, 'bill_total') ? parseNum(cell(cells, 'bill_total')) : null;
+    if (cell(cells, 'bill_total') && !(billTotal > 0)) return { error: `Row ${rowNo}: "bill_total" doesn't parse as a positive number ("${cell(cells, 'bill_total')}")` };
+    const myQty = cell(cells, 'my_qty') ? parseNum(cell(cells, 'my_qty')) : null;
+    if (cell(cells, 'my_qty') && (myQty === null || myQty < 0 || myQty > qty)) return { error: `Row ${rowNo}: "my_qty" is not a number from 0 to qty ("${cell(cells, 'my_qty')}")` };
 
     const row = {
       rowNo, printedReceipt, date, time: /^\d{2}:\d{2}$/.test(time) ? time : '',
@@ -122,6 +128,7 @@ export function parseReceiptCsv(text) {
       venue: cell(cells, 'venue') || null,
       // optional: paid online (MyMagti's top-ups) -- no place
       online: /^(1|true|yes)$/i.test(cell(cells, 'online')),
+      billTotal, myQty,
     };
     if (!byReceipt.has(printedReceipt)) byReceipt.set(printedReceipt, []);
     byReceipt.get(printedReceipt).push(row);
@@ -148,10 +155,18 @@ export function parseReceiptCsv(text) {
     });
     if (dupes) warnings.push(`${dupes} duplicate line number(s) renumbered in file order`);
 
+    // a shared bill: line_total is what I paid -- my_qty of them (all, when empty) at the price
+    const billTotal = rows.find(r => r.billTotal != null)?.billTotal ?? null;
     for (const r of lines2) {
-      if (r.unitPricePaid != null && Math.abs(r.qty * r.unitPricePaid - r.lineTotal) > 0.01) {
-        warnings.push(`line ${r.lineNo} (${r.item.slice(0, 40)}): qty × unit_price_paid = ${(r.qty * r.unitPricePaid).toFixed(2)}, line_total = ${r.lineTotal.toFixed(2)}`);
+      const mine = r.myQty ?? r.qty;
+      if (r.unitPricePaid != null && Math.abs(mine * r.unitPricePaid - r.lineTotal) > 0.01) {
+        warnings.push(`line ${r.lineNo} (${r.item.slice(0, 40)}): ${r.myQty != null ? 'my_qty' : 'qty'} × unit_price_paid = ${(mine * r.unitPricePaid).toFixed(2)}, line_total = ${r.lineTotal.toFixed(2)}`);
       }
+    }
+    // ... and its lines at their prices add up to the bill's printed total
+    if (billTotal != null && lines2.every(r => r.unitPricePaid != null)) {
+      const full = Math.round(lines2.reduce((a, r) => a + r.qty * r.unitPricePaid, 0) * 100) / 100;
+      if (Math.abs(full - billTotal) >= 0.005) warnings.push(`the lines at their prices add up to ${full.toFixed(2)}, the bill's total is ${billTotal.toFixed(2)}`);
     }
     const linesSum = Math.round(lines2.reduce((a, r) => a + r.lineTotal, 0) * 100) / 100;
     const other = Math.round((first.total - linesSum) * 100) / 100;
@@ -164,11 +179,11 @@ export function parseReceiptCsv(text) {
       store: first.store, chain: first.chain || null, city: first.city, country: first.country,
       venue: rows.find(r => r.venue)?.venue || null,
       online: rows.some(r => r.online),
-      currency: first.currency, total: first.total,
+      currency: first.currency, total: first.total, billTotal,
       lines: lines2.map(r => ({
         lineNo: r.lineNo, namePrinted: r.item, nameEn: r.itemEn, qty: r.qty, unit: r.unit,
         unitPriceList: r.unitPriceList, unitPricePaid: r.unitPricePaid, lineTotal: r.lineTotal,
-        barcode: r.barcode, note: r.note, category: r.category,
+        barcode: r.barcode, note: r.note, category: r.category, myQty: r.myQty,
       })),
       warnings, otherAmount: other,
     });

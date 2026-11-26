@@ -26,7 +26,8 @@ async function mpEditItems(src, xid) {
   // showed "resolve" again -- a second click made a second product. The row's
   // Items cell is brought up to date with them.
   if (receipt) {
-    const { data: fresh, error: freshErr } = await sb.from('receipt_lines').select(MP_RECEIPT_LINE_COLS).eq('receipt_id', receipt.id).order('line_no');
+    let { data: fresh, error: freshErr } = await sb.from('receipt_lines').select(MP_RECEIPT_LINE_COLS).eq('receipt_id', receipt.id).order('line_no');
+    if (freshErr) ({ data: fresh, error: freshErr } = await sb.from('receipt_lines').select(MP_RECEIPT_LINE_COLS_BASE).eq('receipt_id', receipt.id).order('line_no'));
     if (!freshErr && fresh) {
       receipt.lines = fresh;
       document.querySelectorAll('#expenses .exp-items').forEach(c => {
@@ -42,13 +43,15 @@ async function mpEditItems(src, xid) {
     // dollars at the purchase day's rate: the row's own dollars over its own amount (the receipt's currency)
     const usdPer = (receipt.currency || r.ccy) === r.ccy && r.amt ? r.usd / r.amt : NaN;
     const usdOf = gel => (Number.isFinite(usdPer) ? `$${(gel * usdPer).toFixed(2)}` : '—');
-    const lineRow = l => `<tr data-item="${l.line_no}">
+    // a shared bill (migration ...264): a line's part that was mine, "1 of 3"; one none of which was mine dimmed
+    const shared = l => l.my_qty != null && Number(l.my_qty) !== Number(l.qty);
+    const lineRow = l => `<tr data-item="${l.line_no}"${shared(l) && Number(l.my_qty) === 0 ? ' style="opacity:0.55" title="Shared bill: paid by the others"' : ''}>
         <td style="text-align:left">${l.product_id != null
           ? `<a href="#" class="item-product" data-pid="${l.product_id}" style="color:#58a6ff">${mpEscapeHtml(l.name_en || l.name_printed)}</a>`
           : receipt.source === 'apple' ? `<a href="#" class="item-apple" data-item="${l.line_no}" style="color:#58a6ff" title="Price history">${mpEscapeHtml(l.name_en || l.name_printed)}</a>`
           : `${mpEscapeHtml(l.name_en || l.name_printed)} <a href="#" class="item-resolve" data-item="${l.line_no}" style="color:#d29922">resolve</a>`}
           <div style="font-size:0.85em;color:#6a7381">${mpEscapeHtml(l.name_printed)}</div></td>
-        <td>${l.qty} ${l.unit}</td>
+        <td>${shared(l) ? `${l.my_qty} of ${l.qty}` : l.qty} ${l.unit}</td>
         <td>${l.unit_price_paid != null ? mpFormatCurrency(l.unit_price_paid, receipt.currency || r.ccy, true) : '—'}</td>
         <td>${mpFormatCurrency(l.line_total, receipt.currency || r.ccy, true)}</td>
         <td>${usdOf(Number(l.line_total))}</td>
@@ -57,7 +60,8 @@ async function mpEditItems(src, xid) {
     const form = mpDialog(`Items · ${r.day} · ${mpShortDesc(r.description)}`, `
       <p class="note" style="margin:0">${receipt.source === 'apple'
         ? `From Apple's purchase history · order ${mpEscapeHtml(receipt.key || '')}, ${mpEscapeHtml(receipt.day || '')}`
-        : `${mpEscapeHtml(receipt.source === 'receipt_csv' ? 'From a receipt' : 'From the statement')}${receipt.chain ? ` · ${mpEscapeHtml(receipt.chain)}` : ''}${receipt.store ? ` · ${mpEscapeHtml(receipt.store)}` : ''}`}</p>
+        : `${mpEscapeHtml(receipt.source === 'receipt_csv' ? 'From a receipt' : 'From the statement')}${receipt.chain ? ` · ${mpEscapeHtml(receipt.chain)}` : ''}${receipt.store ? ` · ${mpEscapeHtml(receipt.store)}` : ''}`}${receipt.billTotal != null
+        ? ` · shared bill ${mpFormatCurrency(receipt.billTotal, receipt.currency || r.ccy, true)}, my part ${mpFormatCurrency(real.reduce((a, l) => a + Number(l.line_total), 0), receipt.currency || r.ccy, true)}` : ''}</p>
       <table class="data-table"><thead><tr><th style="text-align:left">Item</th><th>Qty</th><th>Price</th><th>Line</th><th>USD</th><th style="text-align:left">Category</th><th style="text-align:left">Note</th></tr></thead>
         <tbody>${real.map(lineRow).join('')}${other ? lineRow(other) : ''}</tbody></table>
       <label>Receipt note <input name="rnote" value="${mpEscapeHtml(receipt.note || '')}" style="${MP_FIELD}"></label>`);
