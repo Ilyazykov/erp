@@ -93,7 +93,8 @@ async function mpLoadCryptoDeals() {
     if (Math.abs(d) <= 0.1 * (buy + sell)) continue;
     // under 0.1% of the portfolio: dust (a few euros of TAO, a fee's change), not a deal
     if (Math.abs(d) < MP_CRYPTO_DUST_PCT / 100 * capOn(day)) continue;
-    (d > 0 ? mpCryptoBuys : mpCryptoSells).push({ day, usd: Math.abs(d) });
+    // pct: of the portfolio that day -- what the buy took of the 1% step (mpCryptoStepLeft)
+    (d > 0 ? mpCryptoBuys : mpCryptoSells).push({ day, usd: Math.abs(d), pct: capOn(day) > 0 ? Math.abs(d) / capOn(day) * 100 : 0 });
   }
   mpCryptoBuyDays = mpCryptoBuys.map(b => b.day);
   mpCryptoSellDays = mpCryptoSells.map(b => b.day);
@@ -224,7 +225,23 @@ const mpDaysBefore = (day, n) => mpDayShift(day, -n);
 //   green: the share less 1% (1-10%), 2% (10-20%), 3% (20% and more), not below 1%;
 //     never a buy, even under 1%
 //   neutral after green: the share (nothing to do), but not below 1%
-function mpCryptoTarget(day, share, zone, regime, lastBuy, lastSell) {
+// The red zone's 1% step as a bucket (27.11.2026: a buy of 0.3% used to count as the whole 1%,
+// the next one 30 days off): full at 1 p.p., each buy takes its share of the portfolio out, and
+// it fills again at 1/30 p.p. a day, never over 1. What's in it on `day` (the buys before it;
+// `incl`: that day's too)
+function mpCryptoStepLeft(day, incl = false) {
+  const dd = (a, b) => (Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86400000;
+  let left = 1, prev = null;
+  for (const x of mpCryptoBuys) {
+    if (incl ? x.day > day : x.day >= day) break;
+    if (prev) left = Math.min(1, left + dd(prev, x.day) / 30);
+    left -= x.pct || 0;
+    prev = x.day;
+  }
+  if (prev) left = Math.min(1, left + dd(prev, day) / 30);
+  return Math.max(0, left);
+}
+function mpCryptoTarget(day, share, zone, regime, lastBuy, lastSell, stepLeft = 1) {
   const monthAgo = mpDaysBefore(day, 30);
   if (zone === 'green') {
     const step = share >= 20 ? 3 : share >= 10 ? 2 : 1;
@@ -236,12 +253,10 @@ function mpCryptoTarget(day, share, zone, regime, lastBuy, lastSell) {
   if (zone === 'red' || regime !== 'green') {
     const head = zone === 'red' ? 'красная зона' : 'нейтральная после красной';
     if (share >= MP_AHR.target) return { target: share, step: 1, why: `${head}: доля уже не ниже ${MP_AHR.target}%, ничего не делать` };
-    // after a buy the next 1% comes back gradually: from 0 on its day to the
-    // whole 1% 30 days on
-    if (lastBuy && lastBuy > monthAgo) {
-      const part = (Date.parse(day + 'T00:00:00Z') - Date.parse(lastBuy + 'T00:00:00Z')) / 86400000 / 30;
-      return { target: Math.max(MP_AHR.floor, Math.min(MP_AHR.target, share + part)), step: 1,
-        why: `${head}: после покупки ${lastBuy} следующий шаг набирается — +${part.toFixed(2)} из 1 п.п.` };
+    // after a buy what's left of the 1% step, filling again over 30 days (mpCryptoStepLeft)
+    if (lastBuy && lastBuy > monthAgo && stepLeft < 1) {
+      return { target: Math.max(MP_AHR.floor, Math.min(MP_AHR.target, share + stepLeft)), step: 1,
+        why: `${head}: после покупки ${lastBuy} от шага 1 п.п. доступно +${stepLeft.toFixed(2)} п.п. (покупки вычтены, шаг набирается за 30 дней)` };
     }
     return { target: Math.max(MP_AHR.floor, Math.min(MP_AHR.target, share + 1)), step: 1, why: `${head}: докупить на 1% портфеля, до ${MP_AHR.target}%` };
   }
@@ -259,7 +274,7 @@ function mpCryptoPlan(share, ind = mpCryptoInd) {
   let regime = null;
   for (let i = ind.length - 1; i >= 0 && !regime; i--) { const z = mpAhrZone(ind[i].ahr, ind[i]); if (z !== 'neutral') regime = z; }
   const today = new Date().toISOString().slice(0, 10);
-  const t = mpCryptoTarget(today, share, zone, regime, mpLastBefore(mpCryptoBuyDays, today + 'z'), mpLastBefore(mpCryptoSellDays, today + 'z'));
+  const t = mpCryptoTarget(today, share, zone, regime, mpLastBefore(mpCryptoBuyDays, today + 'z'), mpLastBefore(mpCryptoSellDays, today + 'z'), mpCryptoStepLeft(today, true));
   const action = t.target > share + 1e-9 ? 'buy' : t.target < share - 1e-9 ? 'sell' : 'hold';
   return { day: last.day, ahr: last.ahr, zone, regime, ...t, action };
 }
@@ -410,7 +425,7 @@ async function mpRenderCryptoStrategy() {
       const a = ahrOn.get(x.day) ?? [...ind].reverse().find(r => r.day <= x.day);
       const z = a === undefined ? 'neutral' : mpAhrZone(a.ahr, a);
       if (z !== 'neutral') regime = z;
-      return mpCryptoTarget(x.day, x.pct, z, regime, mpLastBefore(mpCryptoBuyDays, x.day), mpLastBefore(mpCryptoSellDays, x.day)).target;
+      return mpCryptoTarget(x.day, x.pct, z, regime, mpLastBefore(mpCryptoBuyDays, x.day), mpLastBefore(mpCryptoSellDays, x.day), mpCryptoStepLeft(x.day)).target;
     });
     Plotly.newPlot('plot_cs_share', [
       { x: shown.map(x => x.day), y: targets, type: 'scatter', mode: 'lines', name: 'цель стратегии', connectgaps: false, opacity: 0.45, line: { color: '#3dd68c', width: 3, shape: 'hv' },
