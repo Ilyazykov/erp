@@ -110,14 +110,15 @@ const MP_ASSET_CLASS_LABELS = {
 // amounts move from their column (cash / liquid assets) to 'cushion' -- the
 // totals stay.
 const MP_CUSHION_USD = 10000;
-// "account|instrument_type" taken whole; loaded once signed in (mpCushionEnsure)
+// "account|instrument_type|currency" taken whole, currency '' for all of them (TBC's dollars
+// only, 27.11.2026); loaded once signed in (mpCushionEnsure)
 let mpCushionSources = new Set();
 let mpCushionLoading = null;
 function mpCushionEnsure() {
   return mpCushionLoading = mpCushionLoading || (async () => {
-    const { data, error } = await sb.from('cushion_sources').select('account, instrument_type');
+    const { data, error } = await sb.from('cushion_sources').select('account, instrument_type, currency');
     if (error) { mpCushionLoading = null; throw error; }
-    mpCushionSources = new Set((data || []).map(r => `${r.account}|${r.instrument_type}`));
+    mpCushionSources = new Set((data || []).map(r => `${r.account}|${r.instrument_type}|${r.currency || ''}`));
   })();
 }
 window.mpCushionEnsure = mpCushionEnsure;
@@ -126,7 +127,8 @@ window.mpCushionEnsure = mpCushionEnsure;
 const MP_FOREIGN_BROKERS = new Set(['IBKR', 'Freedom24']);
 // (a row the fund takes whole -- its cell then shows a grey zero)
 const mpCushionWhole = r => r.value_usd > 0 && (r.instrument_type === 'cash' || r.instrument_type === 'liquid')
-  && mpCushionSources.has(`${r.account}|${r.instrument_type}`);
+  && (mpCushionSources.has(`${r.account}|${r.instrument_type}|`)
+    || mpCushionSources.has(`${r.account}|${r.instrument_type}|${r.underlying_currency || r.currency}`));
 function mpWithCushion(rows) {
   const out = rows.map(r => (mpCushionWhole(r) ? { ...r, instrument_type: 'cushion' } : r));
   let need = MP_CUSHION_USD - out.filter(r => r.instrument_type === 'cushion').reduce((a, r) => a + r.value_usd, 0);
@@ -727,8 +729,12 @@ function mpRenderCushionSources(wrap, rows, money) {
   for (const r of rows) {
     if (r.instrument_type !== 'cash' && r.instrument_type !== 'liquid') continue;
     if (r.instrument_type === 'liquid' && r.account === 'Revolut') continue;
-    const k = `${r.account}|${r.instrument_type}`;
-    by.set(k, (by.get(k) || 0) + (Number(r.value_usd) || 0));
+    // the account's whole cash / savings, and the one currency when that alone is a source
+    const v = Number(r.value_usd) || 0;
+    const all = `${r.account}|${r.instrument_type}|`;
+    by.set(all, (by.get(all) || 0) + v);
+    const one = `${all}${r.underlying_currency || r.currency}`;
+    if (mpCushionSources.has(one)) by.set(one, (by.get(one) || 0) + v);
   }
   for (const k of mpCushionSources) if (!by.has(k)) by.set(k, 0);
   const items = [...by.entries()].filter(([k, v]) => v > 0.005 || mpCushionSources.has(k))
@@ -737,7 +743,7 @@ function mpRenderCushionSources(wrap, rows, money) {
   box.className = 'empty-note';
   box.append('Emergency fund takes whole: ');
   items.forEach(([k, v], i) => {
-    const [account, type] = k.split('|');
+    const [account, type, currency] = k.split('|');
     const label = document.createElement('label');
     label.style.whiteSpace = 'nowrap';
     const cb = document.createElement('input');
@@ -746,13 +752,13 @@ function mpRenderCushionSources(wrap, rows, money) {
     cb.addEventListener('change', async () => {
       cb.disabled = true;
       const { error } = cb.checked
-        ? await sb.from('cushion_sources').insert({ account, instrument_type: type })
-        : await sb.from('cushion_sources').delete().eq('account', account).eq('instrument_type', type);
+        ? await sb.from('cushion_sources').insert({ account, instrument_type: type, currency })
+        : await sb.from('cushion_sources').delete().eq('account', account).eq('instrument_type', type).eq('currency', currency);
       if (error) { cb.checked = !cb.checked; cb.disabled = false; alert(error.message); return; }
       if (cb.checked) mpCushionSources.add(k); else mpCushionSources.delete(k);
       mpRenderBrokerAssetClass();
     });
-    label.append(cb, ` ${MP_BROKER_SHORT_NAMES[account] || account} ${type === 'liquid' ? 'savings' : 'cash'} ${money(v)}`);
+    label.append(cb, ` ${MP_BROKER_SHORT_NAMES[account] || account} ${type === 'liquid' ? 'savings' : 'cash'}${currency ? ` ${currency}` : ''} ${money(v)}`);
     if (i) box.append(' · ');
     box.append(label);
   });
