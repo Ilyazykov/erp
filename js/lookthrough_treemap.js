@@ -955,6 +955,7 @@ function wireTreemap() {
   const g = name => (typeof window[name] === 'function' ? window[name] : null);
   let data = null, loading = null, run = 0;
   const earnedCache = new Map();
+  const earnedSnap = new Map();   // the snapshot's periods (migration ...267)
   let period = '1d';
   let method = 'contrib';
   try { const v = localStorage.getItem('lt_method'); if (METHODS.includes(v)) method = v; } catch { /* no storage */ }
@@ -965,7 +966,48 @@ function wireTreemap() {
   if ($('lt_show')) $('lt_show').value = showIn;
   const today = () => new Date().toISOString().slice(0, 10);
 
+  // the constituents' company (its name: share classes of one company merge) and the name as written
+  // (a numbered share, 2330, is shown by it: TSMC), from [fund, ticker, weight %, name] rows
+  function holdingsOf(list) {
+    const companyOf = new Map(), nameOf = new Map(), fundHoldings = {};
+    for (const [fund, t, weight, name] of list) {
+      if (name) {
+        // the company: France's loyalty shares ("L'OREAL SA - PF - 2028") are its ordinary ones
+        companyOf.set(t, String(name).trim().toLowerCase().replace(/\s-\spf\s-\s\d{4}$/, '').replace(/\s+eur[\d.]+.*$/, '').replace(/\s*\(.*$/, '')
+          .replace(/\s+(sa|se|nv|ag|plc)$/, '').replace(/^rio tinto ltd$/, 'rio tinto'));   // a dual-listed group: plc and Ltd, one
+        nameOf.set(t, String(name).trim());
+      }
+      (fundHoldings[fund] = fundHoldings[fund] || []).push({ ticker: t, weight: Number(weight) / 100 });
+    }
+    return { fundHoldings, companyOf, nameOf };
+  }
+
+  // the rows the map draws: the portfolio's (the page's own, loaded once for all its tabs)
+  async function portfolioRows(frozen) {
+    // eslint-disable-next-line no-undef
+    const base = await mpLoadPortfolioBase();
+    // eslint-disable-next-line no-undef
+    return [...await mpSplitFundsCash(base.data), ...base.cashRows, ...base.realEstateRows]
+      .filter(r => r.value_usd !== null && !frozen.has(String(r.ticker || '').toUpperCase()));
+  }
+
+  // everything else at once, built by the capital refresh when the prices or the deals change
+  // (treemap_snapshots, migration ...267); none yet -- the old way, piece by piece
   async function loadData() {
+    // eslint-disable-next-line no-undef
+    const { data: snap } = await sb.from('treemap_snapshots').select('built_on, data').maybeSingle();
+    if (!snap?.data) return loadDataLive();
+    const d = snap.data;
+    const frozen = new Set((d.frozen || []).map(t => String(t).toUpperCase()));
+    const { links, periods } = buildSavingsLinks(d.savings || []);
+    const fx = new Map(Object.entries(d.fx || {}).map(([c, pts]) => [c, pts.map(([day, k]) => [day, Number(k)])]));
+    // the periods' earnings: good for today only (their first days are counted back from it)
+    if (snap.built_on === today()) for (const [p, e] of Object.entries(d.earned || {})) earnedSnap.set(p, e);
+    return { rows: await portfolioRows(frozen), frozen, ...holdingsOf(d.holdings || []), savingsLinks: links, savingsPeriods: periods,
+      firstDay: d.first_day || '2000-01-01', reIndex: d.re_index || [], fx };
+  }
+
+  async function loadDataLive() {
     // eslint-disable-next-line no-undef
     const base = await mpLoadPortfolioBase();
     // eslint-disable-next-line no-undef
@@ -1031,6 +1073,11 @@ function wireTreemap() {
   async function earnedFor(p) {
     if (!earnedCache.has(p)) {
       const from = periodStart(p, today()) ?? data.firstDay;
+      const snapped = earnedSnap.get(p);
+      if (snapped && snapped.from === from) {
+        earnedCache.set(p, snapped.rows.filter(r => !data.frozen.has(String(r.asset).toUpperCase())));
+        return earnedCache.get(p);
+      }
       // eslint-disable-next-line no-undef
       const { data: rows, error } = await sb.rpc('investment_by_asset', { p_from: from, p_to: today(), p_ccy: 'USD' });
       if (error) throw new Error(error.message);
@@ -1223,7 +1270,7 @@ function wireTreemap() {
   const show = () => { if ($('lookthrough').classList.contains('active') && signedIn.style.display !== 'none') redraw(); };
   document.querySelector('.tab[data-tab="lookthrough"]')?.addEventListener('click', () => setTimeout(show, 0));
   new MutationObserver(() => {
-    if (signedIn.style.display === 'none') { data = null; loading = null; earnedCache.clear(); box.textContent = ''; status.textContent = ''; }
+    if (signedIn.style.display === 'none') { data = null; loading = null; earnedCache.clear(); earnedSnap.clear(); box.textContent = ''; status.textContent = ''; }
     else show();
   }).observe(signedIn, { attributes: true, attributeFilter: ['style'] });
   show();
