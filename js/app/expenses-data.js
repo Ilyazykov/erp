@@ -180,6 +180,13 @@ async function mpExpLoad(range) {
     r.handTime = true;
     r.approx = !!t.authorized_approx;
   }
+  // a receipt's own row: its account is its own (unknown or set by hand) -- or the bank's, when a
+  // pending hold stands under it (migration ...266); that one isn't changed by hand
+  const ownAcc = await page(() => sb.from('bank_transactions').select('external_id, account').eq('external_source', 'receipt_csv').order('id')).catch(() => []);
+  const ownAccOf = new Map((ownAcc || []).map(t => [t.external_id, t.account]));
+  for (const r of [...spent, ...skipped]) {
+    if (r.src === 'receipt_csv') r.accountOwn = r.account === (ownAccOf.get(r.xid) ?? '<unknown>');
+  }
   // the places one's rows can be set to (the Place column's picker)
   const placeList = await page(() => sb.from('places').select('id, name, lat, lng, url, google_id, city, street, house, country').order('name'))
     .catch(() => page(() => sb.from('places').select('id, name, lat, lng, url, google_id').order('name')).catch(() => []));

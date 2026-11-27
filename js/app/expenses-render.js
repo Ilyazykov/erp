@@ -70,7 +70,7 @@ async function mpExpDrawSpent(c) {
       <td class="exp-cat-set" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}"${r.split ? ' data-split="1" title="Set on the receipt\'s lines: click to open it"' : ' title="Click to change the category"'} style="text-align:left;cursor:pointer;color:#c9d1d9">${esc(r.cat || '—')}</td>
       <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to set the place" style="text-align:left;max-width:180px;cursor:pointer">${mpPlaceHtml(r.place, r.deliveredTo)}</td>
       <td class="exp-items" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to see / add items" style="text-align:left;cursor:pointer">${mpItemsHtml(mpExpCache?.receiptOf?.get(`${r.src}|${r.xid}`))}</td>
-      ${r.src === 'receipt_csv'
+      ${r.src === 'receipt_csv' && r.accountOwn   // a receipt's own row; the account from the bank's hold under it (migration ...266) stays
         ? `<td class="exp-account" data-src="${esc(r.src)}" data-xid="${esc(r.xid || '')}" title="Click to set the account" style="text-align:left;cursor:pointer">${esc(r.account)}</td>`
         : `<td style="text-align:left">${esc(r.account)}</td>`}
       <td>${esc(mpExpAmount(r.amt, r.ccy))}</td><td>${rowMoney(conv(r))}</td></tr>`).join('')}</tbody></table></div>`;
