@@ -436,13 +436,15 @@ function mpSalaryDeltas(c, plan) {
     mpSave('mp_salary_nofreedom', noFreedom.checked ? '1' : '0');
     mpDrawCharts();
   });
-  // chart 3's emergency fund switch, remembered in this browser
-  const cushion = document.getElementById('mp_charts_cushion');
-  try { cushion.checked = localStorage.getItem('mp_charts_cushion') === '1'; } catch { /* no storage */ }
-  cushion.addEventListener('change', () => {
-    mpSave('mp_charts_cushion', cushion.checked ? '1' : '0');
-    mpDrawCharts();
-  });
+  // chart 3's emergency fund and day-to-day money switches, remembered in this browser
+  for (const id of ['mp_charts_cushion', 'mp_charts_spending']) {
+    const el = document.getElementById(id);
+    try { el.checked = localStorage.getItem(id) === '1'; } catch { /* no storage */ }
+    el.addEventListener('change', () => {
+      mpSave(id, el.checked ? '1' : '0');
+      mpDrawCharts();
+    });
+  }
 }
 
 let mpChartsRun = 0;
@@ -673,7 +675,9 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   const total8 = Object.values(types8).reduce((s, v) => s + v, 0);
   // The cash outside the fund: money to spend on things, its target what it is.
   const cashOutside = buckets3[L.cash] || 0;
-  const fundCash = (types[L.cash] || 0) - cashOutside;
+  // what the fund / the day-to-day money took from the cash (the rest of each from the liquid assets)
+  const tookCash = type => withCushion.filter(r => r.instrument_type === type && r.from_type === 'cash').reduce((a, r) => a + r.value_usd, 0);
+  const fundCash = tookCash('cushion'), spendCash = tookCash('spending');
   // The group's share of chart 3: its total less the emergency fund / that
   // cash / gold / crypto targets (gold and crypto 5% each) -- so chart 3's
   // targets add up to its total.
@@ -717,12 +721,20 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   // columns it sits in, and so does its $10,000 -- the cash its cash part, the
   // liquid assets the rest.
   const cushionOn = !!(document.getElementById('mp_charts_cushion') || {}).checked;
-  const types3 = cushionOn ? buckets3 : types;
+  // the day-to-day money a slice of its own with its switch (27.11.2026), as the fund with its own;
+  // off, its money and its target stay in the cash / liquid assets it sits in
+  const spendingOn = !!(document.getElementById('mp_charts_spending') || {}).checked;
+  const types3 = cushionOn && spendingOn ? buckets3 : !cushionOn && !spendingOn ? types
+    : mpAssetBuckets(mpWithCushion(assetRows.filter(r => !isRealEstate(r)), { cushion: cushionOn, spending: spendingOn }));
   const group3 = target8;
-  const target3 = group3 && (cushionOn
-    ? { ...group3, [L.cash]: cashOutside, [L.cushion]: MP_CUSHION_USD, [L.spending]: spendingTarget, [L.gold]: goldTarget, [L.crypto]: cryptoTarget }
-    : { ...group3, [L.cash]: cashOutside + fundCash, [L.liquid]: (group3[L.liquid] || 0) + MP_CUSHION_USD + spendingTarget - fundCash,
-        [L.gold]: goldTarget, [L.crypto]: cryptoTarget });
+  const target3 = group3 && {
+    ...group3,
+    [L.cash]: cashOutside + (cushionOn ? 0 : fundCash) + (spendingOn ? 0 : spendCash),
+    [L.liquid]: (group3[L.liquid] || 0) + (cushionOn ? 0 : MP_CUSHION_USD - fundCash) + (spendingOn ? 0 : spendingTarget - spendCash),
+    ...(cushionOn ? { [L.cushion]: MP_CUSHION_USD } : {}),
+    ...(spendingOn ? { [L.spending]: spendingTarget } : {}),
+    [L.gold]: goldTarget, [L.crypto]: cryptoTarget,
+  };
 
   // Currencies first (the listed ones in order, then the rest largest first),
   // then gold and crypto (listed ones in order, then the rest).

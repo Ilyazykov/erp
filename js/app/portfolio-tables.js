@@ -185,7 +185,7 @@ function mpWithCushion(rows, { spending = true, cushion = true } = {}) {
         const t = Math.min(need, r.value_usd);
         const rest = r.value_usd - t;
         out.splice(out.indexOf(r), 1, ...(rest > 0.005 ? [{ ...r, value_usd: rest }] : []),
-          { ...r, instrument_type: type, value_usd: t, quantity: null });
+          { ...r, instrument_type: type, from_type: r.instrument_type, value_usd: t, quantity: null });
         need -= t; got += t;
       }
       taken.push({ src, usd: got });
