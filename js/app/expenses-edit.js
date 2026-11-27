@@ -45,25 +45,28 @@ async function mpEditItems(src, xid) {
     const usdOf = gel => (Number.isFinite(usdPer) ? `$${(gel * usdPer).toFixed(2)}` : '—');
     // a shared bill (migration ...264): a line's part that was mine, "1 of 3"; one none of which was mine dimmed
     const shared = l => l.my_qty != null && Number(l.my_qty) !== Number(l.qty);
+    const others = l => Number(l.qty) - Number(l.my_qty);
+    const sharedNote = l => !shared(l) ? '' : `<div style="font-size:0.85em;color:#d29922">${Number(l.my_qty) === 0
+      ? 'paid by others' : `${l.my_qty} mine, ${others(l)} paid by others`}</div>`;
     const lineRow = l => `<tr data-item="${l.line_no}"${shared(l) && Number(l.my_qty) === 0 ? ' style="opacity:0.55" title="Shared bill: paid by the others"' : ''}>
         <td style="text-align:left">${l.product_id != null
           ? `<a href="#" class="item-product" data-pid="${l.product_id}" style="color:#58a6ff">${mpEscapeHtml(l.name_en || l.name_printed)}</a>`
           : receipt.source === 'apple' ? `<a href="#" class="item-apple" data-item="${l.line_no}" style="color:#58a6ff" title="Price history">${mpEscapeHtml(l.name_en || l.name_printed)}</a>`
           : `${mpEscapeHtml(l.name_en || l.name_printed)} <a href="#" class="item-resolve" data-item="${l.line_no}" style="color:#d29922">resolve</a>`}
-          <div style="font-size:0.85em;color:#6a7381">${mpEscapeHtml(l.name_printed)}</div></td>
+          <div style="font-size:0.85em;color:#6a7381">${mpEscapeHtml(l.name_printed)}</div>${sharedNote(l)}</td>
         <td>${shared(l) ? `${l.my_qty} of ${l.qty}` : l.qty} ${l.unit}</td>
         <td>${l.unit_price_paid != null ? mpFormatCurrency(l.unit_price_paid, receipt.currency || r.ccy, true) : '—'}</td>
         <td>${mpFormatCurrency(l.line_total, receipt.currency || r.ccy, true)}</td>
         <td>${usdOf(Number(l.line_total))}</td>
-        <td style="text-align:left">${l.is_other || receipt.source === 'apple' ? '' : `<select class="item-cat" data-item="${l.line_no}" title="The line's category; none: the purchase's" style="width:auto;color:${l.category ? '#c9d1d9' : '#6a7381'}"><option value="">${mpEscapeHtml(r.cat || '—')}</option>${MP_EXP_CATS.map(([name]) => `<option${name === l.category ? ' selected' : ''}>${mpEscapeHtml(name)}</option>`).join('')}</select>`}</td>
+        <td style="text-align:left">${l.is_other || receipt.source === 'apple' ? '' : `<select class="item-cat" data-item="${l.line_no}" title="The line's category; none: the purchase's" style="width:auto;max-width:150px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:${l.category ? '#c9d1d9' : '#6a7381'}"><option value="">${mpEscapeHtml(r.cat || '—')}</option>${MP_EXP_CATS.map(([name]) => `<option${name === l.category ? ' selected' : ''}>${mpEscapeHtml(name)}</option>`).join('')}</select>`}</td>
         <td class="item-note" data-item="${l.line_no}" style="cursor:pointer;color:#8b949e">${mpNoteHtml(l.note)}</td></tr>`;
     const form = mpDialog(`Items · ${r.day} · ${mpShortDesc(r.description)}`, `
       <p class="note" style="margin:0">${receipt.source === 'apple'
         ? `From Apple's purchase history · order ${mpEscapeHtml(receipt.key || '')}, ${mpEscapeHtml(receipt.day || '')}`
         : `${mpEscapeHtml(receipt.source === 'receipt_csv' ? 'From a receipt' : 'From the statement')}${receipt.chain ? ` · ${mpEscapeHtml(receipt.chain)}` : ''}${receipt.store ? ` · ${mpEscapeHtml(receipt.store)}` : ''}`}${receipt.billTotal != null
-        ? ` · shared bill ${mpFormatCurrency(receipt.billTotal, receipt.currency || r.ccy, true)}, my part ${mpFormatCurrency(real.reduce((a, l) => a + Number(l.line_total), 0), receipt.currency || r.ccy, true)}` : ''}</p>
-      <table class="data-table"><thead><tr><th style="text-align:left">Item</th><th>Qty</th><th>Price</th><th>Line</th><th>USD</th><th style="text-align:left">Category</th><th style="text-align:left">Note</th></tr></thead>
-        <tbody>${real.map(lineRow).join('')}${other ? lineRow(other) : ''}</tbody></table>
+        ? `<br>Shared bill ${mpFormatCurrency(receipt.billTotal, receipt.currency || r.ccy, true)}: the rest paid by others, mine ${mpFormatCurrency(real.reduce((a, l) => a + Number(l.line_total), 0), receipt.currency || r.ccy, true)}` : ''}</p>
+      <div style="overflow-x:auto"><table class="data-table"><thead><tr><th style="text-align:left">Item</th><th>Qty</th><th>Price</th><th>Line</th><th>USD</th><th style="text-align:left">Category</th><th style="text-align:left">Note</th></tr></thead>
+        <tbody>${real.map(lineRow).join('')}${other ? lineRow(other) : ''}</tbody></table></div>
       <label>Receipt note <input name="rnote" value="${mpEscapeHtml(receipt.note || '')}" style="${MP_FIELD}"></label>`);
     form.querySelector('[data-act=save]').textContent = 'Close';
     form.addEventListener('submit', async e => {
