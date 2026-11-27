@@ -22,7 +22,7 @@ const MP_COLORS = {
   },
   broker: {
     Freedom24: '#00d1b2', 'Bank of Cyprus': '#4fc3f7', Revolut: '#8e8e93', Wise: '#9fe870', Raiffeisen: '#c9a400',
-    UniCredit: '#8c1c28', 'Credo Bank': '#e8562a', 'TBC Bank': '#00aeef', 'Ziraat Bank': '#ff1f2d', IBKR: '#a64dff', Sber: '#4fd05b', 'T-Bank': '#ffdd2d',
+    UniCredit: '#8c1c28', 'Credo Bank': '#e8562a', 'TBC Bank': '#00aeef', RemotePass: '#2f6bff', 'Ziraat Bank': '#ff1f2d', IBKR: '#a64dff', Sber: '#4fd05b', 'T-Bank': '#ffdd2d',
     'Ozon Bank': '#1f6bff', Alfa: '#ff2d2d', 'Yandex Bank': '#ff6a1f', Finuslugi: '#00b4ff', Telegram: '#29b6f6',
     Binance: '#b5651d', Bybit: '#ff9500', 'Crypto.com': '#1a5fb4', Trust: '#3b8cff', cash: '#86e04a',
     '(unspecified)': '#7b8494',

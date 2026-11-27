@@ -217,7 +217,7 @@ const MP_CURRENCY_FLAGS = {
 // Any account not listed here falls back after these, alphabetically.
 const MP_BROKER_ROW_ORDER = [
   '(unspecified)', 'Revolut', 'Wise', 'Bank of Cyprus', 'IBKR', 'Freedom24',
-  'Ziraat Bank', 'Raiffeisen', 'UniCredit', 'Credo Bank', 'TBC Bank', 'Sber', 'T-Bank', 'Alfa', 'Ozon Bank', 'Yandex Bank', 'Finuslugi', 'Binance', 'Bybit', 'Crypto.com', 'Telegram', 'Trust',
+  'Ziraat Bank', 'Raiffeisen', 'UniCredit', 'Credo Bank', 'TBC Bank', 'RemotePass', 'Sber', 'T-Bank', 'Alfa', 'Ozon Bank', 'Yandex Bank', 'Finuslugi', 'Binance', 'Bybit', 'Crypto.com', 'Telegram', 'Trust',
   'cash', 'real estate',
 ];
 

@@ -621,7 +621,7 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   const currencyOrder = ['EUR', 'USD', 'RUB', 'GBP', 'CNY', 'JPY', 'TRY', 'RSD', 'GEL', MP_OTHER_CURRENCIES_COLUMN,
     'XAU', 'BTC', 'ETH', 'SOL', 'TAO', 'GRAM', MP_ALTCOINS_COLUMN]
     .map(c => (c === 'JPY' ? `JPY ${mpFlagOf('JP')}` : currencyLabel(c)));
-  const brokerOrder = ['Freedom24', 'Bank of Cyprus', 'Revolut', 'Wise', 'Raiffeisen', 'UniCredit', 'Credo Bank', 'TBC Bank', 'Ziraat Bank', 'IBKR',
+  const brokerOrder = ['Freedom24', 'Bank of Cyprus', 'Revolut', 'Wise', 'Raiffeisen', 'UniCredit', 'Credo Bank', 'TBC Bank', 'RemotePass', 'Ziraat Bank', 'IBKR',
     'Sber', 'T-Bank', 'Ozon Bank', 'Alfa', 'Yandex Bank', 'Finuslugi', 'Telegram', 'Binance', 'Bybit', 'Crypto.com', 'Trust', 'cash',
     '(unspecified)'].map(brokerName);
   const typeOrder = ['bond', 'cash', 'spending', 'cushion', 'deposit', 'liquid', 'gold', 'crypto', 'stock', 'real_estate'].map(t => MP_ASSET_CLASS_LABELS[t]);
