@@ -256,7 +256,7 @@ function mpCryptoTarget(day, share, zone, regime, lastBuy, lastSell, stepLeft = 
     // after a buy what's left of the 1% step, filling again over 30 days (mpCryptoStepLeft)
     if (lastBuy && lastBuy > monthAgo && stepLeft < 1) {
       return { target: Math.max(MP_AHR.floor, Math.min(MP_AHR.target, share + stepLeft)), step: 1,
-        why: `${head}: после покупки ${lastBuy} от шага 1 п.п. доступно +${stepLeft.toFixed(2)} п.п. (покупки вычтены, шаг набирается за 30 дней)` };
+        why: `${head}: после покупки ${lastBuy} доступно +${stepLeft.toFixed(2)} из 1 п.п.` };
     }
     return { target: Math.max(MP_AHR.floor, Math.min(MP_AHR.target, share + 1)), step: 1, why: `${head}: докупить на 1% портфеля, до ${MP_AHR.target}%` };
   }
