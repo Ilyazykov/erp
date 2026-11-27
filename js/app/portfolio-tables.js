@@ -102,46 +102,52 @@ const MP_ASSET_CLASS_LABELS = {
   cash: 'cash 💵', credit: 'credit 💳', gold: 'gold 🥇', crypto: 'crypto ₿', real_estate: 'real estate 🏠',
 };
 
-// The safety cushion -- $10,000 not to be touched (30.10.2026): the money it
-// takes whole -- an account's cash or liquid assets, switched on and off on the
-// page (table cushion_sources, 23.11.2026) -- and Revolut's liquid assets (its
-// money-market funds) up to what that leaves of the $10,000: the euro ones
-// first, then the dollar ones, then the pound ones. Not new money: those rows'
-// amounts move from their column (cash / liquid assets) to 'cushion' -- the
-// totals stay.
+// The safety cushion -- $10,000 not to be touched (30.10.2026), a queue since 27.11.2026: its
+// sources (table cushion_sources) in their order, each taken as far as what's left of the
+// $10,000 goes -- Ziraat's cash, TBC's savings, TBC's dollars, then Revolut's money-market funds
+// in euro, dollar, pound. Not new money: what's taken moves from its column (cash / liquid
+// assets) to 'cushion' -- the totals stay.
 const MP_CUSHION_USD = 10000;
-// "account|instrument_type|currency" taken whole, currency '' for all of them (TBC's dollars
-// only, 27.11.2026); loaded once signed in (mpCushionEnsure)
-let mpCushionSources = new Set();
+// [{ account, instrument_type, currency ('' -- all), position }] by position; loaded once signed in
+let mpCushionSources = [];
 let mpCushionLoading = null;
 function mpCushionEnsure() {
   return mpCushionLoading = mpCushionLoading || (async () => {
-    const { data, error } = await sb.from('cushion_sources').select('account, instrument_type, currency');
+    const { data, error } = await sb.from('cushion_sources').select('account, instrument_type, currency, position').order('position');
     if (error) { mpCushionLoading = null; throw error; }
-    mpCushionSources = new Set((data || []).map(r => `${r.account}|${r.instrument_type}|${r.currency || ''}`));
+    mpCushionSources = data || [];
   })();
 }
 window.mpCushionEnsure = mpCushionEnsure;
 // The brokerage accounts outside Russia: their cash is invested with the
 // liquidity funds (the salary plan), not spent on things.
 const MP_FOREIGN_BROKERS = new Set(['IBKR', 'Freedom24']);
-// (a row the fund takes whole -- its cell then shows a grey zero)
-const mpCushionWhole = r => r.value_usd > 0 && (r.instrument_type === 'cash' || r.instrument_type === 'liquid')
-  && (mpCushionSources.has(`${r.account}|${r.instrument_type}|`)
-    || mpCushionSources.has(`${r.account}|${r.instrument_type}|${r.underlying_currency || r.currency}`));
+const mpCushionMatch = (src, r) => r.account === src.account && r.instrument_type === src.instrument_type
+  && (!src.currency || (r.underlying_currency || r.currency) === src.currency);
+// rows -> the rows with the fund's part moved to 'cushion'; .taken: [{ src, usd }] per source,
+// .emptied: "account instrument_type" cells the fund took whole (shown as a grey 0)
 function mpWithCushion(rows) {
-  const out = rows.map(r => (mpCushionWhole(r) ? { ...r, instrument_type: 'cushion' } : r));
-  let need = MP_CUSHION_USD - out.filter(r => r.instrument_type === 'cushion').reduce((a, r) => a + r.value_usd, 0);
-  const order = ['EUR', 'USD', 'GBP'];
-  const funds = out.filter(r => r.account === 'Revolut' && r.instrument_type === 'liquid' && r.value_usd > 0
-    && order.includes(r.underlying_currency || r.currency))
-    .sort((a, b) => order.indexOf(a.underlying_currency || a.currency) - order.indexOf(b.underlying_currency || b.currency) || b.value_usd - a.value_usd);
-  for (const r of funds) {
-    if (need <= 0) break;
-    const take = Math.min(need, r.value_usd);
-    out.splice(out.indexOf(r), 1, { ...r, value_usd: r.value_usd - take }, { ...r, instrument_type: 'cushion', value_usd: take, quantity: null });
-    need -= take;
+  let out = rows.slice();
+  let need = MP_CUSHION_USD;
+  const taken = [];
+  for (const src of mpCushionSources) {
+    let got = 0;
+    const from = out.filter(r => r.instrument_type !== 'cushion' && Number(r.value_usd) > 0 && mpCushionMatch(src, r))
+      .sort((x, y) => y.value_usd - x.value_usd);
+    for (const r of from) {
+      if (need <= 0.005) break;
+      const take = Math.min(need, r.value_usd);
+      const rest = r.value_usd - take;
+      out.splice(out.indexOf(r), 1, ...(rest > 0.005 ? [{ ...r, value_usd: rest }] : []),
+        { ...r, instrument_type: 'cushion', value_usd: take, quantity: null });
+      need -= take; got += take;
+    }
+    taken.push({ src, usd: got });
   }
+  const left = new Set(out.filter(r => r.instrument_type !== 'cushion' && Number(r.value_usd) > 0.005).map(r => `${r.account} ${r.instrument_type}`));
+  out.taken = taken;
+  out.emptied = new Set(rows.filter(r => Number(r.value_usd) > 0 && mpCushionSources.some(src => mpCushionMatch(src, r)))
+    .map(r => `${r.account} ${r.instrument_type}`).filter(k => !left.has(k)));
   return out;
 }
 
@@ -715,54 +721,22 @@ async function mpRenderBrokerAssetClass() {
   const everHeld = await mpEverHeld('instrument_type');
   // (a cell the fund emptied -- all of Wise's cash -- shows a grey 0, not an
   // ever-held "$0.00": nothing's gone, it's all in the fund)
-  const moved = new Set(rows.filter(mpCushionWhole).map(r => `${r.account} ${r.instrument_type}`));
-  const shown = cushion ? new Set([...everHeld].filter(k => !moved.has(k))) : everHeld;
-  mpRenderBrokerPivot(wrap, cushion ? mpWithCushion(rows) : rows,
+  const withCushion = cushion ? mpWithCushion(rows) : rows;
+  const shown = cushion ? new Set([...everHeld].filter(k => !withCushion.emptied.has(k))) : everHeld;
+  mpRenderBrokerPivot(wrap, withCushion,
     'instrument_type', 'No holdings yet — import trades above.', undefined, shown, money);
-  if (cushion) mpRenderCushionSources(wrap, rows, money);
+  if (cushion) mpRenderCushionSources(wrap, withCushion.taken, money);
 }
 
-// Under the table, with the emergency fund on: what it takes whole, each a switch -- an
-// account's cash, or its liquid assets (but Revolut's funds, which top it up to its $10,000)
-function mpRenderCushionSources(wrap, rows, money) {
-  const by = new Map();
-  for (const r of rows) {
-    if (r.instrument_type !== 'cash' && r.instrument_type !== 'liquid') continue;
-    if (r.instrument_type === 'liquid' && r.account === 'Revolut') continue;
-    // the account's whole cash / savings, and the one currency when that alone is a source
-    const v = Number(r.value_usd) || 0;
-    const all = `${r.account}|${r.instrument_type}|`;
-    by.set(all, (by.get(all) || 0) + v);
-    const one = `${all}${r.underlying_currency || r.currency}`;
-    if (mpCushionSources.has(one)) by.set(one, (by.get(one) || 0) + v);
-  }
-  for (const k of mpCushionSources) if (!by.has(k)) by.set(k, 0);
-  const items = [...by.entries()].filter(([k, v]) => v > 0.005 || mpCushionSources.has(k))
-    .sort((a, b) => Number(mpCushionSources.has(b[0])) - Number(mpCushionSources.has(a[0])) || b[1] - a[1]);
+// Under the table, with the emergency fund on: its queue, what each source gave
+// (the order is cushion_sources.position, set in the database)
+function mpRenderCushionSources(wrap, taken, money) {
   const box = document.createElement('div');
   box.className = 'empty-note';
-  box.append('Emergency fund takes whole: ');
-  items.forEach(([k, v], i) => {
-    const [account, type, currency] = k.split('|');
-    const label = document.createElement('label');
-    label.style.whiteSpace = 'nowrap';
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.checked = mpCushionSources.has(k);
-    cb.addEventListener('change', async () => {
-      cb.disabled = true;
-      const { error } = cb.checked
-        ? await sb.from('cushion_sources').insert({ account, instrument_type: type, currency })
-        : await sb.from('cushion_sources').delete().eq('account', account).eq('instrument_type', type).eq('currency', currency);
-      if (error) { cb.checked = !cb.checked; cb.disabled = false; alert(error.message); return; }
-      if (cb.checked) mpCushionSources.add(k); else mpCushionSources.delete(k);
-      mpRenderBrokerAssetClass();
-    });
-    label.append(cb, ` ${MP_BROKER_SHORT_NAMES[account] || account} ${type === 'liquid' ? 'savings' : 'cash'}${currency ? ` ${currency}` : ''} ${money(v)}`);
-    if (i) box.append(' · ');
-    box.append(label);
-  });
-  box.append(`. The rest up to ${money(MP_CUSHION_USD)}: Revolut's funds -- euro, then dollar, then pound.`);
+  const type = t => ({ cash: 'cash', liquid: 'savings' })[t] || t;
+  box.textContent = `Emergency fund, up to ${money(MP_CUSHION_USD)}, in this order: `
+    + taken.map(({ src, usd }) => `${MP_BROKER_SHORT_NAMES[src.account] || src.account} ${src.account === 'Revolut' && src.instrument_type === 'liquid' ? 'funds' : type(src.instrument_type)}`
+      + `${src.currency ? ` ${src.currency}` : ''} ${money(usd)}`).join(' · ') + '.';
   wrap.appendChild(box);
 }
 try { const v = localStorage.getItem('mp_assetclass_ccy'); if (v) document.getElementById('assetclass_ccy').value = v; } catch { /* no storage */ }
