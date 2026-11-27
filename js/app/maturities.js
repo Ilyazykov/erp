@@ -5,7 +5,7 @@
 // has its offer (MOEX ISS, straight from the browser), and the term deposits'
 // ends (deposit_terms, set by hand: no statement gives them) -- a bar from
 // today to the date, its thickness the money in it. ----
-const MP_MAT_CACHE = 'mp_moex_bond_dates_v7';
+const MP_MAT_CACHE = 'mp_moex_bond_dates_v8';
 async function mpMoexBondDates(secids) {
   let cache = {};
   try { cache = JSON.parse(localStorage.getItem(MP_MAT_CACHE) || '{}'); } catch { /* none */ }
@@ -17,6 +17,9 @@ async function mpMoexBondDates(secids) {
       fetch(`${base}.json?iss.meta=off&iss.only=description&description.columns=name,value`).then(r => r.json()).catch(() => null),
       fetch(`${base}/bondization.json?iss.meta=off&iss.only=offers,coupons,amortizations&limit=unlimited`).then(r => r.json()).catch(() => null),
     ]);
+    // MOEX didn't answer: keep what's cached (a day old) and ask again next time -- an empty
+    // answer cached for the day took every bond's dates away (27.11.2026)
+    if (!d?.description?.data?.length || !o) { if (cache[secid]) cache[secid].at = null; return; }
     const desc = Object.fromEntries((d?.description?.data || []).map(([k, v]) => [k, v]));
     const table = t => { const c = o?.[t]?.columns || []; return (o?.[t]?.data || []).map(r => Object.fromEntries(c.map((k, i) => [k, r[i]]))); };
     const offers = table('offers').map(r => r.offerdate).filter(x => x && x >= today).sort();
