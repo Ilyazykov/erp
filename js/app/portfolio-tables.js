@@ -169,7 +169,8 @@ const mpCushionMatch = (src, r) => r.account === src.account && r.instrument_typ
   && (!src.currency || (r.underlying_currency || r.currency) === src.currency);
 // rows -> the rows with the fund's part moved to 'cushion'; .taken: [{ src, usd }] per source,
 // .emptied: "account instrument_type" cells the fund took whole (shown as a grey 0)
-function mpWithCushion(rows) {
+// opts: { spending, cushion } -- each on by default (the table has a switch for each)
+function mpWithCushion(rows, { spending = true, cushion = true } = {}) {
   let out = rows.slice();
   // the day-to-day money first, then the fund from what's left
   const take = (sources, total, type) => {
@@ -191,12 +192,12 @@ function mpWithCushion(rows) {
     }
     return taken;
   };
-  const spent = take(MP_SPENDING_SOURCES, mpSpending.usd, 'spending');
-  const taken = take(mpCushionSources, MP_CUSHION_USD, 'cushion');
+  const spent = spending ? take(MP_SPENDING_SOURCES, mpSpending.usd, 'spending') : [];
+  const taken = cushion ? take(mpCushionSources, MP_CUSHION_USD, 'cushion') : [];
   const left = new Set(out.filter(r => !['cushion', 'spending'].includes(r.instrument_type) && Number(r.value_usd) > 0.005).map(r => `${r.account} ${r.instrument_type}`));
   out.taken = taken;
   out.spent = spent;
-  out.emptied = new Set(rows.filter(r => Number(r.value_usd) > 0 && [...mpCushionSources, ...MP_SPENDING_SOURCES].some(src => mpCushionMatch(src, r)))
+  out.emptied = new Set(rows.filter(r => Number(r.value_usd) > 0 && [...(cushion ? mpCushionSources : []), ...(spending ? MP_SPENDING_SOURCES : [])].some(src => mpCushionMatch(src, r)))
     .map(r => `${r.account} ${r.instrument_type}`).filter(k => !left.has(k)));
   return out;
 }
@@ -765,29 +766,30 @@ async function mpRenderBrokerAssetClass() {
   // the emergency fund in a column of its own when switched on (kept in this browser)
   const rows = [...split, ...cashRows, ...realEstateRows];
   const cushion = document.getElementById('assetclass_cushion').checked;
-  if (cushion) {
+  const spending = document.getElementById('assetclass_spending').checked;
+  if (cushion || spending) {
     try { await mpCushionEnsure(); } catch (e) { wrap.innerHTML = `<p class="empty-note">${mpEscapeHtml(e.message)}</p>`; return; }
   }
   const everHeld = await mpEverHeld('instrument_type');
   // (a cell the fund emptied -- all of Wise's cash -- shows a grey 0, not an
   // ever-held "$0.00": nothing's gone, it's all in the fund)
-  const withCushion = cushion ? mpWithCushion(rows) : rows;
-  const shown = cushion ? new Set([...everHeld].filter(k => !withCushion.emptied.has(k))) : everHeld;
+  const withCushion = cushion || spending ? mpWithCushion(rows, { spending, cushion }) : rows;
+  const shown = cushion || spending ? new Set([...everHeld].filter(k => !withCushion.emptied.has(k))) : everHeld;
   mpRenderBrokerPivot(wrap, withCushion,
     'instrument_type', 'No holdings yet — import trades above.', undefined, shown, money);
-  if (cushion) mpRenderCushionSources(wrap, withCushion, money);
+  if (cushion || spending) mpRenderCushionSources(wrap, withCushion, money, { spending, cushion });
 }
 
 // Under the table, with the emergency fund on: its queue, what each source gave
 // (the order is cushion_sources.position, set in the database)
-function mpRenderCushionSources(wrap, withCushion, money) {
+function mpRenderCushionSources(wrap, withCushion, money, { spending, cushion }) {
   const name = src => `${MP_BROKER_SHORT_NAMES[src.account] || src.account} ${src.account === 'Revolut' && src.instrument_type === 'liquid' ? 'funds'
     : ({ cash: 'cash', liquid: 'savings' })[src.instrument_type] || src.instrument_type}${src.currency ? ` ${src.currency}` : ''}`;
   const line = list => list.filter(t => t.usd > 0.005).map(({ src, usd }) => `${name(src)} ${money(usd)}`).join(' · ') || 'nothing';
   const sp = mpSpending;
   for (const text of [
-    sp.since ? `Daily spending ${money(sp.usd)}: ${money(sp.monthly)} a month (median of 12, food / transport / housing) less ${money(sp.spent)} spent (everything) since the salary of ${sp.since} -- from ${line(withCushion.spent)}.` : null,
-    `Emergency fund up to ${money(MP_CUSHION_USD)}, in this order: ${line(withCushion.taken)}.`,
+    spending && sp.since ? `Daily spending ${money(sp.usd)}: ${money(sp.monthly)} a month (median of 12, food / transport / housing) less ${money(sp.spent)} spent (everything) since the salary of ${sp.since} -- from ${line(withCushion.spent)}.` : null,
+    cushion ? `Emergency fund up to ${money(MP_CUSHION_USD)}, in this order: ${line(withCushion.taken)}.` : null,
   ]) {
     if (!text) continue;
     const box = document.createElement('div');
@@ -798,12 +800,17 @@ function mpRenderCushionSources(wrap, withCushion, money) {
 }
 try { const v = localStorage.getItem('mp_assetclass_ccy'); if (v) document.getElementById('assetclass_ccy').value = v; } catch { /* no storage */ }
 try { document.getElementById('assetclass_cushion').checked = localStorage.getItem('mp_assetclass_cushion') === '1'; } catch { /* no storage */ }
+try { document.getElementById('assetclass_spending').checked = localStorage.getItem('mp_assetclass_spending') === '1'; } catch { /* no storage */ }
 document.getElementById('assetclass_ccy').addEventListener('change', e => {
   mpSave('mp_assetclass_ccy', e.target.value);
   if (mpIsSignedIn) mpRenderBrokerAssetClass();
 });
 document.getElementById('assetclass_cushion').addEventListener('change', e => {
   mpSave('mp_assetclass_cushion', e.target.checked ? '1' : '0');
+  if (mpIsSignedIn) mpRenderBrokerAssetClass();
+});
+document.getElementById('assetclass_spending').addEventListener('change', e => {
+  mpSave('mp_assetclass_spending', e.target.checked ? '1' : '0');
   if (mpIsSignedIn) mpRenderBrokerAssetClass();
 });
 
