@@ -539,6 +539,7 @@ function mpDialog(title, body) {
     dlg.style.cssText = 'background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:16px 18px;min-width:320px;max-width:min(92vw,460px)';
     document.body.appendChild(dlg);
   }
+  dlg.style.maxWidth = 'min(92vw,460px)';   // a dialog that needs more (the receipt's items) widens itself
   dlg.innerHTML = `<form method="dialog" style="display:flex;flex-direction:column;gap:10px">
     <b>${mpEscapeHtml(title)}</b>${body}
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">

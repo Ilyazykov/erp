@@ -45,16 +45,13 @@ async function mpEditItems(src, xid) {
     const usdOf = gel => (Number.isFinite(usdPer) ? `$${(gel * usdPer).toFixed(2)}` : '—');
     // a shared bill (migration ...264): a line's part that was mine, "1 of 3"; one none of which was mine dimmed
     const shared = l => l.my_qty != null && Number(l.my_qty) !== Number(l.qty);
-    const others = l => Number(l.qty) - Number(l.my_qty);
-    const sharedNote = l => !shared(l) ? '' : `<div style="font-size:0.85em;color:#d29922">${Number(l.my_qty) === 0
-      ? 'paid by others' : `${l.my_qty} mine, ${others(l)} paid by others`}</div>`;
     const lineRow = l => `<tr data-item="${l.line_no}"${shared(l) && Number(l.my_qty) === 0 ? ' style="opacity:0.55" title="Shared bill: paid by the others"' : ''}>
         <td style="text-align:left">${l.product_id != null
           ? `<a href="#" class="item-product" data-pid="${l.product_id}" style="color:#58a6ff">${mpEscapeHtml(l.name_en || l.name_printed)}</a>`
           : receipt.source === 'apple' ? `<a href="#" class="item-apple" data-item="${l.line_no}" style="color:#58a6ff" title="Price history">${mpEscapeHtml(l.name_en || l.name_printed)}</a>`
           : `${mpEscapeHtml(l.name_en || l.name_printed)} <a href="#" class="item-resolve" data-item="${l.line_no}" style="color:#d29922">resolve</a>`}
-          <div style="font-size:0.85em;color:#6a7381">${mpEscapeHtml(l.name_printed)}</div>${sharedNote(l)}</td>
-        <td>${shared(l) ? `${l.my_qty} of ${l.qty}` : l.qty} ${l.unit}</td>
+          <div style="font-size:0.85em;color:#6a7381">${mpEscapeHtml(l.name_printed)}</div></td>
+        <td style="white-space:nowrap"${shared(l) ? ` title="${l.my_qty} mine, ${Number(l.qty) - Number(l.my_qty)} paid by others"` : ''}>${shared(l) ? `${l.my_qty} of ${l.qty}` : l.qty} ${l.unit}</td>
         <td>${l.unit_price_paid != null ? mpFormatCurrency(l.unit_price_paid, receipt.currency || r.ccy, true) : '—'}</td>
         <td>${mpFormatCurrency(l.line_total, receipt.currency || r.ccy, true)}</td>
         <td>${usdOf(Number(l.line_total))}</td>
@@ -68,6 +65,7 @@ async function mpEditItems(src, xid) {
       <div style="overflow-x:auto"><table class="data-table"><thead><tr><th style="text-align:left">Item</th><th>Qty</th><th>Price</th><th>Line</th><th>USD</th><th style="text-align:left">Category</th><th style="text-align:left">Note</th></tr></thead>
         <tbody>${real.map(lineRow).join('')}${other ? lineRow(other) : ''}</tbody></table></div>
       <label>Receipt note <input name="rnote" value="${mpEscapeHtml(receipt.note || '')}" style="${MP_FIELD}"></label>`);
+    form.closest('dialog').style.maxWidth = 'min(96vw,960px)';   // seven columns don't fit in 460px
     form.querySelector('[data-act=save]').textContent = 'Close';
     form.addEventListener('submit', async e => {
       e.preventDefault();
