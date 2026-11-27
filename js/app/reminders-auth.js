@@ -38,7 +38,7 @@ const mpIsDayOff = d => {
 async function mpRenderCardReminders() {
   const box = document.getElementById('card_reminders');
   const { data: rules, error } = await sb.from('credit_card_reminders').select('*');
-  const out = [...await mpStaleDataReminders(), ...await mpEarnReminders(), ...await mpDepositEndReminders()];
+  const out = [...await mpStaleDataReminders(), ...await mpOneOffReminders(), ...await mpEarnReminders(), ...await mpDepositEndReminders()];
   if (error || !rules?.length) { box.innerHTML = out.join(''); return; }
   const today = new Date(); today.setHours(0, 0, 0, 0);
   for (const r of rules) {
@@ -241,6 +241,28 @@ async function mpEarnReminders() {
   }
   return out;
 }
+
+// One-off reminders (table reminders, 27.11.2026: a subscription's free trial to cancel): a banner
+// from remind_days before the day on, red from the day before, until "готово" marks it done
+async function mpOneOffReminders() {
+  const { data, error } = await sb.from('reminders').select('id, text, due_day, remind_days').is('done_at', null).order('due_day');
+  if (error || !data?.length) return [];
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const fmt = d => d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  return data.filter(r => Math.round((new Date(r.due_day + 'T00:00:00') - today) / 86400000) <= r.remind_days).map(r => {
+    const due = new Date(r.due_day + 'T00:00:00');
+    const n = Math.round((due - today) / 86400000);
+    const when = n > 0 ? `до ${fmt(due)} (через ${n} дн.)` : n === 0 ? 'сегодня' : `просрочено с ${fmt(due)}`;
+    return `<div class="card-reminder${n <= 1 ? ' urgent' : ''}">⏰ ${mpEscapeHtml(r.text)} — ${when}
+      <button type="button" style="margin-left:8px" onclick="mpReminderDone(${Number(r.id)}, this)">готово</button></div>`;
+  });
+}
+window.mpReminderDone = async (id, btn) => {
+  btn.disabled = true;
+  const { error } = await sb.from('reminders').update({ done_at: new Date().toISOString() }).eq('id', id);
+  if (error) { btn.disabled = false; alert(error.message); return; }
+  btn.closest('.card-reminder')?.remove();
+};
 
 // A term deposit's end (deposit_terms, set from the statement or by hand): a faint banner from a week
 // before it to 3 days after, while it's still held. A Ziraat lira deposit's money is changed back in
