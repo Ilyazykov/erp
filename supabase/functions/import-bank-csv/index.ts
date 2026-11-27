@@ -225,6 +225,8 @@ function madeOn(bank: string, description: string, date: string): string | null 
 // brings the payment -- same amount and currency, made the day the hold is
 // dated -- the statement's row takes the hold's note, places, time and hand-set category
 // and the hold goes (05.11.2026). What's left is re-totalled.
+// A hold coming in (RemotePass' payout, +8 394.80 USD, 27.11.2026) settles the same way: the
+// amounts are compared with their sign.
 // A receipt (migration ...179) that matched the hold follows it onto the
 // statement's own row -- its key (tx_source/tx_external_id), not a uuid, is
 // what receipts are keyed by, so it's re-pointed here rather than left
@@ -240,7 +242,7 @@ async function settlePending(db: any, userId: string, bank: string, bankSlug: st
   const from = holds[0].tx_date.slice(0, 10);
   const { data: real, error: rErr } = await db.from('bank_transactions')
     .select('id, external_source, external_id, tx_date, authorized_on, amount, currency, expense_note, expense_manual, place_id, delivery_place_id, authorized_at')
-    .eq('user_id', userId).eq('account', bank).neq('external_source', pendingSource).lt('amount', 0)
+    .eq('user_id', userId).eq('account', bank).neq('external_source', pendingSource).neq('amount', 0)
     .gte('tx_date', `${from}T00:00:00Z`).order('tx_date');
   if (rErr) throw new Error(rErr.message);
   const taken = new Set<string>();
