@@ -675,9 +675,6 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   const total8 = Object.values(types8).reduce((s, v) => s + v, 0);
   // The cash outside the fund: money to spend on things, its target what it is.
   const cashOutside = buckets3[L.cash] || 0;
-  // what the fund / the day-to-day money took from the cash (the rest of each from the liquid assets)
-  const tookCash = type => withCushion.filter(r => r.instrument_type === type && r.from_type === 'cash').reduce((a, r) => a + r.value_usd, 0);
-  const fundCash = tookCash('cushion'), spendCash = tookCash('spending');
   // The group's share of chart 3: its total less the emergency fund / that
   // cash / gold / crypto targets (gold and crypto 5% each) -- so chart 3's
   // targets add up to its total.
@@ -727,10 +724,16 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   const types3 = cushionOn && spendingOn ? buckets3 : !cushionOn && !spendingOn ? types
     : mpAssetBuckets(mpWithCushion(assetRows.filter(r => !isRealEstate(r)), { cushion: cushionOn, spending: spendingOn }));
   const group3 = target8;
+  // The cash's target is the cash shown (what it is). What the switched-off fund / day-to-day
+  // money holds besides goes to the liquid assets' target, so the targets add up to the total
+  // (27.11.2026: the cash got back the day-to-day money's part with its switch off -- $2,068
+  // against $384 -- though without it the fund takes those dollars of TBC's).
+  const cashShown = types3[L.cash] || 0;
+  const reservedHidden = (cushionOn ? 0 : MP_CUSHION_USD) + (spendingOn ? 0 : spendingTarget);
   const target3 = group3 && {
     ...group3,
-    [L.cash]: cashOutside + (cushionOn ? 0 : fundCash) + (spendingOn ? 0 : spendCash),
-    [L.liquid]: (group3[L.liquid] || 0) + (cushionOn ? 0 : MP_CUSHION_USD - fundCash) + (spendingOn ? 0 : spendingTarget - spendCash),
+    [L.cash]: cashShown,
+    [L.liquid]: (group3[L.liquid] || 0) + reservedHidden - (cashShown - cashOutside),
     ...(cushionOn ? { [L.cushion]: MP_CUSHION_USD } : {}),
     ...(spendingOn ? { [L.spending]: spendingTarget } : {}),
     [L.gold]: goldTarget, [L.crypto]: cryptoTarget,
