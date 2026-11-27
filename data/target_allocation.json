@@ -1,18 +1,18 @@
 {
-  "date": "2026-11-26",
-  "updated": "2026-11-26 21:47:03 UTC",
+  "date": "2026-11-27",
+  "updated": "2026-11-27 21:29:55 UTC",
   "z_threshold": 1.5,
   "key_rate_midpoint": 10.322,
   "key_rate_slope": 2.531,
   "key_rate": 14.0,
-  "key_rate_date": "2026-11-26",
+  "key_rate_date": "2026-11-27",
   "composite_z_date": "2026-11",
   "base_stocks": 18.9513,
   "base_bonds": 81.0487,
-  "z": 1.8762,
+  "z": 1.7558,
   "signal": "buy",
-  "stocks_adjustment": 1.8914,
-  "bonds_adjustment": -1.8914194874419366,
-  "target_stocks": 20.8427,
-  "target_bonds": 79.1573
+  "stocks_adjustment": 1.0665,
+  "bonds_adjustment": -1.0665035421478564,
+  "target_stocks": 20.0178,
+  "target_bonds": 79.9822
 }
