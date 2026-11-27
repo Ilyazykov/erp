@@ -29,7 +29,7 @@ const MP_COLORS = {
   },
   // asset types (liquid assets the same grey as deposits, as asked)
   type: {
-    bond: '#3a9bf7', cash: '#86e04a', cushion: '#2bb5a8', deposit: '#8e8e93', liquid: '#8e8e93', gold: '#f5c542', crypto: '#f2452b',
+    bond: '#3a9bf7', cash: '#86e04a', cushion: '#2bb5a8', spending: '#5fd3c6', deposit: '#8e8e93', liquid: '#8e8e93', gold: '#f5c542', crypto: '#f2452b',
     stock: '#d6307f', real_estate: '#e0864a',
   },
   // countries: those whose currency is on chart 1 in that colour; EU states in blues

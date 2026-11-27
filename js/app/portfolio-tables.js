@@ -94,11 +94,11 @@ const MP_CURRENCY_COLUMN_ORDER = [
 // Fixed display order for the broker x asset-class table's columns,
 // matching the user's own tracking spreadsheet (Акции, Облигации,
 // Вклады, Кэш, Золото, Крипта) rather than alphabetical.
-const MP_ASSET_CLASS_COLUMN_ORDER = ['cushion', 'stock', 'bond', 'deposit', 'liquid', 'cash', 'credit', 'gold', 'crypto', 'real_estate'];
+const MP_ASSET_CLASS_COLUMN_ORDER = ['spending', 'cushion', 'stock', 'bond', 'deposit', 'liquid', 'cash', 'credit', 'gold', 'crypto', 'real_estate'];
 // Column headers for the broker x asset-class table (raw instrument_type
 // value -> display label).
 const MP_ASSET_CLASS_LABELS = {
-  stock: 'stock 📈', bond: 'bond 🏛️', deposit: 'deposit 🏦', liquid: 'liquid assets 💧', cushion: 'emergency fund 🛟',
+  stock: 'stock 📈', bond: 'bond 🏛️', deposit: 'deposit 🏦', liquid: 'liquid assets 💧', cushion: 'emergency fund 🛟', spending: 'daily spending 🛒',
   cash: 'cash 💵', credit: 'credit 💳', gold: 'gold 🥇', crypto: 'crypto ₿', real_estate: 'real estate 🏠',
 };
 
@@ -111,11 +111,54 @@ const MP_CUSHION_USD = 10000;
 // [{ account, instrument_type, currency ('' -- all), position }] by position; loaded once signed in
 let mpCushionSources = [];
 let mpCushionLoading = null;
+// The money for day-to-day spending (27.11.2026), taken before the fund: a budget that comes
+// back to the median month of the last 12 whole ones on food, transport and housing (the
+// Expenses groups) when the salary comes, less everything spent since that salary. From
+// TBC's cash (its lari, then the rest), then its savings account.
+const MP_SPENDING_SOURCES = [
+  { account: 'TBC Bank', instrument_type: 'cash', currency: 'GEL' },
+  { account: 'TBC Bank', instrument_type: 'cash', currency: '' },
+  { account: 'TBC Bank', instrument_type: 'liquid', currency: '' },
+];
+// { usd, monthly, spent, since } once loaded (mpCushionEnsure); usd 0 when it can't be told
+let mpSpending = { usd: 0, monthly: 0, spent: 0, since: null };
+async function mpSpendingLoad() {
+  const groups = typeof MP_EXP_GROUPS === 'object' ? MP_EXP_GROUPS : {};
+  const cats = new Set(Object.keys(groups).filter(c => ['Food', 'Transport', 'Housing'].includes(groups[c])));
+  if (!cats.size) return;
+  const now = new Date();
+  const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 12, 1)).toISOString().slice(0, 10);
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().slice(0, 10);
+  // the last salary's day: the budget's start (none on record: the month's first day)
+  const { data: sal } = await sb.from('bank_transactions').select('tx_date').eq('category', 'salary')
+    .order('tx_date', { ascending: false }).limit(1);
+  const since = sal?.length ? sal[0].tx_date.slice(0, 10) : monthStart;
+  const byMonth = new Map();
+  let spent = 0;
+  for (let off = 0; ; off += 1000) {
+    const { data, error } = await sb.from('expenses').select('day, usd, category').eq('counted', true)
+      .gte('day', from).order('id').range(off, off + 999);
+    if (error) throw error;
+    for (const r of data || []) {
+      const usd = Number(r.usd) || 0;
+      // the budget: food, transport and housing; what's taken off it: every spending
+      if (r.day < monthStart && cats.has(r.category)) byMonth.set(r.day.slice(0, 7), (byMonth.get(r.day.slice(0, 7)) || 0) + usd);
+      if (r.day >= since) spent += usd;
+    }
+    if (!data || data.length < 1000) break;
+  }
+  const months = [...byMonth.values()].sort((a, b) => a - b);
+  if (!months.length) return;
+  const mid = months.length >> 1;
+  const monthly = months.length % 2 ? months[mid] : (months[mid - 1] + months[mid]) / 2;
+  mpSpending = { usd: Math.max(0, monthly - spent), monthly, spent, since };
+}
 function mpCushionEnsure() {
   return mpCushionLoading = mpCushionLoading || (async () => {
     const { data, error } = await sb.from('cushion_sources').select('account, instrument_type, currency, position').order('position');
     if (error) { mpCushionLoading = null; throw error; }
     mpCushionSources = data || [];
+    try { await mpSpendingLoad(); } catch { mpSpending = { usd: 0, monthly: 0, spent: 0, since: null }; }
   })();
 }
 window.mpCushionEnsure = mpCushionEnsure;
@@ -128,25 +171,32 @@ const mpCushionMatch = (src, r) => r.account === src.account && r.instrument_typ
 // .emptied: "account instrument_type" cells the fund took whole (shown as a grey 0)
 function mpWithCushion(rows) {
   let out = rows.slice();
-  let need = MP_CUSHION_USD;
-  const taken = [];
-  for (const src of mpCushionSources) {
-    let got = 0;
-    const from = out.filter(r => r.instrument_type !== 'cushion' && Number(r.value_usd) > 0 && mpCushionMatch(src, r))
-      .sort((x, y) => y.value_usd - x.value_usd);
-    for (const r of from) {
-      if (need <= 0.005) break;
-      const take = Math.min(need, r.value_usd);
-      const rest = r.value_usd - take;
-      out.splice(out.indexOf(r), 1, ...(rest > 0.005 ? [{ ...r, value_usd: rest }] : []),
-        { ...r, instrument_type: 'cushion', value_usd: take, quantity: null });
-      need -= take; got += take;
+  // the day-to-day money first, then the fund from what's left
+  const take = (sources, total, type) => {
+    let need = total;
+    const taken = [];
+    for (const src of sources) {
+      let got = 0;
+      const from = out.filter(r => !['cushion', 'spending'].includes(r.instrument_type) && Number(r.value_usd) > 0 && mpCushionMatch(src, r))
+        .sort((x, y) => y.value_usd - x.value_usd);
+      for (const r of from) {
+        if (need <= 0.005) break;
+        const t = Math.min(need, r.value_usd);
+        const rest = r.value_usd - t;
+        out.splice(out.indexOf(r), 1, ...(rest > 0.005 ? [{ ...r, value_usd: rest }] : []),
+          { ...r, instrument_type: type, value_usd: t, quantity: null });
+        need -= t; got += t;
+      }
+      taken.push({ src, usd: got });
     }
-    taken.push({ src, usd: got });
-  }
-  const left = new Set(out.filter(r => r.instrument_type !== 'cushion' && Number(r.value_usd) > 0.005).map(r => `${r.account} ${r.instrument_type}`));
+    return taken;
+  };
+  const spent = take(MP_SPENDING_SOURCES, mpSpending.usd, 'spending');
+  const taken = take(mpCushionSources, MP_CUSHION_USD, 'cushion');
+  const left = new Set(out.filter(r => !['cushion', 'spending'].includes(r.instrument_type) && Number(r.value_usd) > 0.005).map(r => `${r.account} ${r.instrument_type}`));
   out.taken = taken;
-  out.emptied = new Set(rows.filter(r => Number(r.value_usd) > 0 && mpCushionSources.some(src => mpCushionMatch(src, r)))
+  out.spent = spent;
+  out.emptied = new Set(rows.filter(r => Number(r.value_usd) > 0 && [...mpCushionSources, ...MP_SPENDING_SOURCES].some(src => mpCushionMatch(src, r)))
     .map(r => `${r.account} ${r.instrument_type}`).filter(k => !left.has(k)));
   return out;
 }
@@ -725,19 +775,26 @@ async function mpRenderBrokerAssetClass() {
   const shown = cushion ? new Set([...everHeld].filter(k => !withCushion.emptied.has(k))) : everHeld;
   mpRenderBrokerPivot(wrap, withCushion,
     'instrument_type', 'No holdings yet — import trades above.', undefined, shown, money);
-  if (cushion) mpRenderCushionSources(wrap, withCushion.taken, money);
+  if (cushion) mpRenderCushionSources(wrap, withCushion, money);
 }
 
 // Under the table, with the emergency fund on: its queue, what each source gave
 // (the order is cushion_sources.position, set in the database)
-function mpRenderCushionSources(wrap, taken, money) {
-  const box = document.createElement('div');
-  box.className = 'empty-note';
-  const type = t => ({ cash: 'cash', liquid: 'savings' })[t] || t;
-  box.textContent = `Emergency fund, up to ${money(MP_CUSHION_USD)}, in this order: `
-    + taken.map(({ src, usd }) => `${MP_BROKER_SHORT_NAMES[src.account] || src.account} ${src.account === 'Revolut' && src.instrument_type === 'liquid' ? 'funds' : type(src.instrument_type)}`
-      + `${src.currency ? ` ${src.currency}` : ''} ${money(usd)}`).join(' · ') + '.';
-  wrap.appendChild(box);
+function mpRenderCushionSources(wrap, withCushion, money) {
+  const name = src => `${MP_BROKER_SHORT_NAMES[src.account] || src.account} ${src.account === 'Revolut' && src.instrument_type === 'liquid' ? 'funds'
+    : ({ cash: 'cash', liquid: 'savings' })[src.instrument_type] || src.instrument_type}${src.currency ? ` ${src.currency}` : ''}`;
+  const line = list => list.filter(t => t.usd > 0.005).map(({ src, usd }) => `${name(src)} ${money(usd)}`).join(' · ') || 'nothing';
+  const sp = mpSpending;
+  for (const text of [
+    sp.since ? `Daily spending ${money(sp.usd)}: ${money(sp.monthly)} a month (median of 12, food / transport / housing) less ${money(sp.spent)} spent (everything) since the salary of ${sp.since} -- from ${line(withCushion.spent)}.` : null,
+    `Emergency fund up to ${money(MP_CUSHION_USD)}, in this order: ${line(withCushion.taken)}.`,
+  ]) {
+    if (!text) continue;
+    const box = document.createElement('div');
+    box.className = 'empty-note';
+    box.textContent = text;
+    wrap.appendChild(box);
+  }
 }
 try { const v = localStorage.getItem('mp_assetclass_ccy'); if (v) document.getElementById('assetclass_ccy').value = v; } catch { /* no storage */ }
 try { document.getElementById('assetclass_cushion').checked = localStorage.getItem('mp_assetclass_cushion') === '1'; } catch { /* no storage */ }

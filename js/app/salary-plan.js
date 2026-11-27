@@ -622,7 +622,7 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   const brokerOrder = ['Freedom24', 'Bank of Cyprus', 'Revolut', 'Wise', 'Raiffeisen', 'UniCredit', 'Credo Bank', 'TBC Bank', 'Ziraat Bank', 'IBKR',
     'Sber', 'T-Bank', 'Ozon Bank', 'Alfa', 'Yandex Bank', 'Finuslugi', 'Telegram', 'Binance', 'Bybit', 'Crypto.com', 'Trust', 'cash',
     '(unspecified)'].map(brokerName);
-  const typeOrder = ['bond', 'cash', 'cushion', 'deposit', 'liquid', 'gold', 'crypto', 'stock', 'real_estate'].map(t => MP_ASSET_CLASS_LABELS[t]);
+  const typeOrder = ['bond', 'cash', 'spending', 'cushion', 'deposit', 'liquid', 'gold', 'crypto', 'stock', 'real_estate'].map(t => MP_ASSET_CLASS_LABELS[t]);
   const cryptoOrder = ['TON', 'GRAM', 'TAO', 'ETH', 'BTC', 'SOL'];
   const ruOrder = [['stock', 'RUB'], ['bond', 'RUB'], ['deposit', 'RUB'], ['liquid', 'RUB'], ['cash', 'RUB'],
     ['bond', 'CNY'], ['deposit', 'CNY'], ['liquid', 'CNY'], ['cash', 'CNY'], ['stock', 'CNY']]
@@ -679,7 +679,9 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   // targets add up to its total.
   const goldTarget = GOLD_TARGET_PCT / 100 * total3;
   const cryptoTarget = CRYPTO_TARGET_PCT / 100 * total3;
-  const targetTotal8 = total3 - MP_CUSHION_USD - cashOutside - goldTarget - cryptoTarget;
+  // the day-to-day money (mpSpending) is set aside like the fund, its target what it should be
+  const spendingTarget = mpSpending.usd || 0;
+  const targetTotal8 = total3 - MP_CUSHION_USD - spendingTarget - cashOutside - goldTarget - cryptoTarget;
   const usAlloc = DATA && DATA.usAllocTargetRaw;
   // Stocks at the US ERP share of `whole`, the other three the rest in
   // today's proportions (of `now`: chart 8's figures).
@@ -718,8 +720,8 @@ async function mpBuildCharts(baseIn, extra, draw, run, salary = 0, before = null
   const types3 = cushionOn ? buckets3 : types;
   const group3 = target8;
   const target3 = group3 && (cushionOn
-    ? { ...group3, [L.cash]: cashOutside, [L.cushion]: MP_CUSHION_USD, [L.gold]: goldTarget, [L.crypto]: cryptoTarget }
-    : { ...group3, [L.cash]: cashOutside + fundCash, [L.liquid]: (group3[L.liquid] || 0) + MP_CUSHION_USD - fundCash,
+    ? { ...group3, [L.cash]: cashOutside, [L.cushion]: MP_CUSHION_USD, [L.spending]: spendingTarget, [L.gold]: goldTarget, [L.crypto]: cryptoTarget }
+    : { ...group3, [L.cash]: cashOutside + fundCash, [L.liquid]: (group3[L.liquid] || 0) + MP_CUSHION_USD + spendingTarget - fundCash,
         [L.gold]: goldTarget, [L.crypto]: cryptoTarget });
 
   // Currencies first (the listed ones in order, then the rest largest first),
