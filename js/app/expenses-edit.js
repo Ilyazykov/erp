@@ -508,9 +508,11 @@ function mpEditAccount(src, xid) {
     const account = form.account.value;
     const { error } = await sb.from('bank_transactions').update({ account }).eq('external_source', src).eq('external_id', xid);
     if (error) { alert(error.message); return; }
-    // the expenses tab's own copy of the account (refresh_expenses sets it the same way)
+    // the expenses tab's own copy of the account (refresh_expenses sets it the same way); a
+    // capital refresh rewriting the tab holds its rows a minute or two, and the copy waiting
+    // on it times out -- the refresh takes the account from the bank row anyway (27.11.2026)
     const { error: eErr } = await sb.from('expenses').update({ account }).eq('external_source', src).eq('external_id', xid);
-    if (eErr) { alert(eErr.message); return; }
+    if (eErr && eErr.code !== '57014') { alert(eErr.message); return; }
     rows.forEach(x => { x.account = account; });
     form.closest('dialog').close();
     await mpRenderExpenses();

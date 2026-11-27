@@ -449,6 +449,20 @@ function mpPlaceLabel(p, list) {
   const full = addr(p, 3);
   return p.lat != null ? `${p.name} · ${full ? full + ', ' : ''}${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}` : `${p.name}${full ? ' · ' + full : ''}`;
 }
+// A short Google Maps link opened to the full one, by the resolve-map-link function
+// (the browser can't follow goo.gl's redirect itself).
+async function mpOpenShortMapLink(url) {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) throw new Error('sign in first');
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/resolve-map-link`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  });
+  const r = await res.json();
+  if (!res.ok) throw new Error(r.error || res.statusText);
+  return r.url;
+}
 // A point's address, from OpenStreetMap (Nominatim): city, street, house.
 async function mpAddressAt(lat, lng) {
   const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&accept-language=en`);
@@ -624,7 +638,14 @@ function mpEditPlace(src, xid) {
     });
   }
   form.link.addEventListener('input', async () => {
-    const p = mpPlaceFromLink(form.link.value.trim());
+    let link = form.link.value.trim();
+    // a short link (maps.app.goo.gl) has nothing in it: opened to the full one first
+    if (/^https:\/\/(maps\.app\.goo\.gl|goo\.gl)\//.test(link)) {
+      const full = await mpOpenShortMapLink(link).catch(err => { alert(`The short link: ${err.message}`); return null; });
+      if (!full || form.link.value.trim() !== link) return;
+      link = full;
+    }
+    const p = mpPlaceFromLink(link);
     if (!p) return;
     if (p.name) form.pname.value = p.name;
     form.lat.value = p.lat ?? ''; form.lng.value = p.lng ?? '';
