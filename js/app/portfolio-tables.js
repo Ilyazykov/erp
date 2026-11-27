@@ -104,7 +104,7 @@ const MP_ASSET_CLASS_LABELS = {
 
 // The safety cushion -- $10,000 not to be touched (30.10.2026), a queue since 27.11.2026: its
 // sources (table cushion_sources) in their order, each taken as far as what's left of the
-// $10,000 goes -- Ziraat's cash, TBC's savings, TBC's dollars, then Revolut's money-market funds
+// $10,000 goes -- Ziraat's cash, Wise's, TBC's savings, TBC's dollars, then Revolut's money-market funds
 // in euro, dollar, pound. Not new money: what's taken moves from its column (cash / liquid
 // assets) to 'cushion' -- the totals stay.
 const MP_CUSHION_USD = 10000;
