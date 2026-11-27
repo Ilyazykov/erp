@@ -1135,11 +1135,16 @@ function wireTreemap() {
       let rows = data.rows;
       // the cushion's money per asset, taken out of the asset's capital below (its earnings stay)
       const cushionOf = new Map();
-      if (cushionMode !== 'accounts' && g('mpWithCushion')) {
+      // the day-to-day money (mpWithCushion's 'spending', 27.11.2026) the same three ways, out of the
+      // total by default; its money, like the cushion's, idle -- out of its asset's capital
+      const spendingMode = $('lt_spending').value;
+      if ((cushionMode !== 'accounts' || spendingMode !== 'accounts') && g('mpWithCushion')) {
         if (g('mpCushionEnsure')) await window.mpCushionEnsure().catch(() => {});
-        rows = [...window.mpWithCushion(rows.filter(r => r.account !== 'real estate')), ...rows.filter(r => r.account === 'real estate')];
-        for (const r of rows) if (r.instrument_type === 'cushion') cushionOf.set(assetKey(r.ticker), (cushionOf.get(assetKey(r.ticker)) || 0) + Number(r.value_usd));
-        rows = rows.map(r => (r.instrument_type !== 'cushion' ? r : { ...r, ticker: 'CUSHION' }));
+        rows = [...window.mpWithCushion(rows.filter(r => r.account !== 'real estate'), { cushion: cushionMode !== 'accounts', spending: spendingMode !== 'accounts' }),
+          ...rows.filter(r => r.account === 'real estate')];
+        for (const r of rows) if (r.instrument_type === 'cushion' || r.instrument_type === 'spending') cushionOf.set(assetKey(r.ticker), (cushionOf.get(assetKey(r.ticker)) || 0) + Number(r.value_usd));
+        rows = rows.map(r => (r.instrument_type === 'cushion' ? { ...r, ticker: 'CUSHION' } : r.instrument_type === 'spending' ? { ...r, ticker: 'SPENDING' } : r));
+        if (spendingMode === 'total') rows = rows.filter(r => r.instrument_type !== 'spending');
       }
       // 'total': the cash in the currencies is out of the total with the cushion (not drawn, not counted)
       if (cushionMode === 'total') rows = rows.filter(r => r.instrument_type !== 'cash');
@@ -1251,7 +1256,7 @@ function wireTreemap() {
   // load starts at "merged" (the user, 21.11.2026); the old remembered choice is dropped
   try { localStorage.removeItem('lt_funds'); } catch { /* no storage */ }
   $('lt_funds').value = 'merge';
-  for (const id of ['lt_funds', 'lt_cushion', 'lt_gold', 'lt_savings', 'lt_re', 'lt_small']) $(id).addEventListener('change', redraw);
+  for (const id of ['lt_funds', 'lt_cushion', 'lt_spending', 'lt_gold', 'lt_savings', 'lt_re', 'lt_small']) $(id).addEventListener('change', redraw);
   $('lt_show')?.addEventListener('change', e => {
     showIn = SHOW_UNITS.includes(e.target.value) ? e.target.value : '%';
     try { localStorage.setItem('lt_show', showIn); } catch { /* no storage */ }
