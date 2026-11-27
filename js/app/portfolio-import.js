@@ -974,8 +974,8 @@ function mpCyTaxReceiptCsv(payments) {
 //   a withdrawal's receipt (the transaction's menu -> receipt): its reference, day, amount, fee,
 //     method and card; no time in it -- the time from the file's name ("receipt-PS1842292-Nov 27,
 //     2026, 07_55.pdf").
-// A payment over a pay period of more than a day is the contract's fixed pay ("Fixed" in the app):
-// category_bank "RemotePass salary" (import-bank-csv: salary); a one-day one is an "Addition".
+// Every payment is pay -- the contract's fixed (a period of a month) and an "Addition" (a one-day
+// period) alike (the user, 28.11.2026): category_bank "RemotePass salary" (import-bank-csv: salary).
 // Each upload sends the account's whole history -- the rows already in the database and the new
 // ones, a running balance through them -- since import-bank-csv drops the days' rows a file leaves out.
 function mpRpText(rows) { return rows.map(r => r.cells.map(c => c.s).join(' ')).join('\n'); }
@@ -1010,11 +1010,9 @@ function mpRemotePassDoc(d) {
       const details = m[5].trim();
       const payer = details.match(/Paid by (.+?)\s*\|/)?.[1]?.trim() || '';
       const pp = details.match(/Pay Period:\s*(\d{1,2} [A-Z][a-z]{2}(?: \d{4})?)\s*[–-]\s*(\d{1,2} [A-Z][a-z]{2} \d{4})/);
-      const iso = s => { const [dd, mon, y] = s.split(' '); return `${y}-${String(MP_RP_MON[mon]).padStart(2, '0')}-${dd.padStart(2, '0')}`; };
       const to = pp ? pp[2] : '';
-      const from = pp ? (pp[1].split(' ').length === 3 ? pp[1] : `${pp[1]} ${to.split(' ')[2]}`) : '';
       payments.push({ id, day: `${dt[3]}-${dt[1]}-${dt[2]}`, time: tm ? tm[1] : '', amount: Number(m[3].replace(/,/g, '')), currency: m[4], payer,
-        from: pp ? pp[1] : '', to, salary: !!pp && iso(from) !== iso(to) });
+        from: pp ? pp[1] : '', to, salary: true });
     }
     const bal = text.match(/Balance as of (\d{2})\/(\d{2})\/(\d{4})\s+(-?[\d,]+(?:\.\d+)?)/);
     return { kind: 'statement', payments, skipped, balance: bal ? { day: `${bal[3]}-${bal[1]}-${bal[2]}`, amount: Number(bal[4].replace(/,/g, '')) } : null };
