@@ -967,6 +967,128 @@ function mpCyTaxReceiptCsv(payments) {
   }
   return out.join('\n') + '\n';
 }
+// RemotePass (the new job's payroll, 27.11.2026): its wallet as the bank account "RemotePass"
+// (generic bank CSV, account_number = the currency). Two PDFs feed it:
+//   the statement (Transactions -> Export Statement): the payments in, "Pay Period: 27 Oct – 26
+//     Nov 2026" each, and the balance at its end;
+//   a withdrawal's receipt (the transaction's menu -> receipt): its reference, day, amount, fee,
+//     method and card; no time in it -- the time from the file's name ("receipt-PS1842292-Nov 27,
+//     2026, 07_55.pdf").
+// A payment over a pay period of more than a day is the contract's fixed pay ("Fixed" in the app):
+// category_bank "RemotePass salary" (import-bank-csv: salary); a one-day one is an "Addition".
+// Each upload sends the account's whole history -- the rows already in the database and the new
+// ones, a running balance through them -- since import-bank-csv drops the days' rows a file leaves out.
+function mpRpText(rows) { return rows.map(r => r.cells.map(c => c.s).join(' ')).join('\n'); }
+function mpIsRemotePassPdf(rows) {
+  const t = mpRpText(rows);
+  return /RemotePass/.test(t) && (/Transaction recap From/.test(t) || /Paid out from\s+RemotePass/.test(t) || (/^Receipt\b/m.test(t) && /Method:/.test(t)));
+}
+const MP_RP_MON = { Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6, Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12 };
+// -> { kind: 'statement', payments: [{ id, day, time, amount, currency, payer, from, to, salary }], balance: { day, amount } | null }
+//  | { kind: 'receipt', withdrawal: { ref, day, time, amount, fee, currency, method, to } } | { error }
+function mpRemotePassDoc(d) {
+  const text = mpRpText(d.rows);
+  if (/Transaction recap From/.test(text)) {
+    const lines = d.rows.map(r => r.cells.map(c => c.s).join(' '));
+    const end = lines.findIndex(l => /^Balances\b/.test(l));
+    const body = lines.slice(0, end < 0 ? lines.length : end);
+    // a transaction's cells wrap over several lines: its block from its id's line to the next one's
+    const blocks = [];
+    for (const l of body) {
+      if (/^[A-Z]{2}\d{5,}\b/.test(l)) blocks.push(l);
+      else if (blocks.length) blocks[blocks.length - 1] += ' ' + l;
+    }
+    const payments = [], skipped = [];
+    for (const b of blocks) {
+      const id = b.match(/^([A-Z]{2}\d+)/)[1];
+      const dt = b.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+      const tm = b.match(/\b(\d{2}:\d{2})\b/);
+      const rest = b.replace(/\d{2}\/\d{2}\/\d{4}/, ' ').replace(/\b\d{2}:\d{2}\b/, ' ').replace(/\s+/g, ' ');
+      const m = rest.match(/\b(Payment|[A-Z][a-z]+)\s+(Paid|[A-Z][a-z]+)\s+(-?[\d,]+(?:\.\d+)?)\s+([A-Z]{3})\b(.*)$/);
+      if (!dt || !m) { skipped.push(`${id}: not read`); continue; }
+      if (m[1] !== 'Payment' || m[2] !== 'Paid') { skipped.push(`${id}: ${m[1]} ${m[2]}, not a paid payment`); continue; }
+      const details = m[5].trim();
+      const payer = details.match(/Paid by (.+?)\s*\|/)?.[1]?.trim() || '';
+      const pp = details.match(/Pay Period:\s*(\d{1,2} [A-Z][a-z]{2}(?: \d{4})?)\s*[–-]\s*(\d{1,2} [A-Z][a-z]{2} \d{4})/);
+      const iso = s => { const [dd, mon, y] = s.split(' '); return `${y}-${String(MP_RP_MON[mon]).padStart(2, '0')}-${dd.padStart(2, '0')}`; };
+      const to = pp ? pp[2] : '';
+      const from = pp ? (pp[1].split(' ').length === 3 ? pp[1] : `${pp[1]} ${to.split(' ')[2]}`) : '';
+      payments.push({ id, day: `${dt[3]}-${dt[1]}-${dt[2]}`, time: tm ? tm[1] : '', amount: Number(m[3].replace(/,/g, '')), currency: m[4], payer,
+        from: pp ? pp[1] : '', to, salary: !!pp && iso(from) !== iso(to) });
+    }
+    const bal = text.match(/Balance as of (\d{2})\/(\d{2})\/(\d{4})\s+(-?[\d,]+(?:\.\d+)?)/);
+    return { kind: 'statement', payments, skipped, balance: bal ? { day: `${bal[3]}-${bal[1]}-${bal[2]}`, amount: Number(bal[4].replace(/,/g, '')) } : null };
+  }
+  const cell = re => { for (const r of d.rows) for (const c of r.cells) { const m = c.s.match(re); if (m) return m; } return null; };
+  // a label over its value: the value the next line's cell under it
+  const under = re => {
+    for (let i = 0; i + 1 < d.rows.length; i++) {
+      const c = d.rows[i].cells.find(x => re.test(x.s));
+      if (!c) continue;
+      const v = d.rows[i + 1].cells.reduce((best, x) => (!best || Math.abs(x.x - c.x) < Math.abs(best.x - c.x) ? x : best), null);
+      if (v && Math.abs(v.x - c.x) < 40) return { label: c.s, value: v.s };
+    }
+    return null;
+  };
+  const ref = cell(/Reference:\s*(\S+)/)?.[1];
+  const date = cell(/Date:\s*(\d{2})\/(\d{2})\/(\d{4})/);
+  const amt = cell(/Amount:\s*([A-Z]{3})\s*([\d,]+(?:\.\d+)?)/);
+  const method = cell(/Method:\s*(.+)$/)?.[1]?.trim() || '';
+  if (!ref || !date || !amt) return { error: 'the reference, the date or the amount not found' };
+  const fee = Number((under(/^Fee$/)?.value || '').replace(/[^\d.]/g, '')) || 0;
+  const card = under(/account number$/);
+  const last4 = card?.value.match(/(\d{4})\s*$/)?.[1];
+  const to = card ? `${card.label.replace(/\s*account number$/, '')}${last4 ? ` *${last4}` : ''}` : '';
+  const fm = d.name.match(/([A-Z][a-z]{2}) (\d{1,2}), (\d{4}), (\d{2})_(\d{2})/);
+  const day = `${date[3]}-${date[2]}-${date[1]}`;
+  const time = fm && `${fm[3]}-${String(MP_RP_MON[fm[1]]).padStart(2, '0')}-${fm[2].padStart(2, '0')}` === day ? `${fm[4]}:${fm[5]}` : '';
+  return { kind: 'receipt', withdrawal: { ref, day, time, amount: Number(amt[2].replace(/,/g, '')), fee, currency: amt[1], method, to } };
+}
+// docs read -> { csv, rows, text } (csv null: nothing new), with the account's rows already in the database
+async function mpRemotePassCsv(parsed) {
+  const BANK = 'RemotePass';
+  const rows = [];
+  const add = r => { if (!rows.some(x => x.date === r.date && x.time === r.time && x.description === r.description && x.amount === r.amount)) rows.push(r); };
+  const { data: had, error } = await sb.from('bank_transactions').select('tx_date, description, amount, currency, category, external_source')
+    .eq('account', BANK).like('external_source', 'remotepass_csv:%').order('tx_date');
+  if (error) throw new Error(error.message);
+  for (const t of had || []) add({ currency: t.currency, date: t.tx_date.slice(0, 10), time: t.tx_date.slice(11, 16), description: t.description,
+    amount: Number(t.amount), salary: t.category === 'salary', old: true });
+  const balances = [];
+  for (const p of parsed) {
+    if (p.kind === 'statement') {
+      for (const x of p.payments) add({ currency: x.currency, date: x.day, time: x.time,
+        description: `Payment ${x.id}${x.payer ? `, paid by ${x.payer}` : ''}${x.from ? `, pay period ${x.from} - ${x.to}` : ''}`, amount: x.amount, salary: x.salary });
+      if (p.balance) balances.push(p.balance);
+    } else {
+      const w = p.withdrawal;
+      const sent = Math.round((w.amount - w.fee) * 100) / 100;
+      add({ currency: w.currency, date: w.day, time: w.time,
+        description: `Withdrawal ${w.ref}, ${w.method}${w.to ? ` to ${w.to}` : ''}, fee ${w.fee.toFixed(2)} ${w.currency}`, amount: -sent });
+      if (w.fee > 0) add({ currency: w.currency, date: w.day, time: w.time, description: `Withdrawal ${w.ref} fee`, amount: -w.fee });
+    }
+  }
+  const fresh = rows.filter(r => !r.old);
+  if (!fresh.length) return { csv: null, rows: [], text: 'nothing new' };
+  // the day and time, then in before out (a payment and its withdrawal at one minute)
+  rows.sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`) || b.amount - a.amount);
+  const q = v => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+  const bal = {};
+  const out = ['bank,account_number,product,currency,date,time,card,description,amount,balance,category_bank'];
+  for (const r of rows) {
+    bal[r.currency] = Math.round(((bal[r.currency] || 0) + r.amount) * 100) / 100;
+    r.balance = bal[r.currency];
+    out.push([BANK, r.currency.toLowerCase(), 'current_account', r.currency, r.date, r.time, '', r.description, r.amount.toFixed(2),
+      r.balance.toFixed(2), r.salary ? 'RemotePass salary' : ''].map(q).join(','));
+  }
+  // the statement's balance against the rows to its day
+  const checks = balances.map(b => {
+    const cur = rows.filter(r => r.date <= b.day && r.amount > 0 || r.date < b.day);
+    const sum = Math.round(cur.reduce((s, r) => s + r.amount, 0) * 100) / 100;
+    return sum === b.amount ? `balance ${b.amount} on ${b.day} agrees` : `balance ${b.amount} on ${b.day} in the statement, ${sum} by the rows`;
+  });
+  return { csv: out.join('\n') + '\n', rows: fresh, text: `${fresh.length} new row(s) (${fresh.map(r => `${r.date} ${r.amount > 0 ? '+' : ''}${r.amount.toFixed(2)} ${r.currency}`).join('; ')})${checks.length ? '; ' + checks.join('; ') : ''}` };
+}
 // Magti's internet packages (MyMagti -> ინტერნეტი, 22.11.2026), by price in lari: a top-up of
 // exactly a package's price is that package bought (the line names it; the top-up in its note)
 const MP_MAGTI_PACKAGES = {
@@ -1370,6 +1492,24 @@ async function mpImportFiles(files) {
           ok.push(p);
         }
         if (ok.length) files.push(new File([mpCyTaxReceiptCsv(ok)], `cytax_${ok.map(p => p.day).join('+')}.csv`, { type: 'text/csv' }));
+      }
+      // RemotePass' statement and withdrawal receipts: the account "RemotePass", one bank CSV
+      const remotepass = docs.filter(d => mpIsRemotePassPdf(d.rows));
+      docs = docs.filter(d => !remotepass.includes(d));
+      if (remotepass.length) {
+        const rl = document.createElement('div');
+        listEl.appendChild(rl);
+        const parsed = [], notes = [];
+        for (const d of remotepass) {
+          const p = mpRemotePassDoc(d);
+          if (p.error) { notes.push(`${d.name}: ${p.error} -- not loaded`); continue; }
+          if (p.kind === 'receipt' && !p.withdrawal.time) notes.push(`${d.name}: no time in the file's name, the withdrawal at 00:00`);
+          if (p.skipped?.length) notes.push(`${d.name}: left out ${p.skipped.join(', ')}`);
+          parsed.push(p);
+        }
+        const r = parsed.length ? await mpRemotePassCsv(parsed) : { csv: null, text: 'nothing read' };
+        rl.textContent = `${remotepass.map(d => d.name).join(', ')}: RemotePass, ${r.text}${notes.length ? `. ${notes.join('; ')}` : ''}.`;
+        if (r.csv) files.push(new File([r.csv], `remotepass_${r.rows.map(x => x.date).sort()[0]}_${r.rows.map(x => x.date).sort().pop()}.csv`, { type: 'text/csv' }));
       }
       // MyMagti's payment history: a receipt CSV of its payments
       const magti = docs.filter(d => mpIsMagtiPdf(d.rows));
