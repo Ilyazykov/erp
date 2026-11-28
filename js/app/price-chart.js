@@ -222,7 +222,8 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       <label style="margin-left:12px;display:none" id="mp_price_pay_box"><input type="checkbox" id="mp_price_pay" checked> payouts</label>
       <label style="margin-left:12px;display:none" id="mp_price_inv_box"><input type="checkbox" id="mp_price_inv"> <span></span></label>
       <label style="margin-left:12px;display:none" id="mp_price_rate_box"><input type="checkbox" id="mp_price_rate" checked> <span></span></label>
-      <label style="margin-left:12px;display:none" id="mp_price_avg_box"><input type="checkbox" id="mp_price_avg_all"> avg over all time</label>`);
+      <label style="margin-left:12px;display:none" id="mp_price_avg_box"><input type="checkbox" id="mp_price_avg_all"> avg over all time</label>
+      <label style="margin-left:12px;display:none" id="mp_price_avgpay_box" title="Interest in coins or units: more of it for the money paid; a dividend or coupon: its money off the price paid"><input type="checkbox" id="mp_price_avgpay"> avg less payouts</label>`);
   // the company, its country (a flag) and sector from the funds' lists (securities), instead of the
   // ticker again: "NVDA · NVIDIA Corp 🇺🇸 · Information Technology"
   let ccyReady = () => {};
@@ -262,7 +263,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     let wallet;
     [prices, deals, wallet] = await Promise.all([
       mpFetchAll(() => sb.from('price_history').select('ticker, day, price_usd').in('ticker', dealTickers).order('day')),
-      mpFetchAll(() => sb.from('trades').select('ticker, trade_date, side, quantity, price, nkd, currency, fee_tax, fee_currency, account, external_source').in('ticker', dealTickers).in('side', ['buy', 'sell']).order('trade_date')),
+      mpFetchAll(() => sb.from('trades').select('ticker, trade_date, side, quantity, price, nkd, currency, fee_tax, fee_currency, account, external_source, note').in('ticker', dealTickers).in('side', ['buy', 'sell']).order('trade_date')),
       // a coin's deals are its exchanges' and wallets' own rows: a buy (by card or for
       // another coin) and a sale; transfers, fees, interest and Earn moves aren't deals
       mpFetchAll(() => sb.from('wallet_transactions').select('symbol, tx_time, kind, amount, chain').or(dealTickers.map(t => `symbol.ilike.${t}`).join(','))
@@ -355,6 +356,8 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     // change: price 0, e.g. T-Bank's SBER 120 out of one agreement and into another,
     // dated the report's day) is no buy or sale
     deals = deals.filter(d => d.price == null || Number(d.price) !== 0);
+    // a savings account's interest is a buy noted as such (as the payouts above take it)
+    for (const d of deals) d.interest = d.side === 'buy' && /interest|процент|капитализац/i.test(d.note || '');
     for (const d of deals) d.account = d.account || d.external_source || '—';
     // what it paid out: coupons and dividends (trades 'dividend': quantity = the amount), a deposit's or
     // savings account's interest (its 'buy' noted as interest), an exchange's Earn on a coin
@@ -365,9 +368,12 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         .in('kind', ['interest', 'reward']).order('tx_time')),
     ]);
     payouts = [
+      // (kind, for the average less payouts: 'cash' a dividend's or coupon's money, 'units' more of the
+      // coin itself, 'deal' a savings account's interest -- a buy already among the deals)
       ...payTrades.map(t => ({ day: t.trade_date, amount: Number(t.quantity), ccy: (t.currency || '').toUpperCase(), account: t.account || '—',
-        what: t.side === 'dividend' ? (/купон|coupon/i.test(t.note || '') ? 'coupon' : 'dividend') : 'interest' })),
-      ...payWallet.map(w => ({ day: String(w.tx_time).slice(0, 10), amount: Number(w.amount), ccy: String(w.symbol).toUpperCase(), account: w.chain, what: 'interest' })),
+        what: t.side === 'dividend' ? (/купон|coupon/i.test(t.note || '') ? 'coupon' : 'dividend') : 'interest',
+        kind: t.side === 'dividend' ? 'cash' : 'deal' })),
+      ...payWallet.map(w => ({ day: String(w.tx_time).slice(0, 10), amount: Number(w.amount), ccy: String(w.symbol).toUpperCase(), account: w.chain, what: 'interest', kind: 'units' })),
     ].filter(p => Number.isFinite(p.amount) && p.amount !== 0).sort((a, b) => a.day.localeCompare(b.day));
     fx = ccy === 'USD' ? [] : await mpFetchAll(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', ccy).order('day'));
   } catch (err) { ccyReady(null); note.textContent = String(err.message || err); return; }
@@ -758,13 +764,30 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     // the average buy price of what's held: one's own deals over the whole history (not a fund's), as Sber
     // counts it -- each buy adds its cost with the fee and its units, a sale takes units out at the average
     // (checked on SBMM: 18.3767 this way against Sber's 18.3771; FIFO gave 18.41); none when nothing is held
+    // less the payouts (the box, the user's way 28.11.2026): each one more for the money already paid --
+    // interest in the coin or the account's own units adds them at no cost, a dividend's or coupon's money
+    // comes off the cost; only while something's held, in the period's deals' span as they are
+    const payIn = dlg.querySelector('#mp_price_avgpay').checked;
+    const pays = payIn ? payouts.filter(p => p.kind !== 'deal' && p.day <= today && (avgAll || p.day >= from)) : [];
+    // the deals and the payouts by day, a day's deals first
+    const events = list => [...list.map(d => ({ day: d.trade_date, d })), ...pays.map(p => ({ day: p.day, p }))].sort((a, b) => a.day.localeCompare(b.day));
     if (!rateNote) {
       const chartOn = day => { let v = null; for (const p of prices) { if (p.day > day) break; v = p.price_usd; } return v == null ? null : val(day, v); };
+      // a payout's money in the chart's unit (null: no rate for it)
+      const payMoney = p => (p.ccy === unit ? p.amount : unit === 'USD' && p.ccy === ccy && rateOn(p.day) ? p.amount * rateOn(p.day)
+        : p.ccy === 'USD' && unit === ccy && rateOn(p.day) ? p.amount / rateOn(p.day) : null);
       const pos = { qty: 0, cost: 0 };
       // the funds' buys too when they're shown (the box) -- but on an index fund's own chart its average stays
       // that of the units one holds of it: a broad fund's buy is a mark only
-      for (const d of deals.filter(x => (viaOn || !x.via) && !x.indexVia && (avgAll || x.trade_date >= from))) {
+      for (const { d, p } of events(deals.filter(x => (viaOn || !x.via) && !x.indexVia && (avgAll || x.trade_date >= from)))) {
+        if (p) {
+          if (!(pos.qty > 0)) continue;
+          if (p.kind === 'units') pos.qty += p.amount;
+          else { const m = payMoney(p); if (m != null) pos.cost -= m; }
+          continue;
+        }
         const q = Number(d.quantity); if (!(q > 0)) continue;
+        if (d.side === 'buy' && payIn && d.interest) { pos.qty += q; continue; }
         if (d.side === 'buy') {
           const at = chartOn(d.trade_date);
           const dc = String(d.currency || ccy).toUpperCase();
@@ -786,11 +809,34 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         }
       }
       const { qty, cost } = pos;
-      if (qty > 1e-9 && cost > 0) {
+      // (less the payouts the cost can reach 0 or under: all paid back -- shown as it is)
+      if (qty > 1e-9 && (cost > 0 || payIn)) {
         const avg = cost / qty;
         lines.push({ type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: avg, y1: avg, line: { color: '#8b949e', width: 1, dash: 'dot' }, layer: 'below' });
         label(avg, `avg ${fmt(avg)}`, '#30363d', '#e6edf3');
-        avgNote = ` · average buy price ${fmt(avg)} for ${Math.round(qty * 1e6) / 1e6} held (${last0 ? `${last0.v >= avg ? '+' : ''}${((last0.v / avg - 1) * 100).toFixed(1)}%` : ''})`;
+        avgNote = ` · average buy price${payIn ? ' less payouts' : ''} ${fmt(avg)} for ${Math.round(qty * 1e6) / 1e6} held (${last0 && avg > 0 ? `${last0.v >= avg ? '+' : ''}${((last0.v / avg - 1) * 100).toFixed(1)}%` : ''})`;
+      }
+    }
+    // a deposit's, a savings account's or a money-market fund's (its currency's rate on the chart): the average
+    // rate of the money put in -- each top-up its units and their dollars that day, a withdrawal takes units out
+    // at the average; less the payouts, the interest (a savings account's buys noted so, a fund's return) is
+    // units at no cost. Shown as the chart is (CCY per dollar, or dollars per unit)
+    if (rateNote && !opts.currency && moneyCcy && deals.length) {
+      const rateAt = day => { let v = null; for (const p of prices) { if (p.day > day) break; v = Number(p.price_usd); } return v; };
+      const usdPer = day => (opts.invert ? rateAt(day) : rateOn(day));
+      const pos = { qty: 0, usd: 0 };
+      for (const { d, p } of events(deals.filter(x => avgAll || x.trade_date >= from))) {
+        if (p) { if (pos.qty > 0 && p.kind === 'cash' && p.ccy === moneyCcy) pos.qty += p.amount; continue; }
+        const q = Number(d.quantity) * (Number(d.price) > 0 ? Number(d.price) : 1); if (!(q > 0)) continue;
+        if (d.side === 'buy' && payIn && d.interest) { pos.qty += q; continue; }
+        if (d.side === 'buy') { const r = usdPer(d.trade_date); if (r) { pos.qty += q; pos.usd += q * r; } }
+        else if (pos.qty > 0) { const a = pos.usd / pos.qty; pos.qty = Math.max(0, pos.qty - q); pos.usd = pos.qty * a; }
+      }
+      if (pos.qty > 1e-9 && pos.usd > 0) {
+        const avg = opts.invert ? pos.usd / pos.qty : pos.qty / pos.usd;
+        lines.push({ type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: avg, y1: avg, line: { color: '#8b949e', width: 1, dash: 'dot' }, layer: 'below' });
+        label(avg, `avg ${fmt(avg)}`, '#30363d', '#e6edf3');
+        avgNote = ` · average rate${payIn ? ' less payouts' : ''} ${fmt(avg)} for ${Math.round(pos.qty).toLocaleString('en-US')} ${moneyCcy} put in (${last0 ? `${last0.v >= avg ? '+' : ''}${((last0.v / avg - 1) * 100).toFixed(1)}%` : ''})`;
       }
     }
     // a currency's: the same over its exchanges -- each bought adds its units and the dollars paid, each sold
@@ -886,8 +932,15 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   // remembered, the user's rule 23.11.2026); the box where there's an average to draw
   const avgBox = dlg.querySelector('#mp_price_avg_all');
   avgBox.checked = false;
-  if (fxDeals.length || (!rateNote && deals.length)) dlg.querySelector('#mp_price_avg_box').style.display = '';
+  const depositAvg = !!(rateNote && !opts.currency && moneyCcy && deals.length);
+  if (fxDeals.length || (!rateNote && deals.length) || depositAvg) dlg.querySelector('#mp_price_avg_box').style.display = '';
   avgBox.onchange = draw;
+  // the average less the payouts: remembered; the box where there's an average and payouts to take off it
+  const avgPayBox = dlg.querySelector('#mp_price_avgpay');
+  try { avgPayBox.checked = localStorage.getItem('mp_price_avgpay') === '1'; } catch { /* no storage */ }
+  if (((!rateNote && deals.length) || depositAvg) && (payouts.some(p => p.kind !== 'deal') || deals.some(d => d.interest)))
+    dlg.querySelector('#mp_price_avgpay_box').style.display = '';
+  avgPayBox.onchange = () => { mpSave('mp_price_avgpay', avgPayBox.checked ? '1' : '0'); draw(); };
   viaBox.onchange = () => { mpSave('mp_price_via', viaBox.checked ? '1' : '0'); draw(); };
   draw();
 }
