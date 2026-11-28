@@ -85,6 +85,43 @@ function mpMergeDayDeals(deals) {
 // accrued for the whole deal, Alfa's the price in money and the accrued a bond. atNative: the chart's price that day
 // in the deal's currency, to tell % from money and to see the face (1000, or what's left after amortisations).
 // null: not a bond.
+// A staked coin whose reward comes as its balance growing (Lido's stETH rebases daily, no transfer of
+// it -- the staked ETH showed no payouts, 28.11.2026): per wallet, the reward is the balance now less
+// what came in and went out; spread over the days by what was held each day (the transfers' running
+// sum), a month's together as one payout, in the coin it stands for
+const MP_REBASING = { STETH: 'ETH' };
+async function mpRebaseRewards(tickers) {
+  const out = [];
+  const today = new Date().toISOString().slice(0, 10);
+  for (const sym of Object.keys(MP_REBASING).filter(s => tickers.includes(MP_REBASING[s]))) {
+    const [{ data: bal }, moves] = await Promise.all([
+      sb.from('wallet_balances').select('wallet_id, account, quantity').ilike('symbol', sym),
+      mpFetchAll(() => sb.from('wallet_transactions').select('wallet_id, tx_time, amount').ilike('symbol', sym).order('tx_time')),
+    ]);
+    for (const b of bal || []) {
+      const mv = moves.filter(m => m.wallet_id === b.wallet_id);
+      const reward = Number(b.quantity) - mv.reduce((s, m) => s + Number(m.amount), 0);
+      if (!mv.length || !(reward > 0)) continue;
+      const days = new Map();
+      let held = 0, i = 0;
+      for (let t = Date.parse(String(mv[0].tx_time).slice(0, 10)); ; t += 864e5) {
+        const day = new Date(t).toISOString().slice(0, 10);
+        if (day > today) break;
+        while (i < mv.length && String(mv[i].tx_time).slice(0, 10) <= day) held += Number(mv[i++].amount);
+        if (held > 0) days.set(day, held);
+      }
+      const total = [...days.values()].reduce((a, h) => a + h, 0);
+      const byMonth = new Map();
+      for (const [day, h] of days) {
+        const e = byMonth.get(day.slice(0, 7)) || { day, amount: 0 };
+        e.day = day; e.amount += reward * h / total;
+        byMonth.set(day.slice(0, 7), e);
+      }
+      for (const e of byMonth.values()) out.push({ day: e.day, amount: e.amount, ccy: MP_REBASING[sym], account: `${b.account} (Lido ${sym}, estimated)`, what: 'interest', kind: 'units' });
+    }
+  }
+  return out;
+}
 function mpBondUnitMoney(d, atNative) {
   const q = Number(d.quantity), price = Number(d.price);
   if (!/^(SU|RU)[0-9A-Z]{10}$/.test(String(d.ticker)) || !(q > 0) || !(price > 0)) return null;
@@ -378,6 +415,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
         what: t.side === 'dividend' ? (/купон|coupon/i.test(t.note || '') ? 'coupon' : 'dividend') : 'interest',
         kind: t.side === 'dividend' ? 'cash' : 'deal' })),
       ...payWallet.map(w => ({ day: String(w.tx_time).slice(0, 10), amount: Number(w.amount), ccy: String(w.symbol).toUpperCase(), account: w.chain, what: 'interest', kind: 'units' })),
+      ...await mpRebaseRewards(dealTickers),
     ].filter(p => Number.isFinite(p.amount) && p.amount !== 0).sort((a, b) => a.day.localeCompare(b.day));
     fx = ccy === 'USD' ? [] : await mpFetchAll(() => sb.from('fx_history').select('day, usd_per_unit').eq('currency', ccy).order('day'));
   } catch (err) { ccyReady(null); note.textContent = String(err.message || err); return; }
