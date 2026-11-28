@@ -76,8 +76,8 @@ function parse(text: string) {
   const lines = text.replace(/^﻿/, '').split(/\r\n|\r|\n/).filter(l => l.trim());
   const header = parseCsvLine(lines[0] || '').map(h => h.trim());
   const col = (n: string) => header.indexOf(n);
-  const [t, d, c, a, tc, ta, k] = ['Timestamp (UTC)', 'Transaction Description', 'Currency', 'Amount',
-    'To Currency', 'To Amount', 'Transaction Kind'].map(col);
+  const [t, d, c, a, tc, ta, k, nc, na] = ['Timestamp (UTC)', 'Transaction Description', 'Currency', 'Amount',
+    'To Currency', 'To Amount', 'Transaction Kind', 'Native Currency', 'Native Amount'].map(col);
   if ([t, d, c, a, tc, ta, k].some(i => i < 0)) return null;
   const body = lines.slice(1).map(parseCsvLine).filter(r => r[t]);
   // The Fiat Wallet export: crypto -> EUR shows up as kind "crypto_viban"
@@ -94,7 +94,12 @@ function parse(text: string) {
     const sig = `cdc|${r[t]}|${r[d]}|${r[c]}|${dec(r[a])}|${r[tc]}|${dec(r[ta] || '')}`;
     const n = occ.get(sig) ?? 0; occ.set(sig, n + 1);
     const kind = kindOf(r[k]);
-    const base = { tx_hash: sig, kind, tx_time: `${r[t].replace(' ', 'T')}Z`, status: `${r[k]} | ${r[d]}` };
+    // a purchase paid by a card (Apple Pay): what it cost in the native currency at the end of the
+    // status -- the card's charge is estimated from it until the bank has the charge
+    // (refresh_card_estimates, migration ...275)
+    const paid = /^trading\.crypto_purchase\.(apple_pay|google_pay|card)/.test(r[k]) && nc >= 0 && na >= 0 && r[nc] && r[na]
+      ? ` | ${dec(r[na])} ${r[nc]}` : '';
+    const base = { tx_hash: sig, kind, tx_time: `${r[t].replace(' ', 'T')}Z`, status: `${r[k]} | ${r[d]}${paid}` };
     if (r[c] && r[a]) rows.push({ ...base, seq: n * 2, symbol: r[c], amount: dec(r[a]) });
     if (r[tc] && r[ta]) rows.push({ ...base, seq: n * 2 + 1, symbol: r[tc], amount: dec(r[ta]) });
   }

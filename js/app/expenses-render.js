@@ -155,8 +155,9 @@ async function mpExpDrawIncome(c) {
   // the income groups opened by the user stay open across the tab's re-renders (as mpExpOpen does for expenses)
   const incOpen = mpIncOpen;
   const incTable = list => `<div class="exp-rows"><table class="data-table"><thead><tr><th>Date</th><th>Description</th><th style="text-align:left">Type</th><th>Note</th><th style="width:1%;text-align:left">Place</th><th>Account</th><th>Amount</th><th>${ccy}</th></tr></thead><tbody>${
-    list.slice().sort((x, y) => y.day.localeCompare(x.day)).map(r => `<tr><td style="white-space:nowrap">${r.day}${mpTimeHtml(r)}</td>
-      <td style="text-align:left">${esc(r.description || '')} ${mpLinkHtml(r)}</td>
+    // a fund's day after its last statement: the estimate (migration ...274), greyed until the statement comes
+    list.slice().sort((x, y) => y.day.localeCompare(x.day)).map(r => `<tr${r.src === 'openbanking_revolut_fund' ? ' style="color:#8b949e;font-style:italic" title="Estimate until the fund statement comes"' : ''}><td style="white-space:nowrap">${r.day}${mpTimeHtml(r)}</td>
+      <td style="text-align:left">${esc(r.description || '')}${r.src === 'openbanking_revolut_fund' ? ' <span style="font-size:11px;border:1px solid #6a7381;border-radius:4px;padding:0 4px">estimate</span>' : ''} ${mpLinkHtml(r)}</td>
       <td class="inc-cat-set" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to change the type" style="text-align:left;cursor:pointer;color:#c9d1d9">${esc(r.category || '—')}</td>
       <td class="exp-note" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to write a note" style="text-align:left;cursor:pointer;color:#8b949e">${mpNoteHtml(r.note)}</td><td class="exp-place" data-src="${esc(r.src || '')}" data-xid="${esc(r.xid || '')}" title="Click to set the place" style="text-align:left;max-width:180px;cursor:pointer">${mpPlaceHtml(r.place, r.deliveredTo)}</td>
       <td style="text-align:left">${esc(r.account)}</td>
