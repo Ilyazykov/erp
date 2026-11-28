@@ -257,7 +257,7 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       if (numbered) dlg.querySelector('#mp_price_title').textContent = mpShortName(asset, s.name);
       if (parts.length) dlg.querySelector('#mp_price_meta').innerHTML = `${title !== asset && !numbered ? `· ${mpEscapeHtml(asset)} ` : ''}· ${parts.join(' · ')}`;
     }, () => { /* the header stays as it is */ });
-  let prices, deals, ccy, fx, payouts = [];
+  let prices, deals, ccy, fx, payouts = [], principal = [];
   try {
     let wallet;
     [prices, deals, wallet] = await Promise.all([
@@ -360,12 +360,17 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     for (const d of deals) d.account = d.account || d.external_source || '—';
     // what it paid out: coupons and dividends (trades 'dividend': quantity = the amount), a deposit's or
     // savings account's interest (its 'buy' noted as interest), an exchange's Earn on a coin
-    const [payTrades, payWallet] = await Promise.all([
+    const [payTrades, payWallet, backTrades] = await Promise.all([
       mpFetchAll(() => sb.from('trades').select('ticker, trade_date, side, quantity, currency, account, note').in('ticker', dealTickers)
         .or('side.eq.dividend,and(side.eq.buy,note.ilike.*interest*),and(side.eq.buy,note.ilike.*процент*),and(side.eq.buy,note.ilike.*капитализац*)').order('trade_date')),
       mpFetchAll(() => sb.from('wallet_transactions').select('symbol, tx_time, amount, chain').or(dealTickers.map(t => `symbol.ilike.${t}`).join(','))
         .in('kind', ['interest', 'reward']).order('tx_time')),
+      // the face paid back before maturity -- an amortisation, an early repayment (trades 'amortisation',
+      // 'repayment': quantity = the money): the price paid, not income
+      mpFetchAll(() => sb.from('trades').select('trade_date, quantity, currency').in('ticker', dealTickers).in('side', ['amortisation', 'repayment']).order('trade_date')),
     ]);
+    principal = backTrades.map(t => ({ day: t.trade_date, amount: Number(t.quantity), ccy: (t.currency || '').toUpperCase(), kind: 'principal' }))
+      .filter(p => Number.isFinite(p.amount) && p.amount > 0);
     payouts = [
       // (kind, for the average less payouts: 'cash' a dividend's or coupon's money, 'units' more of the
       // coin itself, 'deal' a savings account's interest -- a buy already among the deals)
@@ -767,7 +772,10 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     // paid -- interest in the coin or the account's own units adds them at no cost, a dividend's or coupon's
     // money comes off the cost; only while something's held, in the period's deals' span as they are
     const payIn = dlg.querySelector('#mp_price_pay').checked;
-    const pays = payIn ? payouts.filter(p => p.kind !== 'deal' && p.day <= today && (avgAll || p.day >= from)) : [];
+    // (and the face paid back always, the box or not: the money paid for it came back -- СФО Сплит Финанс's
+    // average stayed 903 RUB a bond with 136 left of its face, 28.11.2026)
+    const pays = [...(payIn ? payouts.filter(p => p.kind !== 'deal') : []), ...principal]
+      .filter(p => p.day <= today && (avgAll || p.day >= from));
     // the deals and the payouts by day, a day's deals first
     const events = list => [...list.map(d => ({ day: d.trade_date, d })), ...pays.map(p => ({ day: p.day, p }))].sort((a, b) => a.day.localeCompare(b.day));
     if (!rateNote) {
@@ -809,11 +817,11 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
       }
       const { qty, cost } = pos;
       // (less the payouts the cost can reach 0 or under: all paid back -- shown as it is)
-      if (qty > 1e-9 && (cost > 0 || payIn)) {
+      if (qty > 1e-9 && (cost > 0 || payIn || principal.length)) {
         const avg = cost / qty;
         lines.push({ type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: avg, y1: avg, line: { color: '#8b949e', width: 1, dash: 'dot' }, layer: 'below' });
         label(avg, `avg ${fmt(avg)}`, '#30363d', '#e6edf3');
-        avgNote = ` · average buy price${payIn ? ' less payouts' : ''} ${fmt(avg)} for ${Math.round(qty * 1e6) / 1e6} held (${last0 && avg > 0 ? `${last0.v >= avg ? '+' : ''}${((last0.v / avg - 1) * 100).toFixed(1)}%` : ''})`;
+        avgNote = ` · average buy price${payIn ? ' less payouts' : ''}${principal.length ? ' less face paid back' : ''} ${fmt(avg)} for ${Math.round(qty * 1e6) / 1e6} held (${last0 && avg > 0 ? `${last0.v >= avg ? '+' : ''}${((last0.v / avg - 1) * 100).toFixed(1)}%` : ''})`;
       }
     }
     // a deposit's, a savings account's or a money-market fund's (its currency's rate on the chart): the average
