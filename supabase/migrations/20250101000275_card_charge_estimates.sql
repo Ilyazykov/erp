@@ -32,7 +32,7 @@ begin
       and t.tx_time > now() - interval '60 days'
     order by t.tx_time
   loop
-    charge := ceil(p.cost * 1.0299 * 100) / 100;
+    charge := round(ceil(p.cost * 1.0299 * 100) / 100, 2);
     select b.id into hit
     from bank_transactions b
     where b.user_id = p_user and b.account = 'Revolut' and b.external_source not like 'estimate_%'
