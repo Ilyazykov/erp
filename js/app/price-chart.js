@@ -219,11 +219,10 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     `<span id="mp_price_title">${mpEscapeHtml(title)}</span> <span id="mp_price_meta" style="color:#8b949e;font-weight:normal">${title !== asset && !numbered && !opts.currency ? `· ${mpEscapeHtml(dealTickers.join(' + '))}` : ''}</span>`,
     `<label style="margin-left:12px" id="mp_price_ccy_box"><input type="checkbox" id="mp_price_usd"> in USD</label>
       <label style="margin-left:12px;display:none" id="mp_price_via_box"><input type="checkbox" id="mp_price_via" checked> buys through funds</label>
-      <label style="margin-left:12px;display:none" id="mp_price_pay_box"><input type="checkbox" id="mp_price_pay" checked> payouts</label>
+      <label style="margin-left:12px;display:none" id="mp_price_pay_box" title="Marked on the chart and taken off the average: interest in coins or units adds them at no cost, a dividend or coupon takes its money off the price paid"><input type="checkbox" id="mp_price_pay" checked> payouts</label>
       <label style="margin-left:12px;display:none" id="mp_price_inv_box"><input type="checkbox" id="mp_price_inv"> <span></span></label>
       <label style="margin-left:12px;display:none" id="mp_price_rate_box"><input type="checkbox" id="mp_price_rate" checked> <span></span></label>
-      <label style="margin-left:12px;display:none" id="mp_price_avg_box"><input type="checkbox" id="mp_price_avg_all"> avg over all time</label>
-      <label style="margin-left:12px;display:none" id="mp_price_avgpay_box" title="Interest in coins or units: more of it for the money paid; a dividend or coupon: its money off the price paid"><input type="checkbox" id="mp_price_avgpay"> avg less payouts</label>`);
+      <label style="margin-left:12px;display:none" id="mp_price_avg_box"><input type="checkbox" id="mp_price_avg_all"> avg over all time</label>`);
   // the company, its country (a flag) and sector from the funds' lists (securities), instead of the
   // ticker again: "NVDA · NVIDIA Corp 🇺🇸 · Information Technology"
   let ccyReady = () => {};
@@ -764,10 +763,10 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
     // the average buy price of what's held: one's own deals over the whole history (not a fund's), as Sber
     // counts it -- each buy adds its cost with the fee and its units, a sale takes units out at the average
     // (checked on SBMM: 18.3767 this way against Sber's 18.3771; FIFO gave 18.41); none when nothing is held
-    // less the payouts (the box, the user's way 28.11.2026): each one more for the money already paid --
-    // interest in the coin or the account's own units adds them at no cost, a dividend's or coupon's money
-    // comes off the cost; only while something's held, in the period's deals' span as they are
-    const payIn = dlg.querySelector('#mp_price_avgpay').checked;
+    // less the payouts (with the payouts' box, the user's way 28.11.2026): each one more for the money already
+    // paid -- interest in the coin or the account's own units adds them at no cost, a dividend's or coupon's
+    // money comes off the cost; only while something's held, in the period's deals' span as they are
+    const payIn = dlg.querySelector('#mp_price_pay').checked;
     const pays = payIn ? payouts.filter(p => p.kind !== 'deal' && p.day <= today && (avgAll || p.day >= from)) : [];
     // the deals and the payouts by day, a day's deals first
     const events = list => [...list.map(d => ({ day: d.trade_date, d })), ...pays.map(p => ({ day: p.day, p }))].sort((a, b) => a.day.localeCompare(b.day));
@@ -935,12 +934,6 @@ async function mpOpenPriceDialog(asset, title, opts = {}) {
   const depositAvg = !!(rateNote && !opts.currency && moneyCcy && deals.length);
   if (fxDeals.length || (!rateNote && deals.length) || depositAvg) dlg.querySelector('#mp_price_avg_box').style.display = '';
   avgBox.onchange = draw;
-  // the average less the payouts: remembered; the box where there's an average and payouts to take off it
-  const avgPayBox = dlg.querySelector('#mp_price_avgpay');
-  try { avgPayBox.checked = localStorage.getItem('mp_price_avgpay') === '1'; } catch { /* no storage */ }
-  if (((!rateNote && deals.length) || depositAvg) && (payouts.some(p => p.kind !== 'deal') || deals.some(d => d.interest)))
-    dlg.querySelector('#mp_price_avgpay_box').style.display = '';
-  avgPayBox.onchange = () => { mpSave('mp_price_avgpay', avgPayBox.checked ? '1' : '0'); draw(); };
   viaBox.onchange = () => { mpSave('mp_price_via', viaBox.checked ? '1' : '0'); draw(); };
   draw();
 }
