@@ -101,7 +101,10 @@ function parse(text: string) {
       ? ` | ${dec(r[na])} ${r[nc]}` : '';
     const base = { tx_hash: sig, kind, tx_time: `${r[t].replace(' ', 'T')}Z`, status: `${r[k]} | ${r[d]}${paid}` };
     if (r[c] && r[a]) rows.push({ ...base, seq: n * 2, symbol: r[c], amount: dec(r[a]) });
-    if (r[tc] && r[ta]) rows.push({ ...base, seq: n * 2 + 1, symbol: r[tc], amount: dec(r[ta]) });
+    // the To side only when it's another leg: "Card Rip Buyback" EUR 0.22 -> EUR 0.22 is one credit,
+    // not two (it read 0.44 EUR, 28.11.2026); its To leg is kept at 0 (seq stays, the stored row updates)
+    const same = r[tc] === r[c] && dec(r[ta] || '') === dec(r[a] || '');
+    if (r[tc] && r[ta]) rows.push({ ...base, seq: n * 2 + 1, symbol: r[tc], amount: same ? '0' : dec(r[ta]) });
   }
   return { fiat, skipped, total: body.length, rows };
 }
