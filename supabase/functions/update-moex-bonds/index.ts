@@ -52,17 +52,32 @@ async function ofzList() {
     yield: Number(md.get(r.SECID)?.YIELD) || 0, turnover: Number(md.get(r.SECID)?.VALTODAY) || 0,
     pd: /^SU2[56]\d{3}/.test(r.SECID), pk: /^SU29\d{3}/.test(r.SECID) }));
 }
-// (the whole corporate board with its trading data didn't come in 130 s, 28.11.2026: the board's
-// reference columns only, the yield and turnover of the few picked from the main board's figures)
+// (the whole corporate board doesn't come from MOEX in 130 s, not even its reference columns alone,
+// 28.11.2026: each issuer's bonds found by MOEX's search instead, then their figures 20 a request)
+const CNY_SEARCH = ['ГазКап', 'РЖД', 'НорНик', 'Полюс', 'ФосАгро', 'Атомэнпр', 'Роснфт', 'МЕТАЛИН', 'ЕАБР'];
 async function cnyList(errors: string[]) {
-  const j = await iss('/engines/stock/markets/bonds/boards/TQCB/securities.json?iss.meta=off&iss.only=securities'
-    + '&securities.columns=SECID,SHORTNAME,MATDATE,OFFERDATE,FACEUNIT,FACEVALUE,PREVPRICE,ACCRUEDINT', 130000, 1);
-  const picked = rowsOf(j, 'securities').filter(r => r.FACEUNIT === 'CNY' && r.MATDATE && CNY_ISSUERS.test(r.SHORTNAME || ''));
-  const md = await marketOf(picked.map(r => r.SECID), errors);
+  const ids = new Set<string>();
+  await Promise.all(CNY_SEARCH.map(async q => {
+    for (let start = 0; start < 500; start += 100) {
+      const j = await iss(`/securities.json?iss.meta=off&q=${encodeURIComponent(q)}&engine=stock&market=bonds&is_trading=1&limit=100&start=${start}`
+        + '&securities.columns=secid,shortname,primary_boardid').catch(e => { errors.push(String(e)); return null; });
+      const rows = rowsOf(j, 'securities');
+      for (const r of rows) if (r.primary_boardid === 'TQCB' && CNY_ISSUERS.test(r.shortname || '')) ids.add(r.secid);
+      if (rows.length < 100) break;
+    }
+  }));
+  const all = [...ids], picked: J[] = [];
+  for (let i = 0; i < all.length; i += 20) {
+    const j = await iss(`/engines/stock/markets/bonds/securities.json?iss.meta=off&iss.only=securities,marketdata&securities=${all.slice(i, i + 20).join(',')}`
+      + '&securities.columns=SECID,BOARDID,SHORTNAME,MATDATE,OFFERDATE,FACEUNIT,FACEVALUE,PREVPRICE,ACCRUEDINT&marketdata.columns=SECID,BOARDID,YIELD,VALTODAY')
+      .catch(e => { errors.push(String(e)); return null; });
+    const md = new Map(rowsOf(j, 'marketdata').map(m => [`${m.SECID}|${m.BOARDID}`, m]));
+    for (const r of rowsOf(j, 'securities')) if (r.BOARDID === 'TQCB' && r.FACEUNIT === 'CNY' && r.MATDATE) picked.push({ ...r, md: md.get(`${r.SECID}|TQCB`) || {} });
+  }
   return picked.map(r => ({
     secid: r.SECID, name: r.SHORTNAME, mat: r.MATDATE, offer: r.OFFERDATE, due: r.OFFERDATE || r.MATDATE, face: Number(r.FACEVALUE),
     price: Number(r.PREVPRICE) || 100, accrued: Number(r.ACCRUEDINT) || 0,
-    yield: Number(md.get(r.SECID)?.yield) || 0, turnover: Number(md.get(r.SECID)?.turnover) || 0 }))
+    yield: Number(r.md.YIELD) || 0, turnover: Number(r.md.VALTODAY) || 0 }))
     .filter(b => b.yield >= 3 && b.yield <= 12);
 }
 
