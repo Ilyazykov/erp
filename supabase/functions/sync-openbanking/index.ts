@@ -705,9 +705,14 @@ async function revolutReport(db: any, userId: string, csv: string): Promise<Reco
   const { data: lastInvest } = await db.from('bank_transactions').select('tx_date').eq('user_id', userId)
     .eq('external_source', 'revolut_invest_csv').order('tx_date', { ascending: false }).limit(1);
   const investEnd = lastInvest?.[0] ? String(lastInvest[0].tx_date).slice(0, 10) : '';
-  const { error: idErr } = await db.from('trades').delete().eq('user_id', userId).eq('external_source', OPENBANKING_TRADE_SOURCE.invest)
-    .gte('trade_date', rep.from).lte('trade_date', rep.to);
-  if (idErr) throw new Error(idErr.message);
+  // only a report with deals rewrites them: one with the section empty (Revolut's own, the deals
+  // filled in by hand only meanwhile) took the VWCE buy of 20.11.2026 away and its 1000 EUR came
+  // back as cash (28.11.2026)
+  if (rep.invest.length) {
+    const { error: idErr } = await db.from('trades').delete().eq('user_id', userId).eq('external_source', OPENBANKING_TRADE_SOURCE.invest)
+      .gte('trade_date', rep.from).lte('trade_date', rep.to);
+    if (idErr) throw new Error(idErr.message);
+  }
   const deals = rep.invest.filter(t => t.at.slice(0, 10) > investEnd).map(t => ({
     user_id: userId, account: 'Revolut', ticker: t.ticker, side: /^SELL/.test(t.type) ? 'sell' : 'buy', quantity: t.quantity,
     price: t.price, trade_date: t.at.slice(0, 10), currency: t.currency, fee_tax: null, fee_currency: null, nkd: null, exchange: 'XETRA',
