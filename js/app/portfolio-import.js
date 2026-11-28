@@ -10,7 +10,8 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 async function mpMoexFetch(url) {
   const { data: { session } } = await sb.auth.getSession();
   const u = String(url).replace(/^https:\/\/iss\.moex\.com/, '');
-  return fetch(`${SUPABASE_URL}/functions/v1/moex-iss?u=${encodeURIComponent(u)}`,
+  // (from Frankfurt: from eu-west-1 the connection to MOEX hangs, 28.11.2026)
+  return fetch(`${SUPABASE_URL}/functions/v1/moex-iss?forceFunctionRegion=eu-central-1&u=${encodeURIComponent(u)}`,
     { headers: session ? { Authorization: `Bearer ${session.access_token}` } : {} });
 }
 

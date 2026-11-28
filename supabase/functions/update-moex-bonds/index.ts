@@ -23,11 +23,12 @@ const CNY_ISSUERS = /^(ГазКап|РЖД|НорНик|Полюс|ФосАгр�
 // deno-lint-ignore no-explicit-any
 type J = any;
 
-async function iss(path: string): Promise<J> {
+// (a try's time: 20 s for a bond's own page; a whole board's list takes MOEX a minute or two, 28.11.2026)
+async function iss(path: string, ms = 20000, tries = 3): Promise<J> {
   let last: unknown = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < tries; attempt++) {
     try {
-      const res = await ruFetch(`${ISS}${path}`);
+      const res = await ruFetch(`${ISS}${path}`, { signal: AbortSignal.timeout(ms) });
       if (res.ok) return await res.json();
       last = `HTTP ${res.status}`;
       await res.body?.cancel();
@@ -44,21 +45,24 @@ const rowsOf = (j: J, t: string) => {
 // 1. the lists
 async function ofzList() {
   const j = await iss('/engines/stock/markets/bonds/boards/TQOB/securities.json?iss.meta=off&iss.only=securities,marketdata'
-    + '&securities.columns=SECID,SHORTNAME,MATDATE,FACEVALUE,PREVPRICE,ACCRUEDINT,FACEUNIT&marketdata.columns=SECID,YIELD,VALTODAY');
+    + '&securities.columns=SECID,SHORTNAME,MATDATE,FACEVALUE,PREVPRICE,ACCRUEDINT,FACEUNIT&marketdata.columns=SECID,YIELD,VALTODAY', 130000, 1);
   const md = new Map(rowsOf(j, 'marketdata').map(m => [m.SECID, m]));
   return rowsOf(j, 'securities').filter(r => r.MATDATE && (r.FACEUNIT || 'SUR') === 'SUR').map(r => ({
     secid: r.SECID, name: r.SHORTNAME, mat: r.MATDATE, face: Number(r.FACEVALUE), price: Number(r.PREVPRICE), accrued: Number(r.ACCRUEDINT),
     yield: Number(md.get(r.SECID)?.YIELD) || 0, turnover: Number(md.get(r.SECID)?.VALTODAY) || 0,
     pd: /^SU2[56]\d{3}/.test(r.SECID), pk: /^SU29\d{3}/.test(r.SECID) }));
 }
-async function cnyList() {
-  const j = await iss('/engines/stock/markets/bonds/boards/TQCB/securities.json?iss.meta=off&iss.only=securities,marketdata'
-    + '&securities.columns=SECID,SHORTNAME,MATDATE,OFFERDATE,FACEUNIT,FACEVALUE,PREVPRICE,ACCRUEDINT&marketdata.columns=SECID,YIELD,VALTODAY');
-  const md = new Map(rowsOf(j, 'marketdata').map(m => [m.SECID, m]));
-  return rowsOf(j, 'securities').filter(r => r.FACEUNIT === 'CNY' && r.MATDATE && CNY_ISSUERS.test(r.SHORTNAME || '')).map(r => ({
+// (the whole corporate board with its trading data didn't come in 130 s, 28.11.2026: the board's
+// reference columns only, the yield and turnover of the few picked from the main board's figures)
+async function cnyList(errors: string[]) {
+  const j = await iss('/engines/stock/markets/bonds/boards/TQCB/securities.json?iss.meta=off&iss.only=securities'
+    + '&securities.columns=SECID,SHORTNAME,MATDATE,OFFERDATE,FACEUNIT,FACEVALUE,PREVPRICE,ACCRUEDINT', 130000, 1);
+  const picked = rowsOf(j, 'securities').filter(r => r.FACEUNIT === 'CNY' && r.MATDATE && CNY_ISSUERS.test(r.SHORTNAME || ''));
+  const md = await marketOf(picked.map(r => r.SECID), errors);
+  return picked.map(r => ({
     secid: r.SECID, name: r.SHORTNAME, mat: r.MATDATE, offer: r.OFFERDATE, due: r.OFFERDATE || r.MATDATE, face: Number(r.FACEVALUE),
     price: Number(r.PREVPRICE) || 100, accrued: Number(r.ACCRUEDINT) || 0,
-    yield: Number(md.get(r.SECID)?.YIELD) || 0, turnover: Number(md.get(r.SECID)?.VALTODAY) || 0 }))
+    yield: Number(md.get(r.SECID)?.yield) || 0, turnover: Number(md.get(r.SECID)?.turnover) || 0 }))
     .filter(b => b.yield >= 3 && b.yield <= 12);
 }
 
@@ -94,17 +98,20 @@ async function bondInfo(secid: string, today: string) {
 }
 
 // 3. the main board's figures, 20 bonds a request
-async function marketOf(secids: string[]) {
+async function marketOf(secids: string[], errors: string[]) {
   const out = new Map<string, J>();
   for (let i = 0; i < secids.length; i += 20) {
+    // (a batch MOEX didn't answer for: those keep what they had)
     const j = await iss(`/engines/stock/markets/bonds/securities.json?iss.meta=off&iss.only=securities,marketdata&securities=${secids.slice(i, i + 20).join(',')}`
-      + '&securities.columns=SECID,BOARDID,COUPONPERCENT,COUPONPERIOD,PREVPRICE,PREVWAPRICE&marketdata.columns=SECID,BOARDID,YIELD,DURATION');
+      + '&securities.columns=SECID,BOARDID,COUPONPERCENT,COUPONPERIOD,PREVPRICE,PREVWAPRICE&marketdata.columns=SECID,BOARDID,YIELD,DURATION,VALTODAY')
+      .catch(e => { errors.push(String(e)); return null; });
+    if (!j) continue;
     const md = new Map(rowsOf(j, 'marketdata').map(m => [`${m.SECID}|${m.BOARDID}`, m]));
     for (const s of rowsOf(j, 'securities')) {
       if (!['TQOB', 'TQCB', 'TQIR'].includes(s.BOARDID)) continue;
       const m = md.get(`${s.SECID}|${s.BOARDID}`) || {};
       out.set(s.SECID, { coupon: s.COUPONPERCENT != null ? Number(s.COUPONPERCENT) : null, period: Number(s.COUPONPERIOD) || null,
-        price: Number(s.PREVPRICE) || null, wap: Number(s.PREVWAPRICE) || null, yield: Number(m.YIELD) || 0, dur: Number(m.DURATION) || 0 });
+        price: Number(s.PREVPRICE) || null, wap: Number(s.PREVWAPRICE) || null, yield: Number(m.YIELD) || 0, dur: Number(m.DURATION) || 0, turnover: Number(m.VALTODAY) || 0 });
     }
   }
   return out;
@@ -119,10 +126,20 @@ Deno.serve(async (req) => {
     const now = new Date().toISOString();
     const errors: string[] = [];
 
-    const [ofz, cny] = await Promise.all([ofzList().catch(e => { errors.push(String(e)); return null; }), cnyList().catch(e => { errors.push(String(e)); return null; })]);
-    const lists = [...(ofz?.length ? [{ name: 'ofz', list: ofz, at: today, updated_at: now }] : []),
-      ...(cny?.length ? [{ name: 'cny', list: cny, at: today, updated_at: now }] : [])];
-    if (lists.length) { const { error } = await db.from('moex_bond_lists').upsert(lists); if (error) throw new Error(error.message); }
+    // the lists (slow at MOEX) alongside the bonds' own pages: the bonds to work out from the
+    // lists stored last time, the new ones written as they come
+    const listsDone = Promise.all([
+      ofzList().catch(e => { errors.push(String(e)); return null; }),
+      cnyList(errors).catch(e => { errors.push(String(e)); return null; }),
+    ]).then(async ([ofz, cny]) => {
+      const lists = [...(ofz?.length ? [{ name: 'ofz', list: ofz, at: today, updated_at: now }] : []),
+        ...(cny?.length ? [{ name: 'cny', list: cny, at: today, updated_at: now }] : [])];
+      if (lists.length) { const { error } = await db.from('moex_bond_lists').upsert(lists); if (error) errors.push(error.message); }
+      console.log(`lists: ofz ${ofz?.length}, cny ${cny?.length}`);
+      return { ofz: ofz?.length ?? null, cny: cny?.length ?? null };
+    });
+    const { data: stored } = await db.from('moex_bond_lists').select('name, list');
+    const listOf = (n: string): J[] => (stored || []).find(l => l.name === n)?.list || [];
 
     // the bonds held, anyone's: buys less sales, by ticker
     const net = new Map<string, number>();
@@ -134,23 +151,30 @@ Deno.serve(async (req) => {
       if (!data || data.length < 1000) break;
     }
     const held = [...net].filter(([, q]) => q > 1e-9).map(([t]) => t);
-    const pk = (ofz || []).filter(b => b.pk && Number(b.secid.slice(2, 7)) >= 29014).map(b => b.secid);
+    const pk = listOf('ofz').filter(b => b.pk && Number(String(b.secid).slice(2, 7)) >= 29014).map(b => b.secid);
     const dated = [...new Set([...held, ...pk])];
+    console.log(`held ${held.length}, to date ${dated.length}`);
 
-    const infos: { secid: string; info: J; updated_at: string }[] = [];
-    for (let i = 0; i < dated.length; i += 6) {
-      await Promise.all(dated.slice(i, i + 6).map(s => bondInfo(s, today)
-        .then(info => { infos.push({ secid: s, info, updated_at: now }); }, e => { errors.push(String(e)); })));
-    }
-    if (infos.length) { const { error } = await db.from('moex_bonds').upsert(infos); if (error) throw new Error(error.message); }
-
-    const priced = [...new Set([...held, ...(ofz || []).map(b => b.secid), ...(cny || []).map(b => b.secid)])];
-    let market = new Map<string, J>();
-    try { market = await marketOf(priced); } catch (e) { errors.push(String(e)); }
-    const mrows = [...market].map(([secid, m]) => ({ secid, market: m, updated_at: now }));
-    if (mrows.length) { const { error } = await db.from('moex_bonds').upsert(mrows); if (error) throw new Error(error.message); }
-
-    return json({ ofz: ofz?.length ?? null, cny: cny?.length ?? null, held: held.length, dated: infos.length, of_dated: dated.length, market: mrows.length, errors });
+    const datesDone = (async () => {
+      const infos: { secid: string; info: J; updated_at: string }[] = [];
+      for (let i = 0; i < dated.length; i += 6) {
+        await Promise.all(dated.slice(i, i + 6).map(s => bondInfo(s, today)
+          .then(info => { infos.push({ secid: s, info, updated_at: now }); }, e => { errors.push(String(e)); })));
+      }
+      if (infos.length) { const { error } = await db.from('moex_bonds').upsert(infos); if (error) errors.push(error.message); }
+      console.log(`dated ${infos.length}`);
+      return infos.length;
+    })();
+    const marketDone = (async () => {
+      const priced = [...new Set([...held, ...listOf('ofz').map(b => b.secid), ...listOf('cny').map(b => b.secid)])];
+      const market = await marketOf(priced, errors);
+      const mrows = [...market].map(([secid, m]) => ({ secid, market: m, updated_at: now }));
+      if (mrows.length) { const { error } = await db.from('moex_bonds').upsert(mrows); if (error) errors.push(error.message); }
+      console.log(`market ${mrows.length}`);
+      return mrows.length;
+    })();
+    const [lists, datedN, marketN] = await Promise.all([listsDone, datesDone, marketDone]);
+    return json({ ...lists, held: held.length, dated: datedN, of_dated: dated.length, market: marketN, errors });
   } catch (err) {
     return json({ error: String(err) }, 500);
   }
