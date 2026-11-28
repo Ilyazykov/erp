@@ -70,7 +70,11 @@ export function parseRevolutReport(text: string): RevolutReport {
   const invest: ReportInvest[] = [];
   let investHeader = false;
   let part = '', ccy = '', daysOwned = 0, to = '';
-  let col: { amount: number; balance: number; fee: number } | null = null;
+  let col: { amount: number[]; balance: number[]; fee: number[] } | null = null;
+  // the running balance of each account so far: the fee column is taken off a row's amount only
+  // when the balance moved by that much (28.11.2026: "Premium plan fee" -110, its Fees 110 too --
+  // the fee itself, not one on top: 302 -> 192)
+  const lastBalance = new Map<string, number>();
   let metalHeader = false;
   for (const r of rows) {
     const c0 = (r[0] ?? '').trim();
@@ -81,20 +85,34 @@ export function parseRevolutReport(text: string): RevolutReport {
     if ((r[2] ?? '').trim() === 'Days owned (in selected period)') daysOwned = Math.max(daysOwned, Number(r[3]) || 0);
     for (const cell of r.slice(0, 2)) { const d = dayOf(cell); if (d && d > to) to = d; }
 
-    if (part === 'Current Accounts Summaries' && ccy && (r[2] ?? '').trim() === 'Closing balance') acc(ccy).closing = money(r[3]);
+    if (part === 'Current Accounts Summaries' && ccy && (r[2] ?? '').trim() === 'Closing balance')
+      acc(ccy).closing = money(r.slice(3).find(x => currencyOf(x) === ccy) ?? r[3]);  // in the account's own currency
     if (part === 'Current Accounts Transaction Statements' && ccy) {
       if (c0 === 'Date') {
-        // a foreign account's amounts come twice -- its own, then in euros: the first of each
-        col = { amount: r.indexOf('Money in/out'), balance: r.indexOf('Balance'), fee: r.indexOf('Fees') };
+        // a foreign account's amounts come twice, in euros and in its own currency (the order has
+        // changed: euros first in the report of 28.11.2026) -- each row's cell in the account's own
+        // currency is taken, by its symbol
+        const all = (name: string) => r.flatMap((h, i) => (h.trim() === name ? [i] : []));
+        col = { amount: all('Money in/out'), balance: all('Balance'), fee: all('Fees') };
         continue;
       }
       const day = dayOf(c0);
       if (day && col) {
-        const amount = money(r[col.amount]);
+        const own = (cols: number[]) => {
+          if (!cols.length) return null;
+          const i = cols.find(n => currencyOf(r[n]) === ccy) ?? cols[0];
+          return money(r[i]);
+        };
+        const amount = own(col.amount);
         if (amount === null) continue;
-        const fee = col.fee >= 0 ? (money(r[col.fee]) ?? 0) : 0;
+        const fee = Math.abs(own(col.fee) ?? 0);
+        const balance = own(col.balance);
+        const prev = lastBalance.get(ccy);
+        const moved = balance !== null && prev !== undefined ? Number((balance - prev).toFixed(8)) : null;
+        const net = fee && (moved === null || Math.abs(moved - (amount - fee)) < 0.005) ? amount - fee : amount;
+        if (balance !== null) lastBalance.set(ccy, balance);
         acc(ccy).rows.push({ day, desc: (r[1] ?? '').trim(), category: (r[2] ?? '').trim(),
-          amount: Number((amount - Math.abs(fee)).toFixed(8)), balance: col.balance >= 0 ? money(r[col.balance]) : null });
+          amount: Number(net.toFixed(8)), balance });
       }
     }
     // Date,Ticker,Type,Quantity,Price per share,Total Amount,Currency,FX Rate
