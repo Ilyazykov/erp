@@ -480,12 +480,13 @@ function mpEditCategory(src, xid) {
   form.addEventListener('submit', async e => {
     e.preventDefault();
     const cat = form.cat.value;
-    const { error } = await sb.from('bank_transactions').update({ expense_category: cat, expense_manual: true })
-      .eq('external_source', src).eq('external_id', xid);
+    const btn = form.querySelector('[data-act=save]');
+    const { error } = await mpWriteRetry(() => sb.from('bank_transactions').update({ expense_category: cat, expense_manual: true })
+      .eq('external_source', src).eq('external_id', xid), btn);
     if (error) { alert(error.message); return; }
     // the expenses tab's own copy too (refresh_expenses sets it the same way): without it
     // a reload showed the old category until the next run (16.11.2026)
-    const { error: eErr } = await sb.from('expenses').update({ category: cat }).in('id', rows.map(x => x.id));
+    const { error: eErr } = await mpWriteRetry(() => sb.from('expenses').update({ category: cat }).in('id', rows.map(x => x.id)), btn);
     if (eErr) { alert(eErr.message); return; }
     rows.forEach(x => { x.cat = cat; });
     form.closest('dialog').close();
@@ -507,12 +508,13 @@ function mpEditAccount(src, xid) {
   form.addEventListener('submit', async e => {
     e.preventDefault();
     const account = form.account.value;
-    const { error } = await sb.from('bank_transactions').update({ account }).eq('external_source', src).eq('external_id', xid);
+    const btn = form.querySelector('[data-act=save]');
+    const { error } = await mpWriteRetry(() => sb.from('bank_transactions').update({ account }).eq('external_source', src).eq('external_id', xid), btn);
     if (error) { alert(error.message); return; }
     // the expenses tab's own copy of the account (refresh_expenses sets it the same way); a
     // capital refresh rewriting the tab holds its rows a minute or two, and the copy waiting
     // on it times out -- the refresh takes the account from the bank row anyway (27.11.2026)
-    const { error: eErr } = await sb.from('expenses').update({ account }).eq('external_source', src).eq('external_id', xid);
+    const { error: eErr } = await mpWriteRetry(() => sb.from('expenses').update({ account }).eq('external_source', src).eq('external_id', xid), btn);
     if (eErr && eErr.code !== '57014') { alert(eErr.message); return; }
     rows.forEach(x => { x.account = account; });
     form.closest('dialog').close();
@@ -564,10 +566,10 @@ async function mpLinkTransfer(src, xid) {
     if (error) { alert(error.message); return; }
     // a linked money out is not spending: its category becomes "Own accounts" (as the pairs' own), so it leaves the expenses
     for (const o of outs) {
-      const { error: cErr } = await sb.from('bank_transactions').update({ expense_category: 'Own accounts', expense_manual: true })
-        .eq('external_source', o.src).eq('external_id', o.xid);
+      const { error: cErr } = await mpWriteRetry(() => sb.from('bank_transactions').update({ expense_category: 'Own accounts', expense_manual: true })
+        .eq('external_source', o.src).eq('external_id', o.xid), form.querySelector('[data-act=save]'));
       if (cErr) { alert(cErr.message); return; }
-      const { error: eErr } = await sb.from('expenses').update({ category: 'Own accounts' }).eq('external_source', o.src).eq('external_id', o.xid);
+      const { error: eErr } = await mpWriteRetry(() => sb.from('expenses').update({ category: 'Own accounts' }).eq('external_source', o.src).eq('external_id', o.xid), form.querySelector('[data-act=save]'));
       if (eErr) { alert(eErr.message); return; }
     }
     form.closest('dialog').close();
@@ -655,7 +657,7 @@ document.getElementById('expenses').addEventListener('click', async e => {
     if (pErr) { alert(pErr.message); return; }
     patch.place_id = place.id;
   }
-  const { error } = await sb.from('bank_transactions').update(patch).eq('external_source', src).eq('external_id', xid);
+  const { error } = await mpWriteRetry(() => sb.from('bank_transactions').update(patch).eq('external_source', src).eq('external_id', xid));
   if (error) { alert(error.message); return; }
   all.forEach(r => { r.note = note; if (found) r.place = { name: found.name, url: found.url }; });
   document.querySelectorAll('#expenses .exp-note, #expenses .exp-place').forEach(c => {

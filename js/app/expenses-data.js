@@ -456,6 +456,28 @@ function mpPlaceLabel(p, list) {
   const full = addr(p, 3);
   return p.lat != null ? `${p.name} · ${full ? full + ', ' : ''}${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}` : `${p.name}${full ? ' · ' + full : ''}`;
 }
+// A write of the page's, tried again while the database is busy (28.11.2026): a capital refresh
+// rewriting the expenses holds their rows about half a minute -- the write timed out (57014) or the
+// gateway dropped it ("Failed to fetch", the place saved and the row's update lost); again every 3 s
+// for up to 90 s, the Save button telling so. (The writes are updates and upserts: the same twice is
+// the same.)
+async function mpWriteRetry(run, btn) {
+  const t0 = Date.now(), label = btn?.textContent;
+  if (btn) btn.disabled = true;
+  try {
+    for (;;) {
+      let res;
+      try { res = await run(); } catch (err) { res = { error: { message: String(err?.message || err) } }; }
+      const e = res?.error;
+      const busy = e && (e.code === '57014' || e.code === '55P03' || /statement timeout|lock timeout|Failed to fetch|NetworkError|Load failed/i.test(e.message || ''));
+      if (!busy || Date.now() - t0 > 90000) return res;
+      if (btn) btn.textContent = 'Saving… the database is busy';
+      await new Promise(r => setTimeout(r, 3000));
+    }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+  }
+}
 // A short Google Maps link opened to the full one, by the resolve-map-link function
 // (the browser can't follow goo.gl's redirect itself).
 async function mpOpenShortMapLink(url) {
@@ -567,8 +589,8 @@ function mpEditTime(src, xid) {
     <label><input type="checkbox" name="approx"${!r.handTime || r.approx ? ' checked' : ''}> примерное</label>
     ${r.handTime ? '<button type="button" data-act="clear">Remove the time</button>' : ''}`);
   const save = async (t, approx) => {
-    const { error } = await sb.from('bank_transactions').update({ authorized_at: t ? `${r.day}T${t}:00Z` : null, authorized_approx: !!t && approx })
-      .eq('external_source', src).eq('external_id', xid);
+    const { error } = await mpWriteRetry(() => sb.from('bank_transactions').update({ authorized_at: t ? `${r.day}T${t}:00Z` : null, authorized_approx: !!t && approx })
+      .eq('external_source', src).eq('external_id', xid), form.querySelector('[data-act=save]'));
     if (error) { alert(error.message); return; }
     rows.forEach(x => { x.at = t || ''; x.handTime = !!t; x.approx = !!t && approx; x.ts = t ? `${x.day}T${t}:00Z` : x.day; });
     form.closest('dialog').close();
@@ -604,6 +626,7 @@ function mpEditPlace(src, xid) {
     <fieldset name="nw" style="display:none;border:1px solid #30363d;border-radius:6px;padding:8px;gap:6px;flex-direction:column">
       <legend>New place</legend>
       <input name="link" placeholder="Google Maps link -- fills the fields" style="${MP_FIELD}">
+      <small data-st style="color:#8b949e;min-height:1em"></small>
       <input name="pname" placeholder="name" style="${MP_FIELD}">
       <div style="display:flex;gap:6px"><input name="lat" placeholder="lat" style="${MP_FIELD}"><input name="lng" placeholder="lng" style="${MP_FIELD}"></div>
       <div style="display:flex;gap:6px"><input name="city" placeholder="city" style="${MP_FIELD}"><input name="country" placeholder="country (GE)" style="${MP_FIELD};width:30%"></div>
@@ -645,16 +668,22 @@ function mpEditPlace(src, xid) {
       form.link.focus();
     });
   }
+  // what the link's being turned into, under it (a short link takes the server a few seconds -- nothing
+  // showed meanwhile, 28.11.2026)
+  const st = form.querySelector('[data-st]');
   form.link.addEventListener('input', async () => {
     let link = form.link.value.trim();
+    st.textContent = '';
     // a short link (maps.app.goo.gl) has nothing in it: opened to the full one first
     if (/^https:\/\/(maps\.app\.goo\.gl|goo\.gl)\//.test(link)) {
-      const full = await mpOpenShortMapLink(link).catch(err => { alert(`The short link: ${err.message}`); return null; });
+      st.textContent = 'Opening the link…';
+      const full = await mpOpenShortMapLink(link).catch(err => { st.textContent = `The link did not open: ${err.message}`; return null; });
       if (!full || form.link.value.trim() !== link) return;
       link = full;
     }
     const p = mpPlaceFromLink(link);
-    if (!p) return;
+    if (!p) { if (link) st.textContent = 'No place in this link'; return; }
+    st.textContent = 'Finding the address…';
     if (p.name) form.pname.value = p.name;
     form.lat.value = p.lat ?? ''; form.lng.value = p.lng ?? '';
     form.url.value = p.url; form.gid.value = p.google_id ?? '';
@@ -662,9 +691,11 @@ function mpEditPlace(src, xid) {
     if (p.lat == null) return;
     const a = await mpAddressAt(p.lat, p.lng).catch(() => null);
     if (a) { form.city.value = a.city; form.street.value = a.street; form.house.value = a.house; form.country.value = a.country; }
+    st.textContent = a ? '' : 'No address found -- fill it in';
   });
   form.addEventListener('submit', async e => {
     e.preventDefault();
+    const btn = form.querySelector('[data-act=save]');
     let newId = null;
     const num = v => (v.trim() === '' ? null : Number(v));
     const txt = v => v.trim() || null;
@@ -673,7 +704,7 @@ function mpEditPlace(src, xid) {
     const cols = 'id, name, lat, lng, url, google_id, city, street, house, country';
     if (editing) {
       // the chosen place's own fields, fixed in place: every row with it shows them
-      const { data, error } = await sb.from('places').update(fields()).eq('id', editing).select(cols).single();
+      const { data, error } = await mpWriteRetry(() => sb.from('places').update(fields()).eq('id', editing).select(cols).single(), btn);
       if (error) { alert(error.message); return; }
       Object.assign(list.find(x => x.id === editing), data);
       for (const x of [...(mpExpCache?.spent || []), ...(mpExpCache?.skipped || []), ...(mpExpCache?.incomeRows || [])]) {
@@ -683,8 +714,9 @@ function mpEditPlace(src, xid) {
     }
     if (target) {
       const place = fields();
+      // (an insert tried again could make the place twice: only one with Google's id, an upsert, is)
       const { data, error } = place.google_id
-        ? await sb.from('places').upsert(place, { onConflict: 'user_id,google_id' }).select(cols).single()
+        ? await mpWriteRetry(() => sb.from('places').upsert(place, { onConflict: 'user_id,google_id' }).select(cols).single(), btn)
         : await sb.from('places').insert(place).select(cols).single();
       if (error) { alert(error.message); return; }
       newId = data.id;
@@ -692,7 +724,7 @@ function mpEditPlace(src, xid) {
     }
     const pick = name => (form[name].value === 'new' ? newId : form[name].value ? Number(form[name].value) : null);
     const from = pick('from'), to = delivery ? pick('to') : null;
-    const { error } = await sb.from('bank_transactions').update({ place_id: from, delivery_place_id: to }).eq('external_source', src).eq('external_id', xid);
+    const { error } = await mpWriteRetry(() => sb.from('bank_transactions').update({ place_id: from, delivery_place_id: to }).eq('external_source', src).eq('external_id', xid), btn);
     if (error) { alert(error.message); return; }
     // the row's receipt (migration ...179), if it has one: remember this
     // place for its store, so the next receipt from there picks it by
