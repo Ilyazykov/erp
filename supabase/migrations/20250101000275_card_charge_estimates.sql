@@ -6,7 +6,7 @@
 -- Revolut account, source estimate_card:cryptocom, its own running minus as its balance (as the
 -- receipts' rows, migration ...216): rebuilt on every capital refresh, a purchase's row gone as
 -- soon as a Crypto.com charge of it comes (the statement, Open Banking or the report: the same
--- currency, the amount within 1% / 0.50, from the day before the purchase to 14 days after).
+-- currency, the amount within 3% / 0.50 (the fee was 3.8% on 18.11.2026: 156.08 -> 162, 28.89 -> 30), from the day before the purchase to 14 days after).
 -- The charge: the purchase's price in the native currency (the export's "Native Amount", kept at
 -- the end of the row's status by import-crypto-com) plus Crypto.com's 2.99% card fee, rounded up
 -- to the cent -- 373.82 -> 385.00, 87.38 -> 90.00, 4.85 -> 5.00 (27.11.2026). The card is taken to
@@ -37,7 +37,7 @@ begin
     from bank_transactions b
     where b.user_id = p_user and b.account = 'Revolut' and b.external_source not like 'estimate_%'
       and upper(b.currency) = p.ccy and b.amount < 0 and b.description ~* 'crypto\.com'
-      and abs(-b.amount - charge) <= greatest(0.5, charge * 0.01)
+      and abs(-b.amount - charge) <= greatest(0.5, charge * 0.03)
       and coalesce(b.authorized_on, b.tx_date::date) between p.tx_time::date - 1 and p.tx_time::date + 14
       and not (b.id = any (used))
     order by abs(coalesce(b.authorized_on, b.tx_date::date) - p.tx_time::date), b.tx_date
