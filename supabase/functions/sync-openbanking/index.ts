@@ -100,7 +100,8 @@ async function eb(jwt: string, method: 'GET' | 'POST', path: string, body?: unkn
   return out;
 }
 
-type Tx = { day: string; made?: string; fx?: number; amount: number; currency: string; ref: string; desc: string; status: string; code: string };
+type Tx = { day: string; made?: string; fx?: number; amount: number; currency: string; ref: string; desc: string; status: string; code: string;
+  units?: number };  // a metal purchase's units, when the report's commodity statement has them
 
 // deno-lint-ignore no-explicit-any
 async function revolutEndOf(db: any, userId: string, kind: string): Promise<string> {
@@ -330,6 +331,19 @@ async function revolutStandIns(db: any, userId: string, write: Tx[]): Promise<{ 
     const m = /^Exchanged to (XAU|XAG|XPT|XPD)\b/i.exec(x.desc);
     const metal = m ? m[1].toUpperCase() : /^Revolut Ltd$/i.test(x.desc) && x.code === 'EXCHANGE' ? 'XAU' : '';
     if (!metal || x.amount >= 0 || x.day <= metalEnd) continue;
+    const base = `revolut:${x.ref || `${x.day}:${x.currency}:${x.amount}`}`;
+    // the units the report's commodity statement gives: as they are (27.11.2026: 0.088597 XAU for
+    // 300.80 EUR, the market price had made it 0.089572)
+    if (x.units && x.units > 0) {
+      rows.push({
+        user_id: userId, account: 'Revolut', ticker: metal, side: 'buy', quantity: x.units,
+        price: Math.round(-x.amount / x.units * 10000) / 10000, trade_date: x.day, currency: x.currency,
+        fee_tax: null, fee_currency: null, nkd: null, exchange: null, estimated: true,
+        note: `ESTIMATED: ${x.desc} (${x.amount} ${x.currency}), ${x.units} ${metal} by the report's commodity statement, until the metal statement comes`,
+        external_source: OPENBANKING_TRADE_SOURCE.metal, external_id: base,
+      });
+      continue;
+    }
     const { data: hist } = await db.from('price_history').select('day, price_usd').eq('ticker', metal).lte('day', x.day)
       .order('day', { ascending: false }).limit(1);
     // the history more than 3 days behind (its nightly fill stood still from
@@ -345,7 +359,6 @@ async function revolutStandIns(db: any, userId: string, write: Tx[]): Promise<{ 
     const usd = Number(px?.[0]?.price_usd), perUnit = x.currency === 'USD' ? 1 : Number(fx?.[0]?.usd_per_unit);
     if (!(usd > 0) || !(perUnit > 0)) continue;
     const price = usd / perUnit * REVOLUT_METAL_FEE;
-    const base = `revolut:${x.ref || `${x.day}:${x.currency}:${x.amount}`}`;
     rows.push({
       user_id: userId, account: 'Revolut', ticker: metal, side: 'buy', quantity: Math.round(-x.amount / price * 1e6) / 1e6,
       price: Math.round(price * 10000) / 10000, trade_date: x.day, currency: x.currency,
@@ -542,21 +555,30 @@ async function reconcileAccount(db: any, userId: string, bank: { label: string; 
 
 // ---- Revolut's combined report (_shared/revolut_report.ts) ----
 
-type ReportStored = { id: number; tx_date: string; amount: number; currency: string; description: string };
-// the same transaction: the currency, the amount, at most 3 days apart
+type ReportStored = { id: number; tx_date: string; amount: number; currency: string; description: string; note?: string | null };
+// the same transaction: the currency, the amount, at most 7 days apart -- a card's charge is in
+// Open Banking on the day it was made, in the report on the day it settled (Crypto.com's -162 and
+// -30 EUR: 18.11.2026 and 22.11.2026; with 3 days they were written twice, 28.11.2026)
+const REPORT_MATCH_DAYS = 7;
 const sameTx = (a: { day: string; amount: number; currency: string }, b: { day: string; amount: number; currency: string }) =>
   a.currency === b.currency && Math.abs(a.amount - b.amount) < 0.005
-  && Math.abs(Date.parse(a.day) - Date.parse(b.day)) <= EDGE_DAYS * 86400000;
+  && Math.abs(Date.parse(a.day) - Date.parse(b.day)) <= REPORT_MATCH_DAYS * 86400000;
 
 // deno-lint-ignore no-explicit-any
 async function reportRows(db: any, userId: string): Promise<ReportStored[]> {
-  const { data, error } = await db.from('bank_transactions').select('id, tx_date, amount, currency, description')
+  const { data, error } = await db.from('bank_transactions').select('id, tx_date, amount, currency, description, note')
     .eq('user_id', userId).eq('external_source', OPENBANKING_REPORT_SOURCE).order('tx_date');
   if (error) throw new Error(error.message);
   return (data ?? []).map((r: ReportStored) => ({ ...r, amount: Number(r.amount) }));
 }
-const reportTx = (r: ReportStored): Tx => ({ day: String(r.tx_date).slice(0, 10), amount: r.amount, currency: r.currency, ref: '',
-  desc: String(r.description ?? ''), status: 'BOOK', code: /^Revolut Ltd$/i.test(String(r.description ?? '')) ? 'EXCHANGE' : '' });
+// a metal purchase's units, kept in its row's note from the commodity statement ("XAU 0.088597 units")
+const METAL_UNITS = /\b(XAU|XAG|XPT|XPD) ([0-9]+(?:\.[0-9]+)?) units\b/;
+const reportTx = (r: ReportStored): Tx => {
+  const u = METAL_UNITS.exec(String(r.note ?? ''));
+  return { day: String(r.tx_date).slice(0, 10), amount: r.amount, currency: r.currency, ref: '',
+    desc: String(r.description ?? ''), status: 'BOOK', code: /^Revolut Ltd$/i.test(String(r.description ?? '')) ? 'EXCHANGE' : '',
+    ...(u ? { units: Number(u[2]) } : {}) };
+};
 
 // the report rows' running balance per currency, from 0, again
 // deno-lint-ignore no-explicit-any
@@ -646,12 +668,14 @@ async function revolutReport(db: any, userId: string, csv: string): Promise<Reco
     const n = seen.get(id) ?? 0; seen.set(id, n + 1);
     // a metal purchase: its own time, from the report's commodity statement
     const mi = x.code === 'EXCHANGE' ? metalsLeft.findIndex(m => m.at.slice(0, 10) === x.day && m.currency === x.currency && Math.abs(m.value - x.amount) < 0.005) : -1;
-    const at = mi >= 0 ? new Date(metalsLeft.splice(mi, 1)[0].at).toISOString() : new Date(Date.parse(`${x.day}T00:00:00Z`) + i).toISOString();
+    const metal = mi >= 0 ? metalsLeft.splice(mi, 1)[0] : null;
+    const at = metal ? new Date(metal.at).toISOString() : new Date(Date.parse(`${x.day}T00:00:00Z`) + i).toISOString();
     return {
       user_id: userId, account: bank.label, tx_date: at, booked_at: at, authorized_on: null, fx_rate: null,
       description: x.desc || '(no description)', counterparty: null, amount: x.amount, currency: x.currency, category: null,
       balance_after: 0, synthetic: false, synthetic_kind: null,
-      note: `from Revolut's combined report (${rep.from}..${rep.to}): in neither the statement nor Open Banking`,
+      note: `from Revolut's combined report (${rep.from}..${rep.to}): in neither the statement nor Open Banking`
+        + (metal ? `; ${metal.metal} ${metal.units} units (the commodity statement)` : ''),
       external_source: OPENBANKING_REPORT_SOURCE, external_id: n ? `${id}:dup${n}` : id,
     };
   });
