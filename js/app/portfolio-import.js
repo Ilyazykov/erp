@@ -5,6 +5,14 @@
 const SUPABASE_URL = 'https://xdltomehejjtgzdxbiyx.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_C21SGa0MVRBIUg7RG0zpNA_bk0k_Khr';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// MOEX ISS through the edge function moex-iss: since 23.11.2026 iss.moex.com's certificate is the
+// Russian root's, which the browser won't take -- fetched directly, every request failed
+async function mpMoexFetch(url) {
+  const { data: { session } } = await sb.auth.getSession();
+  const u = String(url).replace(/^https:\/\/iss\.moex\.com/, '');
+  return fetch(`${SUPABASE_URL}/functions/v1/moex-iss?u=${encodeURIComponent(u)}`,
+    { headers: session ? { Authorization: `Bearer ${session.access_token}` } : {} });
+}
 
 document.getElementById('btn_login').addEventListener('click', async () => {
   const { data: { session } } = await sb.auth.getSession();
@@ -2644,7 +2652,7 @@ const mpMoexIds = new Map();
 async function mpMoexBy(q, field) {
   const key = `${field}:${q}`;
   if (mpMoexIds.has(key)) return mpMoexIds.get(key);
-  const res = await fetch(`https://iss.moex.com/iss/securities.json?iss.meta=off&q=${encodeURIComponent(q)}&securities.columns=secid,isin,regnumber,shortname,type,is_traded`)
+  const res = await mpMoexFetch(`https://iss.moex.com/iss/securities.json?iss.meta=off&q=${encodeURIComponent(q)}&securities.columns=secid,isin,regnumber,shortname,type,is_traded`)
     .then(r => r.json()).catch(() => null);
   const rows = (res?.securities?.data || []).map(([secid, isin, regnumber, shortname, type, traded]) => ({ secid, isin, regnumber, shortname, type, traded }));
   const exact = rows.filter(r => r[field] === q);

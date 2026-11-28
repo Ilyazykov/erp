@@ -2,11 +2,30 @@
 // odds, what to buy next.
 
 // ---- Bonds & deposits tab (05.11.2026): when each bond held is redeemed or
-// has its offer (MOEX ISS, straight from the browser), and the term deposits'
+// has its offer (MOEX ISS, worked out daily by update-moex-bonds), and the term deposits
 // ends (deposit_terms, set by hand: no statement gives them) -- a bar from
 // today to the date, its thickness the money in it. ----
 const MP_MAT_CACHE = 'mp_moex_bond_dates_v8';
+// Worked out ahead (28.11.2026): update-moex-bonds keeps each bond's dates and payments in
+// moex_bonds daily; the page reads them, MOEX asked (mpMoexBondDatesLive) only for a bond not
+// there yet. What's passed since the day it was worked out is left out here.
 async function mpMoexBondDates(secids) {
+  const ids = [...new Set(secids)], out = {};
+  const today = new Date().toISOString().slice(0, 10);
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data } = await sb.from('moex_bonds').select('secid, info').in('secid', ids.slice(i, i + 200)).not('info', 'is', null);
+    for (const { secid, info } of data || []) out[secid] = { ...info, offer: info.offer && info.offer >= today ? info.offer : null,
+      coupons: (info.coupons || []).filter(c => c.day > today), face: (info.face || []).filter(a => a.day > today) };
+  }
+  const missing = ids.filter(s => !out[s]);
+  return missing.length ? Object.assign(await mpMoexBondDatesLive(missing), out) : out;
+}
+// one list of update-moex-bonds' (moex_bond_lists: 'ofz', 'cny'); null if none yet
+async function mpMoexList(name) {
+  const { data } = await sb.from('moex_bond_lists').select('list').eq('name', name).maybeSingle();
+  return data?.list?.length ? data.list : null;
+}
+async function mpMoexBondDatesLive(secids) {
   let cache = {};
   try { cache = JSON.parse(localStorage.getItem(MP_MAT_CACHE) || '{}'); } catch { /* none */ }
   const today = new Date().toISOString().slice(0, 10);
@@ -14,8 +33,8 @@ async function mpMoexBondDates(secids) {
   const one = async secid => {
     const base = `https://iss.moex.com/iss/securities/${encodeURIComponent(secid)}`;
     const [d, o] = await Promise.all([
-      fetch(`${base}.json?iss.meta=off&iss.only=description&description.columns=name,value`).then(r => r.json()).catch(() => null),
-      fetch(`${base}/bondization.json?iss.meta=off&iss.only=offers,coupons,amortizations&limit=unlimited`).then(r => r.json()).catch(() => null),
+      mpMoexFetch(`${base}.json?iss.meta=off&iss.only=description&description.columns=name,value`).then(r => r.json()).catch(() => null),
+      mpMoexFetch(`${base}/bondization.json?iss.meta=off&iss.only=offers,coupons,amortizations&limit=unlimited`).then(r => r.json()).catch(() => null),
     ]);
     // MOEX didn't answer: keep what's cached (a day old) and ask again next time -- an empty
     // answer cached for the day took every bond's dates away (27.11.2026)
@@ -230,9 +249,11 @@ function mpLadderNote(auto, now, age, from, cny = false) {
 // of the face), the face, the accrued coupon, the yield, the day's turnover;
 // pd -- a fixed coupon (25xxx/26xxx), pk -- a floater (29xxx)
 async function mpOfzList() {
+  const stored = await mpMoexList('ofz');
+  if (stored) return stored;
   const KEY = 'mp_ofz_v1', today = new Date().toISOString().slice(0, 10);
   try { const c = JSON.parse(localStorage.getItem(KEY) || 'null'); if (c?.at === today) return c.list; } catch { /* none */ }
-  const j = await fetch('https://iss.moex.com/iss/engines/stock/markets/bonds/boards/TQOB/securities.json?iss.meta=off&iss.only=securities,marketdata'
+  const j = await mpMoexFetch('https://iss.moex.com/iss/engines/stock/markets/bonds/boards/TQOB/securities.json?iss.meta=off&iss.only=securities,marketdata'
     + '&securities.columns=SECID,SHORTNAME,MATDATE,FACEVALUE,PREVPRICE,ACCRUEDINT,FACEUNIT&marketdata.columns=SECID,YIELD,VALTODAY')
     .then(r => r.json()).catch(() => null);
   if (!j) return [];
@@ -254,9 +275,11 @@ async function mpOfzList() {
 // may come back
 const MP_CNY_ISSUERS = /^(ГазКап|РЖД|НорНик|Полюс|ФосАгро|Атомэнпр|Роснфт|МЕТАЛИН|ЕАБР)/;
 async function mpCnyBondList() {
+  const stored = await mpMoexList('cny');
+  if (stored) return stored;
   const KEY = 'mp_cny_bonds_v1', today = new Date().toISOString().slice(0, 10);
   try { const c = JSON.parse(localStorage.getItem(KEY) || 'null'); if (c?.at === today) return c.list; } catch { /* none */ }
-  const j = await fetch('https://iss.moex.com/iss/engines/stock/markets/bonds/boards/TQCB/securities.json?iss.meta=off&iss.only=securities,marketdata'
+  const j = await mpMoexFetch('https://iss.moex.com/iss/engines/stock/markets/bonds/boards/TQCB/securities.json?iss.meta=off&iss.only=securities,marketdata'
     + '&securities.columns=SECID,SHORTNAME,MATDATE,OFFERDATE,FACEUNIT,FACEVALUE,PREVPRICE,ACCRUEDINT&marketdata.columns=SECID,YIELD,VALTODAY')
     .then(r => r.json()).catch(() => null);
   if (!j) return [];
@@ -292,26 +315,35 @@ async function mpBestPk(ofz, keyNow) {
 // security its main board's coupon (% a year; a floater's -- none), coupon
 // period (days), last price (%), yield (effective, to maturity or the offer;
 // a floater's -- 0) and duration (days); a day's cache
+// (moex_bonds.market first, update-moex-bonds' -- MOEX asked only for the rest)
 async function mpBondMarket(secids) {
-  const KEY = 'mp_bond_market_v1', today = new Date().toISOString().slice(0, 10);
+  const ids = [...new Set(secids)], stored = new Map();
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data } = await sb.from('moex_bonds').select('secid, market').in('secid', ids.slice(i, i + 200)).not('market', 'is', null);
+    for (const { secid, market } of data || []) stored.set(secid, market);
+  }
+  const rest = ids.filter(id => !stored.has(id));
+  if (!rest.length) return stored;
+  const KEY = 'mp_bond_market_v2', today = new Date().toISOString().slice(0, 10);
   let cache = {};
   try { cache = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { /* none */ }
   if (cache.at !== today) cache = { at: today, m: {} };
-  const todo = [...new Set(secids)].filter(id => !(id in cache.m));
+  const todo = rest.filter(id => !(id in cache.m));
   for (let i = 0; i < todo.length; i += 20) {
     const ids = todo.slice(i, i + 20).join(',');
-    const j = await fetch(`https://iss.moex.com/iss/engines/stock/markets/bonds/securities.json?iss.meta=off&iss.only=securities,marketdata&securities=${ids}`
-      + '&securities.columns=SECID,BOARDID,COUPONPERCENT,COUPONPERIOD,PREVPRICE&marketdata.columns=SECID,BOARDID,YIELD,DURATION').then(r => r.json()).catch(() => null);
+    const j = await mpMoexFetch(`https://iss.moex.com/iss/engines/stock/markets/bonds/securities.json?iss.meta=off&iss.only=securities,marketdata&securities=${ids}`
+      + '&securities.columns=SECID,BOARDID,COUPONPERCENT,COUPONPERIOD,PREVPRICE,PREVWAPRICE&marketdata.columns=SECID,BOARDID,YIELD,DURATION').then(r => r.json()).catch(() => null);
     const md = new Map((j?.marketdata?.data || []).map(([id, b, y, d]) => [`${id}|${b}`, { y, d }]));
-    for (const [id, b, cp, per, price] of j?.securities?.data || []) {
+    for (const [id, b, cp, per, price, wap] of j?.securities?.data || []) {
       if (!['TQOB', 'TQCB', 'TQIR'].includes(b)) continue;
       const m = md.get(`${id}|${b}`) || {};
-      cache.m[id] = { coupon: cp != null ? Number(cp) : null, period: Number(per) || null, price: Number(price) || null, yield: Number(m.y) || 0, dur: Number(m.d) || 0 };
+      cache.m[id] = { coupon: cp != null ? Number(cp) : null, period: Number(per) || null, price: Number(price) || null, wap: Number(wap) || null, yield: Number(m.y) || 0, dur: Number(m.d) || 0 };
     }
     for (const id of todo.slice(i, i + 20)) if (!(id in cache.m)) cache.m[id] = null;
   }
   try { localStorage.setItem(KEY, JSON.stringify(cache)); } catch { /* no storage */ }
-  return new Map(Object.entries(cache.m));
+  for (const id of rest) stored.set(id, cache.m[id] ?? null);
+  return stored;
 }
 
 // The Bonds & deposits tab's buy logic for others (06.11.2026: the salary
@@ -603,9 +635,9 @@ async function mpMatDrawFloat(c, plan = []) {
   ];
   plotFloat.style.display = floaters.length ? '' : 'none';
   if (!floaters.length) return;
-  const md = await fetch(`https://iss.moex.com/iss/engines/stock/markets/bonds/securities.json?iss.meta=off&iss.only=securities&securities.columns=SECID,PREVWAPRICE,PREVPRICE&securities=${floaters.map(r => r.ticker).join(',')}`)
-    .then(r => r.json()).catch(() => null);
-  const priceOf = new Map((md?.securities?.data || []).filter(([, w, p]) => w || p).map(([id, w, p]) => [id, Number(w || p)]));
+  // the day's weighted price, else the last (moex_bonds.market)
+  const mk = await mpBondMarket(floaters.map(r => r.ticker));
+  const priceOf = new Map([...mk].filter(([, m]) => m && (m.wap || m.price)).map(([id, m]) => [id, Number(m.wap || m.price)]));
   const pts = floaters.map(r => {
     const years = Math.max(0.05, (Date.parse(r.next) - Date.now()) / (365 * 86400000));
     const price = priceOf.get(r.ticker) ?? 100;

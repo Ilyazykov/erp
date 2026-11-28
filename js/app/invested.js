@@ -207,13 +207,13 @@ async function mpBondNames(tickers) {
   };
   try {
     for (let i = 0; i < want.length; i += 50) {
-      const r = await fetch(`${iss}/engines/stock/markets/bonds/securities.json?iss.meta=off&iss.only=securities`
+      const r = await mpMoexFetch(`${iss}/engines/stock/markets/bonds/securities.json?iss.meta=off&iss.only=securities`
         + `&securities.columns=SECID,ISIN,SECNAME&securities=${want.slice(i, i + 50).join(',')}`);
       const j = await r.json();
       put(j.securities.data, j.securities.columns);
     }
     for (const t of want.filter(t => !cache[t])) {
-      const r = await fetch(`${iss}/securities.json?iss.meta=off&iss.only=securities&securities.columns=secid,isin,name&q=${t}`);
+      const r = await mpMoexFetch(`${iss}/securities.json?iss.meta=off&iss.only=securities&securities.columns=secid,isin,name&q=${t}`);
       const j = await r.json();
       put(j.securities.data, j.securities.columns);
     }
